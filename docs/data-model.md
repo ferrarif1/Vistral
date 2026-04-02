@@ -1,18 +1,23 @@
 # Data Model
 
 ## Overview
-This document defines the core data models for the Vistral platform, supporting three-party roles, model lifecycle management, conversation tracking, and audit capabilities.
+This document defines the core data models for the Vistral platform, supporting two system roles, ownership-based permissions, model lifecycle management, conversation tracking, and audit capabilities.
 
 ## Core Entities
 
+### Owner semantics
+- `owner` is a resource relationship (e.g., `models.owner_user_id`), not a `User.role` value.
+- Access control combines `role` (`user`/`admin`) and `capabilities` with ownership checks.
+
 ### User
-Represents all types of users in the system (model owners, end users, administrators)
+Represents all users in the system (users and administrators)
 
 **Attributes:**
 - id (UUID, primary key)
 - email (string, unique, indexed)
 - username (string, unique, indexed)
-- role (enum: 'model_owner', 'end_user', 'administrator')
+- role (enum: 'user', 'admin')
+- capabilities (JSON array, e.g., ['manage_models'])
 - profile_data (JSON object)
 - preferences (JSON object)
 - created_at (timestamp)
@@ -22,7 +27,7 @@ Represents all types of users in the system (model owners, end users, administra
 - email_verified (boolean)
 
 **Relationships:**
-- owns -> Model (one-to-many)
+- owns -> Model (one-to-many via ownership relation)
 - participates_in -> Conversation (many-to-many)
 - manages -> ApprovalRequest (many-to-many as admin)
 
@@ -39,7 +44,8 @@ Represents visual models managed in the system
 - file_path (string, path to model files)
 - config (JSON object, model configuration)
 - metadata (JSON object, additional metadata)
-- created_by (UUID, foreign key to User)
+- visibility (enum: 'private', 'workspace', 'public')
+- owner_user_id (UUID, foreign key to User)
 - approved_by (UUID, foreign key to User, nullable)
 - approved_at (timestamp, nullable)
 - published_at (timestamp, nullable)
@@ -50,7 +56,7 @@ Represents visual models managed in the system
 - edge_deployments (JSON array, deployment locations)
 
 **Relationships:**
-- owner -> User (many-to-one)
+- owner_user -> User (many-to-one)
 - approver -> User (many-to-one, nullable)
 - conversations -> Conversation (many-to-many)
 - training_datasets -> Dataset (many-to-many)
@@ -199,7 +205,7 @@ Represents model deployments to edge locations
 ### Performance Indexes
 - User.email (unique)
 - User.username (unique)
-- Model.created_by + status (composite)
+- Model.owner_user_id + status (composite)
 - Conversation.model_id + status (composite)
 - Message.conversation_id + created_at (composite)
 - FileAttachment.attached_to_type + attached_to_id (composite)

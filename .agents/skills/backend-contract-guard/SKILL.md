@@ -23,7 +23,7 @@ This skill ensures backend implementations adhere to the API contracts, data mod
 - Confirm audit logging implementation
 
 ### 3. Business Logic Enforcement
-- Validate three-party role management
+- Validate two-role access model with ownership/capability permissions
 - Check model lifecycle workflows
 - Verify approval process implementation
 - Confirm edge deployment capabilities
@@ -170,7 +170,7 @@ This skill ensures backend implementations adhere to the API contracts, data mod
 - [ ] Constraints and uniqueness enforced
 
 ### Business Logic
-- [ ] Three-party role management implemented
+- [ ] Two-role access model with ownership/capability permissions implemented
 - [ ] Model lifecycle workflows functional
 - [ ] Approval processes working correctly
 - [ ] Multi-step processes maintain state
