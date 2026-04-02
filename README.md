@@ -49,6 +49,11 @@ Please read `docs/contributing.md` before opening a change.
 - 协作规则（中文）：`AGENTS.zh-CN.md`
 - Setup（中文）：`docs/setup.zh-CN.md`
 - Contributing（中文）：`docs/contributing.zh-CN.md`
+- PRD（中文）：`docs/prd.zh-CN.md`
+- IA（中文）：`docs/ia.zh-CN.md`
+- Flows（中文）：`docs/flows.zh-CN.md`
+- Data Model（中文）：`docs/data-model.zh-CN.md`
+- API Contract（中文）：`docs/api-contract.zh-CN.md`
 
 ## License
 License file is not yet added in this baseline; add one before production distribution.
