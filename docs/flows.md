@@ -10,6 +10,7 @@ This document details the primary user flows and business processes for the Vist
 **Goal**: Get insights from a visual model through conversation
 
 1. User navigates to main conversation interface
+   - Entry path: `/` (dual entry) -> `/workspace/chat`
 2. System displays welcome message and recent conversations
 3. User selects a model to interact with (or system suggests default)
 4. User types natural language query

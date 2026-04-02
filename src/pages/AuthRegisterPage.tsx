@@ -1,30 +1,44 @@
 import { useState } from 'react';
-import { api } from '../services/api';
 import StateBlock from '../components/StateBlock';
+import { api } from '../services/api';
 
 export default function AuthRegisterPage() {
   const [email, setEmail] = useState('new@vistral.dev');
   const [username, setUsername] = useState('newuser');
   const [message, setMessage] = useState('');
+  const [variant, setVariant] = useState<'success' | 'error'>('success');
 
   const submit = async () => {
+    setMessage('');
     try {
-      const created = await api.register({ email, password: 'mock-pass', username, role: 'admin' });
-      setMessage(`Registered as ${created.role}`);
-    } catch (e) {
-      setMessage((e as Error).message);
+      const created = await api.register({
+        email,
+        password: 'mock-pass',
+        username
+      });
+      setVariant('success');
+      setMessage(`Registered as ${created.role}. Public registration can only create user accounts.`);
+    } catch (error) {
+      setVariant('error');
+      setMessage((error as Error).message);
     }
   };
 
   return (
-    <div className="stack">
+    <div className="stack page-width">
       <h2>Register</h2>
       <section className="card">
-        <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} /></label>
-        <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} /></label>
-        <button onClick={submit}>Register</button>
+        <label>
+          Email
+          <input value={email} onChange={(event) => setEmail(event.target.value)} />
+        </label>
+        <label>
+          Username
+          <input value={username} onChange={(event) => setUsername(event.target.value)} />
+        </label>
+        <button onClick={submit}>Create User Account</button>
       </section>
-      {message ? <StateBlock variant="success" title="Register Result" description={message} /> : null}
+      {message ? <StateBlock variant={variant} title="Register Result" description={message} /> : null}
     </div>
   );
 }

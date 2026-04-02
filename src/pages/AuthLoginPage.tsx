@@ -1,24 +1,35 @@
 import { useState } from 'react';
-import { api } from '../services/api';
 import StateBlock from '../components/StateBlock';
+import { api } from '../services/api';
 
 export default function AuthLoginPage() {
   const [email, setEmail] = useState('user@vistral.dev');
   const [message, setMessage] = useState('');
+  const [variant, setVariant] = useState<'success' | 'error'>('success');
 
   const submit = async () => {
-    const user = await api.login({ email, password: 'mock-pass' });
-    setMessage(`Logged in as ${user.username} (${user.role})`);
+    setMessage('');
+    try {
+      const user = await api.login({ email, password: 'mock-pass' });
+      setVariant('success');
+      setMessage(`Logged in as ${user.username} (${user.role}).`);
+    } catch (error) {
+      setVariant('error');
+      setMessage((error as Error).message);
+    }
   };
 
   return (
-    <div className="stack">
+    <div className="stack page-width">
       <h2>Login</h2>
       <section className="card">
-        <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+        <label>
+          Email
+          <input value={email} onChange={(event) => setEmail(event.target.value)} />
+        </label>
         <button onClick={submit}>Login</button>
       </section>
-      {message ? <StateBlock variant="success" title="Login Result" description={message} /> : null}
+      {message ? <StateBlock variant={variant} title="Login Result" description={message} /> : null}
     </div>
   );
 }

@@ -1,133 +1,130 @@
 # Information Architecture
 
-## Overview
-This document outlines the information architecture for the Vistral platform, organizing content and functionality to support natural language and attachment-driven workflows while maintaining clear navigation for all user types.
+## 1. Purpose
+This IA defines executable page-level structure for round-1 implementation, centered on AI-native conversation + attachment + workflow state.
 
-## Site Structure
+## 2. Access and Role Rules
+- System roles are only `user` and `admin`.
+- `owner` is a resource relationship (for example `models.owner_user_id`), not a system role.
+- Public registration creates only `user` accounts.
+- `admin` assignment is only via seed/bootstrap or admin-only management endpoints.
 
-### Level 0: Root
-- `/` - Main conversation interface (landing for authenticated users)
-- `/auth` - Authentication flows
-- `/admin` - Administrative dashboard
-- `/models` - Model discovery and management (user domain, not a separate owner portal)
-- `/account` - User account management
+## 3. Route Map (Round 1 Executable)
 
-### Level 1: Conversation Interface
-- `/` - Primary chat interface
-  - `/new` - Start new conversation
-  - `/c/:conversationId` - Specific conversation view
-  - `/attachments` - Manage conversation attachments
+### 3.1 Public/Auth
+- `/auth/login`
+  - Purpose: login into existing account.
+  - Main blocks: credential form, loading/error/success feedback.
+- `/auth/register`
+  - Purpose: create user account (`role` is server-assigned as `user`).
+  - Main blocks: registration form, validation feedback.
 
-### Level 2: Authentication
-- `/auth/login` - Login form
-- `/auth/signup` - Registration form
-- `/auth/forgot-password` - Password reset
-- `/auth/verify-email` - Email verification
+### 3.2 Dual Work Entry
+- `/`
+  - Purpose: dual-entry launcher for two working modes.
+  - Main blocks:
+    - conversation workspace entry card
+    - professional console entry card
+    - mode-specific capability summary
 
-### Level 3: Administration
-- `/admin/dashboard` - Admin overview
-- `/admin/models` - Model management
-  - `/admin/models/pending` - Pending approvals
-  - `/admin/models/rejected` - Rejected models
-  - `/admin/models/archived` - Archived models
-- `/admin/users` - User management
-- `/admin/audit` - Audit logs
-- `/admin/settings` - System settings
+### 3.3 User Workspace
+- `/workspace/chat`
+  - Purpose: AI-native conversation workspace.
+  - Main blocks:
+    - conversation timeline
+    - message input composer
+    - persistent attachment panel (visible, deletable, status-aware)
+  - Mock round-1 flow: upload attachments -> send message -> receive mock assistant response.
+- `/workspace/console`
+  - Purpose: professional control-plane console.
+  - Main blocks:
+    - operational metrics snapshot
+    - approval queue summary
+    - quick actions to model workflows
 
-### Level 4: Model Management
-- `/models/explore` - Discover public models
-- `/models/my-models` - User-owned and authorized models
-- `/models/create` - Model creation wizard
-- `/models/:modelId` - Model detail page
-  - `/models/:modelId/chat` - Chat with specific model
-  - `/models/:modelId/configure` - Model configuration
-  - `/models/:modelId/analytics` - Model analytics
-  - `/models/:modelId/version-history` - Version management
+### 3.4 Model Domain
+- `/models/explore`
+  - Purpose: discover available models.
+  - Main blocks: searchable model list, status and visibility tags.
+- `/models/my-models`
+  - Purpose: list user-owned/authorized models.
+  - Main blocks: ownership-scoped list, quick status view.
+- `/models/create`
+  - Purpose: model creation wizard.
+  - Main blocks:
+    - top stepper (required)
+    - Step 1 metadata
+    - Step 2 model file upload (visible status + delete)
+    - Step 3 parameters (advanced collapsed by default)
+    - Step 4 review + submit approval (mock)
 
-### Level 5: Account Management
-- `/account/profile` - Profile management
-- `/account/security` - Security settings
-- `/account/preferences` - User preferences
-- `/account/billing` - Billing information
-- `/account/api-keys` - API key management
+### 3.5 Admin Domain (post round-1 focus)
+- `/admin/dashboard`
+- `/admin/models/pending`
+- `/admin/users`
+- `/admin/audit`
 
-## Navigation Patterns
+Admin pages are contract-defined but not fully implemented in round-1 UI scope.
 
-### Primary Navigation (Top Bar)
-- Logo/Brand (links to main conversation)
-- Search functionality
-- User profile menu
-- Notifications
-- Quick access to recent conversations
+## 4. Navigation Structure
 
-### Secondary Navigation (Sidebar)
-- New conversation button
-- Recent conversations list
-- Saved conversations
-- Model favorites
-- File attachments from current session
+### Primary Navigation (global shell)
+- Dual Entry
+- Conversation Workspace
+- Professional Console
+- Models Explore
+- My Models
+- Create Model
+- Auth (login/register) shortcuts for mock mode
 
-### Contextual Navigation (Within Views)
-- Breadcrumb navigation for multi-step processes
-- Progress indicators for wizards
-- Related content suggestions
-- Action-based navigation buttons
+### Contextual Navigation
+- Conversation: no stepper, timeline-centric interaction.
+- Professional console: metric/queue/action blocks for structured operation.
+- Model creation: mandatory top stepper with current step + total steps + completion state.
 
-## Content Organization
+## 5. Page Contracts
 
-### Conversation Interface Layout
-```
-┌─────────────────────────────────────┐
-│ Header: Logo | Search | User Menu   │
-├─────────────────────────────────────┤
-│ Sidebar        │     Main Area      │
-│                │                   │
-│ • New Conv     │   Conversation    │
-│ • Recent       │      History      │
-│ • Attachments  │                   │
-│ • Favorites    │   Active Chat     │
-│                │                   │
-└─────────────────────────────────────┘
-```
+### 5.1 Conversation Page Contract
+- Attachment list must stay visible in context.
+- Every attachment row must support delete.
+- Attachment statuses must include at least:
+  - `uploading`
+  - `processing`
+  - `ready`
+  - `error`
+- State feedback must use unified empty/loading/error/success semantics.
 
-### Multi-Step Process Layout
-```
-┌─────────────────────────────────────┐
-│ Progress Bar (Top Indication)       │
-├─────────────────────────────────────┤
-│ Header: Step X of Y | Back | Next   │
-├─────────────────────────────────────┤
-│         Main Content Area           │
-│                                     │
-│    Current Step Content             │
-│                                     │
-│    [Advanced Parameters Section]    │
-│    (Collapsed by Default)          │
-│                                     │
-└─────────────────────────────────────┘
-```
+### 5.2 Create Model Page Contract
+- Stepper is always visible at top.
+- Advanced parameters are collapsed by default.
+- Submission path in round-1 is mock, but transitions must be explicit:
+  - draft creation
+  - file uploaded
+  - parameter configured
+  - approval request submitted
 
-## File Attachment System
-- All uploaded files visible in sidebar during session
-- Status indicators (uploading, processing, ready, error)
-- Delete capability for each file
-- Drag-and-drop support
-- Preview capability where applicable
+### 5.3 State Presentation Contract
+All primary pages must present consistent state blocks for:
+- empty
+- loading
+- error
+- success
 
-## State Management
-- Conversation contexts preserved across page refreshes
-- Multi-step process state maintained in browser storage
-- User preferences saved to backend
-- File upload states persisted during session
+## 6. Shared UI Building Blocks
+- `AppShell`: global navigation + content frame
+- `StateBlock`: unified state feedback
+- `AttachmentUploader`: reusable upload/delete/status list
+- `StepIndicator`: top workflow indicator
+- `AdvancedSection`: progressive disclosure container
 
-## Responsive Behavior
-- Mobile: Collapsed sidebar by default, swipe to reveal
-- Tablet: Adaptive layout with optimized touch targets
-- Desktop: Full sidebar and multi-panel views
+## 7. Responsive Baseline
+- Mobile: single-column content, stacked navigation actions.
+- Tablet/Desktop: shell sidebar + content panel.
+- Attachment and stepper information must remain readable on all breakpoints.
 
-## Accessibility Considerations
-- Keyboard navigation for all interactive elements
-- Screen reader compatibility for conversation content
-- Alt text for all visual elements
-- High contrast mode support
-- Focus management during dynamic content updates
+## 8. Round-1 Boundary
+Round-1 prioritizes mock-closed user flows:
+1. attachment + conversation loop
+2. model creation + approval submission loop
+
+Real training/approval engines, edge deployment operations, and full admin operations are deferred to later phases.

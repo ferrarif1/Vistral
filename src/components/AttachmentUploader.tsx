@@ -1,46 +1,104 @@
-import { useEffect, useState } from 'react';
-import { api } from '../services/api';
-import type { AttachmentItem } from '../types/domain';
+import { useState } from 'react';
+import type { FileAttachment } from '../../shared/domain';
+import StateBlock from './StateBlock';
 import StatusBadge from './StatusBadge';
 
-export default function AttachmentUploader() {
-  const [items, setItems] = useState<AttachmentItem[]>([]);
-  const [filename, setFilename] = useState('example-image.png');
+interface AttachmentUploaderProps {
+  title: string;
+  items: FileAttachment[];
+  onUpload: (filename: string) => Promise<void>;
+  onDelete: (attachmentId: string) => Promise<void>;
+  disabled?: boolean;
+  emptyDescription: string;
+  uploadButtonLabel?: string;
+}
 
-  const refresh = async () => setItems(await api.listAttachments());
-
-  useEffect(() => {
-    refresh();
-  }, []);
+export default function AttachmentUploader({
+  title,
+  items,
+  onUpload,
+  onDelete,
+  disabled,
+  emptyDescription,
+  uploadButtonLabel = 'Upload'
+}: AttachmentUploaderProps) {
+  const [filename, setFilename] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
 
   const upload = async () => {
-    await api.uploadAttachment(filename || `file-${Date.now()}.bin`);
-    await refresh();
+    const finalName = filename.trim() || `file-${Date.now()}.bin`;
+    setPending(true);
+    setError('');
+
+    try {
+      await onUpload(finalName);
+      setFilename('');
+    } catch (uploadError) {
+      setError((uploadError as Error).message);
+    } finally {
+      setPending(false);
+    }
   };
 
-  const remove = async (id: string) => {
-    await api.removeAttachment(id);
-    await refresh();
+  const remove = async (attachmentId: string) => {
+    setPending(true);
+    setError('');
+
+    try {
+      await onDelete(attachmentId);
+    } catch (removeError) {
+      setError((removeError as Error).message);
+    } finally {
+      setPending(false);
+    }
   };
+
+  const isDisabled = pending || disabled;
 
   return (
-    <section className="card">
-      <h3>Attachments</h3>
-      <div className="row gap">
-        <input value={filename} onChange={(e) => setFilename(e.target.value)} />
-        <button onClick={upload}>Upload</button>
+    <section className="card stack">
+      <div className="row gap between">
+        <h3>{title}</h3>
+        <span className="muted">Visible in current context</span>
       </div>
-      <ul className="list">
-        {items.map((item) => (
-          <li key={item.id} className="list-item">
-            <div>
-              <strong>{item.filename}</strong>
-              <StatusBadge status={item.status} />
-            </div>
-            <button onClick={() => remove(item.id)}>Delete</button>
-          </li>
-        ))}
-      </ul>
+
+      <div className="row gap">
+        <input
+          value={filename}
+          placeholder="Enter file name, for example: sample-image.jpg"
+          onChange={(event) => setFilename(event.target.value)}
+          disabled={isDisabled}
+        />
+        <button onClick={upload} disabled={isDisabled}>
+          {pending ? 'Working...' : uploadButtonLabel}
+        </button>
+      </div>
+
+      {error ? <StateBlock variant="error" title="Attachment Action Failed" description={error} /> : null}
+
+      {items.length === 0 ? (
+        <StateBlock variant="empty" title="No Files Yet" description={emptyDescription} />
+      ) : (
+        <ul className="list">
+          {items.map((item) => (
+            <li key={item.id} className="list-item stack">
+              <div className="row between gap">
+                <div className="stack tight">
+                  <strong>{item.filename}</strong>
+                  {item.upload_error ? <small className="error-text">{item.upload_error}</small> : null}
+                </div>
+                <div className="row gap">
+                  <StatusBadge status={item.status} />
+                  <button onClick={() => remove(item.id)} disabled={isDisabled}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

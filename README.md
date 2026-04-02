@@ -66,7 +66,8 @@ License file is not yet added in this baseline; add one before production distri
 
 ### Implemented in this round
 - Shared app shell and unified theme
-- Conversation skeleton with attachment upload/status/delete
+- Dual work entry: AI-native conversation workspace + professional console
+- Conversation workflow with attachment upload/status/delete and mock assistant responses
 - Model pages: explore / my-models / create (stepper + advanced collapsed)
 - Auth mock: login/register (`register` cannot create `admin`)
 - Ownership-based model filtering and create permission via capabilities
