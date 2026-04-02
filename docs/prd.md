@@ -1,132 +1,158 @@
 # Product Requirements Document (PRD)
 
-## Product Overview
-Vistral is an AI-native visual model platform that enables natural language and attachment-driven interactions with visual models. Building on RVision's foundation, it introduces a conversational interface paradigm while preserving core business logic with a two-role access model (user/admin) and ownership-based permissions for model-management actions.
+## 1. Product Overview
+Vistral is an AI-native visual model platform with two work entries:
+1. conversational workspace (natural language + attachments)
+2. professional engineering console (dataset/annotation/training/model-version/inference operations)
 
-## Problem Statement
-Current visual model platforms use traditional dashboard interfaces that require users to navigate complex UIs to interact with models. This creates friction for users who want to quickly get insights from visual models using natural communication patterns.
+The platform keeps a strict two-role system (`user`, `admin`) and ownership/capability-based authorization.
 
-## Target Users
-1. **Users**: Professionals, researchers, and developers who interact with models through conversation and attachments; with proper capabilities, users can also create, manage, and retrain models they own.
-2. **Administrators**: Platform operators who manage approval, auditing, governance, and system-wide operations.
+## 2. Problem Statement
+Engineers currently rely on fragmented tools for dataset prep, annotation, training, and inference verification. This increases handoff costs and slows iteration.
 
-## Core Use Cases
+Vistral must provide one closed-loop platform where engineers can:
+- prepare datasets
+- annotate and review
+- fine-tune models
+- evaluate and register versions
+- validate inference
+- feed error samples back for retraining
 
-### Use Case 1: Visual Model Query
-- **Actor**: User
-- **Goal**: Get insights from a visual model using natural language
-- **Flow**:
-  1. User initiates conversation
-  2. User uploads visual content (image, document, etc.)
-  3. User describes their question in natural language
-  4. Platform processes request and returns visual model response
-  5. User can continue conversation with follow-up questions
+## 3. Target Users
+1. `user`: engineer/researcher/operator performing day-to-day model workflows
+2. `admin`: governance/audit/approval/system operations
 
-### Use Case 2: Model Management
-- **Actor**: User with model-management permission
-- **Goal**: Upload, configure, and manage visual models
-- **Flow**:
-  1. User accesses model management interface
-  2. Uploads model files and configuration
-  3. Configures model parameters and constraints
-  4. Submits for approval process
-  5. Monitors model usage and performance
+## 4. Task and Framework Scope
 
-### Use Case 3: Approval Workflow
-- **Actor**: Administrator
-- **Goal**: Review and approve submitted models
-- **Flow**:
-  1. Admin receives notification of new model submission
-  2. Reviews model for compliance and safety
-  3. Tests model functionality
-  4. Approves or rejects model
-  5. Updates model status in system
+### 4.1 Task scope
+- OCR
+- detection
+- classification
+- segmentation
+- optional OBB
 
-## Access Model Clarification
-- Model owner is not a first-class system role.
-- Ownership is represented as a resource relationship (for example `models.owner_user_id`).
-- Additional model-management authority is represented by lightweight capabilities (for example `user.capabilities` contains `manage_models`).
+### 4.2 Framework responsibilities
+- PaddleOCR: OCR baseline
+- docTR: OCR alternative
+- YOLO: detection baseline with extension toward classification/segmentation/OBB
 
-## Functional Requirements
+## 5. Core Use Cases
+1. AI-native conversation with attachments
+2. dataset creation and management
+3. online annotation and review
+4. pre-annotation and correction
+5. fine-tuning training job management
+6. evaluation and model version registration
+7. inference validation and error feedback loop
 
-### FR-001: Conversational Interface
-- The system shall support natural language input from users
-- The system shall maintain conversation context across multiple exchanges
-- The system shall support file attachments in conversations
+## 6. Access Model Clarification
+- System roles: `user`, `admin`
+- `owner` is a resource relation (`owner_user_id`), not a role
+- register endpoint cannot create admin accounts
+- admin assignment only via bootstrap/admin-only backend path
 
-### FR-002: File Management
-- The system shall display uploaded files with their current status
-- The system shall allow users to delete uploaded files during the session
-- The system shall maintain file visibility throughout the interaction flow
+## 7. Functional Requirements
 
-### FR-003: Multi-Step Processes
-- The system shall display progress indicators for multi-step processes
-- The system shall maintain state across page refreshes for active processes
-- The system shall allow users to resume interrupted processes
+### FR-001 Conversation Workspace
+- natural language interaction
+- persistent context per conversation
+- attachment-driven message flow
 
-### FR-004: Parameter Controls
-- The system shall collapse advanced parameters by default
-- The system shall provide clear indication of available advanced options
-- The system shall maintain user preferences for parameter visibility
+### FR-002 File Attachment Baseline
+- uploads remain visible in context
+- each upload is deletable
+- status at minimum: `uploading`, `processing`, `ready`, `error`
 
-### FR-005: Role-Based Access Control
-- The system shall support two system roles (user, admin) with ownership-based and capability-based permissions
-- The system shall enforce role-based permissions consistently
-- The system shall maintain audit logs for all privileged actions
+### FR-003 Unified Stepper Requirement
+- all multi-step workflows must display top stepper
+- current step, total step, completion hints are explicit
 
-### FR-006: Model Lifecycle Management
-- The system shall support model upload and versioning
-- The system shall provide training pipeline capabilities
-- The system shall implement approval workflows for new models
-- The system shall enable model publishing and deprecation
+### FR-004 Advanced Parameters
+- advanced sections are collapsed by default
+- users can expand progressively
 
-### FR-007: Edge Inference
-- The system shall support model deployment to edge locations
-- The system shall monitor edge node health and performance
-- The system shall route inference requests appropriately
+### FR-005 Consistent State Feedback
+- all pages must use unified empty/loading/error/success patterns
 
-### FR-008: Auditing and Compliance
-- The system shall log all model interactions
-- The system shall track model changes and approvals
-- The system shall generate compliance reports
+### FR-006 Dataset Management
+- create/manage datasets
+- upload image/video/archive files
+- sample list/detail
+- label class management
+- train/val/test split
+- dataset versioning
+- annotation import formats: YOLO/COCO/LabelMe/OCR
+- export endpoint contract reserved
 
-## Non-Functional Requirements
+### FR-007 Online Annotation
+- detection boxes
+- rotated boxes (OBB baseline)
+- polygon/segmentation
+- OCR text input/correction
+- save/undo/continue editing
+- status flow: `unannotated -> in_progress -> annotated -> in_review -> approved/rejected`
 
-### NFR-001: Performance
-- Response time for simple queries: < 2 seconds
-- Response time for complex visual processing: < 10 seconds
-- System shall support 1000+ concurrent users
+### FR-008 Pre-Annotation and Review
+- run pre-annotation with selected model version
+- manual correction and review sampling
+- reject/rework path with audit notes
 
-### NFR-002: Availability
-- System uptime: 99.9%
-- Recovery time objective: < 1 hour
-- Support for graceful degradation during maintenance
+### FR-009 Training Jobs
+- create training job
+- choose task type/framework/base model
+- configure parameters and submit
+- support start/cancel/retry lifecycle
+- status flow: `draft -> queued -> preparing -> running -> evaluating -> completed/failed/cancelled`
 
-### NFR-003: Security
-- All data transmission encrypted in transit
-- User data encrypted at rest
-- Regular security audits and penetration testing
+### FR-010 Evaluation and Model Versioning
+- OCR metrics: accuracy/CER/WER
+- detection metrics: mAP/precision/recall
+- store error sample analysis
+- register model version with training linkage
+- compare model versions
 
-### NFR-004: Scalability
-- Horizontal scaling support for increased load
-- Auto-scaling based on demand
-- Efficient resource utilization
+### FR-011 Inference Validation
+- upload image and run inference with selected model version
+- show raw output + normalized output
+- persist inference runs
+- one-click feedback sample back to dataset
 
-## Success Metrics
-- User engagement: Average session duration and conversation length
-- Model adoption: Number of active models and usage frequency
-- User satisfaction: Net Promoter Score and usability metrics
-- System performance: Response times and error rates
-- Business impact: Model utilization and revenue generation
+### FR-012 Adapter Abstraction
+Framework integrations must follow unified trainer interface:
+- `validate_dataset()`
+- `train()`
+- `evaluate()`
+- `predict()`
+- `export()`
+- `load_model()`
 
-## Out of Scope
-- Direct integration with external model marketplaces
-- Real-time collaborative editing of model parameters
-- Offline model execution capabilities
-- Hardware-accelerated training (limited to inference)
+## 8. Non-Functional Requirements
 
-## Assumptions and Constraints
-- Users have reliable internet connectivity for file uploads
-- Visual models are compatible with standard deployment formats
-- Organization has appropriate compute resources for inference
-- Compliance requirements align with standard enterprise standards
+### NFR-001 Performance
+- page interactions under 2s for baseline operations
+- long-running jobs have visible status transitions and logs
+
+### NFR-002 Security
+- in-transit encryption
+- secure secret handling
+- role/ownership checks on all mutating APIs
+- audit logs for privileged actions
+
+### NFR-003 Reliability
+- resumable multi-step flows
+- clear failure states and retry paths
+
+### NFR-004 Extensibility
+- framework adapters added without breaking API/UI contracts
+
+## 9. Delivery Strategy
+- Phase 1: schema/API/page skeleton + mock loops
+- Phase 2: minimal online annotation loop
+- Phase 3: PaddleOCR/docTR/YOLO adapters
+- Phase 4: OCR + detection business loop closure
+- Phase 5: pre-annotation scale-up, active learning, distributed execution
+
+## 10. Out of Scope (Current Round)
+- production-grade distributed training orchestration
+- full collaborative annotation suite
+- advanced benchmarking dashboards beyond baseline metrics

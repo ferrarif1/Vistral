@@ -140,6 +140,27 @@ export default function ProfessionalConsolePage() {
           <Link to="/models/explore" className="quick-link">
             Explore Model Catalog
           </Link>
+          <Link to="/datasets" className="quick-link">
+            Manage Datasets
+          </Link>
+          <Link to="/training/jobs" className="quick-link">
+            Open Training Jobs
+          </Link>
+          <Link to="/models/versions" className="quick-link">
+            Open Model Versions
+          </Link>
+          <Link to="/inference/validate" className="quick-link">
+            Validate Inference
+          </Link>
+          <Link to="/admin/models/pending" className="quick-link">
+            Review Approval Queue
+          </Link>
+          <Link to="/admin/audit" className="quick-link">
+            View Audit Logs
+          </Link>
+          <Link to="/settings/llm" className="quick-link">
+            Configure LLM Key
+          </Link>
         </div>
         <small className="muted">Pending approvals visible in queue: {pendingApprovals}.</small>
       </section>

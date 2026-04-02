@@ -1,97 +1,84 @@
 # Project Plans and Milestones
 
-## Vision
-Create an AI-native visual model platform where users interact through natural language and attachments, with a simple two-role system (`user`, `admin`) and ownership-based permissions for model-management actions.
+## 1. Vision
+Build Vistral into an AI-native visual model engineering platform with dual entry:
+- conversational workspace for rapid interaction
+- professional console for dataset/annotation/training/model lifecycle operations
 
-## Role and Permission Baseline
-- System roles are only:
-  - `user`
-  - `admin`
-- `model owner` is **not** a system role.
-- Ownership is a resource relationship (for example `models.owner_user_id`).
-- Capability gates are lightweight and explicit (for example `user.capabilities` includes `manage_models`).
-- `admin` governs global operations (approval, audit, user management, system settings, edge deployment).
-- `user` manages only self-owned or explicitly authorized models.
+The system roles remain only `user` and `admin`; ownership is modeled as resource relation/capability.
 
-## First-Round Code Development Plan (Round 1)
-The repository is now documentation-ready and should enter first code implementation in this order:
+## 2. Current Baseline
+Already available:
+- shared app shell and unified UI state blocks
+- conversation + attachment + mock response loop
+- model draft + file upload + approval submission flow
+- admin approval queue and audit list
+- BYO LLM settings (prototype)
 
-1. **Project scaffolding**
-   - Monorepo/project structure, package scripts, lint/type baseline
-   - Environment configuration templates
+## 3. Next Delivery Phases
 
-2. **Authentication foundation**
-   - Signup/login/refresh minimal flow
-   - Registration defaults to `user`
-   - Admin role assignment only via seed/init or admin-only backend path
+### Phase 1: Data and Task Skeleton (current round)
+Scope:
+1. schema and domain types for dataset/annotation/training/model-version/inference
+2. API stubs + mock handlers
+3. skeleton pages:
+   - dataset list/detail
+   - training jobs list/detail
+   - model versions
+   - inference validation
+4. contract and docs alignment
 
-3. **Frontend shared shell**
-   - Global layout shell, navigation frame, state and theme baseline
-   - Unified empty/loading/error/success state components
+Acceptance:
+- build/lint/typecheck pass
+- mock OCR and detection paths can be demonstrated end-to-end
 
-4. **Conversation page skeleton**
-   - Basic chat timeline + input region
-   - Session-level state persistence hooks
+### Phase 2: Minimal Annotation Loop
+Scope:
+1. image annotation workspace
+2. box + OCR text annotation
+3. save/continue edit
+4. review status transitions and rejection loop
+Status:
+- In progress with baseline shipped:
+  - OCR/detection annotation and review transitions
+  - box draw/move/resize + keyboard nudge/delete
+  - minimal segmentation polygon canvas with vertex drag/edit
+  - phase smoke script (`npm run smoke:phase2`) validating segmentation persistence + inference fallback
 
-5. **Attachment upload status component**
-   - Persistent visibility in context
-   - Per-file delete action
-   - Status lifecycle: uploading / processing / ready / error
+### Phase 3: Framework Adapter Integration
+Scope:
+1. PaddleOCR adapter
+2. docTR adapter
+3. YOLO adapter
+4. unified normalized inference output
 
-6. **Model CRUD skeleton**
-   - Create/list/detail/update minimal endpoints and pages
-   - Ownership checks on mutating operations
+Early progress:
+- YOLO inference adapter now supports optional external runtime bridge via `YOLO_RUNTIME_ENDPOINT` with automatic mock fallback.
 
-7. **Initial schema and API stubs**
-   - `users(role, capabilities)`
-   - `models(owner_user_id, visibility, status, metadata)`
-   - API stubs aligned with docs/api-contract.md
+### Phase 4: Two Closed Business Loops
+Loop A (OCR): dataset -> annotation/import -> train -> evaluate -> register -> validate -> feedback
 
-## Phase Plan
+Loop B (Detection): dataset -> annotation/import -> train -> evaluate -> register -> validate -> feedback
 
-### Phase 1 (Weeks 1-2): Contract-to-Scaffold
-- Deliverables:
-  - Project scaffolding
-  - Auth foundation
-  - Shared UI shell
-  - Initial schema/API stubs
-- Success metrics:
-  - Local dev can boot from clean clone
-  - Auth roundtrip works for user signup/login
-  - Shared state components used across at least one flow
+### Phase 5: Enhancement Track
+- pre-annotation at scale
+- difficult-sample mining and active learning
+- collaborative annotation
+- worker queue scaling and distributed training
 
-### Phase 2 (Weeks 3-6): Core User Flows
-- Deliverables:
-  - Conversation skeleton
-  - Attachment upload status component
-  - Model CRUD skeleton with ownership checks
-  - Basic approval queue entry path
-- Success metrics:
-  - User can complete conversation + attachment basic loop
-  - User can create and manage own model records
-  - Non-owner mutation requests are denied
+## 4. Hard Execution Rules
+- do not stop at landing-only updates
+- shared layer first, then feature pages
+- multi-step flows require top stepper
+- advanced parameters default collapsed
+- uploads remain visible/deletable/status-aware
+- empty/loading/error/success states must stay consistent
+- register cannot create admin accounts
 
-### Phase 3 (Weeks 7-10): Governance and Operations
-- Deliverables:
-  - Admin approval workflow
-  - Audit trail capture
-  - Admin user-management hooks
-  - Edge deployment operation stubs
-- Success metrics:
-  - Admin-only routes enforce privilege boundaries
-  - Approval and audit records are traceable end-to-end
-
-### Phase 4 (Weeks 11-14): Hardening and Scale
-- Deliverables:
-  - Performance and reliability hardening
-  - Observability and operational dashboards
-  - Extended tests and release readiness
-- Success metrics:
-  - Core SLA targets are measurable
-  - Regression risk is controlled with CI checks
-
-## Risk Mitigation
-- Keep access model minimal in round 1; avoid speculative RBAC complexity.
-- Enforce contract-first updates before code changes.
-- Validate ownership/capability boundaries with integration tests early.
-- Roll out admin-sensitive endpoints behind explicit checks and audit logs.
+## 5. Risks and Mitigation
+- Risk: contract drift across docs and code
+  - Mitigation: update flows/data-model/api-contract before behavior changes
+- Risk: framework-specific branching
+  - Mitigation: enforce unified adapter interface
+- Risk: UI inconsistency across new modules
+  - Mitigation: reuse shared components and parity review

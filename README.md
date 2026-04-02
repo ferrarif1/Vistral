@@ -32,6 +32,10 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/flows.md`
    - `docs/data-model.md`
    - `docs/api-contract.md`
+   - `docs/training-platform-roadmap.md`
+   - `docs/dataset-management.md`
+   - `docs/annotation-workflow.md`
+   - `docs/model-runtime-architecture.md`
 4. Follow local setup instructions in `docs/setup.md`.
 
 ## Repository Working Model (How Codex should work in this repo)
@@ -61,17 +65,34 @@ License file is not yet added in this baseline; add one before production distri
 
 ## Development (Round 1 Baseline)
 1. `npm install`
-2. `npm run dev`
+2. `npm run dev` (runs API + web together)
 3. Open `http://localhost:5173`
+
+### Validation Commands
+- `npm run typecheck`
+- `npm run lint`
+- `npm run build`
+- `npm run smoke:phase2`
+  - verifies segmentation annotation persistence and YOLO runtime fallback behavior in the mock loop
 
 ### Implemented in this round
 - Shared app shell and unified theme
 - Dual work entry: AI-native conversation workspace + professional console
-- Conversation workflow with attachment upload/status/delete and mock assistant responses
+- Conversation workflow with attachment upload/status/delete and assistant responses
+- Bring-your-own LLM settings page (`/settings/llm`) for OpenAI-compatible providers (for example ChatAnywhere)
 - Model pages: explore / my-models / create (stepper + advanced collapsed)
-- Auth mock: login/register (`register` cannot create `admin`)
+- Auth mock: login/register/logout with browser session cookie (`register` cannot create `admin`)
+- Admin approval queue page (`/admin/models/pending`) with approve/reject actions
+- Admin audit page (`/admin/audit`) for governance event visibility
 - Ownership-based model filtering and create permission via capabilities
 - Initial schema in `db/schema.sql`
+
+### LLM Key Safety
+- Do not commit API keys into repository files.
+- LLM key configuration is encrypted at rest in local prototype data (`.data/llm-config.enc.json`) using `LLM_CONFIG_SECRET`.
+- Browser holds only masked key view; raw key is submitted on save/test and managed server-side for this prototype.
+- Ensure `.data/` remains git-ignored and set `LLM_CONFIG_SECRET` before local usage.
+- Mutating API calls in prototype mode are protected with `X-CSRF-Token` tied to session.
 
 
 ## Docker Deployment

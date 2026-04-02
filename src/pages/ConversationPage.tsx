@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type {
   ConversationRecord,
   FileAttachment,
+  LlmConfigView,
   MessageRecord,
   ModelRecord
 } from '../../shared/domain';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import { api } from '../services/api';
+import { LLM_CONFIG_UPDATED_EVENT } from '../services/llmConfig';
 
 export default function ConversationPage() {
   const [models, setModels] = useState<ModelRecord[]>([]);
@@ -19,6 +22,12 @@ export default function ConversationPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [llmView, setLlmView] = useState<LlmConfigView | null>(null);
+
+  const refreshLlmConfig = useCallback(async () => {
+    const config = await api.getLlmConfig();
+    setLlmView(config);
+  }, []);
 
   const refreshAttachments = useCallback(async () => {
     const result = await api.listConversationAttachments();
@@ -28,7 +37,7 @@ export default function ConversationPage() {
   useEffect(() => {
     setLoading(true);
 
-    Promise.all([api.listModels(), refreshAttachments()])
+    Promise.all([api.listModels(), refreshAttachments(), refreshLlmConfig()])
       .then(([modelResults]) => {
         setModels(modelResults);
         if (modelResults.length > 0) {
@@ -38,7 +47,21 @@ export default function ConversationPage() {
       })
       .catch((loadError) => setError((loadError as Error).message))
       .finally(() => setLoading(false));
-  }, [refreshAttachments]);
+  }, [refreshAttachments, refreshLlmConfig]);
+
+  useEffect(() => {
+    const handleConfigChange = () => {
+      refreshLlmConfig().catch(() => {
+        // Keep current state on transient errors.
+      });
+    };
+
+    window.addEventListener(LLM_CONFIG_UPDATED_EVENT, handleConfigChange as EventListener);
+
+    return () => {
+      window.removeEventListener(LLM_CONFIG_UPDATED_EVENT, handleConfigChange as EventListener);
+    };
+  }, [refreshLlmConfig]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -54,6 +77,14 @@ export default function ConversationPage() {
     () => attachments.filter((item) => item.status === 'ready').map((item) => item.id),
     [attachments]
   );
+
+  const llmModeText = useMemo(() => {
+    if (!llmView || !llmView.enabled || !llmView.has_api_key) {
+      return 'Mock mode (custom LLM disabled or key missing).';
+    }
+
+    return `Custom LLM mode: ${llmView.provider} · ${llmView.model} · key ${llmView.api_key_masked}`;
+  }, [llmView]);
 
   const onUpload = async (filename: string) => {
     await api.uploadConversationAttachment(filename);
@@ -110,8 +141,18 @@ export default function ConversationPage() {
     <div className="stack">
       <h2>Conversation Workspace</h2>
       <p className="muted">
-        Mock loop: upload files -&gt; send message -&gt; receive assistant response.
+        Loop: upload files -&gt; send message -&gt; receive assistant response.
       </p>
+
+      <section className="card stack">
+        <div className="row between gap">
+          <strong>Assistant Mode</strong>
+          <Link to="/settings/llm" className="quick-link">
+            Configure LLM Key
+          </Link>
+        </div>
+        <small className="muted">{llmModeText}</small>
+      </section>
 
       {loading ? (
         <StateBlock

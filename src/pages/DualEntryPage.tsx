@@ -42,6 +42,17 @@ export default function DualEntryPage() {
           </Link>
         </article>
       </section>
+
+      <section className="card stack">
+        <h3>Bring Your Own LLM Key</h3>
+        <p className="muted">
+          To use your own provider credentials, open LLM Settings and configure base URL, API key, and
+          model.
+        </p>
+        <Link to="/settings/llm" className="quick-link">
+          Open LLM Settings
+        </Link>
+      </section>
     </div>
   );
 }

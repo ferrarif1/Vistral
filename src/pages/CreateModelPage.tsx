@@ -12,7 +12,9 @@ export default function CreateModelPage() {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [modelType, setModelType] = useState('classification');
+  const [modelType, setModelType] = useState<
+    'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
+  >('classification');
   const [visibility, setVisibility] = useState<'private' | 'workspace' | 'public'>('private');
   const [draftModel, setDraftModel] = useState<ModelRecord | null>(null);
   const [modelFiles, setModelFiles] = useState<FileAttachment[]>([]);
@@ -187,10 +189,24 @@ export default function CreateModelPage() {
           </label>
           <label>
             Model Type
-            <select value={modelType} onChange={(event) => setModelType(event.target.value)}>
+            <select
+              value={modelType}
+              onChange={(event) =>
+                setModelType(
+                  event.target.value as
+                    | 'ocr'
+                    | 'detection'
+                    | 'classification'
+                    | 'segmentation'
+                    | 'obb'
+                )
+              }
+            >
+              <option value="ocr">ocr</option>
               <option value="classification">classification</option>
               <option value="detection">detection</option>
               <option value="segmentation">segmentation</option>
+              <option value="obb">obb</option>
             </select>
           </label>
           <label>

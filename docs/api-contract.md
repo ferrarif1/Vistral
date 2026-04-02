@@ -1,706 +1,466 @@
 # API Contract
 
-## Overview
-This document defines the API contract for the Vistral platform, specifying endpoints, request/response formats, authentication, and error handling for all services.
+## 1. Overview
+This document defines the executable API contract for Vistral's prototype and the next-stage training platform skeleton.
 
-## Base URL
-Production: `https://api.vistral.ai/v1`
-Staging: `https://staging-api.vistral.ai/v1`
+## 2. Base Path and Auth
+- Base path: `/api`
+- Prototype auth: `HttpOnly` cookie session (`vistral_session`)
+- Production target: bearer token
+- Mutation methods (`POST`, `PUT`, `PATCH`, `DELETE`) require `X-CSRF-Token` in prototype mode except login/register/csrf
 
-## Authentication
-All API requests require authentication using Bearer tokens:
-```
-Authorization: Bearer {access_token}
-```
+## 3. Common Response Envelope
 
-API keys can alternatively be used in headers:
-```
-X-API-Key: {api_key}
-```
-
-## Common Headers
-- `Content-Type: application/json`
-- `Accept: application/json`
-- `User-Agent: {client_identifier}`
-- `X-Request-ID: {uuid}` (optional, for request tracing)
-
-## Common Response Format
-Successful responses follow this pattern:
+### Success
 ```json
 {
   "success": true,
-  "data": { /* resource data */ },
-  "meta": { /* pagination, timestamps, etc. */ }
+  "data": {}
 }
 ```
 
-Error responses follow this pattern:
+### Failure
 ```json
 {
   "success": false,
   "error": {
-    "code": "ERROR_CODE",
-    "message": "Human-readable error message",
-    "details": { /* optional error details */ }
+    "code": "VALIDATION_ERROR",
+    "message": "Human-readable explanation"
   }
 }
 ```
 
-## Error Codes
-- `AUTHENTICATION_REQUIRED`: 401 - Authentication required
-- `INSUFFICIENT_PERMISSIONS`: 403 - Insufficient permissions
-- `RESOURCE_NOT_FOUND`: 404 - Resource not found
-- `VALIDATION_ERROR`: 422 - Request validation failed
-- `RATE_LIMIT_EXCEEDED`: 429 - Rate limit exceeded
-- `INTERNAL_ERROR`: 500 - Internal server error
-- `SERVICE_UNAVAILABLE`: 503 - Service temporarily unavailable
+## 4. Shared Enums
 
-## Rate Limiting
-- Standard endpoints: 1000 requests/hour per API key
-- File upload endpoints: 100 requests/hour per API key
-- Model inference endpoints: 500 requests/hour per API key
-- Custom rate limits available for enterprise accounts
+### 4.1 Roles
+- `user`
+- `admin`
 
----
+### 4.2 Task types
+- `ocr`
+- `detection`
+- `classification`
+- `segmentation`
+- `obb`
 
-## Authentication Endpoints
+### 4.3 Frameworks
+- `paddleocr`
+- `doctr`
+- `yolo`
 
-### POST /auth/login
-Authenticate user and retrieve access token
+### 4.4 Annotation status
+- `unannotated`
+- `in_progress`
+- `annotated`
+- `in_review`
+- `approved`
+- `rejected`
 
-**Request:**
-```json
-{
-  "email": "user@example.com",
-  "password": "secure_password"
-}
-```
+### 4.5 Training job status
+- `draft`
+- `queued`
+- `preparing`
+- `running`
+- `evaluating`
+- `completed`
+- `failed`
+- `cancelled`
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "access_token": "jwt_token",
-    "refresh_token": "refresh_token",
-    "user": { /* user object */ },
-    "expires_in": 3600
-  }
-}
-```
+## 5. Authentication Endpoints
 
 ### POST /auth/register
-Register new user account
+Create user account.
 
-Registration creates `user` accounts only.
-`admin` role assignment is restricted to backend seed/bootstrap or admin-only management endpoints.
+Important constraints:
+- request payload does not accept `role`
+- server always creates `role=user`
+- admin assignment is only bootstrap/admin-only backend operation
 
-**Request:**
+Request:
 ```json
 {
   "email": "user@example.com",
-  "password": "secure_password",
-  "username": "username"
+  "username": "alice",
+  "password": "***"
 }
 ```
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "access_token": "jwt_token",
-    "user": { /* user object */ }
-  }
-}
-```
+### POST /auth/login
+Login and bind session cookie.
 
-### POST /auth/refresh
-Refresh access token
+### POST /auth/logout
+Logout current session.
 
-**Request:**
-```json
-{
-  "refresh_token": "refresh_token"
-}
-```
+### GET /auth/csrf
+Fetch CSRF token for current session.
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "access_token": "new_jwt_token",
-    "expires_in": 3600
-  }
-}
-```
-
----
-
-## User Management Endpoints
+## 6. User Endpoint
 
 ### GET /users/me
-Get current user profile
+Get current session user.
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "user_uuid",
-    "email": "user@example.com",
-    "username": "username",
-    "role": "user",
-    "capabilities": ["manage_models"],
-    "profile_data": {},
-    "preferences": {},
-    "created_at": "2023-01-01T00:00:00Z",
-    "last_login_at": "2023-01-02T00:00:00Z"
-  }
-}
-```
-
-### PUT /users/me
-Update current user profile
-
-**Request:**
-```json
-{
-  "username": "new_username",
-  "profile_data": { /* updated profile data */ },
-  "preferences": { /* updated preferences */ }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* updated user object */ }
-}
-```
-
-### GET /users/{id}
-Get specific user (administrative only)
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* user object */ }
-}
-```
-
----
-
-
-## Authorization Boundaries (Minimum v1)
-- System roles are `user` and `admin` only.
-- Ownership and capabilities control model-management scope:
-  - `user` can read/use public models and manage owned/authorized models.
-  - `admin` can review, approve, audit, and perform global governance operations.
-- Ownership reference: `models.owner_user_id`.
-- Capability example: `user.capabilities` contains `manage_models`.
-
-## Model Management Endpoints
-
-### GET /models
-List available models
-
-**Query Parameters:**
-- `status`: Filter by status ('published', 'draft', etc.)
-- `type`: Filter by model type
-- `search`: Search term for name/description
-- `limit`: Number of results (default: 20, max: 100)
-- `offset`: Offset for pagination
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": [
-    { /* model objects */ }
-  ],
-  "meta": {
-    "total": 150,
-    "limit": 20,
-    "offset": 0,
-    "has_more": true
-  }
-}
-```
-
-### POST /models
-Create new model
-
-**Request:**
-```json
-{
-  "name": "My Visual Model",
-  "description": "A model for image classification",
-  "model_type": "classification",
-  "config": { /* model configuration */ },
-  "metadata": { /* additional metadata */ }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* created model object */ }
-}
-```
-
-### GET /models/{id}
-Get specific model
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* model object */ }
-}
-```
-
-### PUT /models/{id}
-Update model
-
-**Request:**
-```json
-{
-  "name": "Updated Model Name",
-  "description": "Updated description",
-  "config": { /* updated config */ }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* updated model object */ }
-}
-```
-
-### DELETE /models/{id}
-Delete model (sets status to 'deprecated')
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* model object with deprecated status */ }
-}
-```
-
-### POST /models/{id}/upload
-Upload model files
-
-**Request:** (multipart/form-data)
-- `file`: Model file
-- `part_number`: For multipart uploads
-- `upload_id`: For multipart uploads
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "upload_id": "upload_session_id",
-    "status": "uploading|complete",
-    "file_info": { /* file metadata */ }
-  }
-}
-```
-
-### POST /models/{id}/publish
-Publish model (requires approval workflow)
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* model object with pending status */ }
-}
-```
-
----
-
-## Conversation Endpoints
+## 7. Conversation Endpoints
 
 ### GET /conversations
-List user conversations
+List conversations visible to current user.
 
-**Query Parameters:**
-- `model_id`: Filter by specific model
-- `status`: Filter by status ('active', 'completed', 'archived')
-- `limit`: Number of results
-- `offset`: Offset for pagination
+### POST /conversations/start
+Start a conversation.
 
-**Response:**
+Request:
 ```json
 {
-  "success": true,
-  "data": [
-    { /* conversation objects */ }
-  ],
-  "meta": {
-    "total": 50,
-    "limit": 20,
-    "offset": 0,
-    "has_more": true
-  }
+  "model_id": "m-1",
+  "initial_message": "Analyze this image",
+  "attachment_ids": ["f-1"]
 }
 ```
 
-### POST /conversations
-Start new conversation
-
-**Request:**
-```json
-{
-  "model_id": "model_uuid",
-  "initial_message": "Hello, can you analyze this image?",
-  "metadata": { /* conversation metadata */ }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* created conversation object */ }
-}
-```
+### POST /conversations/message
+Send message to an existing conversation.
 
 ### GET /conversations/{id}
-Get specific conversation
+Get conversation with messages.
 
-**Response:**
+## 8. File Attachment Endpoints
+
+### GET /files/conversation
+List conversation-scoped attachments for current user.
+
+### POST /files/conversation/upload
+Upload conversation attachment (prototype mock uses filename input).
+
+Request:
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "conversation_uuid",
-    "title": "Conversation Title",
-    "model_id": "model_uuid",
-    "messages": [ /* message objects */ ],
-    "created_at": "2023-01-01T00:00:00Z",
-    "updated_at": "2023-01-01T00:00:00Z"
-  }
+  "filename": "sample.jpg"
 }
 ```
 
-### DELETE /conversations/{id}
-Archive conversation
+### GET /files/model/{modelId}
+List model-scoped attachments.
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* conversation object with archived status */ }
-}
-```
+### POST /files/model/{modelId}/upload
+Upload model artifact attachment.
 
----
+### GET /files/dataset/{datasetId}
+List dataset-scoped attachments.
 
-## Message Endpoints
-
-### GET /conversations/{conversation_id}/messages
-Get messages from conversation
-
-**Query Parameters:**
-- `limit`: Number of messages to return
-- `before`: Message ID to fetch messages before
-- `after`: Message ID to fetch messages after
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": [
-    { /* message objects */ }
-  ]
-}
-```
-
-### POST /conversations/{conversation_id}/messages
-Send message in conversation
-
-**Request:**
-```json
-{
-  "content": "What can you tell me about this image?",
-  "attachments": [
-    {
-      "file_id": "attachment_uuid",
-      "filename": "image.jpg"
-    }
-  ],
-  "metadata": { /* message metadata */ }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* created message object */ }
-}
-```
-
-### POST /conversations/{conversation_id}/messages/{message_id}/regenerate
-Regenerate model response
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* regenerated message object */ }
-}
-```
-
----
-
-## File Attachment Endpoints
-
-### POST /files/upload
-Upload file for attachment
-
-**Request:** (multipart/form-data)
-- `file`: File to upload
-- `purpose`: Purpose of upload ('conversation', 'model_upload', 'dataset')
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "file_uuid",
-    "filename": "original_filename.jpg",
-    "file_path": "/path/to/file",
-    "file_size": 1024000,
-    "mime_type": "image/jpeg",
-    "status": "ready",
-    "metadata": { /* file metadata */ }
-  }
-}
-```
-
-### GET /files/{id}
-Get file information
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* file object */ }
-}
-```
+### POST /files/dataset/{datasetId}/upload
+Upload dataset source file attachment.
 
 ### DELETE /files/{id}
-Delete file
+Delete attachment in ownership scope.
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* file object with deleted status */ }
-}
-```
+Attachment status values:
+- `uploading`
+- `processing`
+- `ready`
+- `error`
 
-### GET /files/{id}/download
-Download file
+## 9. Model and Approval Endpoints
 
-**Response:** Raw file content with appropriate Content-Type header
+### GET /models
+List visible models.
 
----
+### GET /models/my
+List owned/authorized models.
 
-## Model Inference Endpoints
+### POST /models/draft
+Create model draft.
 
-### POST /models/{id}/infer
-Run inference on model
+### POST /approvals/submit
+Submit model approval request.
 
-**Request:**
-```json
-{
-  "inputs": [
-    {
-      "type": "image",
-      "data": "base64_encoded_data_or_file_id"
-    }
-  ],
-  "parameters": { /* inference parameters */ }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "outputs": [ /* inference results */ ],
-    "metadata": {
-      "inference_time": 1.234,
-      "model_version": "1.0.0"
-    }
-  }
-}
-```
-
-### POST /models/{id}/chat-infer
-Run inference in chat context (for conversation integration)
-
-**Request:**
-```json
-{
-  "message": "Describe this image in detail",
-  "context": {
-    "conversation_id": "conversation_uuid",
-    "previous_messages": [ /* recent message history */ ]
-  },
-  "attachments": [ /* file attachment IDs */ ],
-  "parameters": { /* inference parameters */ }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "response": "Detailed description of the image...",
-    "metadata": {
-      "confidence": 0.95,
-      "processing_time": 2.1
-    }
-  }
-}
-```
-
----
-
-## Approval Workflow Endpoints
-
-### GET /approvals/pending
-List pending approval requests (administrative only)
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": [
-    { /* approval request objects */ }
-  ]
-}
-```
+### GET /approvals
+List approval requests (admin gets global list, user gets own).
 
 ### POST /approvals/{id}/approve
-Approve model request
-
-**Request:**
-```json
-{
-  "notes": "Model approved for publication"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* updated approval request */ }
-}
-```
+Approve request (admin only).
 
 ### POST /approvals/{id}/reject
-Reject model request
-
-**Request:**
-```json
-{
-  "reason": "Model does not meet quality standards",
-  "notes": "Please address the issues mentioned..."
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": { /* updated approval request */ }
-}
-```
-
----
-
-## Audit and Monitoring Endpoints
+Reject request (admin only).
 
 ### GET /audit/logs
-Get audit logs (administrative only)
+Audit logs (admin only).
 
-**Query Parameters:**
-- `user_id`: Filter by user
-- `action`: Filter by action type
-- `entity_type`: Filter by entity type
-- `start_date`: Filter by start date
-- `end_date`: Filter by end date
-- `limit`: Number of results
-- `offset`: Offset for pagination
+## 10. Dataset Management Endpoints
 
-**Response:**
+### GET /datasets
+List datasets visible to current user.
+
+Query:
+- `task_type` (optional)
+- `status` (optional)
+
+### POST /datasets
+Create dataset.
+
+Request:
 ```json
 {
-  "success": true,
-  "data": [
-    { /* audit log objects */ }
-  ]
-}
-```
-
-### GET /monitoring/status
-Get system status
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "status": "operational",
-    "services": {
-      "api": "operational",
-      "inference": "operational",
-      "storage": "operational"
-    },
-    "timestamp": "2023-01-01T00:00:00Z"
+  "name": "Invoice OCR Set",
+  "description": "Round-1 OCR samples",
+  "task_type": "ocr",
+  "label_schema": {
+    "classes": ["text_line", "table", "stamp"]
   }
 }
 ```
 
----
+### GET /datasets/{id}
+Get dataset detail.
 
-## Webhook Endpoints
+### GET /datasets/{id}/items
+List dataset items.
 
-### POST /webhooks/model-status
-Receive model status updates (internal use)
+### POST /datasets/{id}/items
+Add dataset item metadata record (for imported references).
 
-**Expected Payload:**
+### POST /datasets/{id}/split
+Save split strategy and assign `train/val/test`.
+
+Request:
 ```json
 {
-  "model_id": "model_uuid",
-  "status": "training_complete|deployment_failed|health_warning",
-  "timestamp": "2023-01-01T00:00:00Z",
-  "details": { /* status details */ }
+  "train_ratio": 0.7,
+  "val_ratio": 0.2,
+  "test_ratio": 0.1,
+  "seed": 42
 }
 ```
 
-## Versioning
-API version is specified in the URL path (e.g., `/v1/`). Breaking changes will increment the version number. Clients should specify the version they expect to use.
+### GET /datasets/{id}/versions
+List dataset versions.
 
-## Testing
-- Sandbox environment available at `https://sandbox-api.vistral.ai/v1`
-- Test credentials provided for development
-- Rate limits may differ in sandbox environment
+### POST /datasets/{id}/versions
+Create dataset version snapshot.
 
+### POST /datasets/{id}/import
+Import annotations into dataset items.
+
+Prototype behavior:
+- accepts dataset-scoped source attachment id
+- generates/updates annotations with `source=import`
+- returns import summary (`imported`, `updated`)
+
+Request:
+```json
+{
+  "format": "yolo",
+  "attachment_id": "f-100"
+}
+```
+
+### POST /datasets/{id}/export
+Export annotations from dataset.
+
+Prototype behavior:
+- returns export summary and generated dataset-scoped export attachment metadata
+- does not yet stream binary export files in this round
+
+Request:
+```json
+{
+  "format": "coco"
+}
+```
+
+## 11. Annotation Endpoints (Phase 2 Minimum)
+
+### GET /datasets/{datasetId}/annotations
+List annotation records by item/status/task.
+
+### POST /datasets/{datasetId}/annotations
+Create or update annotation payload.
+
+Request:
+```json
+{
+  "dataset_item_id": "di-1",
+  "task_type": "detection",
+  "status": "in_progress",
+  "source": "manual",
+  "payload": {}
+}
+```
+
+### POST /datasets/{datasetId}/annotations/{annotationId}/submit-review
+Move annotation to `in_review`.
+
+### POST /datasets/{datasetId}/annotations/{annotationId}/review
+Review annotation (`approved` or `rejected`).
+
+Request:
+```json
+{
+  "status": "approved",
+  "quality_score": 0.92,
+  "review_comment": "Good quality"
+}
+```
+
+### POST /datasets/{datasetId}/pre-annotations
+Run model-based pre-annotation (Phase 5 scale-up, Phase 2/3 basic entry).
+
+## 12. Training Job Endpoints
+
+### GET /training/jobs
+List training jobs.
+
+Query:
+- `task_type`
+- `framework`
+- `status`
+
+### POST /training/jobs
+Create training job.
+
+Request:
+```json
+{
+  "name": "ocr-finetune-april",
+  "task_type": "ocr",
+  "framework": "paddleocr",
+  "dataset_id": "d-1",
+  "dataset_version_id": "dv-1",
+  "base_model": "paddleocr-PP-OCRv4",
+  "config": {
+    "epochs": 20,
+    "batch_size": 16,
+    "learning_rate": 0.001
+  }
+}
+```
+
+Server behavior (prototype):
+- create in `draft` then move through mock status path (`queued -> preparing -> running -> evaluating -> completed`)
+- persist mock logs and metrics
+
+### GET /training/jobs/{id}
+Get training job detail including metrics and log excerpt.
+
+### POST /training/jobs/{id}/cancel
+Cancel running/queued job.
+
+### POST /training/jobs/{id}/retry
+Retry from failed/cancelled state.
+
+## 13. Model Version Endpoints
+
+### GET /model-versions
+List model versions.
+
+Query:
+- `task_type`
+- `framework`
+- `model_id`
+
+### POST /model-versions/register
+Register model version from training job output.
+
+Request:
+```json
+{
+  "model_id": "m-1",
+  "training_job_id": "tj-1",
+  "version_name": "v2026.04.02-ocr-a"
+}
+```
+
+### GET /model-versions/{id}
+Get model version detail.
+
+## 14. Inference Validation Endpoints
+
+### GET /inference/runs
+List inference runs.
+
+### POST /inference/runs
+Create inference run using model version and input attachment.
+
+Request:
+```json
+{
+  "model_version_id": "mv-1",
+  "input_attachment_id": "f-1",
+  "task_type": "ocr"
+}
+```
+
+Response includes both raw and normalized outputs.
+
+### GET /inference/runs/{id}
+Get inference run detail.
+
+### POST /inference/runs/{id}/feedback
+Send failed sample back to dataset.
+
+Request:
+```json
+{
+  "dataset_id": "d-1",
+  "reason": "missed_detection"
+}
+```
+
+## 15. Unified Inference Output Schema
+Used by `/inference/runs*` and adapter predict APIs.
+
+```json
+{
+  "image": {
+    "filename": "sample.jpg",
+    "width": 1280,
+    "height": 720,
+    "source_attachment_id": "f-1"
+  },
+  "task_type": "detection",
+  "framework": "yolo",
+  "model": {
+    "model_id": "m-1",
+    "model_version_id": "mv-1",
+    "name": "Defect Detector",
+    "version": "v1"
+  },
+  "boxes": [
+    { "x": 100, "y": 120, "width": 80, "height": 40, "label": "scratch", "score": 0.91 }
+  ],
+  "rotated_boxes": [],
+  "polygons": [],
+  "masks": [],
+  "labels": [],
+  "ocr": {
+    "lines": [],
+    "words": []
+  },
+  "raw_output": {},
+  "normalized_output": {
+    "version": "v1"
+  }
+}
+```
+
+## 16. Adapter Interface Contract (Runtime)
+Platform adapter implementations for PaddleOCR/docTR/YOLO must expose:
+- `validate_dataset()`
+- `train()`
+- `evaluate()`
+- `predict()`
+- `export()`
+- `load_model()`
+
+Adapter-specific internals are hidden behind this contract.
+
+## 17. Error Codes
+- `AUTHENTICATION_REQUIRED`
+- `INSUFFICIENT_PERMISSIONS`
+- `CSRF_VALIDATION_FAILED`
+- `RESOURCE_NOT_FOUND`
+- `VALIDATION_ERROR`
+- `INVALID_STATE_TRANSITION`
+- `INTERNAL_ERROR`
+
+## 18. Versioning Strategy
+- API path versioning is planned (`/v1`) for production.
+- Current prototype uses stable `/api` routes; breaking changes must be documented in `PLANS.md` and migration notes.

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import StateBlock from '../components/StateBlock';
 import { api } from '../services/api';
+import { emitAuthUpdated } from '../services/authSession';
 
 export default function AuthRegisterPage() {
   const [email, setEmail] = useState('new@vistral.dev');
@@ -16,6 +17,7 @@ export default function AuthRegisterPage() {
         password: 'mock-pass',
         username
       });
+      emitAuthUpdated();
       setVariant('success');
       setMessage(`Registered as ${created.role}. Public registration can only create user accounts.`);
     } catch (error) {

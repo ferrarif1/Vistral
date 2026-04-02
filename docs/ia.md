@@ -1,130 +1,106 @@
 # Information Architecture
 
 ## 1. Purpose
-This IA defines executable page-level structure for round-1 implementation, centered on AI-native conversation + attachment + workflow state.
+Define executable route and page structure for the AI-native conversation workspace plus professional engineering console.
 
-## 2. Access and Role Rules
+## 2. Access Rules
 - System roles are only `user` and `admin`.
-- `owner` is a resource relationship (for example `models.owner_user_id`), not a system role.
-- Public registration creates only `user` accounts.
-- `admin` assignment is only via seed/bootstrap or admin-only management endpoints.
+- `owner` is resource relation, not system role.
+- `/auth/register` creates only `user`.
 
-## 3. Route Map (Round 1 Executable)
+## 3. Route Map
 
-### 3.1 Public/Auth
+### 3.1 Auth
 - `/auth/login`
-  - Purpose: login into existing account.
-  - Main blocks: credential form, loading/error/success feedback.
 - `/auth/register`
-  - Purpose: create user account (`role` is server-assigned as `user`).
-  - Main blocks: registration form, validation feedback.
 
-### 3.2 Dual Work Entry
+### 3.2 Entry
 - `/`
-  - Purpose: dual-entry launcher for two working modes.
-  - Main blocks:
-    - conversation workspace entry card
-    - professional console entry card
-    - mode-specific capability summary
+  - Dual work entry:
+    - AI-native conversation workspace
+    - professional console
 
-### 3.3 User Workspace
+### 3.3 Conversation Workspace
 - `/workspace/chat`
-  - Purpose: AI-native conversation workspace.
-  - Main blocks:
-    - conversation timeline
-    - message input composer
-    - persistent attachment panel (visible, deletable, status-aware)
-  - Mock round-1 flow: upload attachments -> send message -> receive mock assistant response.
+  - timeline + composer + persistent attachment panel
+
+### 3.4 Professional Console
 - `/workspace/console`
-  - Purpose: professional control-plane console.
-  - Main blocks:
-    - operational metrics snapshot
-    - approval queue summary
-    - quick actions to model workflows
+  - operational snapshots and quick links
 
-### 3.4 Model Domain
+### 3.5 Model Domain
 - `/models/explore`
-  - Purpose: discover available models.
-  - Main blocks: searchable model list, status and visibility tags.
 - `/models/my-models`
-  - Purpose: list user-owned/authorized models.
-  - Main blocks: ownership-scoped list, quick status view.
-- `/models/create`
-  - Purpose: model creation wizard.
-  - Main blocks:
-    - top stepper (required)
-    - Step 1 metadata
-    - Step 2 model file upload (visible status + delete)
-    - Step 3 parameters (advanced collapsed by default)
-    - Step 4 review + submit approval (mock)
+- `/models/create` (stepper required)
+- `/models/versions`
 
-### 3.5 Admin Domain (post round-1 focus)
-- `/admin/dashboard`
+### 3.6 Dataset Domain
+- `/datasets`
+  - dataset list + create entry
+- `/datasets/:datasetId`
+  - dataset detail
+  - top stepper for ingestion/split/version
+  - dataset attachments always visible/deletable/status-aware
+- `/datasets/:datasetId/annotate`
+  - minimal annotation workspace
+  - detection box + OCR text annotation
+  - submit-review and approve/reject actions
+
+### 3.7 Training Domain
+- `/training/jobs`
+  - job list
+- `/training/jobs/new`
+  - create training job wizard (stepper required, advanced params collapsed)
+- `/training/jobs/:jobId`
+  - detail: status, logs, metrics
+
+### 3.8 Inference Validation Domain
+- `/inference/validate`
+  - upload image
+  - choose model version
+  - run inference
+  - show raw + normalized output
+  - feedback-to-dataset action
+
+### 3.9 Settings
+- `/settings/llm`
+
+### 3.10 Admin
 - `/admin/models/pending`
-- `/admin/users`
 - `/admin/audit`
 
-Admin pages are contract-defined but not fully implemented in round-1 UI scope.
+## 4. Shared UI Contracts
+- `AppShell`: unified global navigation
+- `StateBlock`: empty/loading/error/success
+- `AttachmentUploader`: visible + deletable + status list
+- `StepIndicator`: mandatory for multi-step flows
+- `AdvancedSection`: advanced params collapsed by default
 
-## 4. Navigation Structure
+## 5. Page-Level Interaction Contracts
 
-### Primary Navigation (global shell)
-- Dual Entry
-- Conversation Workspace
-- Professional Console
-- Models Explore
-- My Models
-- Create Model
-- Auth (login/register) shortcuts for mock mode
+### 5.1 Dataset Detail
+- top stepper for `Upload -> Organize -> Version`
+- attachment list stays visible
+- split/version actions are explicit operations
 
-### Contextual Navigation
-- Conversation: no stepper, timeline-centric interaction.
-- Professional console: metric/queue/action blocks for structured operation.
-- Model creation: mandatory top stepper with current step + total steps + completion state.
+### 5.2 Training Job Creation
+- top stepper for `Task -> Data -> Params -> Review`
+- advanced hyperparameters remain collapsed initially
 
-## 5. Page Contracts
+### 5.3 Inference Validation
+- reusable uploader and state blocks
+- output panel displays:
+  - model metadata
+  - raw output
+  - normalized output
+- one-click send to dataset feedback
 
-### 5.1 Conversation Page Contract
-- Attachment list must stay visible in context.
-- Every attachment row must support delete.
-- Attachment statuses must include at least:
-  - `uploading`
-  - `processing`
-  - `ready`
-  - `error`
-- State feedback must use unified empty/loading/error/success semantics.
+## 6. Responsive Baseline
+- Mobile: stacked single-column layout
+- Desktop: side navigation + content frame
+- Stepper and upload statuses remain readable on all breakpoints
 
-### 5.2 Create Model Page Contract
-- Stepper is always visible at top.
-- Advanced parameters are collapsed by default.
-- Submission path in round-1 is mock, but transitions must be explicit:
-  - draft creation
-  - file uploaded
-  - parameter configured
-  - approval request submitted
-
-### 5.3 State Presentation Contract
-All primary pages must present consistent state blocks for:
-- empty
-- loading
-- error
-- success
-
-## 6. Shared UI Building Blocks
-- `AppShell`: global navigation + content frame
-- `StateBlock`: unified state feedback
-- `AttachmentUploader`: reusable upload/delete/status list
-- `StepIndicator`: top workflow indicator
-- `AdvancedSection`: progressive disclosure container
-
-## 7. Responsive Baseline
-- Mobile: single-column content, stacked navigation actions.
-- Tablet/Desktop: shell sidebar + content panel.
-- Attachment and stepper information must remain readable on all breakpoints.
-
-## 8. Round-1 Boundary
-Round-1 prioritizes mock-closed user flows:
-1. attachment + conversation loop
-2. model creation + approval submission loop
-
-Real training/approval engines, edge deployment operations, and full admin operations are deferred to later phases.
+## 7. Phase Boundary
+- Phase 1 focuses on skeleton pages + mock APIs.
+- Phase 2 introduces and now starts implementing minimal annotation workspace and review loop.
+- Phase 3+ integrates real framework adapters and executors.

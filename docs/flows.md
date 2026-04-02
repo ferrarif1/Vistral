@@ -1,176 +1,128 @@
-# User Flows and Process Documentation
+# User Flows
 
-## Overview
-This document details the primary user flows and business processes for the Vistral platform, focusing on natural language and attachment-driven interactions while maintaining clear progress indicators and state management.
+## 1. Overview
+This document defines executable flows for Vistral's AI-native conversation entry and professional engineering loop.
 
-## Primary User Flows
+## 2. Flow A: Conversation + Attachment Loop (implemented)
+Actor: `user`
 
-### Flow 1: Basic Model Interaction
-**Actor**: User
-**Goal**: Get insights from a visual model through conversation
+1. open `/workspace/chat`
+2. upload attachments (visible list with status)
+3. send message
+4. system starts conversation and returns assistant reply (mock or configured LLM)
+5. user continues messaging with attachments in context
 
-1. User navigates to main conversation interface
-   - Entry path: `/` (dual entry) -> `/workspace/chat`
-2. System displays welcome message and recent conversations
-3. User selects a model to interact with (or system suggests default)
-4. User types natural language query
-5. User attaches relevant files if needed (drag-and-drop or click-to-upload)
-6. System shows file status (uploading, processing, ready)
-7. User submits query
-8. System processes request and displays response
-9. User continues conversation or ends session
-10. System saves conversation for future reference
+Attachment states:
+- `uploading`
+- `processing`
+- `ready`
+- `error`
 
-**Alternative Paths**:
-- If no model selected → System prompts to select or explore models
-- If file upload fails → System shows error and allows retry
-- If model unavailable → System suggests alternative models
+## 3. Flow B: Model Draft -> Approval Submission (implemented)
+Actor: `user` with capability
 
-### Flow 2: Model Upload and Publishing
-**Actor**: User
-**Goal**: Publish a new visual model to the platform (for owned/authorized model scope)
+1. open `/models/create`
+2. stepper flow: metadata -> model file -> parameters -> review
+3. upload model files (visible/deletable/status-aware)
+4. advanced parameters collapsed by default
+5. submit approval request (mock)
 
-1. User navigates to model management section
-2. User clicks "Create New Model" button
-3. System presents multi-step wizard with progress indicator
-4. Step 1: Model metadata (name, description, tags)
-5. Step 2: Model file upload with status indicators
-6. Step 3: Configuration parameters (advanced options collapsed by default)
-7. Step 4: Privacy and access settings
-8. User submits model for approval
-9. System queues model for review process
-10. System sends confirmation to user
+Admin review path:
+- `/admin/models/pending` approve/reject
+- `/admin/audit` observe audit records
 
-**Alternative Paths**:
-- If file upload fails → Return to Step 2 with error message
-- If metadata incomplete → Highlight required fields
-- If user exits mid-flow → Save draft and allow resume
+## 4. Flow C: Dataset Management (Phase 1 skeleton, implemented)
+Actor: `user`
 
-### Flow 3: Approval Process
-**Actor**: Administrator
-**Goal**: Review and approve submitted models
+1. open `/datasets`
+2. create dataset with `task_type`
+3. open `/datasets/:datasetId`
+4. upload dataset files
+5. run split operation (`train/val/test`)
+6. create dataset version snapshot
 
-1. System notifies admin of pending model submissions
-2. Admin navigates to approval queue
-3. System displays pending models with priority indicators
-4. Admin selects model to review
-5. System shows model details, files, and configuration
-6. Admin tests model functionality
-7. Admin approves or rejects model
-8. If approved → System publishes model and notifies the submitting user
-9. If rejected → System sends feedback to the submitting user and moves to rejected queue
-10. System logs approval action for audit trail
+## 5. Flow D: Annotation Workflow (Phase 2 minimum, implementing now)
+Actor: `user` (annotator), `user/admin` (reviewer by capability)
 
-### Flow 4: Multi-Step Training Pipeline
-**Actor**: User
-**Goal**: Retrain a model with new data (for owned/authorized model scope)
+Status machine:
+- `unannotated -> in_progress -> annotated -> in_review -> approved`
+- rejection: `in_review -> rejected -> in_progress`
 
-1. User selects existing model for retraining
-2. System shows model dashboard with training options
-3. User selects "Retrain Model" option
-4. System opens multi-step training wizard with top progress bar
-5. Step 1: Select training dataset (with file attachment system)
-6. Step 2: Configure training parameters (advanced options collapsed)
-7. Step 3: Set resource allocation and schedule
-8. Step 4: Review and confirm settings
-9. User confirms to start training
-10. System begins training process and shows progress
-11. System notifies user when complete
+Minimum actions:
+- detection box annotation (draw/move/resize)
+- OCR text annotation
+- segmentation polygon input (minimal)
+- save, undo, continue edit
+- submit to review
+- approve/reject with comment
 
-## File Attachment Flows
+Current phase target:
+1. open `/datasets/:datasetId/annotate`
+2. select dataset item
+3. edit OCR/detection payload
+4. save as `in_progress`/`annotated`
+5. submit `annotated -> in_review`
+6. review as `approved` or `rejected`
 
-### Standard File Attachment
-1. User clicks attachment button or drags file to drop zone
-2. System shows file in attachment panel with status "Uploading"
-3. System updates status to "Processing" during validation
-4. System updates status to "Ready" when available for use
-5. File remains visible in sidebar throughout session
-6. User can remove file using delete icon
-7. Removed files are cleared from session
+## 6. Flow E: Training Job Workflow (Phase 1 skeleton, Phase 3 runtime)
+Actor: `user`
 
-### Failed File Upload
-1. System detects upload failure
-2. File status changes to "Error" with error message
-3. User sees option to retry or remove file
-4. If retry selected → Resume upload process
-5. If remove selected → Clear file from attachment list
+1. open `/training/jobs/new`
+2. stepper flow:
+   - Step 1 task + framework
+   - Step 2 dataset + base model
+   - Step 3 parameters (advanced collapsed)
+   - Step 4 review + submit
+3. create training job
+4. job transitions through:
+   - `draft`
+   - `queued`
+   - `preparing`
+   - `running`
+   - `evaluating`
+   - `completed` (or `failed` / `cancelled`)
+5. view logs and metrics in `/training/jobs/:jobId`
 
-## Multi-Step Process Patterns
+## 7. Flow F: Model Version Registration
+Actor: `user`
 
-### Progress Indication
-- Top-of-page progress bar showing current step
-- Step counter in header (e.g., "Step 2 of 4")
-- Visual indicators of completed steps
-- Clear back/forward navigation
+1. completed training job becomes registerable
+2. register model version in `/models/versions`
+3. model version is linked to model + dataset + training job + metrics
 
-### State Persistence
-- Form data saved automatically as user progresses
-- Ability to exit and resume process later
-- Session-based temporary storage
-- Draft saving for complex processes
+## 8. Flow G: Inference Validation + Feedback Loop
+Actor: `user`
 
-### Advanced Options Management
-- Advanced parameter sections collapsed by default
-- Clear expand/collapse controls
-- Visual indicator of available advanced options
-- User preference for default visibility
+1. open `/inference/validate`
+2. upload inference image
+3. select model version
+4. run inference
+5. inspect visualized predictions + raw output + normalized output
+6. if failure sample, click feedback action to send sample to dataset
 
-## Edge Deployment Flows
+## 9. Closed Business Loop 1: OCR Fine-tune
+1. create OCR dataset
+2. annotate/import OCR labels
+3. choose `paddleocr` or `doctr`
+4. run training
+5. evaluate OCR metrics (accuracy/CER/WER)
+6. register model version
+7. validate inference
+8. feedback errors to dataset
 
-### Model Deployment
-1. Admin selects model for edge deployment
-2. System validates model compatibility
-3. System identifies suitable edge locations
-4. Admin selects target locations
-5. System begins deployment process
-6. Real-time progress tracking
-7. Health monitoring of deployed models
-8. Automatic rollback on failure
+## 10. Closed Business Loop 2: Detection Fine-tune
+1. create detection dataset
+2. annotate/import boxes
+3. choose `yolo`
+4. run training
+5. evaluate detection metrics (mAP/precision/recall)
+6. register model version
+7. validate inference
+8. feedback errors to dataset
 
-## Error Handling Flows
-
-### Service Unavailable
-1. System detects service unavailability
-2. User receives clear error message
-3. System suggests retry or alternative actions
-4. Background retry mechanism initiated
-5. User notified when service restored
-
-### Permission Denied
-1. System detects insufficient permissions
-2. User receives clear explanation of limitation
-3. System suggests contacting administrator if appropriate
-4. Alternative pathways suggested when available
-
-## System Initiation Flows
-
-### First-Time User Onboarding
-1. New user completes registration
-2. System presents guided tour of conversation interface
-3. User completes profile setup
-4. System suggests popular models to try
-5. User attempts first conversation
-6. System provides contextual help as needed
-
-## Audit Trail Flows
-
-### Activity Logging
-1. System automatically logs significant user actions
-2. Timestamp, user ID, and action details recorded
-3. Model interactions tracked for compliance
-4. Administrative actions logged separately
-5. Audit reports generated periodically
-6. Compliance officers review logs as needed
-
-## Performance Considerations
-- Critical flows should load within 2 seconds
-- File uploads should provide continuous progress feedback
-- Long-running processes should be cancellable
-- Error states should provide clear recovery paths
-- Mobile flows optimized for touch interactions
-
-## Validation Points
-- All flows tested with actual user scenarios
-- Accessibility requirements verified at each step
-- Performance benchmarks met across all flows
-- Error handling robust for edge cases
+## 11. Unified UX Constraints
+- multi-step flows must have top stepper
+- advanced params default to collapsed
+- upload files must remain visible + deletable + status-aware
+- all pages use consistent empty/loading/error/success state blocks
+- style and interaction semantics stay consistent across modules

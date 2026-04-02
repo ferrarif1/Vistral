@@ -1,257 +1,284 @@
 # Data Model
 
-## Overview
-This document defines the core data models for the Vistral platform, supporting two system roles, ownership-based permissions, model lifecycle management, conversation tracking, and audit capabilities.
+## 1. Overview
+This document defines platform-level entities for Vistral's AI-native conversation and training workflows. Contracts in this file are the source of truth for schema and API payload design.
 
-## Core Entities
+## 2. Access and Ownership Semantics
+- System roles are only `user` and `admin`.
+- `owner` is a resource relationship (`owner_user_id`), not a role enum.
+- Public registration creates only `user`.
+- Privileged actions combine role checks with ownership/capability checks.
 
-### Owner semantics
-- `owner` is a resource relationship (e.g., `models.owner_user_id`), not a `User.role` value.
-- Access control combines `role` (`user`/`admin`) and `capabilities` with ownership checks.
+## 3. Shared Enums
 
-### User
-Represents all users in the system (users and administrators)
+### 3.1 Task type
+- `ocr`
+- `detection`
+- `classification`
+- `segmentation`
+- `obb` (optional)
 
-**Attributes:**
-- id (UUID, primary key)
-- email (string, unique, indexed)
-- username (string, unique, indexed)
-- role (enum: 'user', 'admin')
-- capabilities (JSON array, e.g., ['manage_models'])
-- profile_data (JSON object)
-- preferences (JSON object)
-- created_at (timestamp)
-- updated_at (timestamp)
-- last_login_at (timestamp)
-- is_active (boolean)
-- email_verified (boolean)
+### 3.2 Framework
+- `paddleocr`
+- `doctr`
+- `yolo`
 
-**Relationships:**
-- owns -> Model (one-to-many via ownership relation)
-- participates_in -> Conversation (many-to-many)
-- manages -> ApprovalRequest (many-to-many as admin)
+### 3.3 File status
+- `uploading`
+- `processing`
+- `ready`
+- `error`
 
-### Model
-Represents visual models managed in the system
+### 3.4 Annotation status
+- `unannotated`
+- `in_progress`
+- `annotated`
+- `in_review`
+- `approved`
+- `rejected`
 
-**Attributes:**
-- id (UUID, primary key)
-- name (string)
-- description (text)
-- version (string)
-- status (enum: 'draft', 'pending_approval', 'approved', 'rejected', 'published', 'deprecated')
-- model_type (string, e.g., 'classification', 'detection', 'segmentation')
-- file_path (string, path to model files)
-- config (JSON object, model configuration)
-- metadata (JSON object, additional metadata)
-- visibility (enum: 'private', 'workspace', 'public')
-- owner_user_id (UUID, foreign key to User)
-- approved_by (UUID, foreign key to User, nullable)
-- approved_at (timestamp, nullable)
-- published_at (timestamp, nullable)
-- created_at (timestamp)
-- updated_at (timestamp)
-- last_accessed_at (timestamp)
-- usage_count (integer)
-- edge_deployments (JSON array, deployment locations)
+### 3.5 Training job status
+- `draft`
+- `queued`
+- `preparing`
+- `running`
+- `evaluating`
+- `completed`
+- `failed`
+- `cancelled`
 
-**Relationships:**
-- owner_user -> User (many-to-one)
-- approver -> User (many-to-one, nullable)
-- conversations -> Conversation (many-to-many)
-- training_datasets -> Dataset (many-to-many)
-- versions -> ModelVersion (one-to-many)
+## 4. Core Entities
 
-### Conversation
-Represents a conversation thread between user and model
+### 4.1 User
+Attributes:
+- `id` (PK)
+- `email` (unique)
+- `username` (unique)
+- `role` (`user` | `admin`)
+- `capabilities` (JSON array)
+- `created_at`, `updated_at`
 
-**Attributes:**
-- id (UUID, primary key)
-- title (string, auto-generated from first message)
-- participants (JSON array, user IDs)
-- model_id (UUID, foreign key to Model)
-- status (enum: 'active', 'completed', 'archived')
-- created_at (timestamp)
-- updated_at (timestamp)
-- last_message_at (timestamp)
-- metadata (JSON object)
+Relationships:
+- owns many `Model`
+- owns many `Dataset`
+- creates many `TrainingJob`
 
-**Relationships:**
-- participants -> User (many-to-many)
-- model -> Model (many-to-one)
-- messages -> Message (one-to-many)
+### 4.2 Model
+Attributes:
+- `id` (PK)
+- `name`
+- `description`
+- `model_type`
+- `owner_user_id` (FK User)
+- `visibility` (`private` | `workspace` | `public`)
+- `status` (`draft` | `pending_approval` | `approved` | `rejected` | `published` | `deprecated`)
+- `metadata` (JSON)
+- `created_at`, `updated_at`
 
-### Message
-Represents individual messages within a conversation
+Relationships:
+- has many `ModelVersion`
+- has many `ApprovalRequest`
 
-**Attributes:**
-- id (UUID, primary key)
-- conversation_id (UUID, foreign key to Conversation)
-- sender_id (UUID, foreign key to User)
-- content (text)
-- message_type (enum: 'user_query', 'model_response', 'system_notification', 'file_attachment')
-- attachments (JSON array, file metadata)
-- response_metadata (JSON object, model response details)
-- created_at (timestamp)
-- updated_at (timestamp)
-- parent_message_id (UUID, foreign key to Message, nullable for threading)
+### 4.3 Conversation
+Attributes:
+- `id` (PK)
+- `model_id` (FK Model)
+- `title`
+- `status` (`active` | `completed` | `archived`)
+- `created_by` (FK User)
+- `created_at`, `updated_at`
 
-**Relationships:**
-- conversation -> Conversation (many-to-one)
-- sender -> User (many-to-one)
-- parent -> Message (self-referencing, nullable)
+Relationships:
+- has many `Message`
+- references many `FileAttachment` (via message/context)
 
-### FileAttachment
-Represents files attached to conversations or model uploads
+### 4.4 Message
+Attributes:
+- `id` (PK)
+- `conversation_id` (FK Conversation)
+- `sender` (`user` | `assistant` | `system`)
+- `content`
+- `attachment_ids` (JSON array)
+- `created_at`
 
-**Attributes:**
-- id (UUID, primary key)
-- filename (string)
-- original_filename (string)
-- file_path (string)
-- file_size (integer, in bytes)
-- mime_type (string)
-- status (enum: 'uploading', 'processing', 'ready', 'error', 'deleted')
-- upload_error (string, nullable)
-- uploaded_by (UUID, foreign key to User)
-- attached_to_type (string, polymorphic type: 'Message', 'Model')
-- attached_to_id (UUID, polymorphic foreign key)
-- metadata (JSON object, additional file metadata)
-- created_at (timestamp)
-- updated_at (timestamp)
+### 4.5 FileAttachment
+Attributes:
+- `id` (PK)
+- `filename`
+- `status` (`uploading` | `processing` | `ready` | `error`)
+- `owner_user_id` (FK User)
+- `attached_to_type` (`Conversation` | `Model` | `Dataset` | `InferenceRun`)
+- `attached_to_id` (nullable)
+- `upload_error` (nullable)
+- `created_at`, `updated_at`
 
-**Relationships:**
-- uploader -> User (many-to-one)
-- attached_entity (polymorphic relationship to Message/Model)
+Rule:
+- upload lists must stay visible in UI and support delete actions.
 
-### ApprovalRequest
-Represents approval requests for models
+### 4.6 ApprovalRequest
+Attributes:
+- `id` (PK)
+- `model_id` (FK Model)
+- `requested_by` (FK User)
+- `approved_by` (FK User, nullable)
+- `status` (`pending` | `approved` | `rejected`)
+- `review_notes` (nullable)
+- `requested_at`, `reviewed_at`
 
-**Attributes:**
-- id (UUID, primary key)
-- model_id (UUID, foreign key to Model)
-- requested_by (UUID, foreign key to User)
-- approved_by (UUID, foreign key to User, nullable)
-- status (enum: 'pending', 'approved', 'rejected')
-- rejection_reason (text, nullable)
-- review_notes (text, nullable)
-- requested_at (timestamp)
-- reviewed_at (timestamp, nullable)
-- expires_at (timestamp, nullable)
+### 4.7 Dataset
+Attributes:
+- `id` (PK)
+- `name`
+- `description`
+- `task_type` (TaskType)
+- `status` (`draft` | `ready` | `archived`)
+- `owner_user_id` (FK User)
+- `label_schema` (JSON: classes, aliases, color)
+- `metadata` (JSON)
+- `created_at`, `updated_at`
 
-**Relationships:**
-- model -> Model (many-to-one)
-- requester -> User (many-to-one)
-- reviewer -> User (many-to-one, nullable)
+Relationships:
+- has many `DatasetItem`
+- has many `DatasetVersion`
+- referenced by many `TrainingJob`
 
-### Dataset
-Represents training datasets used for model improvement
+### 4.8 DatasetItem
+Attributes:
+- `id` (PK)
+- `dataset_id` (FK Dataset)
+- `attachment_id` (FK FileAttachment)
+- `split` (`train` | `val` | `test` | `unassigned`)
+- `status` (`uploading` | `processing` | `ready` | `error`)
+- `metadata` (JSON)
+- `created_at`, `updated_at`
 
-**Attributes:**
-- id (UUID, primary key)
-- name (string)
-- description (text)
-- file_path (string)
-- size (integer, in bytes)
-- format (string, e.g., 'image_folder', 'coco', 'pascal_voc')
-- num_samples (integer)
-- created_by (UUID, foreign key to User)
-- created_at (timestamp)
-- updated_at (timestamp)
-- metadata (JSON object)
+Relationships:
+- has many `Annotation`
 
-**Relationships:**
-- creator -> User (many-to-one)
-- models -> Model (many-to-many)
+### 4.9 Annotation
+Attributes:
+- `id` (PK)
+- `dataset_item_id` (FK DatasetItem)
+- `task_type` (TaskType)
+- `source` (`manual` | `import` | `pre_annotation`)
+- `status` (AnnotationStatus)
+- `payload` (JSON normalized annotation payload)
+- `annotated_by` (FK User)
+- `created_at`, `updated_at`
 
-### AuditLog
-Represents system audit logs for compliance and monitoring
+### 4.10 AnnotationReview
+Attributes:
+- `id` (PK)
+- `annotation_id` (FK Annotation)
+- `reviewer_user_id` (FK User)
+- `status` (`approved` | `rejected`)
+- `quality_score` (nullable float)
+- `review_comment` (nullable)
+- `created_at`
 
-**Attributes:**
-- id (UUID, primary key)
-- user_id (UUID, foreign key to User, nullable for system events)
-- action (string, e.g., 'model_created', 'model_approved', 'conversation_started')
-- entity_type (string, e.g., 'Model', 'Conversation', 'User')
-- entity_id (UUID)
-- old_values (JSON object, previous state)
-- new_values (JSON object, new state)
-- ip_address (string)
-- user_agent (string)
-- timestamp (timestamp)
-- metadata (JSON object)
+### 4.11 DatasetVersion
+Attributes:
+- `id` (PK)
+- `dataset_id` (FK Dataset)
+- `version_name`
+- `split_summary` (JSON)
+- `item_count`
+- `annotation_coverage` (float)
+- `created_by` (FK User)
+- `created_at`
 
-**Relationships:**
-- user -> User (many-to-one, nullable)
+### 4.12 TrainingJob
+Attributes:
+- `id` (PK)
+- `name`
+- `task_type` (TaskType)
+- `framework` (Framework)
+- `status` (TrainingJobStatus)
+- `dataset_id` (FK Dataset)
+- `dataset_version_id` (FK DatasetVersion, nullable)
+- `base_model`
+- `config` (JSON)
+- `log_excerpt` (nullable)
+- `submitted_by` (FK User)
+- `created_at`, `updated_at`
 
-### EdgeDeployment
-Represents model deployments to edge locations
+Relationships:
+- has many `TrainingMetric`
+- can produce one or more `ModelVersion`
 
-**Attributes:**
-- id (UUID, primary key)
-- model_id (UUID, foreign key to Model)
-- location (string, edge location identifier)
-- status (enum: 'deploying', 'active', 'inactive', 'error')
-- deployment_config (JSON object)
-- deployed_at (timestamp)
-- updated_at (timestamp)
-- health_status (JSON object, runtime metrics)
-- last_heartbeat (timestamp)
+### 4.13 TrainingMetric
+Attributes:
+- `id` (PK)
+- `training_job_id` (FK TrainingJob)
+- `metric_name` (for example `map`, `cer`, `wer`, `precision`, `recall`)
+- `metric_value` (float)
+- `step` (int)
+- `recorded_at`
 
-**Relationships:**
-- model -> Model (many-to-one)
+### 4.14 ModelVersion
+Attributes:
+- `id` (PK)
+- `model_id` (FK Model)
+- `training_job_id` (FK TrainingJob, nullable)
+- `version_name`
+- `task_type` (TaskType)
+- `framework` (Framework)
+- `status` (`registered` | `deprecated`)
+- `metrics_summary` (JSON)
+- `artifact_attachment_id` (FK FileAttachment, nullable)
+- `created_by` (FK User)
+- `created_at`
 
-## Indexes and Constraints
+### 4.15 InferenceRun
+Attributes:
+- `id` (PK)
+- `model_version_id` (FK ModelVersion)
+- `input_attachment_id` (FK FileAttachment)
+- `task_type` (TaskType)
+- `framework` (Framework)
+- `status` (`queued` | `running` | `completed` | `failed`)
+- `raw_output` (JSON)
+- `normalized_output` (JSON)
+- `feedback_dataset_id` (FK Dataset, nullable)
+- `created_by` (FK User)
+- `created_at`, `updated_at`
 
-### Performance Indexes
-- User.email (unique)
-- User.username (unique)
-- Model.owner_user_id + status (composite)
-- Conversation.model_id + status (composite)
-- Message.conversation_id + created_at (composite)
-- FileAttachment.attached_to_type + attached_to_id (composite)
-- AuditLog.timestamp (descending)
-- AuditLog.user_id + timestamp (composite)
+## 5. State Transition Rules
 
-### Foreign Key Constraints
-- All foreign key relationships enforce referential integrity
-- Cascade delete for user-owned models (with soft-delete option)
-- Restrict deletion of referenced entities where integrity is critical
+### 5.1 Annotation
+- `unannotated -> in_progress -> annotated -> in_review -> approved`
+- rejection path: `in_review -> rejected -> in_progress`
 
-## Data Lifecycle
+### 5.2 TrainingJob
+- `draft -> queued -> preparing -> running -> evaluating -> completed`
+- failure path: `running|evaluating -> failed`
+- manual stop: `queued|preparing|running -> cancelled`
 
-### User Data
-- Created during registration
-- Updated through profile management
-- Soft-deleted rather than hard deletion for audit purposes
-- Personal data anonymization after account closure
+### 5.3 ModelVersion
+- register path: training/evaluation completion creates `registered`
+- lifecycle can move to `deprecated`
 
-### Model Data
-- Created during model upload process
-- Versioned for each update
-- Lifecycle: draft → pending_approval → approved → published
-- Archived when deprecated rather than deleted
+## 6. Unified Inference Output Storage
+`InferenceRun.normalized_output` must support:
+- image metadata
+- `task_type`, `framework`
+- model metadata
+- `boxes`, `rotated_boxes`, `polygons`, `masks`, `labels`
+- OCR lines/words/confidence
+- full `raw_output`
 
-### Conversation Data
-- Created when first message is sent
-- Maintained for user access and model training
-- Automatically archived after period of inactivity
-- Exportable for user data portability
+## 7. Indexes and Constraints (minimum)
+- unique: `users.email`, `users.username`
+- index: `models.owner_user_id, models.status`
+- index: `datasets.owner_user_id, datasets.task_type`
+- index: `dataset_items.dataset_id, dataset_items.split`
+- index: `annotations.dataset_item_id, annotations.status`
+- index: `training_jobs.dataset_id, training_jobs.status`
+- index: `training_metrics.training_job_id, training_metrics.metric_name`
+- index: `model_versions.model_id, model_versions.created_at`
+- index: `inference_runs.model_version_id, inference_runs.created_at`
 
-### File Data
-- Stored securely with access controls
-- Retained during active conversation
-- Cleaned up after conversation archival
-- Temporary files cleaned up after processing
-
-## Security Considerations
-- All sensitive data encrypted at rest
-- User passwords hashed with bcrypt/scrypt
-- File uploads validated and sanitized
-- Access control enforced at application layer
-- Audit logging for all sensitive operations
-
-## Scalability Considerations
-- Large file attachments stored in object storage
-- Conversation history partitioned by date/user
-- Model binaries stored separately from metadata
-- Audit logs archived to separate system after retention period
+## 8. Security and Audit Notes
+- sensitive operations (approval, role-sensitive actions, training state transitions) must create audit logs
+- file and inference artifacts should remain traceable to user + resource ownership
+- key material remains outside plain-text source control
