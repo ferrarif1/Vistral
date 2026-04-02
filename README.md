@@ -71,3 +71,9 @@ License file is not yet added in this baseline; add one before production distri
 - Auth mock: login/register (`register` cannot create `admin`)
 - Ownership-based model filtering and create permission via capabilities
 - Initial schema in `db/schema.sql`
+
+
+## Docker Deployment
+- Quick guide: `docs/deployment.docker.md`
+- Build: `docker build -t vistral-web:round1 .`
+- Run: `docker run --rm -p 8080:80 vistral-web:round1`
