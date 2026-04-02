@@ -1,56 +1,17 @@
-# Vistral Project Configuration for Codex
+# Codex model selection for primary implementation tasks.
+model = "gpt-5.3-codex"
 
-[project]
-name = "Vistral"
-version = "0.1.0"
-description = "AI-Native Visual Model Platform"
+# Provider for the configured model.
+model_provider = "openai"
 
-[model]
-primary = "gpt-5.4"
-fallback = "gpt-5.3-codex"
+# Secondary model used for review/check pass.
+review_model = "gpt-5.3-codex"
 
-[workspace]
-root = "."
-source_dirs = ["src", "api", "ui"]
-test_dirs = ["tests"]
+# Keep reasoning effort balanced for everyday repo work.
+model_reasoning_effort = "medium"
 
-[agents]
-default_timeout = 30000
-max_concurrent = 5
+# Require no interactive approvals in this repository environment.
+approval_policy = "never"
 
-[skills]
-enabled = [
-    "product-architect",
-    "frontend-parity-review", 
-    "backend-contract-guard"
-]
-
-[tools]
-allowed = [
-    "shell_command",
-    "apply_patch",
-    "read_file",
-    "write_file"
-]
-
-[validation]
-enable_pre_commit = true
-required_docs = [
-    "README.md",
-    "docs/prd.md",
-    "docs/data-model.md",
-    "docs/api-contract.md"
-]
-
-[deployment]
-staging_branch = "develop"
-production_branch = "main"
-auto_deploy_enabled = false
-
-[review]
-automated_checks = [
-    "code_style",
-    "security_scan",
-    "dependency_check"
-]
-required_approvals = 1
+# Match repository execution environment: full local access.
+sandbox_mode = "danger-full-access"

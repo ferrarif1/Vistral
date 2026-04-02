@@ -24,13 +24,24 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
 - Infrastructure: Scalable deployment and edge computing support
 
 ## Getting Started
-1. Clone the repository
-2. Install dependencies (see docs/setup.md)
-3. Configure environment variables
-4. Run development server
+1. Clone the repository.
+2. Read collaboration rules in `AGENTS.md`.
+3. Review product contracts in:
+   - `docs/prd.md`
+   - `docs/ia.md`
+   - `docs/flows.md`
+   - `docs/data-model.md`
+   - `docs/api-contract.md`
+4. Follow local setup instructions in `docs/setup.md`.
+
+## Repository Working Model (How Codex should work in this repo)
+- Collaboration and execution rules: `AGENTS.md`
+- Product and engineering contracts: `docs/*`
+- Reusable skills: `.agents/skills/`
+- Delivery order: plan first, align contracts, then implement
 
 ## Contributing
-See our contribution guidelines in docs/contributing.md
+Please read `docs/contributing.md` before opening a change.
 
 ## License
-MIT License - see LICENSE file for details
+License file is not yet added in this baseline; add one before production distribution.
