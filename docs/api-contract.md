@@ -92,13 +92,15 @@ Authenticate user and retrieve access token
 ### POST /auth/register
 Register new user account
 
+Registration creates `user` accounts only.
+`admin` role assignment is restricted to backend seed/bootstrap or admin-only management endpoints.
+
 **Request:**
 ```json
 {
   "email": "user@example.com",
   "password": "secure_password",
-  "username": "username",
-  "role": "model_owner|end_user|administrator"
+  "username": "username"
 }
 ```
 
@@ -149,7 +151,8 @@ Get current user profile
     "id": "user_uuid",
     "email": "user@example.com",
     "username": "username",
-    "role": "model_owner",
+    "role": "user",
+    "capabilities": ["manage_models"],
     "profile_data": {},
     "preferences": {},
     "created_at": "2023-01-01T00:00:00Z",
@@ -190,6 +193,15 @@ Get specific user (administrative only)
 ```
 
 ---
+
+
+## Authorization Boundaries (Minimum v1)
+- System roles are `user` and `admin` only.
+- Ownership and capabilities control model-management scope:
+  - `user` can read/use public models and manage owned/authorized models.
+  - `admin` can review, approve, audit, and perform global governance operations.
+- Ownership reference: `models.owner_user_id`.
+- Capability example: `user.capabilities` contains `manage_models`.
 
 ## Model Management Endpoints
 
