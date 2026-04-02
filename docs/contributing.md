@@ -2,7 +2,7 @@
 
 ## Contribution Principles
 - Keep Vistral AI-native: conversation + attachment driven.
-- Preserve three-party role semantics (owner / user / admin).
+- Preserve two-role semantics (user / admin) plus ownership-based model permissions.
 - Prefer shared, reusable patterns over page-specific divergence.
 - Update contracts first (`docs/*`) when behavior/data/API changes.
 

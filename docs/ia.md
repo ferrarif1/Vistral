@@ -9,7 +9,7 @@ This document outlines the information architecture for the Vistral platform, or
 - `/` - Main conversation interface (landing for authenticated users)
 - `/auth` - Authentication flows
 - `/admin` - Administrative dashboard
-- `/models` - Model discovery and management
+- `/models` - Model discovery and management (user domain, not a separate owner portal)
 - `/account` - User account management
 
 ### Level 1: Conversation Interface
