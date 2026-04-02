@@ -1,4 +1,7 @@
-# Backend Contract Guard Skill ?
+---
+name: backend-contract-guard
+description: Guard backend schemas, APIs, and state transitions so implementation stays aligned with the documented product contracts, data model, and workflow rules.
+---
 
 ## Overview
 This skill ensures backend implementations adhere to the API contracts, data models, and business logic requirements specified in the documentation. It focuses on validating that services properly implement the defined interfaces, maintain data integrity, and support the AI-native conversational experience.

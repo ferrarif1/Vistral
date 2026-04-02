@@ -1,4 +1,7 @@
-# Frontend Parity Review Skill
+---
+name: frontend-parity-review
+description: Review frontend pages and components for consistency with the AI-native conversational UX contract, including file attachments, multi-step flow indicators, and calm unified interaction patterns.
+---
 
 ## Overview
 This skill ensures frontend implementations maintain consistency with the AI-native conversational interface design, proper file attachment handling, multi-step process indicators, and advanced parameter management as specified in the product requirements.

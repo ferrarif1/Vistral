@@ -1,5 +1,7 @@
-# Product Architect Skill
-
+---
+name: product-architect
+description: Define product structure, flows, information architecture, and implementation plans for the AI-native vision platform before coding begins.
+---
 ## Overview
 This skill guides architectural decisions for the Vistral platform, ensuring alignment with product vision, scalability requirements, and business objectives. It focuses on AI-native interfaces, natural language processing, and visual model integration.
 
