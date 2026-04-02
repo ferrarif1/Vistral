@@ -1,77 +1,116 @@
-# Agent Roles and Responsibilities
+# Vistral Codex Collaboration Guide
 
-## Overview
-This document outlines the various AI agents that will operate within the Vistral platform, each with specific roles and responsibilities to support the three-party ecosystem (model owners, users, administrators).
+## 1) 项目使命与范围
+Vistral 是一个 **AI-native、对话与附件驱动** 的视觉模型平台。
 
-## Core Agents
+本仓库当前阶段目标：
+- 把产品蓝图（PRD / IA / Flows / Data Model / API Contract）稳定落地为可持续演进的工程基线。
+- 保持两类系统角色（User、Admin）与资源所有权权限模型的一致语义。
+- 支持模型训练、审批、发布、边缘部署、审计等主线能力。
 
-### 1. Model Interaction Agent
-- **Role**: Handles user conversations and model interactions
-- **Responsibilities**:
-  - Process natural language queries from users
-  - Manage file attachments and visual inputs
-  - Coordinate with visual models for inference
-  - Provide contextual responses based on conversation history
-- **Permissions**: Access to active models, conversation memory
+**范围约束**：本文件规定的是 Codex 在本仓库的协作与交付规则，不是产品内“运行时 agent”设计说明。
 
-### 2. Model Management Agent
-- **Role**: Oversees model lifecycle operations
-- **Responsibilities**:
-  - Handle model uploads and versioning
-  - Coordinate training pipelines
-  - Manage approval workflows
-  - Monitor model performance metrics
-- **Permissions**: Access to model registry, training infrastructure
+---
 
-### 3. Audit and Compliance Agent
-- **Role**: Ensures regulatory compliance and tracks activities
-- **Responsibilities**:
-  - Log all model interactions and changes
-  - Verify approval processes are followed
-  - Monitor for policy violations
-  - Generate compliance reports
-- **Permissions**: Read access to all system logs, model metadata
+## 2) 开工前必读文件顺序（必须遵守）
+每次开始实现前，按以下顺序阅读并对齐：
 
-### 4. User Management Agent
-- **Role**: Manages user roles and permissions
-- **Responsibilities**:
-  - Authenticate and authorize users
-  - Manage role-based access control
-  - Handle user onboarding and profile management
-- **Permissions**: Access to user database and authentication systems
+1. `README.md`（仓库定位、工作入口）
+2. `AGENTS.md`（本协作规则）
+3. `.codex/config.toml`（执行与安全边界）
+4. `docs/prd.md`（需求与非功能要求）
+5. `docs/ia.md`（信息架构与导航）
+6. `docs/flows.md`（关键流程与状态）
+7. `docs/data-model.md`（实体、约束、状态枚举）
+8. `docs/api-contract.md`（接口契约与错误规范）
+9. `.agents/skills/**/SKILL.md`（按任务类型调用）
 
-### 5. Edge Deployment Agent
-- **Role**: Manages edge inference deployments
-- **Responsibilities**:
-  - Deploy models to edge locations
-  - Monitor edge node health
-  - Handle scaling and load balancing
-  - Manage model updates on edge devices
-- **Permissions**: Access to deployment infrastructure, monitoring systems
+如上述文档有冲突，按“更具体、更新近、影响面更大”的原则处理，并在变更说明中明确记录。
 
-### 6. Workflow Orchestration Agent
-- **Role**: Coordinates complex multi-step processes
-- **Responsibilities**:
-  - Track progress through multi-step workflows
-  - Display progress indicators to users
-  - Manage state persistence across sessions
-  - Handle workflow interruption and resumption
-- **Permissions**: Access to workflow state, user session data
+---
 
-## Agent Communication Protocols
-- All agents communicate through standardized message formats
-- Event-driven architecture with pub/sub messaging
-- State management through shared data stores
-- Error handling and retry mechanisms
+## 3) Skill 调用规则（按任务类型）
+当任务明显匹配以下场景时，必须调用对应 skill：
 
-## Security Considerations
-- Each agent operates with minimal required permissions
-- All inter-agent communication is authenticated and encrypted
-- Audit trails maintained for all agent actions
-- Regular security assessments of agent behaviors
+- **产品规划 / 范围梳理 / 方案分解**：`product-architect`
+  - 何时用：进入编码前的需求拆解、信息结构调整、跨模块流程设计。
+- **前端页面与交互一致性审查**：`frontend-parity-review`
+  - 何时用：涉及对话 UI、附件交互、多步骤流程、状态反馈样式时。
+- **后端合同与状态机约束审查**：`backend-contract-guard`
+  - 何时用：涉及 API、数据结构、状态迁移、权限与审计链路时。
 
-## Performance Standards
-- Response times under 2 seconds for user-facing agents
-- 99.9% uptime for critical operational agents
-- Scalable resource allocation based on demand
-- Monitoring and alerting for agent health
+多 skill 同时命中时：
+1) 先 `product-architect`，
+2) 再 `backend-contract-guard` / `frontend-parity-review`（按改动面并行或串行），
+3) 最后统一回归检查。
+
+---
+
+## 4) 全站强约束（必须满足）
+以下是实现与评审的硬门槛，不满足即视为未完成：
+
+1. **不能只做首页**：任何新增能力必须覆盖其完整入口与主流程，不得停留在 landing 演示。
+2. **上传附件必须完整可用**：
+   - 可见（始终可见于上下文）
+   - 可删（用户可显式移除）
+   - 有状态（至少包含 uploading / processing / ready / error）
+3. **多步骤流程必须有顶部 stepper**：包含当前步骤、总步骤、完成态提示。
+4. **高级参数默认折叠**：遵循渐进披露，默认不展开。
+5. **状态反馈统一**：空态 / 错态 / 加载态 / 成功态必须在全站保持一致语义与表现。
+
+---
+
+## 5) 文档优先原则（合同先于实现）
+若改动涉及行为、数据、接口或流程，必须先更新相应合同文档，再进行实现：
+
+- 流程变化：先改 `docs/flows.md`
+- 数据结构变化：先改 `docs/data-model.md`
+- 接口变化：先改 `docs/api-contract.md`
+- 需求变化：先改 `docs/prd.md`（必要时同步 `docs/ia.md`）
+
+禁止“代码先行、文档事后补写”导致合同漂移。
+
+---
+
+## 6) 改动原则（防止风格漂移）
+1. **优先共享层**：先复用或扩展公共组件、状态层、样式 token、流程容器。
+2. **禁止页面各自为政**：不允许单页私有样式与交互规则偏离全站规范。
+3. **避免重复实现**：相同语义（上传列表、stepper、状态反馈）必须抽象复用。
+4. **保持 AI-native 语义一致**：所有入口均应服务“对话 + 附件 + 流程状态”的统一体验。
+
+---
+
+## 7) 验证要求（每次改动后的最小检查）
+每次提交前至少执行与改动面对应的最小检查：
+
+- 文档改动：
+  - 链接有效性检查（README 与 docs 内部链接）
+  - 关键术语一致性检查（角色名、状态枚举、流程步骤名）
+- 前端改动：
+  - lint / typecheck（最小可执行集）
+  - 关键流程的状态 UI 自测（空/错/载入/成功）
+- 后端改动：
+  - lint / test（最小可执行集）
+  - API contract 与 data model 对齐检查
+
+若受环境限制无法跑完整检查，必须在交付说明中标明未执行项与风险。
+
+---
+
+## 8) 输出要求（每次任务都遵循）
+1. **先 plan**：明确范围、影响文件、验证方式。
+2. **再改动**：按“先文档合同，后实现”推进。
+3. **最后自查风险**：列出未覆盖项、不确定项、建议下一步。
+
+交付说明必须至少包含：
+- 改了什么
+- 为什么这样改
+- 验证了什么
+- 剩余风险与下一轮建议
+
+
+## 中文版本
+- 本文件中文版：`AGENTS.zh-CN.md`
+- 仓库说明中文版：`README.zh-CN.md`
+- Setup 中文版：`docs/setup.zh-CN.md`
+- Contributing 中文版：`docs/contributing.zh-CN.md`

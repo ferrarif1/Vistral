@@ -1,20 +1,19 @@
 # Product Requirements Document (PRD)
 
 ## Product Overview
-Vistral is an AI-native visual model platform that enables natural language and attachment-driven interactions with visual models. Building on RVision's foundation, it introduces a conversational interface paradigm while preserving core business logic and three-party role management.
+Vistral is an AI-native visual model platform that enables natural language and attachment-driven interactions with visual models. Building on RVision's foundation, it introduces a conversational interface paradigm while preserving core business logic with a two-role access model (user/admin) and ownership-based permissions for model-management actions.
 
 ## Problem Statement
 Current visual model platforms use traditional dashboard interfaces that require users to navigate complex UIs to interact with models. This creates friction for users who want to quickly get insights from visual models using natural communication patterns.
 
 ## Target Users
-1. **Model Owners**: Researchers, developers, and organizations that create and maintain visual models
-2. **End Users**: Professionals who need visual model insights for decision-making
-3. **Administrators**: Platform operators who manage the system and governance
+1. **Users**: Professionals, researchers, and developers who interact with models through conversation and attachments; with proper capabilities, users can also create, manage, and retrain models they own.
+2. **Administrators**: Platform operators who manage approval, auditing, governance, and system-wide operations.
 
 ## Core Use Cases
 
 ### Use Case 1: Visual Model Query
-- **Actor**: End User
+- **Actor**: User
 - **Goal**: Get insights from a visual model using natural language
 - **Flow**:
   1. User initiates conversation
@@ -24,10 +23,10 @@ Current visual model platforms use traditional dashboard interfaces that require
   5. User can continue conversation with follow-up questions
 
 ### Use Case 2: Model Management
-- **Actor**: Model Owner
+- **Actor**: User with model-management permission
 - **Goal**: Upload, configure, and manage visual models
 - **Flow**:
-  1. Model owner accesses model management interface
+  1. User accesses model management interface
   2. Uploads model files and configuration
   3. Configures model parameters and constraints
   4. Submits for approval process
@@ -42,6 +41,11 @@ Current visual model platforms use traditional dashboard interfaces that require
   3. Tests model functionality
   4. Approves or rejects model
   5. Updates model status in system
+
+## Access Model Clarification
+- Model owner is not a first-class system role.
+- Ownership is represented as a resource relationship (for example `models.owner_user_id`).
+- Additional model-management authority is represented by lightweight capabilities (for example `user.capabilities` contains `manage_models`).
 
 ## Functional Requirements
 
@@ -66,7 +70,7 @@ Current visual model platforms use traditional dashboard interfaces that require
 - The system shall maintain user preferences for parameter visibility
 
 ### FR-005: Role-Based Access Control
-- The system shall support three distinct user roles (owner, user, admin)
+- The system shall support two system roles (user, admin) with ownership-based and capability-based permissions
 - The system shall enforce role-based permissions consistently
 - The system shall maintain audit logs for all privileged actions
 
