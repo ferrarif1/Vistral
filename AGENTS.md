@@ -107,3 +107,10 @@ Vistral 是一个 **AI-native、对话与附件驱动** 的视觉模型平台。
 - 为什么这样改
 - 验证了什么
 - 剩余风险与下一轮建议
+
+
+## 中文版本
+- 本文件中文版：`AGENTS.zh-CN.md`
+- 仓库说明中文版：`README.zh-CN.md`
+- Setup 中文版：`docs/setup.zh-CN.md`
+- Contributing 中文版：`docs/contributing.zh-CN.md`

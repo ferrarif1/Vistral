@@ -43,5 +43,12 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
 ## Contributing
 Please read `docs/contributing.md` before opening a change.
 
+
+## 中文文档
+- 仓库说明（中文）：`README.zh-CN.md`
+- 协作规则（中文）：`AGENTS.zh-CN.md`
+- Setup（中文）：`docs/setup.zh-CN.md`
+- Contributing（中文）：`docs/contributing.zh-CN.md`
+
 ## License
 License file is not yet added in this baseline; add one before production distribution.
