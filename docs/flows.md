@@ -6,7 +6,7 @@ This document details the primary user flows and business processes for the Vist
 ## Primary User Flows
 
 ### Flow 1: Basic Model Interaction
-**Actor**: End User
+**Actor**: User
 **Goal**: Get insights from a visual model through conversation
 
 1. User navigates to main conversation interface
@@ -26,7 +26,7 @@ This document details the primary user flows and business processes for the Vist
 - If model unavailable → System suggests alternative models
 
 ### Flow 2: Model Upload and Publishing
-**Actor**: Model Owner
+**Actor**: User
 **Goal**: Publish a new visual model to the platform
 
 1. User navigates to model management section
@@ -56,12 +56,12 @@ This document details the primary user flows and business processes for the Vist
 5. System shows model details, files, and configuration
 6. Admin tests model functionality
 7. Admin approves or rejects model
-8. If approved → System publishes model and notifies owner
-9. If rejected → System sends feedback to owner and moves to rejected queue
+8. If approved → System publishes model and notifies the submitting user
+9. If rejected → System sends feedback to the submitting user and moves to rejected queue
 10. System logs approval action for audit trail
 
 ### Flow 4: Multi-Step Training Pipeline
-**Actor**: Model Owner
+**Actor**: User
 **Goal**: Retrain a model with new data
 
 1. User selects existing model for retraining

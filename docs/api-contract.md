@@ -98,7 +98,7 @@ Register new user account
   "email": "user@example.com",
   "password": "secure_password",
   "username": "username",
-  "role": "model_owner|end_user|administrator"
+  "role": "user|admin"
 }
 ```
 
@@ -149,7 +149,8 @@ Get current user profile
     "id": "user_uuid",
     "email": "user@example.com",
     "username": "username",
-    "role": "model_owner",
+    "role": "user",
+    "capabilities": ["manage_models"],
     "profile_data": {},
     "preferences": {},
     "created_at": "2023-01-01T00:00:00Z",
