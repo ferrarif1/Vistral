@@ -27,7 +27,7 @@ This document details the primary user flows and business processes for the Vist
 
 ### Flow 2: Model Upload and Publishing
 **Actor**: User
-**Goal**: Publish a new visual model to the platform
+**Goal**: Publish a new visual model to the platform (for owned/authorized model scope)
 
 1. User navigates to model management section
 2. User clicks "Create New Model" button
@@ -62,7 +62,7 @@ This document details the primary user flows and business processes for the Vist
 
 ### Flow 4: Multi-Step Training Pipeline
 **Actor**: User
-**Goal**: Retrain a model with new data
+**Goal**: Retrain a model with new data (for owned/authorized model scope)
 
 1. User selects existing model for retraining
 2. System shows model dashboard with training options

@@ -42,6 +42,11 @@ Current visual model platforms use traditional dashboard interfaces that require
   4. Approves or rejects model
   5. Updates model status in system
 
+## Access Model Clarification
+- Model owner is not a first-class system role.
+- Ownership is represented as a resource relationship (for example `models.owner_user_id`).
+- Additional model-management authority is represented by lightweight capabilities (for example `user.capabilities` contains `manage_models`).
+
 ## Functional Requirements
 
 ### FR-001: Conversational Interface

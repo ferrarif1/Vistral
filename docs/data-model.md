@@ -5,6 +5,10 @@ This document defines the core data models for the Vistral platform, supporting 
 
 ## Core Entities
 
+### Owner semantics
+- `owner` is a resource relationship (e.g., `models.owner_user_id`), not a `User.role` value.
+- Access control combines `role` (`user`/`admin`) and `capabilities` with ownership checks.
+
 ### User
 Represents all users in the system (users and administrators)
 

@@ -36,7 +36,7 @@ This document outlines the information architecture for the Vistral platform, or
 
 ### Level 4: Model Management
 - `/models/explore` - Discover public models
-- `/models/my-models` - User's owned models
+- `/models/my-models` - User-owned and authorized models
 - `/models/create` - Model creation wizard
 - `/models/:modelId` - Model detail page
   - `/models/:modelId/chat` - Chat with specific model

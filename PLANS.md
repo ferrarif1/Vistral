@@ -1,110 +1,97 @@
 # Project Plans and Milestones
 
 ## Vision
-Create an AI-native visual model platform that revolutionizes how users interact with visual models through natural language and attachment-driven workflows, while maintaining RVision's core business logic and three-party role system.
+Create an AI-native visual model platform where users interact through natural language and attachments, with a simple two-role system (`user`, `admin`) and ownership-based permissions for model-management actions.
 
-## Phase 1: Foundation (Weeks 1-2)
-### Goals
-- Establish project structure and documentation
-- Define core data models and API contracts
-- Set up development environment and CI/CD
-- Create basic conversational interface framework
+## Role and Permission Baseline
+- System roles are only:
+  - `user`
+  - `admin`
+- `model owner` is **not** a system role.
+- Ownership is a resource relationship (for example `models.owner_user_id`).
+- Capability gates are lightweight and explicit (for example `user.capabilities` includes `manage_models`).
+- `admin` governs global operations (approval, audit, user management, system settings, edge deployment).
+- `user` manages only self-owned or explicitly authorized models.
 
-### Deliverables
-- Complete documentation suite (PRD, IA, Flows, Data Model, API Contract)
-- Basic project scaffolding
-- Initial database schema
-- Authentication and authorization framework
-- Basic conversational UI components
+## First-Round Code Development Plan (Round 1)
+The repository is now documentation-ready and should enter first code implementation in this order:
 
-### Success Metrics
-- All foundational documentation completed and reviewed
-- Development environment reproducible by team members
-- Basic UI framework supports conversation flow
-- Authentication system functional
+1. **Project scaffolding**
+   - Monorepo/project structure, package scripts, lint/type baseline
+   - Environment configuration templates
 
-## Phase 2: Core Functionality (Weeks 3-6)
-### Goals
-- Implement model interaction capabilities
-- Develop file upload and management system
-- Create multi-step workflow engine
-- Build basic model management features
+2. **Authentication foundation**
+   - Signup/login/refresh minimal flow
+   - Registration defaults to `user`
+   - Admin role assignment only via seed/init or admin-only backend path
 
-### Deliverables
-- Natural language processing for visual model queries
-- File upload system with persistent states (visible, deletable, status-indicated)
-- Progress tracking for multi-step processes with top-level indicators
-- Collapsible advanced parameter controls
-- Basic model hosting and inference capabilities
+3. **Frontend shared shell**
+   - Global layout shell, navigation frame, state and theme baseline
+   - Unified empty/loading/error/success state components
 
-### Success Metrics
-- Users can interact with models via natural language
-- File uploads maintain visibility and status throughout sessions
-- Multi-step processes show clear progress indicators
-- Advanced parameters are collapsed by default
-- Basic model inference works end-to-end
+4. **Conversation page skeleton**
+   - Basic chat timeline + input region
+   - Session-level state persistence hooks
 
-## Phase 3: Advanced Features (Weeks 7-10)
-### Goals
-- Implement three-party role management system
-- Develop training pipeline capabilities
-- Create approval and auditing workflows
-- Build edge deployment system
+5. **Attachment upload status component**
+   - Persistent visibility in context
+   - Per-file delete action
+   - Status lifecycle: uploading / processing / ready / error
 
-### Deliverables
-- Role-based access control for model owners, users, and administrators
-- Training pipeline with progress tracking
-- Approval workflow system
-- Audit logging and reporting
-- Edge deployment capabilities
+6. **Model CRUD skeleton**
+   - Create/list/detail/update minimal endpoints and pages
+   - Ownership checks on mutating operations
 
-### Success Metrics
-- All three-party roles function with appropriate permissions
-- Training pipeline supports end-to-end model improvement
-- Approval workflows maintain proper governance
-- Audit system captures all relevant activities
-- Models deploy successfully to edge locations
+7. **Initial schema and API stubs**
+   - `users(role, capabilities)`
+   - `models(owner_user_id, visibility, status, metadata)`
+   - API stubs aligned with docs/api-contract.md
 
-## Phase 4: Optimization and Scale (Weeks 11-14)
-### Goals
-- Optimize performance and user experience
-- Implement advanced features and analytics
-- Prepare for production deployment
-- Conduct comprehensive testing
+## Phase Plan
 
-### Deliverables
-- Performance optimizations
-- Analytics and monitoring dashboard
-- Production deployment configuration
-- Comprehensive test coverage
-- User documentation and onboarding
+### Phase 1 (Weeks 1-2): Contract-to-Scaffold
+- Deliverables:
+  - Project scaffolding
+  - Auth foundation
+  - Shared UI shell
+  - Initial schema/API stubs
+- Success metrics:
+  - Local dev can boot from clean clone
+  - Auth roundtrip works for user signup/login
+  - Shared state components used across at least one flow
 
-### Success Metrics
-- System meets performance benchmarks
-- Analytics provide actionable insights
-- Production deployment is stable and scalable
-- Test coverage >90%
-- User onboarding is smooth and intuitive
+### Phase 2 (Weeks 3-6): Core User Flows
+- Deliverables:
+  - Conversation skeleton
+  - Attachment upload status component
+  - Model CRUD skeleton with ownership checks
+  - Basic approval queue entry path
+- Success metrics:
+  - User can complete conversation + attachment basic loop
+  - User can create and manage own model records
+  - Non-owner mutation requests are denied
 
-## Key Dependencies
-- Visual model infrastructure (RVision integration)
-- Natural language processing capabilities
-- File storage and processing systems
-- Edge computing resources
+### Phase 3 (Weeks 7-10): Governance and Operations
+- Deliverables:
+  - Admin approval workflow
+  - Audit trail capture
+  - Admin user-management hooks
+  - Edge deployment operation stubs
+- Success metrics:
+  - Admin-only routes enforce privilege boundaries
+  - Approval and audit records are traceable end-to-end
+
+### Phase 4 (Weeks 11-14): Hardening and Scale
+- Deliverables:
+  - Performance and reliability hardening
+  - Observability and operational dashboards
+  - Extended tests and release readiness
+- Success metrics:
+  - Core SLA targets are measurable
+  - Regression risk is controlled with CI checks
 
 ## Risk Mitigation
-- Regular architecture reviews to prevent technical debt
-- Continuous integration to catch issues early
-- Staged rollouts to minimize production impact
-- Comprehensive backup and recovery procedures
-
-## Resource Allocation
-- Frontend engineers: 3
-- Backend engineers: 3
-- DevOps engineer: 1
-- Product designer: 1
-- QA engineer: 1
-
-## Timeline
-Total duration: 14 weeks
-Critical path: API contract definition → Database schema → Core UI framework → Model integration
+- Keep access model minimal in round 1; avoid speculative RBAC complexity.
+- Enforce contract-first updates before code changes.
+- Validate ownership/capability boundaries with integration tests early.
+- Roll out admin-sensitive endpoints behind explicit checks and audit logs.
