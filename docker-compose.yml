@@ -1,0 +1,10 @@
+services:
+  vistral-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vistral-web:round1
+    container_name: vistral-web
+    ports:
+      - "8080:80"
+    restart: unless-stopped

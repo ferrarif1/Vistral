@@ -57,3 +57,23 @@ Please read `docs/contributing.md` before opening a change.
 
 ## License
 License file is not yet added in this baseline; add one before production distribution.
+
+
+## Development (Round 1 Baseline)
+1. `npm install`
+2. `npm run dev`
+3. Open `http://localhost:5173`
+
+### Implemented in this round
+- Shared app shell and unified theme
+- Conversation skeleton with attachment upload/status/delete
+- Model pages: explore / my-models / create (stepper + advanced collapsed)
+- Auth mock: login/register (`register` cannot create `admin`)
+- Ownership-based model filtering and create permission via capabilities
+- Initial schema in `db/schema.sql`
+
+
+## Docker Deployment
+- Quick guide: `docs/deployment.docker.md`
+- Build: `docker build -t vistral-web:round1 .`
+- Run: `docker run --rm -p 8080:80 vistral-web:round1`
