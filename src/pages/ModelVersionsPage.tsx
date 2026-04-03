@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 export default function ModelVersionsPage() {
+  const { t } = useI18n();
   const [versions, setVersions] = useState<ModelVersionRecord[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [jobs, setJobs] = useState<TrainingJobRecord[]>([]);
@@ -48,7 +50,7 @@ export default function ModelVersionsPage() {
 
   const registerVersion = async () => {
     if (!modelId || !jobId || !versionName.trim()) {
-      setFeedback({ variant: 'error', text: 'Select model/job and fill version name.' });
+      setFeedback({ variant: 'error', text: t('Select model/job and fill version name.') });
       return;
     }
 
@@ -62,7 +64,10 @@ export default function ModelVersionsPage() {
         version_name: versionName.trim()
       });
 
-      setFeedback({ variant: 'success', text: `Model version ${created.id} registered.` });
+      setFeedback({
+        variant: 'success',
+        text: t('Model version {versionId} registered.', { versionId: created.id })
+      });
       setVersionName('');
       await load();
     } catch (error) {
@@ -74,13 +79,13 @@ export default function ModelVersionsPage() {
 
   return (
     <div className="stack">
-      <h2>Model Versions</h2>
-      <p className="muted">Register and inspect model versions linked to training outputs.</p>
+      <h2>{t('Model Versions')}</h2>
+      <p className="muted">{t('Register and inspect model versions linked to training outputs.')}</p>
 
       <section className="card stack">
-        <h3>Register New Version</h3>
+        <h3>{t('Register New Version')}</h3>
         <label>
-          Model
+          {t('Model')}
           <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
             {models.map((model) => (
               <option key={model.id} value={model.id}>
@@ -90,7 +95,7 @@ export default function ModelVersionsPage() {
           </select>
         </label>
         <label>
-          Completed Training Job
+          {t('Completed Training Job')}
           <select value={jobId} onChange={(event) => setJobId(event.target.value)}>
             {completedJobs.map((job) => (
               <option key={job.id} value={job.id}>
@@ -100,7 +105,7 @@ export default function ModelVersionsPage() {
           </select>
         </label>
         <label>
-          Version Name
+          {t('Version Name')}
           <input
             value={versionName}
             onChange={(event) => setVersionName(event.target.value)}
@@ -108,24 +113,24 @@ export default function ModelVersionsPage() {
           />
         </label>
         <button onClick={registerVersion} disabled={submitting || completedJobs.length === 0}>
-          {submitting ? 'Registering...' : 'Register Model Version'}
+          {submitting ? t('Registering...') : t('Register Model Version')}
         </button>
       </section>
 
       {loading ? (
-        <StateBlock variant="loading" title="Loading Versions" description="Fetching model version list." />
+        <StateBlock variant="loading" title={t('Loading Versions')} description={t('Fetching model version list.')} />
       ) : null}
 
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
-          title={feedback.variant === 'success' ? 'Action Completed' : 'Action Failed'}
+          title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
       ) : null}
 
       {!loading && versions.length === 0 ? (
-        <StateBlock variant="empty" title="No Versions" description="Register first model version from completed job." />
+        <StateBlock variant="empty" title={t('No Versions')} description={t('Register first model version from completed job.')} />
       ) : null}
 
       {!loading && versions.length > 0 ? (

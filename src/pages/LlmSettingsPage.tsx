@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { LlmConfig } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import {
   DEFAULT_LLM_CONFIG,
@@ -9,6 +10,7 @@ import {
 } from '../services/llmConfig';
 
 export default function LlmSettingsPage() {
+  const { t } = useI18n();
   const [form, setForm] = useState<LlmConfig>({ ...DEFAULT_LLM_CONFIG });
   const [status, setStatus] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -47,14 +49,14 @@ export default function LlmSettingsPage() {
     const normalized = normalizeLlmConfig(form);
 
     if (!normalized.base_url || !normalized.model) {
-      setStatus({ variant: 'error', text: 'Base URL and model are required.' });
+      setStatus({ variant: 'error', text: t('Base URL and model are required.') });
       return;
     }
 
     if (normalized.enabled && !normalized.api_key && !hasApiKey) {
       setStatus({
         variant: 'error',
-        text: 'Enable mode requires an API key. Please input key at least once.'
+        text: t('Enable mode requires an API key. Please input key at least once.')
       });
       return;
     }
@@ -66,7 +68,9 @@ export default function LlmSettingsPage() {
       setForm((prev) => ({ ...prev, api_key: '' }));
       setStatus({
         variant: 'success',
-        text: `Configuration saved on server memory. Current key: ${saved.api_key_masked}.`
+        text: t('Configuration saved on server memory. Current key: {key}.', {
+          key: saved.api_key_masked
+        })
       });
       emitLlmConfigUpdated();
     } catch (error) {
@@ -87,7 +91,7 @@ export default function LlmSettingsPage() {
       });
       setApiKeyMasked(cleared.api_key_masked);
       setHasApiKey(cleared.has_api_key);
-      setStatus({ variant: 'success', text: 'Configuration cleared from server memory.' });
+      setStatus({ variant: 'success', text: t('Configuration cleared from server memory.') });
       emitLlmConfigUpdated();
     } catch (error) {
       setStatus({ variant: 'error', text: (error as Error).message });
@@ -104,7 +108,7 @@ export default function LlmSettingsPage() {
     if (!configForTest.api_key) {
       setStatus({
         variant: 'error',
-        text: 'Connection test requires API key input for this test run.'
+        text: t('Connection test requires API key input for this test run.')
       });
       return;
     }
@@ -116,10 +120,15 @@ export default function LlmSettingsPage() {
       const result = await api.testLlmConnection(configForTest);
       setStatus({
         variant: 'success',
-        text: `Connection succeeded. Preview: ${result.preview.slice(0, 140)}`
+        text: t('Connection succeeded. Preview: {preview}', {
+          preview: result.preview.slice(0, 140)
+        })
       });
     } catch (error) {
-      setStatus({ variant: 'error', text: `Connection failed: ${(error as Error).message}` });
+      setStatus({
+        variant: 'error',
+        text: t('Connection failed: {message}', { message: (error as Error).message })
+      });
     } finally {
       setTesting(false);
     }
@@ -127,32 +136,33 @@ export default function LlmSettingsPage() {
 
   return (
     <div className="stack page-width">
-      <h2>LLM Settings (Bring Your Own Key)</h2>
+      <h2>{t('LLM Settings (Bring Your Own Key)')}</h2>
       <p className="muted">
-        Configure your own OpenAI-compatible endpoint. Key is managed server-side and encrypted in local
-        prototype storage; it is never committed into repository files.
+        {t(
+          'Configure your own OpenAI-compatible endpoint. Key is managed server-side and encrypted in local prototype storage; it is never committed into repository files.'
+        )}
       </p>
 
       {loading ? (
-        <StateBlock variant="loading" title="Loading Settings" description="Fetching current LLM settings." />
+        <StateBlock variant="loading" title={t('Loading Settings')} description={t('Fetching current LLM settings.')} />
       ) : null}
 
       {status ? (
         <StateBlock
           variant={status.variant}
-          title={status.variant === 'success' ? 'Settings Updated' : 'Settings Error'}
+          title={status.variant === 'success' ? t('Settings Updated') : t('Settings Error')}
           description={status.text}
         />
       ) : null}
 
       <section className="card stack">
         <label>
-          Provider
+          {t('Provider')}
           <input value="chatanywhere (OpenAI compatible)" disabled />
         </label>
 
         <label>
-          Base URL
+          {t('Base URL')}
           <input
             value={form.base_url}
             onChange={(event) => update('base_url', event.target.value)}
@@ -161,7 +171,7 @@ export default function LlmSettingsPage() {
         </label>
 
         <label>
-          API Key
+          {t('API Key')}
           <input
             type="password"
             value={form.api_key}
@@ -170,10 +180,10 @@ export default function LlmSettingsPage() {
           />
         </label>
 
-        <small className="muted">Stored key: {apiKeyMasked}</small>
+        <small className="muted">{t('Stored key: {key}', { key: apiKeyMasked })}</small>
 
         <label>
-          Model
+          {t('Model')}
           <input
             value={form.model}
             onChange={(event) => update('model', event.target.value)}
@@ -182,7 +192,7 @@ export default function LlmSettingsPage() {
         </label>
 
         <label>
-          Temperature (0-2)
+          {t('Temperature (0-2)')}
           <input
             type="number"
             value={form.temperature}
@@ -199,21 +209,22 @@ export default function LlmSettingsPage() {
             checked={form.enabled}
             onChange={(event) => update('enabled', event.target.checked)}
           />
-          Enable custom LLM in conversation workspace
+          {t('Enable custom LLM in conversation workspace')}
         </label>
       </section>
 
       <section className="card stack">
         <div className="row gap">
-          <button onClick={save}>Save</button>
+          <button onClick={save}>{t('Save')}</button>
           <button onClick={testConnection} disabled={testing}>
-            {testing ? 'Testing...' : 'Test Connection'}
+            {testing ? t('Testing...') : t('Test Connection')}
           </button>
-          <button onClick={clear}>Clear</button>
+          <button onClick={clear}>{t('Clear')}</button>
         </div>
         <small className="muted">
-          Security note: rotate your key if it was ever exposed in public channels and keep
-          `LLM_CONFIG_SECRET` private.
+          {t(
+            'Security note: rotate your key if it was ever exposed in public channels and keep `LLM_CONFIG_SECRET` private.'
+          )}
         </small>
       </section>
     </div>

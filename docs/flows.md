@@ -7,10 +7,15 @@ This document defines executable flows for Vistral's AI-native conversation entr
 Actor: `user`
 
 1. open `/workspace/chat`
-2. upload attachments (visible list with status)
-3. send message
-4. system starts conversation and returns assistant reply (mock or configured LLM)
-5. user continues messaging with attachments in context
+2. choose model and optionally start a new chat session from sidebar
+3. upload attachments in composer attachment strip (visible list with status + delete)
+4. send message
+5. system starts conversation and returns assistant reply (mock or configured LLM)
+6. sidebar conversation history can be synced from backend and opened to restore full message timeline
+7. user can use desktop right-click or mobile long-press on history item for open/rename/pin/delete quick actions
+8. when context menu is open, keyboard shortcuts `O/R/P/D` execute corresponding actions quickly
+9. user can drag within pinned group to reorder priority chats
+10. user continues messaging with attachments in context
 
 Attachment states:
 - `uploading`
@@ -94,11 +99,12 @@ Actor: `user`
 Actor: `user`
 
 1. open `/inference/validate`
-2. upload inference image
-3. select model version
-4. run inference
-5. inspect visualized predictions + raw output + normalized output
-6. if failure sample, click feedback action to send sample to dataset
+2. run runtime connectivity check (PaddleOCR/docTR/YOLO) and confirm framework status
+3. upload inference image
+4. select model version
+5. run inference
+6. inspect visualized predictions + raw output + normalized output
+7. if failure sample, click feedback action to send sample to dataset
 
 ## 9. Closed Business Loop 1: OCR Fine-tune
 1. create OCR dataset
@@ -120,7 +126,22 @@ Actor: `user`
 7. validate inference
 8. feedback errors to dataset
 
-## 11. Unified UX Constraints
+## 11. Flow H: Deployment Verification Governance
+Actor: `admin`
+
+1. run `docker:verify:full` to generate report files
+2. open `/admin/verification-reports`
+3. filter by status/base url/date range or search by filename/business user
+4. optionally apply quick range preset (last 7 days / last 30 days)
+5. apply report ordering (latest/oldest/failed-first; default failed-first)
+6. paginate and inspect failed checks in report detail panel
+7. export filtered reports as JSON for release evidence
+8. decide go/no-go for intranet rollout handoff
+9. run `docker:release:bundle` with:
+   - optional `VERIFY_REPORT_PATH` to pin report
+   - optional `VERIFY_REPORT_MAX_AGE_SECONDS` to enforce report freshness
+
+## 12. Unified UX Constraints
 - multi-step flows must have top stepper
 - advanced params default to collapsed
 - upload files must remain visible + deletable + status-aware

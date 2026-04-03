@@ -1,20 +1,23 @@
 import { useState } from 'react';
 import StateBlock from '../components/StateBlock';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { emitAuthUpdated } from '../services/authSession';
 
 export default function AuthLoginPage() {
-  const [email, setEmail] = useState('user@vistral.dev');
+  const { t, roleLabel } = useI18n();
+  const [username, setUsername] = useState('alice');
+  const [password, setPassword] = useState('mock-pass');
   const [message, setMessage] = useState('');
   const [variant, setVariant] = useState<'success' | 'error'>('success');
 
   const submit = async () => {
     setMessage('');
     try {
-      const user = await api.login({ email, password: 'mock-pass' });
+      const user = await api.login({ username, password });
       emitAuthUpdated();
       setVariant('success');
-      setMessage(`Logged in as ${user.username} (${user.role}).`);
+      setMessage(t('Logged in as {username} ({role}).', { username: user.username, role: roleLabel(user.role) }));
     } catch (error) {
       setVariant('error');
       setMessage((error as Error).message);
@@ -23,15 +26,23 @@ export default function AuthLoginPage() {
 
   return (
     <div className="stack page-width">
-      <h2>Login</h2>
+      <h2>{t('Login')}</h2>
       <section className="card">
         <label>
-          Email
-          <input value={email} onChange={(event) => setEmail(event.target.value)} />
+          {t('Username')}
+          <input value={username} onChange={(event) => setUsername(event.target.value)} />
         </label>
-        <button onClick={submit}>Login</button>
+        <label>
+          {t('Password')}
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        <button onClick={submit}>{t('Login')}</button>
       </section>
-      {message ? <StateBlock variant={variant} title="Login Result" description={message} /> : null}
+      {message ? <StateBlock variant={variant} title={t('Login Result')} description={message} /> : null}
     </div>
   );
 }

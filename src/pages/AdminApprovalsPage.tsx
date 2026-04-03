@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ApprovalRequest, User } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 export default function AdminApprovalsPage() {
+  const { t } = useI18n();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [items, setItems] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,8 +45,8 @@ export default function AdminApprovalsPage() {
     setResult('');
 
     try {
-      await api.approveRequest(approvalId, 'Approved in admin queue page.');
-      setResult(`Approval ${approvalId} approved.`);
+      await api.approveRequest(approvalId, t('Approved in admin queue page.'));
+      setResult(t('Approval {approvalId} approved.', { approvalId }));
       await load();
     } catch (actionError) {
       setError((actionError as Error).message);
@@ -61,10 +63,10 @@ export default function AdminApprovalsPage() {
     try {
       await api.rejectRequest(
         approvalId,
-        'Mock quality review failed.',
-        'Rejected in admin queue page.'
+        t('Mock quality review failed.'),
+        t('Rejected in admin queue page.')
       );
-      setResult(`Approval ${approvalId} rejected.`);
+      setResult(t('Approval {approvalId} rejected.', { approvalId }));
       await load();
     } catch (actionError) {
       setError((actionError as Error).message);
@@ -76,8 +78,8 @@ export default function AdminApprovalsPage() {
   if (loading) {
     return (
       <div className="stack">
-        <h2>Admin Approval Queue</h2>
-        <StateBlock variant="loading" title="Loading" description="Fetching approval queue." />
+        <h2>{t('Admin Approval Queue')}</h2>
+        <StateBlock variant="loading" title={t('Loading')} description={t('Fetching approval queue.')} />
       </div>
     );
   }
@@ -85,11 +87,11 @@ export default function AdminApprovalsPage() {
   if (currentUser && currentUser.role !== 'admin') {
     return (
       <div className="stack">
-        <h2>Admin Approval Queue</h2>
+        <h2>{t('Admin Approval Queue')}</h2>
         <StateBlock
           variant="error"
-          title="Permission Denied"
-          description="Only admin role can access approval operations."
+          title={t('Permission Denied')}
+          description={t('Only admin role can access approval operations.')}
         />
       </div>
     );
@@ -97,17 +99,17 @@ export default function AdminApprovalsPage() {
 
   return (
     <div className="stack">
-      <h2>Admin Approval Queue</h2>
-      <p className="muted">Review and process pending model approval requests.</p>
+      <h2>{t('Admin Approval Queue')}</h2>
+      <p className="muted">{t('Review and process pending model approval requests.')}</p>
 
-      {error ? <StateBlock variant="error" title="Action Failed" description={error} /> : null}
-      {result ? <StateBlock variant="success" title="Action Completed" description={result} /> : null}
+      {error ? <StateBlock variant="error" title={t('Action Failed')} description={error} /> : null}
+      {result ? <StateBlock variant="success" title={t('Action Completed')} description={result} /> : null}
 
       {pendingItems.length === 0 ? (
         <StateBlock
           variant="empty"
-          title="No Pending Requests"
-          description="All model submissions have been processed."
+          title={t('No Pending Requests')}
+          description={t('All model submissions have been processed.')}
         />
       ) : (
         <ul className="list">
@@ -115,18 +117,18 @@ export default function AdminApprovalsPage() {
             <li key={item.id} className="card stack">
               <div className="row between">
                 <strong>{item.id}</strong>
-                <span className="chip">pending</span>
+                <span className="chip">{t('pending')}</span>
               </div>
-              <small className="muted">Model: {item.model_id}</small>
-              <small className="muted">Requested by: {item.requested_by}</small>
-              <div className="row gap">
-                <button disabled={actionLoading} onClick={() => approve(item.id)}>
-                  Approve
-                </button>
-                <button disabled={actionLoading} onClick={() => reject(item.id)}>
-                  Reject
-                </button>
-              </div>
+                <small className="muted">{t('Model')}: {item.model_id}</small>
+                <small className="muted">{t('Requested by: {requestedBy}', { requestedBy: item.requested_by })}</small>
+                <div className="row gap">
+                  <button disabled={actionLoading} onClick={() => approve(item.id)}>
+                    {t('Approve')}
+                  </button>
+                  <button disabled={actionLoading} onClick={() => reject(item.id)}>
+                    {t('Reject')}
+                  </button>
+                </div>
             </li>
           ))}
         </ul>

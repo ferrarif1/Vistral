@@ -52,8 +52,8 @@ This document defines platform-level entities for Vistral's AI-native conversati
 ### 4.1 User
 Attributes:
 - `id` (PK)
-- `email` (unique)
 - `username` (unique)
+- `password_hash` (scrypt+salt, server-side only, never returned to client)
 - `role` (`user` | `admin`)
 - `capabilities` (JSON array)
 - `created_at`, `updated_at`
@@ -268,7 +268,7 @@ Attributes:
 - full `raw_output`
 
 ## 7. Indexes and Constraints (minimum)
-- unique: `users.email`, `users.username`
+- unique: `users.username`
 - index: `models.owner_user_id, models.status`
 - index: `datasets.owner_user_id, datasets.task_type`
 - index: `dataset_items.dataset_id, dataset_items.split`

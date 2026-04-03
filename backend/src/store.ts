@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { hashPassword } from './auth';
 import type {
   AnnotationRecord,
   AnnotationReviewRecord,
@@ -69,7 +70,6 @@ const decryptText = (payload: EncryptedPayload): string => {
 export const users: User[] = [
   {
     id: 'u-1',
-    email: 'user@vistral.dev',
     username: 'alice',
     role: 'user',
     capabilities: ['manage_models'],
@@ -78,7 +78,6 @@ export const users: User[] = [
   },
   {
     id: 'u-2',
-    email: 'admin@vistral.dev',
     username: 'admin',
     role: 'admin',
     capabilities: ['manage_models', 'global_governance'],
@@ -86,6 +85,11 @@ export const users: User[] = [
     updated_at: now()
   }
 ];
+
+export const userPasswordHashes: Record<string, string> = {
+  'u-1': hashPassword(process.env.DEFAULT_USER_PASSWORD ?? 'mock-pass'),
+  'u-2': hashPassword(process.env.DEFAULT_ADMIN_PASSWORD ?? 'mock-pass-admin')
+};
 
 export const models: ModelRecord[] = [
   {

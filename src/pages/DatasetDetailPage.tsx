@@ -10,11 +10,12 @@ import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
-const STEPS = ['Upload', 'Split', 'Version'];
-
 export default function DatasetDetailPage() {
+  const { t } = useI18n();
+  const steps = useMemo(() => [t('Upload'), t('Split'), t('Version')], [t]);
   const { datasetId } = useParams<{ datasetId: string }>();
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
@@ -89,7 +90,7 @@ export default function DatasetDetailPage() {
 
   const uploadDatasetFile = async (filename: string) => {
     if (!datasetId) {
-      throw new Error('Missing dataset id.');
+      throw new Error(t('Missing Dataset ID'));
     }
 
     await api.uploadDatasetAttachment(datasetId, filename);
@@ -116,7 +117,7 @@ export default function DatasetDetailPage() {
       const total = trainRatio + valRatio + testRatio;
 
       if (Math.abs(total - 1) > 0.0001) {
-        throw new Error('Split ratios must sum to 1.0.');
+        throw new Error(t('Split ratios must sum to 1.0.'));
       }
 
       await api.splitDataset({
@@ -129,7 +130,7 @@ export default function DatasetDetailPage() {
 
       await loadDetail();
       setStep(2);
-      setFeedback({ variant: 'success', text: 'Dataset split updated successfully.' });
+      setFeedback({ variant: 'success', text: t('Dataset split updated successfully.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -148,7 +149,10 @@ export default function DatasetDetailPage() {
     try {
       const created = await api.createDatasetVersion(datasetId, versionName.trim() || undefined);
       await loadDetail();
-      setFeedback({ variant: 'success', text: `Dataset version ${created.version_name} created.` });
+      setFeedback({
+        variant: 'success',
+        text: t('Dataset version {versionName} created.', { versionName: created.version_name })
+      });
       setVersionName('');
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -163,7 +167,7 @@ export default function DatasetDetailPage() {
     }
 
     if (!importAttachmentId) {
-      setFeedback({ variant: 'error', text: 'Select a ready dataset attachment as import source.' });
+      setFeedback({ variant: 'error', text: t('Select a ready dataset attachment as import source.') });
       return;
     }
 
@@ -179,7 +183,11 @@ export default function DatasetDetailPage() {
       await loadDetail();
       setFeedback({
         variant: 'success',
-        text: `Import finished (${result.format}). imported ${result.imported}, updated ${result.updated}.`
+        text: t('Import finished ({format}). imported {imported}, updated {updated}.', {
+          format: result.format,
+          imported: result.imported,
+          updated: result.updated
+        })
       });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -204,7 +212,11 @@ export default function DatasetDetailPage() {
       await loadDetail();
       setFeedback({
         variant: 'success',
-        text: `Export ready (${result.format}). file ${result.filename}, records ${result.exported}.`
+        text: t('Export ready ({format}). file {filename}, records {count}.', {
+          format: result.format,
+          filename: result.filename,
+          count: result.exported
+        })
       });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -216,8 +228,8 @@ export default function DatasetDetailPage() {
   if (!datasetId) {
     return (
       <div className="stack">
-        <h2>Dataset Detail</h2>
-        <StateBlock variant="error" title="Missing Dataset ID" description="Open from dataset list page." />
+        <h2>{t('Dataset Detail')}</h2>
+        <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset list page.')} />
       </div>
     );
   }
@@ -225,8 +237,8 @@ export default function DatasetDetailPage() {
   if (loading) {
     return (
       <div className="stack">
-        <h2>Dataset Detail</h2>
-        <StateBlock variant="loading" title="Loading Dataset" description="Preparing dataset detail view." />
+        <h2>{t('Dataset Detail')}</h2>
+        <StateBlock variant="loading" title={t('Loading Dataset')} description={t('Preparing dataset detail view.')} />
       </div>
     );
   }
@@ -234,8 +246,8 @@ export default function DatasetDetailPage() {
   if (!dataset) {
     return (
       <div className="stack">
-        <h2>Dataset Detail</h2>
-        <StateBlock variant="error" title="Dataset Not Found" description="The requested dataset is unavailable." />
+        <h2>{t('Dataset Detail')}</h2>
+        <StateBlock variant="error" title={t('Dataset Not Found')} description={t('The requested dataset is unavailable.')} />
       </div>
     );
   }
@@ -244,61 +256,61 @@ export default function DatasetDetailPage() {
     <div className="stack">
       <div className="row between gap align-center">
         <div className="stack tight">
-          <h2>Dataset Detail</h2>
+          <h2>{t('Dataset Detail')}</h2>
           <p className="muted">
-            {dataset.name} · {dataset.task_type} · {dataset.status}
+            {dataset.name} · {t(dataset.task_type)} · {t(dataset.status)}
           </p>
         </div>
         <Link className="quick-link" to={`/datasets/${dataset.id}/annotate`}>
-          Open Annotation Workspace
+          {t('Open Annotation Workspace')}
         </Link>
       </div>
 
-      <StepIndicator steps={STEPS} current={step} />
+      <StepIndicator steps={steps} current={step} />
 
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
-          title={feedback.variant === 'success' ? 'Action Completed' : 'Action Failed'}
+          title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
       ) : null}
 
       <AttachmentUploader
-        title="Step 1. Dataset File Upload"
+        title={t('Step 1. Dataset File Upload')}
         items={attachments}
         onUpload={uploadDatasetFile}
         onDelete={deleteAttachment}
-        emptyDescription="Upload images or archives. Files stay visible for this dataset context."
-        uploadButtonLabel="Upload Dataset File"
+        emptyDescription={t('Upload images or archives. Files stay visible for this dataset context.')}
+        uploadButtonLabel={t('Upload Dataset File')}
         disabled={busy}
       />
 
       <section className="card stack">
-        <h3>Step 2. Train/Val/Test Split</h3>
+        <h3>{t('Step 2. Train/Val/Test Split')}</h3>
         <div className="three-col">
           <label>
-            Train Ratio
+            {t('Train Ratio')}
             <input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
           </label>
           <label>
-            Val Ratio
+            {t('Val Ratio')}
             <input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
           </label>
           <label>
-            Test Ratio
+            {t('Test Ratio')}
             <input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
           </label>
         </div>
         <button onClick={runSplit} disabled={busy || items.length === 0}>
-          Apply Split
+          {t('Apply Split')}
         </button>
       </section>
 
       <section className="card stack">
-        <h3>Step 3. Dataset Version</h3>
+        <h3>{t('Step 3. Dataset Version')}</h3>
         <label>
-          Version Name (optional)
+          {t('Version Name (optional)')}
           <input
             value={versionName}
             onChange={(event) => setVersionName(event.target.value)}
@@ -306,18 +318,18 @@ export default function DatasetDetailPage() {
           />
         </label>
         <button onClick={createVersion} disabled={busy || items.length === 0}>
-          Create Version Snapshot
+          {t('Create Version Snapshot')}
         </button>
       </section>
 
       <AdvancedSection
-        title="Annotation Import / Export"
-        description="Use this section to run minimal import/export stubs with format selection."
+        title={t('Annotation Import / Export')}
+        description={t('Use this section to run minimal import/export stubs with format selection.')}
       >
         <section className="card stack">
-          <h4>Import Annotations</h4>
+          <h4>{t('Import Annotations')}</h4>
           <label>
-            Format
+            {t('Format')}
             <select
               value={importFormat}
               onChange={(event) =>
@@ -331,7 +343,7 @@ export default function DatasetDetailPage() {
             </select>
           </label>
           <label>
-            Source Attachment
+            {t('Source Attachment')}
             <select
               value={importAttachmentId}
               onChange={(event) => setImportAttachmentId(event.target.value)}
@@ -346,14 +358,14 @@ export default function DatasetDetailPage() {
             </select>
           </label>
           <button onClick={importAnnotations} disabled={busy || !importAttachmentId}>
-            Run Import
+            {t('Run Import')}
           </button>
         </section>
 
         <section className="card stack">
-          <h4>Export Annotations</h4>
+          <h4>{t('Export Annotations')}</h4>
           <label>
-            Format
+            {t('Format')}
             <select
               value={exportFormat}
               onChange={(event) =>
@@ -367,16 +379,16 @@ export default function DatasetDetailPage() {
             </select>
           </label>
           <button onClick={exportAnnotations} disabled={busy}>
-            Run Export
+            {t('Run Export')}
           </button>
         </section>
       </AdvancedSection>
 
       <section className="card stack">
-        <h3>Dataset Items</h3>
-        <small className="muted">Ready files: {readyCount}</small>
+        <h3>{t('Dataset Items')}</h3>
+        <small className="muted">{t('Ready files: {count}', { count: readyCount })}</small>
         {items.length === 0 ? (
-          <StateBlock variant="empty" title="No Items" description="Upload dataset files to generate items." />
+          <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files to generate items.')} />
         ) : (
           <ul className="list">
             {items.map((item) => (
@@ -384,7 +396,7 @@ export default function DatasetDetailPage() {
                 <div className="row between gap">
                   <span>{item.id}</span>
                   <span className="chip">
-                    {item.split} · {item.status}
+                    {t(item.split)} · {t(item.status)}
                   </span>
                 </div>
               </li>
@@ -394,16 +406,19 @@ export default function DatasetDetailPage() {
       </section>
 
       <section className="card stack">
-        <h3>Dataset Versions</h3>
+        <h3>{t('Dataset Versions')}</h3>
         {versions.length === 0 ? (
-          <StateBlock variant="empty" title="No Versions" description="Create first version snapshot after split." />
+          <StateBlock variant="empty" title={t('No Versions')} description={t('Create first version snapshot after split.')} />
         ) : (
           <ul className="list">
             {versions.map((version) => (
               <li key={version.id} className="list-item stack tight">
                 <strong>{version.version_name}</strong>
                 <small className="muted">
-                  items {version.item_count} · coverage {version.annotation_coverage}
+                  {t('Items {count} · Coverage {coverage}', {
+                    count: version.item_count,
+                    coverage: version.annotation_coverage
+                  })}
                 </small>
               </li>
             ))}

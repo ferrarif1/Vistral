@@ -3,17 +3,19 @@ import type {
   DatasetRecord,
   FileAttachment,
   InferenceRunRecord,
-  ModelVersionRecord
+  ModelVersionRecord,
+  RuntimeConnectivityRecord
 } from '../../shared/domain';
 import AttachmentUploader from '../components/AttachmentUploader';
 import PredictionVisualizer from '../components/PredictionVisualizer';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
-const STEPS = ['Input', 'Run', 'Feedback'];
-
 export default function InferenceValidationPage() {
+  const { t } = useI18n();
+  const steps = useMemo(() => [t('Input'), t('Run'), t('Feedback')], [t]);
   const [versions, setVersions] = useState<ModelVersionRecord[]>([]);
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
@@ -25,6 +27,9 @@ export default function InferenceValidationPage() {
   const [feedbackReason, setFeedbackReason] = useState('missed_detection');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [runtimeError, setRuntimeError] = useState('');
+  const [runtimeChecks, setRuntimeChecks] = useState<RuntimeConnectivityRecord[]>([]);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
 
   const loadAll = useCallback(async () => {
@@ -83,6 +88,39 @@ export default function InferenceValidationPage() {
     [runs, selectedRunId]
   );
 
+  const runtimeInsight = useMemo(() => {
+    if (!selectedRun) {
+      return null;
+    }
+
+    const normalizedMeta = selectedRun.normalized_output.normalized_output as Record<string, unknown>;
+    const source =
+      typeof normalizedMeta.source === 'string' && normalizedMeta.source.trim()
+        ? normalizedMeta.source
+        : 'mock_default';
+
+    const fallbackReason =
+      typeof selectedRun.raw_output.runtime_fallback_reason === 'string'
+        ? selectedRun.raw_output.runtime_fallback_reason
+        : '';
+    const runtimeFramework =
+      typeof selectedRun.raw_output.runtime_framework === 'string'
+        ? selectedRun.raw_output.runtime_framework
+        : selectedRun.framework;
+
+    return {
+      source,
+      runtimeFramework,
+      fallbackReason,
+      isFallback: source === 'mock_fallback'
+    };
+  }, [selectedRun]);
+
+  const runtimeByFramework = useMemo(
+    () => new Map(runtimeChecks.map((item) => [item.framework, item])),
+    [runtimeChecks]
+  );
+
   const step = useMemo(() => {
     if (!selectedRun) {
       return 0;
@@ -94,6 +132,23 @@ export default function InferenceValidationPage() {
 
     return 1;
   }, [selectedRun]);
+
+  const loadRuntimeConnectivity = useCallback(async () => {
+    setRuntimeLoading(true);
+    setRuntimeError('');
+    try {
+      const result = await api.getRuntimeConnectivity();
+      setRuntimeChecks(result);
+    } catch (error) {
+      setRuntimeError((error as Error).message);
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRuntimeConnectivity();
+  }, [loadRuntimeConnectivity]);
 
   const uploadInput = async (filename: string) => {
     await api.uploadConversationAttachment(filename);
@@ -107,7 +162,7 @@ export default function InferenceValidationPage() {
 
   const runInference = async () => {
     if (!selectedVersion || !selectedAttachmentId) {
-      setFeedback({ variant: 'error', text: 'Select model version and ready attachment first.' });
+      setFeedback({ variant: 'error', text: t('Select model version and ready attachment first.') });
       return;
     }
 
@@ -121,7 +176,10 @@ export default function InferenceValidationPage() {
         task_type: selectedVersion.task_type
       });
 
-      setFeedback({ variant: 'success', text: `Inference run ${created.id} completed.` });
+      setFeedback({
+        variant: 'success',
+        text: t('Inference run {runId} completed.', { runId: created.id })
+      });
       await loadAll();
       setSelectedRunId(created.id);
     } catch (error) {
@@ -133,7 +191,7 @@ export default function InferenceValidationPage() {
 
   const sendFeedback = async () => {
     if (!selectedRun || !selectedDatasetId) {
-      setFeedback({ variant: 'error', text: 'Run inference and select dataset before feedback.' });
+      setFeedback({ variant: 'error', text: t('Run inference and select dataset before feedback.') });
       return;
     }
 
@@ -147,7 +205,7 @@ export default function InferenceValidationPage() {
         reason: feedbackReason
       });
 
-      setFeedback({ variant: 'success', text: 'Sample feedback sent to dataset.' });
+      setFeedback({ variant: 'success', text: t('Sample feedback sent to dataset.') });
       await loadAll();
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -158,35 +216,35 @@ export default function InferenceValidationPage() {
 
   return (
     <div className="stack">
-      <h2>Inference Validation</h2>
-      <StepIndicator steps={STEPS} current={step} />
+      <h2>{t('Inference Validation')}</h2>
+      <StepIndicator steps={steps} current={step} />
 
       {loading ? (
-        <StateBlock variant="loading" title="Loading Validation Workspace" description="Preparing resources." />
+        <StateBlock variant="loading" title={t('Loading Validation Workspace')} description={t('Preparing resources.')} />
       ) : null}
 
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
-          title={feedback.variant === 'success' ? 'Action Completed' : 'Action Failed'}
+          title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
       ) : null}
 
       <AttachmentUploader
-        title="Inference Inputs"
+        title={t('Inference Inputs')}
         items={attachments}
         onUpload={uploadInput}
         onDelete={removeInput}
-        emptyDescription="Upload image inputs for inference validation."
-        uploadButtonLabel="Upload Inference Input"
+        emptyDescription={t('Upload image inputs for inference validation.')}
+        uploadButtonLabel={t('Upload Inference Input')}
         disabled={busy}
       />
 
       <section className="card stack">
-        <h3>Run Inference</h3>
+        <h3>{t('Run Inference')}</h3>
         <label>
-          Model Version
+          {t('Model Version')}
           <select
             value={selectedVersionId}
             onChange={(event) => setSelectedVersionId(event.target.value)}
@@ -199,7 +257,7 @@ export default function InferenceValidationPage() {
           </select>
         </label>
         <label>
-          Input Attachment
+          {t('Input Attachment')}
           <select
             value={selectedAttachmentId}
             onChange={(event) => setSelectedAttachmentId(event.target.value)}
@@ -214,18 +272,72 @@ export default function InferenceValidationPage() {
           </select>
         </label>
         <button onClick={runInference} disabled={busy || !selectedVersionId || !selectedAttachmentId}>
-          Run Inference
+          {t('Run Inference')}
         </button>
       </section>
 
       <section className="card stack">
-        <h3>Latest Inference Output</h3>
+        <div className="row between gap align-center">
+          <h3>{t('Runtime Connectivity')}</h3>
+          <button onClick={loadRuntimeConnectivity} disabled={runtimeLoading || busy}>
+            {runtimeLoading ? t('Checking...') : t('Refresh Runtime Status')}
+          </button>
+        </div>
+        {runtimeError ? (
+          <StateBlock variant="error" title={t('Runtime Check Failed')} description={runtimeError} />
+        ) : null}
+        <div className="three-col">
+          {(['paddleocr', 'doctr', 'yolo'] as const).map((framework) => {
+            const item = runtimeByFramework.get(framework);
+            const source = item?.source ?? 'not_configured';
+            const isReady = item?.source === 'reachable';
+
+            return (
+              <article key={framework} className="card stack tight">
+                <strong>{framework}</strong>
+                <span className="chip">
+                  {source === 'reachable'
+                    ? 'reachable'
+                    : source === 'unreachable'
+                      ? 'unreachable'
+                      : 'not configured'}
+                </span>
+                <small className="muted">endpoint: {item?.endpoint ?? 'not set'}</small>
+                <small className="muted">error kind: {item?.error_kind ?? 'none'}</small>
+                <small className="muted">{item?.message ?? 'No check data yet.'}</small>
+                {isReady ? (
+                  <StateBlock
+                    variant="success"
+                    title={t('Runtime Ready')}
+                    description={t('This framework can serve runtime prediction calls.')}
+                  />
+                ) : source === 'unreachable' ? (
+                  <StateBlock
+                    variant="error"
+                    title={t('Runtime Unreachable')}
+                    description={t('Inference will use mock fallback until runtime endpoint is reachable.')}
+                  />
+                ) : (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Fallback Mode')}
+                    description={t('Inference will use mock fallback until runtime endpoint is reachable.')}
+                  />
+                )}
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="card stack">
+        <h3>{t('Latest Inference Output')}</h3>
         {!selectedRun ? (
-          <StateBlock variant="empty" title="No Runs Yet" description="Run inference to inspect outputs." />
+          <StateBlock variant="empty" title={t('No Runs Yet')} description={t('Run inference to inspect outputs.')} />
         ) : (
           <>
             <label>
-              Select Run
+              {t('Select Run')}
               <select value={selectedRun.id} onChange={(event) => setSelectedRunId(event.target.value)}>
                 {runs.map((run) => (
                   <option key={run.id} value={run.id}>
@@ -237,19 +349,42 @@ export default function InferenceValidationPage() {
             <small className="muted">
               run {selectedRun.id} · task {selectedRun.task_type} · framework {selectedRun.framework}
             </small>
+            <div className="row gap wrap">
+              <span className="chip">runtime source: {runtimeInsight?.source ?? 'unknown'}</span>
+              <span className="chip">runtime framework: {runtimeInsight?.runtimeFramework ?? 'unknown'}</span>
+            </div>
+            {runtimeInsight?.isFallback ? (
+              <StateBlock
+                variant="empty"
+                title={t('Runtime Fallback Active')}
+                description={
+                  runtimeInsight.fallbackReason
+                    ? t('Using mock fallback because runtime call failed: {reason}', {
+                        reason: runtimeInsight.fallbackReason
+                      })
+                    : t('Using mock fallback because runtime endpoint is unavailable.')
+                }
+              />
+            ) : (
+              <StateBlock
+                variant="success"
+                title={t('Runtime Bridge Active')}
+                description={t('Prediction output is coming from configured runtime endpoint.')}
+              />
+            )}
             <PredictionVisualizer output={selectedRun.normalized_output} />
-            <h4>Raw Output</h4>
+            <h4>{t('Raw Output')}</h4>
             <pre className="code-block">{JSON.stringify(selectedRun.raw_output, null, 2)}</pre>
-            <h4>Normalized Output</h4>
+            <h4>{t('Normalized Output')}</h4>
             <pre className="code-block">{JSON.stringify(selectedRun.normalized_output, null, 2)}</pre>
           </>
         )}
       </section>
 
       <section className="card stack">
-        <h3>Feedback to Dataset</h3>
+        <h3>{t('Feedback to Dataset')}</h3>
         <label>
-          Target Dataset
+          {t('Target Dataset')}
           <select
             value={selectedDatasetId}
             onChange={(event) => setSelectedDatasetId(event.target.value)}
@@ -262,7 +397,7 @@ export default function InferenceValidationPage() {
           </select>
         </label>
         <label>
-          Feedback Reason
+          {t('Feedback Reason')}
           <input
             value={feedbackReason}
             onChange={(event) => setFeedbackReason(event.target.value)}
@@ -270,7 +405,7 @@ export default function InferenceValidationPage() {
           />
         </label>
         <button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>
-          Send to Dataset
+          {t('Send to Dataset')}
         </button>
       </section>
     </div>

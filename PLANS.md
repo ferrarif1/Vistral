@@ -14,6 +14,21 @@ Already available:
 - model draft + file upload + approval submission flow
 - admin approval queue and audit list
 - BYO LLM settings (prototype)
+- dockerized intranet baseline (`vistral-web` + `vistral-api`)
+- intranet rollout modes: local build + registry image mode + offline image import path
+- ops automation: release bundle packaging + full deployment verification scripts + report-included bundle handoff
+- admin console now includes deployment verification report visibility for operations governance
+- username/password auth flow (public registration locked to `user`)
+- release bundle hardening: verify target precheck + report pinning (`VERIFY_REPORT_PATH`) + optional freshness gate (`VERIFY_REPORT_MAX_AGE_SECONDS`)
+- admin verification reports page now supports filter/search + collapsible check details for operations review
+- permission smoke script for admin verification reports endpoint (`npm run smoke:admin:verification-reports`)
+- API error semantics hardened: core handlers now map to contract codes/status (`401/403/404/409/500`)
+- admin verification reports page now supports pagination + filtered JSON export for governance evidence
+- API error mapping now uses pattern-first classification with explicit fallback mappings
+- admin verification reports page now supports date-range filter and ordering controls
+- API error normalization moved into shared backend module (`backend/src/apiError.ts`) to reduce drift
+- admin verification reports page now supports quick date presets (7/30 days) and defaults to failed-first ordering
+- conversation workspace refreshed to immersive chat-style shell with persistent attachment strip in composer context
 
 ## 3. Next Delivery Phases
 
@@ -53,7 +68,11 @@ Scope:
 4. unified normalized inference output
 
 Early progress:
-- YOLO inference adapter now supports optional external runtime bridge via `YOLO_RUNTIME_ENDPOINT` with automatic mock fallback.
+- Runtime bridge is now unified across PaddleOCR/docTR/YOLO predict path with per-framework endpoint + API key config.
+- Adapter fallback policy is unified (`mock_fallback`) to keep product loop available when runtime endpoint is unavailable.
+- Inference validation page now supports in-app runtime connectivity checks (`/api/runtime/connectivity`) for all three frameworks.
+- Added dedicated runtime settings entry (`/settings/runtime`) for engineering diagnostics and refresh checks.
+- Runtime settings now includes integration templates (env vars, health curl, request/response payload examples).
 
 ### Phase 4: Two Closed Business Loops
 Loop A (OCR): dataset -> annotation/import -> train -> evaluate -> register -> validate -> feedback

@@ -46,10 +46,17 @@ export type TrainingJobStatus =
 
 export type ModelVersionStatus = 'registered' | 'deprecated';
 export type InferenceRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type RuntimeConnectivitySource = 'not_configured' | 'reachable' | 'unreachable';
+export type RuntimeConnectivityErrorKind =
+  | 'none'
+  | 'timeout'
+  | 'network'
+  | 'http_status'
+  | 'invalid_payload'
+  | 'unknown';
 
 export interface User {
   id: string;
-  email: string;
   username: string;
   role: SystemRole;
   capabilities: Capability[];
@@ -120,6 +127,30 @@ export interface AuditLogRecord {
   entity_id: string | null;
   metadata: Record<string, string>;
   timestamp: string;
+}
+
+export type VerificationReportStatus = 'passed' | 'failed' | 'unknown';
+
+export interface VerificationCheckRecord {
+  name: string;
+  status: string;
+  detail: string;
+}
+
+export interface VerificationReportRecord {
+  id: string;
+  filename: string;
+  status: VerificationReportStatus;
+  summary: string;
+  started_at_utc: string;
+  finished_at_utc: string;
+  target_base_url: string;
+  business_username: string;
+  probe_username: string;
+  checks_total: number;
+  checks_failed: number;
+  checks: VerificationCheckRecord[];
+  entities: Record<string, string>;
 }
 
 export interface DatasetRecord {
@@ -313,14 +344,24 @@ export interface InferenceRunRecord {
   updated_at: string;
 }
 
+export interface RuntimeConnectivityRecord {
+  framework: ModelFramework;
+  configured: boolean;
+  reachable: boolean;
+  endpoint: string | null;
+  source: RuntimeConnectivitySource;
+  error_kind: RuntimeConnectivityErrorKind;
+  checked_at: string;
+  message: string;
+}
+
 export interface RegisterInput {
-  email: string;
   username: string;
   password: string;
 }
 
 export interface LoginInput {
-  email: string;
+  username: string;
   password: string;
 }
 
@@ -413,6 +454,10 @@ export interface SendMessageInput {
   content: string;
   attachment_ids: string[];
   llm_config?: LlmConfig | null;
+}
+
+export interface RenameConversationInput {
+  title: string;
 }
 
 export interface SubmitApprovalInput {

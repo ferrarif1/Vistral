@@ -1,11 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import type { User } from '../../shared/domain';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { AUTH_UPDATED_EVENT, emitAuthUpdated } from '../services/authSession';
 
 export default function AppShell({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  const { language, setLanguage, t, roleLabel } = useI18n();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const isConversationWorkspace = location.pathname === '/workspace/chat';
 
   const refreshUser = () => {
     api.me().then(setCurrentUser).catch(() => setCurrentUser(null));
@@ -29,22 +33,36 @@ export default function AppShell({ children }: { children: ReactNode }) {
     }
   };
 
+  if (isConversationWorkspace) {
+    return <main className="chat-route-main">{children}</main>;
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
         <Link to="/" className="brand">
-          Vistral Prototype
+          {t('Vistral Prototype')}
         </Link>
         <nav className="row gap">
-          <NavLink to="/auth/login">Login</NavLink>
-          <NavLink to="/auth/register">Register</NavLink>
+          <label className="language-switch-inline">
+            <span>{t('Language')}</span>
+            <select
+              value={language}
+              onChange={(event) => setLanguage(event.target.value as 'zh-CN' | 'en-US')}
+            >
+              <option value="zh-CN">{t('Chinese')}</option>
+              <option value="en-US">{t('English')}</option>
+            </select>
+          </label>
+          <NavLink to="/auth/login">{t('Login')}</NavLink>
+          <NavLink to="/auth/register">{t('Register')}</NavLink>
           {currentUser ? (
             <>
               <span className="chip">
-                {currentUser.username} · {currentUser.role}
+                {currentUser.username} · {roleLabel(currentUser.role)}
               </span>
               <button type="button" onClick={logout} className="small-btn">
-                Logout
+                {t('Logout')}
               </button>
             </>
           ) : null}
@@ -52,19 +70,21 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       <aside className="sidebar">
-        <NavLink to="/">Dual Entry</NavLink>
-        <NavLink to="/workspace/chat">Conversation Workspace</NavLink>
-        <NavLink to="/workspace/console">Professional Console</NavLink>
-        <NavLink to="/models/explore">Models Explore</NavLink>
-        <NavLink to="/models/my-models">My Models</NavLink>
-        <NavLink to="/models/create">Create Model</NavLink>
-        <NavLink to="/models/versions">Model Versions</NavLink>
-        <NavLink to="/datasets">Datasets</NavLink>
-        <NavLink to="/training/jobs">Training Jobs</NavLink>
-        <NavLink to="/inference/validate">Inference Validate</NavLink>
-        <NavLink to="/admin/models/pending">Admin Approvals</NavLink>
-        <NavLink to="/admin/audit">Admin Audit</NavLink>
-        <NavLink to="/settings/llm">LLM Settings</NavLink>
+        <NavLink to="/">{t('Dual Entry')}</NavLink>
+        <NavLink to="/workspace/chat">{t('Conversation Workspace')}</NavLink>
+        <NavLink to="/workspace/console">{t('Professional Console')}</NavLink>
+        <NavLink to="/models/explore">{t('Models Explore')}</NavLink>
+        <NavLink to="/models/my-models">{t('My Models')}</NavLink>
+        <NavLink to="/models/create">{t('Create Model')}</NavLink>
+        <NavLink to="/models/versions">{t('Model Versions')}</NavLink>
+        <NavLink to="/datasets">{t('Datasets')}</NavLink>
+        <NavLink to="/training/jobs">{t('Training Jobs')}</NavLink>
+        <NavLink to="/inference/validate">{t('Inference Validate')}</NavLink>
+        <NavLink to="/admin/models/pending">{t('Admin Approvals')}</NavLink>
+        <NavLink to="/admin/audit">{t('Admin Audit')}</NavLink>
+        <NavLink to="/admin/verification-reports">{t('Admin Verify Reports')}</NavLink>
+        <NavLink to="/settings/llm">{t('LLM Settings')}</NavLink>
+        <NavLink to="/settings/runtime">{t('Runtime Settings')}</NavLink>
       </aside>
 
       <main className="main">{children}</main>

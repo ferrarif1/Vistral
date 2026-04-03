@@ -4,11 +4,15 @@ import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
-const STEPS = ['Metadata', 'Model File', 'Parameters', 'Review'];
-
 export default function CreateModelPage() {
+  const { t } = useI18n();
+  const steps = useMemo(
+    () => [t('Metadata'), t('Model File'), t('Parameters'), t('Review')],
+    [t]
+  );
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -61,7 +65,7 @@ export default function CreateModelPage() {
 
   const createDraft = async () => {
     if (!name.trim() || !description.trim()) {
-      setFeedback({ variant: 'error', text: 'Name and description are required before creating a draft.' });
+      setFeedback({ variant: 'error', text: t('Name and description are required before creating a draft.') });
       return;
     }
 
@@ -78,7 +82,10 @@ export default function CreateModelPage() {
 
       setDraftModel(created);
       setStep(1);
-      setFeedback({ variant: 'success', text: `Draft ${created.id} created. Continue with model file upload.` });
+      setFeedback({
+        variant: 'success',
+        text: t('Draft {draftId} created. Continue with model file upload.', { draftId: created.id })
+      });
       await refreshModelFiles();
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -89,7 +96,7 @@ export default function CreateModelPage() {
 
   const onUploadModelFile = async (filename: string) => {
     if (!draftModel) {
-      throw new Error('Create metadata draft first.');
+      throw new Error(t('Create metadata draft first.'));
     }
     await api.uploadModelAttachment(draftModel.id, filename);
     await refreshModelFiles();
@@ -109,12 +116,12 @@ export default function CreateModelPage() {
     if (step === 1 && readyFileCount === 0) {
       setFeedback({
         variant: 'error',
-        text: 'Upload at least one ready model file before proceeding.'
+        text: t('Upload at least one ready model file before proceeding.')
       });
       return;
     }
 
-    if (step < STEPS.length - 1) {
+    if (step < steps.length - 1) {
       setStep((value) => value + 1);
       setFeedback(null);
     }
@@ -129,7 +136,7 @@ export default function CreateModelPage() {
 
   const submitApproval = async () => {
     if (!draftModel) {
-      setFeedback({ variant: 'error', text: 'Draft model is missing.' });
+      setFeedback({ variant: 'error', text: t('Draft model is missing.') });
       return;
     }
 
@@ -139,7 +146,7 @@ export default function CreateModelPage() {
     try {
       const request = await api.submitApprovalRequest({
         model_id: draftModel.id,
-        review_notes: 'Round-1 mock submission from create wizard.',
+        review_notes: t('Round-1 mock submission from create wizard.'),
         parameter_snapshot: {
           learning_rate: learningRate,
           batch_size: batchSize,
@@ -150,7 +157,9 @@ export default function CreateModelPage() {
       setDraftModel({ ...draftModel, status: 'pending_approval' });
       setFeedback({
         variant: 'success',
-        text: `Approval request ${request.id} submitted. Model status is now pending_approval.`
+        text: t('Approval request {requestId} submitted. Model status is now pending_approval.', {
+          requestId: request.id
+        })
       });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -161,26 +170,26 @@ export default function CreateModelPage() {
 
   return (
     <div className="stack page-width">
-      <h2>Create Model</h2>
-      <StepIndicator steps={STEPS} current={step} />
+      <h2>{t('Create Model')}</h2>
+      <StepIndicator steps={steps} current={step} />
 
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
-          title={feedback.variant === 'success' ? 'Action Completed' : 'Action Failed'}
+          title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
       ) : null}
 
       {step === 0 ? (
         <section className="card stack">
-          <h3>Step 1. Metadata</h3>
+          <h3>{t('Step 1. Metadata')}</h3>
           <label>
-            Model Name
+            {t('Model Name')}
             <input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <label>
-            Description
+            {t('Description')}
             <textarea
               value={description}
               onChange={(event) => setDescription(event.target.value)}
@@ -188,7 +197,7 @@ export default function CreateModelPage() {
             />
           </label>
           <label>
-            Model Type
+            {t('Model Type')}
             <select
               value={modelType}
               onChange={(event) =>
@@ -202,24 +211,24 @@ export default function CreateModelPage() {
                 )
               }
             >
-              <option value="ocr">ocr</option>
-              <option value="classification">classification</option>
-              <option value="detection">detection</option>
-              <option value="segmentation">segmentation</option>
-              <option value="obb">obb</option>
+              <option value="ocr">{t('ocr')}</option>
+              <option value="classification">{t('classification')}</option>
+              <option value="detection">{t('detection')}</option>
+              <option value="segmentation">{t('segmentation')}</option>
+              <option value="obb">{t('obb')}</option>
             </select>
           </label>
           <label>
-            Visibility
+            {t('Visibility')}
             <select
               value={visibility}
               onChange={(event) =>
                 setVisibility(event.target.value as 'private' | 'workspace' | 'public')
               }
             >
-              <option value="private">private</option>
-              <option value="workspace">workspace</option>
-              <option value="public">public</option>
+              <option value="private">{t('private')}</option>
+              <option value="workspace">{t('workspace')}</option>
+              <option value="public">{t('public')}</option>
             </select>
           </label>
         </section>
@@ -227,12 +236,12 @@ export default function CreateModelPage() {
 
       {step === 1 ? (
         <AttachmentUploader
-          title="Step 2. Model File Upload"
+          title={t('Step 2. Model File Upload')}
           items={modelFiles}
           onUpload={onUploadModelFile}
           onDelete={onDeleteModelFile}
-          emptyDescription="Upload model artifact files here. Status will transition from uploading to ready."
-          uploadButtonLabel="Upload Model File"
+          emptyDescription={t('Upload model artifact files here. Status will transition from uploading to ready.')}
+          uploadButtonLabel={t('Upload Model File')}
           disabled={loading}
         />
       ) : null}
@@ -240,13 +249,13 @@ export default function CreateModelPage() {
       {step === 2 ? (
         <section className="stack">
           <section className="card stack">
-            <h3>Step 3. Parameters</h3>
+            <h3>{t('Step 3. Parameters')}</h3>
             <label>
-              Learning Rate
+              {t('Learning Rate')}
               <input value={learningRate} onChange={(event) => setLearningRate(event.target.value)} />
             </label>
             <label>
-              Batch Size
+              {t('Batch Size')}
               <input value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
             </label>
           </section>
@@ -257,14 +266,14 @@ export default function CreateModelPage() {
                 checked={enableEarlyStop}
                 onChange={(event) => setEnableEarlyStop(event.target.checked)}
               />
-              Enable early stop
+              {t('Enable early stop')}
             </label>
             <label>
-              Warmup Ratio
+              {t('Warmup Ratio')}
               <input defaultValue="0.1" />
             </label>
             <label>
-              Weight Decay
+              {t('Weight Decay')}
               <input defaultValue="0.0001" />
             </label>
           </AdvancedSection>
@@ -273,26 +282,26 @@ export default function CreateModelPage() {
 
       {step === 3 ? (
         <section className="card stack">
-          <h3>Step 4. Review and Submit</h3>
+          <h3>{t('Step 4. Review and Submit')}</h3>
           {draftModel ? (
             <>
               <p>
-                <strong>{draftModel.name}</strong> ({draftModel.model_type})
+                <strong>{draftModel.name}</strong> ({t(draftModel.model_type)})
               </p>
               <p>{draftModel.description}</p>
               <p className="muted">
-                Visibility: {draftModel.visibility} · Ready model files: {readyFileCount}
+                {t('Visibility')}: {t(draftModel.visibility)} · {t('Ready model files')}: {readyFileCount}
               </p>
               <p className="muted">
-                Parameters: learning rate {learningRate}, batch size {batchSize}, early stop{' '}
-                {enableEarlyStop ? 'enabled' : 'disabled'}.
+                {t('Parameters')}: {t('learning rate')} {learningRate}, {t('batch size')} {batchSize},{' '}
+                {t('early stop')} {enableEarlyStop ? t('enabled') : t('disabled')}.
               </p>
             </>
           ) : (
             <StateBlock
               variant="empty"
-              title="Missing Draft"
-              description="Go back to metadata step and create draft first."
+              title={t('Missing Draft')}
+              description={t('Go back to metadata step and create draft first.')}
             />
           )}
         </section>
@@ -300,13 +309,13 @@ export default function CreateModelPage() {
 
       <div className="row gap">
         <button onClick={previousStep} disabled={step === 0 || loading}>
-          Back
+          {t('Back')}
         </button>
-        <button onClick={nextStep} disabled={step === STEPS.length - 1 || loading}>
-          Next
+        <button onClick={nextStep} disabled={step === steps.length - 1 || loading}>
+          {t('Next')}
         </button>
-        <button onClick={submitApproval} disabled={step !== STEPS.length - 1 || loading}>
-          {loading ? 'Submitting...' : 'Submit Approval'}
+        <button onClick={submitApproval} disabled={step !== steps.length - 1 || loading}>
+          {loading ? t('Submitting...') : t('Submit Approval')}
         </button>
       </div>
     </div>

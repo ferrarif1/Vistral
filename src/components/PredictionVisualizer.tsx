@@ -1,4 +1,5 @@
 import type { UnifiedInferenceOutput } from '../../shared/domain';
+import { useI18n } from '../i18n/I18nProvider';
 import StateBlock from './StateBlock';
 
 interface PredictionVisualizerProps {
@@ -20,11 +21,18 @@ const scalePoint = (
 });
 
 export default function PredictionVisualizer({ output, title = 'Prediction Visualization' }: PredictionVisualizerProps) {
+  const { t } = useI18n();
+  const finalTitle = t(title);
+
   if (!output) {
     return (
       <section className="card stack">
-        <h3>{title}</h3>
-        <StateBlock variant="empty" title="No Output" description="Run inference to visualize results." />
+        <h3>{finalTitle}</h3>
+        <StateBlock
+          variant="empty"
+          title={t('No Output')}
+          description={t('Run inference to visualize results.')}
+        />
       </section>
     );
   }
@@ -34,7 +42,7 @@ export default function PredictionVisualizer({ output, title = 'Prediction Visua
 
   return (
     <section className="card stack">
-      <h3>{title}</h3>
+      <h3>{finalTitle}</h3>
       <small className="muted">
         {output.image.filename} · {output.task_type} · {output.framework}
       </small>
@@ -108,26 +116,26 @@ export default function PredictionVisualizer({ output, title = 'Prediction Visua
 
       <section className="prediction-summary-grid">
         <article className="card stack tight">
-          <strong>Boxes</strong>
+          <strong>{t('Boxes')}</strong>
           <small className="muted">{output.boxes.length}</small>
         </article>
         <article className="card stack tight">
-          <strong>Rotated Boxes</strong>
+          <strong>{t('Rotated Boxes')}</strong>
           <small className="muted">{output.rotated_boxes.length}</small>
         </article>
         <article className="card stack tight">
-          <strong>Polygons</strong>
+          <strong>{t('Polygons')}</strong>
           <small className="muted">{output.polygons.length}</small>
         </article>
         <article className="card stack tight">
-          <strong>OCR Lines</strong>
+          <strong>{t('OCR Lines')}</strong>
           <small className="muted">{output.ocr.lines.length}</small>
         </article>
       </section>
 
       {output.ocr.lines.length > 0 ? (
         <section className="card stack">
-          <h4>OCR Lines</h4>
+          <h4>{t('OCR Lines')}</h4>
           <ul className="list">
             {output.ocr.lines.map((line, index) => (
               <li key={`${line.text}-${index}`} className="list-item row between gap">

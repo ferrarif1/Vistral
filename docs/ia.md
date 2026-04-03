@@ -22,7 +22,15 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.3 Conversation Workspace
 - `/workspace/chat`
-  - timeline + composer + persistent attachment panel
+  - dedicated immersive chat shell (chat-style left sidebar + centered timeline + floating composer)
+  - sidebar uses server-backed conversation history with sync + click-to-restore conversation detail
+  - sidebar history is grouped by recency buckets (Pinned/Today/Yesterday/Previous 7 Days/Older)
+  - pinned chats support drag-to-reorder inside the pinned group
+  - conversation item context menu supports open/rename/pin/delete quick actions (right-click on desktop, long-press on mobile)
+  - context menu supports keyboard navigation (`ArrowUp/ArrowDown`, `Enter`, `Esc`) and quick keys (`O/R/P/D`)
+  - mobile long-press uses lightweight haptic feedback when browser vibration API is available
+  - sidebar supports local hide/clear controls with explicit "show hidden" recovery
+  - persistent attachment strip with status + delete controls inside composer context
 
 ### 3.4 Professional Console
 - `/workspace/console`
@@ -56,6 +64,7 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.8 Inference Validation Domain
 - `/inference/validate`
+  - runtime connectivity diagnostics (PaddleOCR/docTR/YOLO)
   - upload image
   - choose model version
   - run inference
@@ -64,10 +73,12 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.9 Settings
 - `/settings/llm`
+- `/settings/runtime`
 
 ### 3.10 Admin
 - `/admin/models/pending`
 - `/admin/audit`
+- `/admin/verification-reports`
 
 ## 4. Shared UI Contracts
 - `AppShell`: unified global navigation
@@ -89,11 +100,26 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 5.3 Inference Validation
 - reusable uploader and state blocks
+- runtime diagnostics panel with refresh action and per-framework status
 - output panel displays:
   - model metadata
   - raw output
   - normalized output
 - one-click send to dataset feedback
+
+### 5.4 Runtime Settings
+- runtime connectivity checks for all frameworks and single framework
+- integration templates (env vars, request/response payload examples, health-check curl)
+- advanced template section collapsed by default
+
+### 5.5 Admin Verification Reports
+- support filtering by status, base URL, and keyword
+- support date-range filtering and report ordering (latest/oldest/failed-first)
+- support quick date presets (last 7 days / last 30 days / clear)
+- checks detail is collapsible per report to reduce operational list noise
+- support pagination and filtered JSON export for release governance evidence
+- default ordering prefers failed reports first for governance triage
+- page is used for deployment go/no-go governance review
 
 ## 6. Responsive Baseline
 - Mobile: stacked single-column layout

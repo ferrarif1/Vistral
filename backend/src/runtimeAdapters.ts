@@ -1,5 +1,7 @@
 import type {
   ModelFramework,
+  RuntimeConnectivityErrorKind,
+  RuntimeConnectivityRecord,
   TaskType,
   UnifiedInferenceOutput
 } from '../../shared/domain';
@@ -19,8 +21,26 @@ import type {
 } from '../../shared/runtime';
 
 const delay = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
-const yoloRuntimeEndpoint = (process.env.YOLO_RUNTIME_ENDPOINT ?? '').trim();
-const yoloRuntimeApiKey = (process.env.YOLO_RUNTIME_API_KEY ?? '').trim();
+
+interface FrameworkRuntimeConfig {
+  endpoint: string;
+  apiKey: string;
+}
+
+const runtimeConfigs: Record<ModelFramework, FrameworkRuntimeConfig> = {
+  paddleocr: {
+    endpoint: (process.env.PADDLEOCR_RUNTIME_ENDPOINT ?? '').trim(),
+    apiKey: (process.env.PADDLEOCR_RUNTIME_API_KEY ?? '').trim()
+  },
+  doctr: {
+    endpoint: (process.env.DOCTR_RUNTIME_ENDPOINT ?? '').trim(),
+    apiKey: (process.env.DOCTR_RUNTIME_API_KEY ?? '').trim()
+  },
+  yolo: {
+    endpoint: (process.env.YOLO_RUNTIME_ENDPOINT ?? '').trim(),
+    apiKey: (process.env.YOLO_RUNTIME_API_KEY ?? '').trim()
+  }
+};
 
 const buildMetrics = (taskType: TaskType): Record<string, number> => {
   if (taskType === 'ocr') {
@@ -162,15 +182,16 @@ const parsePoint = (value: unknown): { x: number; y: number } | null => {
   };
 };
 
-const parseYoloRuntimeOutput = (
+const parseRuntimeOutput = (
+  framework: ModelFramework,
   input: PredictInput,
   payload: Record<string, unknown>
 ): UnifiedInferenceOutput => {
-  const normalized = buildOutput('yolo', input);
+  const normalized = buildOutput(framework, input);
   normalized.raw_output = payload;
   normalized.normalized_output = {
     ...normalized.normalized_output,
-    source: 'yolo_runtime'
+    source: `${framework}_runtime`
   };
 
   const imagePayload = payload.image as { filename?: string; width?: number; height?: number } | undefined;
@@ -311,41 +332,67 @@ const parseYoloRuntimeOutput = (
     .filter((value): value is { label: string; score: number } => value !== null);
 
   const ocrPayload = payload.ocr as { lines?: unknown; words?: unknown } | undefined;
-  if (ocrPayload) {
-    const linesRaw = Array.isArray(ocrPayload.lines) ? ocrPayload.lines : [];
-    const wordsRaw = Array.isArray(ocrPayload.words) ? ocrPayload.words : [];
+  const linesFromPayload =
+    (ocrPayload && Array.isArray(ocrPayload.lines) ? ocrPayload.lines : null) ??
+    (Array.isArray(payload.lines) ? payload.lines : null) ??
+    (Array.isArray(payload.text_lines) ? payload.text_lines : null) ??
+    [];
 
-    normalized.ocr.lines = linesRaw
-      .map((entry) => {
-        const record = entry as { text?: string; confidence?: number };
-        if (!record.text) {
-          return null;
-        }
-        return {
-          text: record.text,
-          confidence: typeof record.confidence === 'number' ? record.confidence : 0.5
-        };
-      })
-      .filter((value): value is { text: string; confidence: number } => value !== null);
+  const wordsFromPayload =
+    (ocrPayload && Array.isArray(ocrPayload.words) ? ocrPayload.words : null) ??
+    (Array.isArray(payload.words) ? payload.words : null) ??
+    [];
 
-    normalized.ocr.words = wordsRaw
-      .map((entry) => {
-        const record = entry as { text?: string; confidence?: number };
-        if (!record.text) {
-          return null;
-        }
-        return {
-          text: record.text,
-          confidence: typeof record.confidence === 'number' ? record.confidence : 0.5
-        };
-      })
-      .filter((value): value is { text: string; confidence: number } => value !== null);
-  }
+  normalized.ocr.lines = linesFromPayload
+    .map((entry) => {
+      const record = entry as { text?: string; confidence?: number };
+      if (!record.text) {
+        return null;
+      }
+      return {
+        text: record.text,
+        confidence: typeof record.confidence === 'number' ? record.confidence : 0.5
+      };
+    })
+    .filter((value): value is { text: string; confidence: number } => value !== null);
+
+  normalized.ocr.words = wordsFromPayload
+    .map((entry) => {
+      const record = entry as { text?: string; confidence?: number };
+      if (!record.text) {
+        return null;
+      }
+      return {
+        text: record.text,
+        confidence: typeof record.confidence === 'number' ? record.confidence : 0.5
+      };
+    })
+    .filter((value): value is { text: string; confidence: number } => value !== null);
+
+  const masksList = (Array.isArray(payload.masks) ? payload.masks : []) as Array<Record<string, unknown>>;
+  normalized.masks = masksList
+    .map((entry) => {
+      const encoding = entry.encoding;
+      if (typeof encoding !== 'string' || !encoding.trim()) {
+        return null;
+      }
+
+      return {
+        label: typeof entry.label === 'string' ? entry.label : 'region',
+        score: typeof entry.score === 'number' ? entry.score : 0.5,
+        encoding
+      };
+    })
+    .filter((value): value is { label: string; score: number; encoding: string } => value !== null);
 
   return normalized;
 };
 
-const callYoloRuntimePredict = async (input: PredictInput): Promise<UnifiedInferenceOutput> => {
+const callRuntimePredict = async (
+  framework: ModelFramework,
+  config: FrameworkRuntimeConfig,
+  input: PredictInput
+): Promise<UnifiedInferenceOutput> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
 
@@ -354,14 +401,15 @@ const callYoloRuntimePredict = async (input: PredictInput): Promise<UnifiedInfer
       'Content-Type': 'application/json'
     };
 
-    if (yoloRuntimeApiKey) {
-      headers.Authorization = `Bearer ${yoloRuntimeApiKey}`;
+    if (config.apiKey) {
+      headers.Authorization = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetch(yoloRuntimeEndpoint, {
+    const response = await fetch(config.endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({
+        framework,
         model_id: input.modelId,
         model_version_id: input.modelVersionId,
         input_attachment_id: input.inputAttachmentId,
@@ -372,13 +420,132 @@ const callYoloRuntimePredict = async (input: PredictInput): Promise<UnifiedInfer
     });
 
     if (!response.ok) {
-      throw new Error(`YOLO runtime returned ${response.status}.`);
+      throw new Error(`${framework} runtime returned ${response.status}.`);
     }
 
-    const payload = (await response.json()) as Record<string, unknown>;
-    return parseYoloRuntimeOutput(input, payload);
+    const payloadRaw = await response.json();
+    if (typeof payloadRaw !== 'object' || payloadRaw === null || Array.isArray(payloadRaw)) {
+      throw new Error('Runtime response payload is invalid.');
+    }
+
+    const payload = payloadRaw as Record<string, unknown>;
+    return parseRuntimeOutput(framework, input, payload);
   } finally {
     clearTimeout(timeout);
+  }
+};
+
+const classifyConnectivityError = (error: unknown): RuntimeConnectivityErrorKind => {
+  const detail = error as { name?: string; message?: string };
+  const name = (detail.name ?? '').toLowerCase();
+  const message = (detail.message ?? '').toLowerCase();
+
+  if (
+    name === 'aborterror' ||
+    message.includes('timeout') ||
+    message.includes('timed out') ||
+    message.includes('aborted')
+  ) {
+    return 'timeout';
+  }
+
+  if (message.includes('runtime returned') || message.includes('status')) {
+    return 'http_status';
+  }
+
+  if (message.includes('payload') && message.includes('invalid')) {
+    return 'invalid_payload';
+  }
+
+  if (
+    message.includes('fetch') ||
+    message.includes('network') ||
+    message.includes('failed to connect') ||
+    message.includes('econnrefused') ||
+    message.includes('enotfound')
+  ) {
+    return 'network';
+  }
+
+  return 'unknown';
+};
+
+const createPredictWithRuntimeBridge =
+  (framework: ModelFramework) =>
+  async (input: PredictInput): Promise<UnifiedInferenceOutput> => {
+    const runtime = runtimeConfigs[framework];
+    if (!runtime.endpoint) {
+      await delay(100);
+      return buildOutput(framework, input);
+    }
+
+    try {
+      return await callRuntimePredict(framework, runtime, input);
+    } catch (error) {
+      const fallback = buildOutput(framework, input);
+      fallback.raw_output = {
+        ...fallback.raw_output,
+        runtime_fallback_reason: (error as Error).message,
+        runtime_framework: framework
+      };
+      fallback.normalized_output = {
+        ...fallback.normalized_output,
+        source: 'mock_fallback'
+      };
+      return fallback;
+    }
+  };
+
+const buildConnectivityProbeInput = (framework: ModelFramework): PredictInput => ({
+  modelId: `runtime-probe-${framework}`,
+  modelVersionId: `runtime-probe-${framework}-v1`,
+  inputAttachmentId: `runtime-probe-${framework}-file`,
+  filename: `${framework}-runtime-probe.jpg`,
+  taskType: framework === 'yolo' ? 'detection' : 'ocr'
+});
+
+export const checkRuntimeConnectivity = async (
+  framework: ModelFramework
+): Promise<RuntimeConnectivityRecord> => {
+  const runtime = runtimeConfigs[framework];
+  const checkedAt = new Date().toISOString();
+
+  if (!runtime.endpoint) {
+    return {
+      framework,
+      configured: false,
+      reachable: false,
+      endpoint: null,
+      source: 'not_configured',
+      error_kind: 'none',
+      checked_at: checkedAt,
+      message: 'Runtime endpoint is not configured.'
+    };
+  }
+
+  try {
+    await callRuntimePredict(framework, runtime, buildConnectivityProbeInput(framework));
+    return {
+      framework,
+      configured: true,
+      reachable: true,
+      endpoint: runtime.endpoint,
+      source: 'reachable',
+      error_kind: 'none',
+      checked_at: checkedAt,
+      message: 'Runtime endpoint responded with compatible payload.'
+    };
+  } catch (error) {
+    return {
+      framework,
+      configured: true,
+      reachable: false,
+      endpoint: runtime.endpoint,
+      source: 'unreachable',
+      error_kind: classifyConnectivityError(error),
+      checked_at: checkedAt,
+      message: (error as Error).message
+    };
   }
 };
 
@@ -449,30 +616,14 @@ const createTrainer = (
 });
 
 const adapters: Record<ModelFramework, UnifiedTrainer> = {
-  paddleocr: createTrainer('paddleocr', ['ocr']),
-  doctr: createTrainer('doctr', ['ocr']),
+  paddleocr: createTrainer('paddleocr', ['ocr'], {
+    predictOverride: createPredictWithRuntimeBridge('paddleocr')
+  }),
+  doctr: createTrainer('doctr', ['ocr'], {
+    predictOverride: createPredictWithRuntimeBridge('doctr')
+  }),
   yolo: createTrainer('yolo', ['detection', 'classification', 'segmentation', 'obb'], {
-    predictOverride: async (input) => {
-      if (!yoloRuntimeEndpoint) {
-        await delay(100);
-        return buildOutput('yolo', input);
-      }
-
-      try {
-        return await callYoloRuntimePredict(input);
-      } catch (error) {
-        const fallback = buildOutput('yolo', input);
-        fallback.raw_output = {
-          ...fallback.raw_output,
-          runtime_fallback_reason: (error as Error).message
-        };
-        fallback.normalized_output = {
-          ...fallback.normalized_output,
-          source: 'mock_fallback'
-        };
-        return fallback;
-      }
-    }
+    predictOverride: createPredictWithRuntimeBridge('yolo')
   })
 };
 

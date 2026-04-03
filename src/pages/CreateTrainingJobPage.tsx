@@ -4,12 +4,13 @@ import type { DatasetRecord } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
-const STEPS = ['Task', 'Dataset', 'Params', 'Review'];
-
 export default function CreateTrainingJobPage() {
+  const { t } = useI18n();
   const navigate = useNavigate();
+  const steps = useMemo(() => [t('Task'), t('Dataset'), t('Params'), t('Review')], [t]);
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
@@ -65,7 +66,7 @@ export default function CreateTrainingJobPage() {
   }, [taskType]);
 
   const nextStep = () => {
-    if (step < STEPS.length - 1) {
+    if (step < steps.length - 1) {
       setStep((value) => value + 1);
       setFeedback(null);
     }
@@ -80,12 +81,12 @@ export default function CreateTrainingJobPage() {
 
   const submit = async () => {
     if (!name.trim()) {
-      setFeedback({ variant: 'error', text: 'Training job name is required.' });
+      setFeedback({ variant: 'error', text: t('Training job name is required.') });
       return;
     }
 
     if (!datasetId) {
-      setFeedback({ variant: 'error', text: 'Please select a dataset.' });
+      setFeedback({ variant: 'error', text: t('Please select a dataset.') });
       return;
     }
 
@@ -109,7 +110,10 @@ export default function CreateTrainingJobPage() {
         }
       });
 
-      setFeedback({ variant: 'success', text: `Training job ${created.id} created.` });
+      setFeedback({
+        variant: 'success',
+        text: t('Training job {jobId} created.', { jobId: created.id })
+      });
       navigate(`/training/jobs/${created.id}`);
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -120,30 +124,30 @@ export default function CreateTrainingJobPage() {
 
   return (
     <div className="stack page-width">
-      <h2>Create Training Job</h2>
-      <StepIndicator steps={STEPS} current={step} />
+      <h2>{t('Create Training Job')}</h2>
+      <StepIndicator steps={steps} current={step} />
 
       {loading ? (
-        <StateBlock variant="loading" title="Preparing" description="Loading dataset options." />
+        <StateBlock variant="loading" title={t('Preparing')} description={t('Loading dataset options.')} />
       ) : null}
 
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
-          title={feedback.variant === 'success' ? 'Action Completed' : 'Action Failed'}
+          title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
       ) : null}
 
       {step === 0 ? (
         <section className="card stack">
-          <h3>Step 1. Task and Framework</h3>
+          <h3>{t('Step 1. Task and Framework')}</h3>
           <label>
-            Training Job Name
+            {t('Training Job Name')}
             <input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <label>
-            Task Type
+            {t('Task Type')}
             <select
               value={taskType}
               onChange={(event) =>
@@ -152,22 +156,22 @@ export default function CreateTrainingJobPage() {
                 )
               }
             >
-              <option value="ocr">ocr</option>
-              <option value="detection">detection</option>
-              <option value="classification">classification</option>
-              <option value="segmentation">segmentation</option>
-              <option value="obb">obb</option>
+              <option value="ocr">{t('ocr')}</option>
+              <option value="detection">{t('detection')}</option>
+              <option value="classification">{t('classification')}</option>
+              <option value="segmentation">{t('segmentation')}</option>
+              <option value="obb">{t('obb')}</option>
             </select>
           </label>
           <label>
-            Framework
+            {t('Framework')}
             <select
               value={framework}
               onChange={(event) => setFramework(event.target.value as 'paddleocr' | 'doctr' | 'yolo')}
             >
               {taskFrameworkOptions.map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {t(option)}
                 </option>
               ))}
             </select>
@@ -177,26 +181,26 @@ export default function CreateTrainingJobPage() {
 
       {step === 1 ? (
         <section className="card stack">
-          <h3>Step 2. Dataset and Base Model</h3>
+          <h3>{t('Step 2. Dataset and Base Model')}</h3>
           {filteredDatasets.length === 0 ? (
             <StateBlock
               variant="empty"
-              title="No Matching Dataset"
-              description="Create dataset for selected task type first."
+              title={t('No Matching Dataset')}
+              description={t('Create dataset for selected task type first.')}
             />
           ) : null}
           <label>
-            Dataset
+            {t('Dataset')}
             <select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
               {filteredDatasets.map((dataset) => (
                 <option key={dataset.id} value={dataset.id}>
-                  {dataset.name} ({dataset.status})
+                  {dataset.name} ({t(dataset.status)})
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Dataset Version (optional)
+            {t('Dataset Version (optional)')}
             <input
               value={datasetVersionId}
               onChange={(event) => setDatasetVersionId(event.target.value)}
@@ -204,7 +208,7 @@ export default function CreateTrainingJobPage() {
             />
           </label>
           <label>
-            Base Model
+            {t('Base Model')}
             <input
               value={baseModel}
               onChange={(event) => setBaseModel(event.target.value)}
@@ -217,18 +221,18 @@ export default function CreateTrainingJobPage() {
       {step === 2 ? (
         <section className="stack">
           <section className="card stack">
-            <h3>Step 3. Core Params</h3>
+            <h3>{t('Step 3. Core Params')}</h3>
             <div className="three-col">
               <label>
-                Epochs
+                {t('Epochs')}
                 <input value={epochs} onChange={(event) => setEpochs(event.target.value)} />
               </label>
               <label>
-                Batch Size
+                {t('Batch Size')}
                 <input value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
               </label>
               <label>
-                Learning Rate
+                {t('Learning Rate')}
                 <input value={learningRate} onChange={(event) => setLearningRate(event.target.value)} />
               </label>
             </div>
@@ -236,11 +240,11 @@ export default function CreateTrainingJobPage() {
 
           <AdvancedSection>
             <label>
-              Warmup Ratio
+              {t('Warmup Ratio')}
               <input value={warmupRatio} onChange={(event) => setWarmupRatio(event.target.value)} />
             </label>
             <label>
-              Weight Decay
+              {t('Weight Decay')}
               <input value={weightDecay} onChange={(event) => setWeightDecay(event.target.value)} />
             </label>
           </AdvancedSection>
@@ -249,31 +253,31 @@ export default function CreateTrainingJobPage() {
 
       {step === 3 ? (
         <section className="card stack">
-          <h3>Step 4. Review</h3>
+          <h3>{t('Step 4. Review')}</h3>
           <p>
-            <strong>{name || 'Unnamed job'}</strong>
+            <strong>{name || t('Unnamed job')}</strong>
           </p>
           <p className="muted">
-            task {taskType} · framework {framework}
+            {t('Task')}: {t(taskType)} · {t('Framework')}: {t(framework)}
           </p>
           <p className="muted">
-            dataset {datasetId || 'N/A'} · dataset version {datasetVersionId || 'latest'}
+            {t('Dataset')}: {datasetId || t('N/A')} · {t('Dataset Version')}: {datasetVersionId || t('latest')}
           </p>
           <p className="muted">
-            epochs {epochs}, batch size {batchSize}, learning rate {learningRate}
+            {t('Epochs')}: {epochs}, {t('Batch Size')}: {batchSize}, {t('Learning Rate')}: {learningRate}
           </p>
         </section>
       ) : null}
 
       <div className="row gap">
         <button onClick={previousStep} disabled={step === 0 || submitting}>
-          Back
+          {t('Back')}
         </button>
-        <button onClick={nextStep} disabled={step === STEPS.length - 1 || submitting || loading}>
-          Next
+        <button onClick={nextStep} disabled={step === steps.length - 1 || submitting || loading}>
+          {t('Next')}
         </button>
-        <button onClick={submit} disabled={step !== STEPS.length - 1 || submitting || loading}>
-          {submitting ? 'Submitting...' : 'Create Training Job'}
+        <button onClick={submit} disabled={step !== steps.length - 1 || submitting || loading}>
+          {submitting ? t('Submitting...') : t('Create Training Job')}
         </button>
       </div>
     </div>

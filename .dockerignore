@@ -4,3 +4,5 @@ dist
 .gitignore
 npm-debug.log
 *.tsbuildinfo
+.data
+.env

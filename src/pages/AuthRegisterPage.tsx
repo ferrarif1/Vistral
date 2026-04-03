@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import StateBlock from '../components/StateBlock';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { emitAuthUpdated } from '../services/authSession';
 
 export default function AuthRegisterPage() {
-  const [email, setEmail] = useState('new@vistral.dev');
+  const { t, roleLabel } = useI18n();
   const [username, setUsername] = useState('newuser');
+  const [password, setPassword] = useState('newpass123');
   const [message, setMessage] = useState('');
   const [variant, setVariant] = useState<'success' | 'error'>('success');
 
@@ -13,13 +15,16 @@ export default function AuthRegisterPage() {
     setMessage('');
     try {
       const created = await api.register({
-        email,
-        password: 'mock-pass',
+        password,
         username
       });
       emitAuthUpdated();
       setVariant('success');
-      setMessage(`Registered as ${created.role}. Public registration can only create user accounts.`);
+      setMessage(
+        t('Registered as {role}. Public registration can only create user accounts.', {
+          role: roleLabel(created.role)
+        })
+      );
     } catch (error) {
       setVariant('error');
       setMessage((error as Error).message);
@@ -28,19 +33,23 @@ export default function AuthRegisterPage() {
 
   return (
     <div className="stack page-width">
-      <h2>Register</h2>
+      <h2>{t('Register')}</h2>
       <section className="card">
         <label>
-          Email
-          <input value={email} onChange={(event) => setEmail(event.target.value)} />
-        </label>
-        <label>
-          Username
+          {t('Username')}
           <input value={username} onChange={(event) => setUsername(event.target.value)} />
         </label>
-        <button onClick={submit}>Create User Account</button>
+        <label>
+          {t('Password')}
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        <button onClick={submit}>{t('Create User Account')}</button>
       </section>
-      {message ? <StateBlock variant={variant} title="Register Result" description={message} /> : null}
+      {message ? <StateBlock variant={variant} title={t('Register Result')} description={message} /> : null}
     </div>
   );
 }

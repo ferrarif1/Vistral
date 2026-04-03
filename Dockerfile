@@ -1,6 +1,7 @@
-# syntax=docker/dockerfile:1
+ARG NODE_BASE_IMAGE=node:20-alpine
+ARG NGINX_BASE_IMAGE=nginx:1.27-alpine
 
-FROM node:20-alpine AS builder
+FROM ${NODE_BASE_IMAGE} AS builder
 WORKDIR /app
 
 COPY package*.json ./
@@ -9,7 +10,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine AS runtime
+FROM ${NGINX_BASE_IMAGE} AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 

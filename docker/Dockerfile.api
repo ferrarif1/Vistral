@@ -1,0 +1,18 @@
+ARG NODE_BASE_IMAGE=node:20-alpine
+FROM ${NODE_BASE_IMAGE}
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY backend ./backend
+COPY shared ./shared
+COPY tsconfig*.json ./
+
+ENV API_PORT=8787
+ENV API_HOST=0.0.0.0
+
+EXPOSE 8787
+
+CMD ["./node_modules/.bin/tsx", "backend/src/server.ts"]

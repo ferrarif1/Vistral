@@ -4,17 +4,18 @@
 定义认证、用户、模型、会话等接口的最小可实现合同。
 
 ## 认证
-使用 Bearer Token：
-- `Authorization: Bearer {access_token}`
+原型阶段使用 Cookie Session：
+- `HttpOnly` 会话 Cookie：`vistral_session`
+- 变更类请求（`POST/PUT/PATCH/DELETE`）需携带 `X-CSRF-Token`
 
 ## 统一返回
 成功：
 ```json
-{ "success": true, "data": {}, "meta": {} }
+{ "success": true, "data": {} }
 ```
 失败：
 ```json
-{ "success": false, "error": { "code": "", "message": "", "details": {} } }
+{ "success": false, "error": { "code": "", "message": "" } }
 ```
 
 ## 认证接口
@@ -28,17 +29,13 @@
 请求体：
 ```json
 {
-  "email": "user@example.com",
-  "password": "secure_password",
-  "username": "username"
+  "username": "username",
+  "password": "secure_password"
 }
 ```
 
 ### POST /auth/login
-登录并返回访问令牌。
-
-### POST /auth/refresh
-刷新访问令牌。
+登录并绑定会话 Cookie（用户名+密码）。
 
 ## 权限边界（最小 v1）
 - 系统角色仅 `user` / `admin`。
@@ -54,3 +51,71 @@
 - `PUT /models/{id}` 更新（仅 owner/authorized/admin）
 - `DELETE /models/{id}` 弃用（仅 owner/authorized/admin）
 - `POST /models/{id}/publish` 提交发布（进入审批）
+
+## 管理接口补充
+- `GET /audit/logs`：审计日志（仅 admin）
+- `GET /admin/verification-reports`：部署验收报告列表（仅 admin）
+
+## 会话接口（补充）
+- `GET /conversations`：会话列表
+- `POST /conversations/start`：发起会话
+- `POST /conversations/message`：会话追加消息
+- `GET /conversations/{id}`：会话详情（含消息）
+- `PATCH /conversations/{id}`：重命名会话标题（owner/admin）
+
+`PATCH /conversations/{id}` 请求体：
+```json
+{
+  "title": "Invoice Batch Review"
+}
+```
+
+约束：
+- `title` 去空格后不能为空
+- 标题长度 1-120
+
+### GET /admin/verification-reports 返回项
+```json
+{
+  "id": "docker-verify-full-20260402223826",
+  "filename": "docker-verify-full-20260402223826.json",
+  "status": "passed",
+  "summary": "full deployment verification succeeded",
+  "started_at_utc": "2026-04-02T14:38:26Z",
+  "finished_at_utc": "2026-04-02T14:38:31Z",
+  "target_base_url": "http://127.0.0.1:8080",
+  "business_username": "alice",
+  "probe_username": "verify-123",
+  "checks_total": 9,
+  "checks_failed": 0,
+  "checks": [
+    {
+      "name": "infrastructure health checks",
+      "status": "passed",
+      "detail": "health endpoints are reachable"
+    }
+  ],
+  "entities": {
+    "model_id": "m-1",
+    "approval_id": "ar-1"
+  }
+}
+```
+
+说明：
+- 仅 `admin` 可访问；普通 `user` 请求应返回失败。
+- `status` 取值：`passed` / `failed` / `unknown`。
+- 普通 `user` 调用建议返回：`403 + INSUFFICIENT_PERMISSIONS`。
+
+## 错误码与状态码映射（原型已实现）
+- `AUTHENTICATION_REQUIRED` -> `401`
+- `INSUFFICIENT_PERMISSIONS` -> `403`
+- `CSRF_VALIDATION_FAILED` -> `403`
+- `RESOURCE_NOT_FOUND` -> `404`
+- `VALIDATION_ERROR` -> `400`
+- `INVALID_STATE_TRANSITION` -> `409`
+- `INTERNAL_ERROR` -> `500`
+
+实现说明：
+- 后端优先通过错误消息模式归类（权限/资源不存在/状态迁移），由共享错误归一模块实现
+- 对未命中模式的边界消息保留显式映射兜底

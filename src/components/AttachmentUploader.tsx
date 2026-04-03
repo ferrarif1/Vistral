@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FileAttachment } from '../../shared/domain';
+import { useI18n } from '../i18n/I18nProvider';
 import StateBlock from './StateBlock';
 import StatusBadge from './StatusBadge';
 
@@ -20,11 +21,13 @@ export default function AttachmentUploader({
   onDelete,
   disabled,
   emptyDescription,
-  uploadButtonLabel = 'Upload'
+  uploadButtonLabel
 }: AttachmentUploaderProps) {
+  const { t } = useI18n();
   const [filename, setFilename] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const finalUploadButtonLabel = uploadButtonLabel ?? t('Upload');
 
   const upload = async () => {
     const finalName = filename.trim() || `file-${Date.now()}.bin`;
@@ -60,25 +63,25 @@ export default function AttachmentUploader({
     <section className="card stack">
       <div className="row gap between">
         <h3>{title}</h3>
-        <span className="muted">Visible in current context</span>
+        <span className="muted">{t('Visible in current context')}</span>
       </div>
 
       <div className="row gap">
         <input
           value={filename}
-          placeholder="Enter file name, for example: sample-image.jpg"
+          placeholder={t('Enter file name, for example: sample-image.jpg')}
           onChange={(event) => setFilename(event.target.value)}
           disabled={isDisabled}
         />
         <button onClick={upload} disabled={isDisabled}>
-          {pending ? 'Working...' : uploadButtonLabel}
+          {pending ? t('Working...') : finalUploadButtonLabel}
         </button>
       </div>
 
-      {error ? <StateBlock variant="error" title="Attachment Action Failed" description={error} /> : null}
+      {error ? <StateBlock variant="error" title={t('Attachment Action Failed')} description={error} /> : null}
 
       {items.length === 0 ? (
-        <StateBlock variant="empty" title="No Files Yet" description={emptyDescription} />
+        <StateBlock variant="empty" title={t('No Files Yet')} description={emptyDescription} />
       ) : (
         <ul className="list">
           {items.map((item) => (
@@ -91,7 +94,7 @@ export default function AttachmentUploader({
                 <div className="row gap">
                   <StatusBadge status={item.status} />
                   <button onClick={() => remove(item.id)} disabled={isDisabled}>
-                    Delete
+                    {t('Delete')}
                   </button>
                 </div>
               </div>

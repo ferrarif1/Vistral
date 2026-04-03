@@ -16,10 +16,12 @@ import type {
   ModelVersionRecord,
   RegisterInput,
   ReviewAnnotationInput,
+  RuntimeConnectivityRecord,
   SubmitApprovalInput,
   TrainingJobRecord,
   TrainingMetricRecord,
   UpsertAnnotationInput,
+  VerificationReportRecord,
   User
 } from '../../shared/domain';
 
@@ -187,6 +189,19 @@ export const api = {
         body: JSON.stringify(input)
       }
     ),
+
+  listConversations: () => request<ConversationRecord[]>('/api/conversations'),
+
+  getConversationDetail: (conversationId: string) =>
+    request<{ conversation: ConversationRecord; messages: MessageRecord[] }>(
+      `/api/conversations/${encodeURIComponent(conversationId)}`
+    ),
+
+  renameConversation: (conversationId: string, title: string) =>
+    request<ConversationRecord>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title })
+    }),
 
   sendConversationMessage: (input: {
     conversation_id: string;
@@ -382,6 +397,13 @@ export const api = {
   getInferenceRun: (runId: string) =>
     request<InferenceRunRecord>(`/api/inference/runs/${encodeURIComponent(runId)}`),
 
+  getRuntimeConnectivity: (framework?: 'paddleocr' | 'doctr' | 'yolo') =>
+    request<RuntimeConnectivityRecord[]>(
+      `/api/runtime/connectivity${
+        framework ? `?framework=${encodeURIComponent(framework)}` : ''
+      }`
+    ),
+
   sendInferenceFeedback: (input: { run_id: string; dataset_id: string; reason: string }) =>
     request<InferenceRunRecord>(`/api/inference/runs/${encodeURIComponent(input.run_id)}/feedback`, {
       method: 'POST',
@@ -412,6 +434,9 @@ export const api = {
     }),
 
   listAuditLogs: () => request<AuditLogRecord[]>('/api/audit/logs'),
+
+  listVerificationReports: () =>
+    request<VerificationReportRecord[]>('/api/admin/verification-reports'),
 
   getLlmConfig: () => request<LlmConfigView>('/api/settings/llm'),
 

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { ModelRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 export default function MyModelsPage() {
+  const { t } = useI18n();
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -22,12 +24,12 @@ export default function MyModelsPage() {
 
   return (
     <div className="stack">
-      <h2>My Models</h2>
+      <h2>{t('My Models')}</h2>
 
-      {loading ? <StateBlock variant="loading" title="Loading Models" description="Checking ownership-scoped models." /> : null}
-      {error ? <StateBlock variant="error" title="Load Failed" description={error} /> : null}
+      {loading ? <StateBlock variant="loading" title={t('Loading Models')} description={t('Checking ownership-scoped models.')} /> : null}
+      {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
       {!loading && !error && models.length === 0 ? (
-        <StateBlock variant="empty" title="No Owned Models" description="Create your first model from the Create Model page." />
+        <StateBlock variant="empty" title={t('No Owned Models')} description={t('Create your first model from the Create Model page.')} />
       ) : null}
 
       {!loading && !error && models.length > 0 ? (
@@ -39,7 +41,7 @@ export default function MyModelsPage() {
                 <span className="chip">{model.status}</span>
               </div>
               <p>{model.description}</p>
-              <small className="muted">owner_user_id: {model.owner_user_id}</small>
+              <small className="muted">{t('owner_user_id')}: {model.owner_user_id}</small>
             </li>
           ))}
         </ul>

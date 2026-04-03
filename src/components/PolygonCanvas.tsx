@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useI18n } from '../i18n/I18nProvider';
 import StateBlock from './StateBlock';
 
 export interface PolygonAnnotation {
@@ -40,6 +41,7 @@ export default function PolygonCanvas({
   width = 700,
   height = 380
 }: PolygonCanvasProps) {
+  const { t } = useI18n();
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
   const [selectedPolygonId, setSelectedPolygonId] = useState<string | null>(null);
@@ -131,7 +133,7 @@ export default function PolygonCanvas({
 
   const completePolygon = () => {
     if (draftPoints.length < 3) {
-      setError('Polygon requires at least 3 points.');
+      setError(t('Polygon requires at least 3 points.'));
       return;
     }
 
@@ -228,8 +230,8 @@ export default function PolygonCanvas({
   return (
     <section className="card stack">
       <div className="row between gap align-center">
-        <h3>{title}</h3>
-        <span className="muted">Click to add points, then complete polygon. Drag vertices to adjust.</span>
+        <h3>{t(title)}</h3>
+        <span className="muted">{t('Click to add points, then complete polygon. Drag vertices to adjust.')}</span>
       </div>
 
       <div
@@ -299,37 +301,37 @@ export default function PolygonCanvas({
 
       <div className="row gap wrap">
         <button onClick={completePolygon} disabled={disabled || draftPoints.length < 3}>
-          Complete Polygon
+          {t('Complete Polygon')}
         </button>
         <button onClick={clearDraft} disabled={disabled || draftPoints.length === 0}>
-          Clear Draft Points
+          {t('Clear Draft Points')}
         </button>
         <button onClick={removeSelected} disabled={disabled || !selectedPolygonId}>
-          Delete Selected Polygon
+          {t('Delete Selected Polygon')}
         </button>
         <button onClick={clearAll} disabled={disabled || polygons.length === 0}>
-          Clear All Polygons
+          {t('Clear All Polygons')}
         </button>
       </div>
 
       <div className="polygon-meta-grid">
         <label>
-          New Polygon Label
+          {t('New Polygon Label')}
           <input value={draftLabel} onChange={(event) => setDraftLabel(event.target.value)} disabled={disabled} />
         </label>
 
         <label>
-          Selected Polygon Label
+          {t('Selected Polygon Label')}
           <input
             value={selectedPolygon?.label ?? ''}
             onChange={(event) => updateSelectedPolygon({ label: event.target.value })}
             disabled={disabled || !selectedPolygon}
-            placeholder="Select polygon to edit label"
+            placeholder={t('Select polygon to edit label')}
           />
         </label>
       </div>
 
-      {error ? <StateBlock variant="error" title="Polygon Error" description={error} /> : null}
+      {error ? <StateBlock variant="error" title={t('Polygon Error')} description={error} /> : null}
     </section>
   );
 }

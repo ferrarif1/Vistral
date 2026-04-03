@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { ModelRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 export default function ModelsExplorePage() {
+  const { t } = useI18n();
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -22,12 +24,12 @@ export default function ModelsExplorePage() {
 
   return (
     <div className="stack">
-      <h2>Model Explore</h2>
+      <h2>{t('Models Explore')}</h2>
 
-      {loading ? <StateBlock variant="loading" title="Loading Models" description="Fetching model catalog." /> : null}
-      {error ? <StateBlock variant="error" title="Load Failed" description={error} /> : null}
+      {loading ? <StateBlock variant="loading" title={t('Loading Models')} description={t('Fetching model catalog.')} /> : null}
+      {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
       {!loading && !error && models.length === 0 ? (
-        <StateBlock variant="empty" title="No Models" description="No models are currently visible to this account." />
+        <StateBlock variant="empty" title={t('No Models')} description={t('No models are currently visible to this account.')} />
       ) : null}
 
       {!loading && !error && models.length > 0 ? (
@@ -40,7 +42,7 @@ export default function ModelsExplorePage() {
               </div>
               <p>{model.description}</p>
               <small className="muted">
-                {model.visibility} · {model.model_type} · owner {model.owner_user_id}
+                {model.visibility} · {model.model_type} · {t('owner')} {model.owner_user_id}
               </small>
             </li>
           ))}

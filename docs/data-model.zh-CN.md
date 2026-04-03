@@ -12,14 +12,11 @@
 
 ### User
 - `id`
-- `email`
 - `username`
+- `password_hash`（scrypt+salt，仅服务端存储，不返回前端）
 - `role`：`user` / `admin`
 - `capabilities`：JSON 数组
-- `profile_data`
-- `preferences`
-- `created_at` / `updated_at` / `last_login_at`
-- `is_active` / `email_verified`
+- `created_at` / `updated_at`
 
 ### Model
 - `id`
@@ -36,7 +33,7 @@
 
 ### Conversation / Message / FileAttachment
 - 会话与消息维持对话上下文
-- 附件状态：`uploading | processing | ready | error | deleted`
+- 附件状态：`uploading | processing | ready | error`
 
 ### ApprovalRequest
 - 审批请求主体（提交人、审核人、状态、时间戳）
@@ -45,7 +42,6 @@
 - 记录敏感行为与治理动作
 
 ## 索引建议
-- `User.email`（unique）
 - `User.username`（unique）
 - `Model.owner_user_id + status`
 - `Message.conversation_id + created_at`

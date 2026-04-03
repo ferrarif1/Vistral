@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import {
   annotationReviews,
   annotations,
@@ -17,9 +19,11 @@ import {
   persistLlmConfigs,
   trainingJobs,
   trainingMetrics,
+  userPasswordHashes,
   users
 } from './store';
-import { getTrainerByFramework } from './runtimeAdapters';
+import { hashPassword, verifyPassword } from './auth';
+import { checkRuntimeConnectivity, getTrainerByFramework } from './runtimeAdapters';
 import type {
   AnnotationRecord,
   AnnotationReviewRecord,
@@ -45,8 +49,10 @@ import type {
   ModelRecord,
   ModelVersionRecord,
   RegisterInput,
+  RenameConversationInput,
   RegisterModelVersionInput,
   ReviewAnnotationInput,
+  RuntimeConnectivityRecord,
   RunInferenceInput,
   SendMessageInput,
   StartConversationInput,
@@ -54,11 +60,15 @@ import type {
   TrainingJobRecord,
   TrainingMetricRecord,
   UpsertAnnotationInput,
+  VerificationCheckRecord,
+  VerificationReportRecord,
   User
 } from '../../shared/domain';
 
 const delay = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
+const normalizeUsername = (value: string) => value.trim().toLowerCase();
+const verificationReportsDir = path.resolve(process.cwd(), '.data', 'verify-reports');
 
 let idSeed = 400;
 const currentUserId = process.env.DEFAULT_USER_ID ?? 'u-1';
@@ -321,6 +331,19 @@ const getEffectiveConversationLlmConfig = (override?: LlmConfig | null): LlmConf
 const conversationMessages = (conversationId: string): MessageRecord[] =>
   messages.filter((item) => item.conversation_id === conversationId);
 
+const assertConversationAccess = (conversationId: string, user: User): ConversationRecord => {
+  const conversation = conversations.find((item) => item.id === conversationId);
+  if (!conversation) {
+    throw new Error('Conversation not found.');
+  }
+
+  if (!(user.role === 'admin' || conversation.created_by === user.id)) {
+    throw new Error('No permission to message in this conversation.');
+  }
+
+  return conversation;
+};
+
 const logAudit = (
   action: string,
   entityType: string,
@@ -507,14 +530,25 @@ const getModelVersionsVisibleToUser = (user: User): ModelVersionRecord[] =>
 export async function register(input: RegisterInput): Promise<User> {
   await delay();
 
-  if (users.some((user) => user.email.toLowerCase() === input.email.toLowerCase())) {
-    throw new Error('Email already exists.');
+  const username = input.username.trim();
+  const normalizedUsername = normalizeUsername(username);
+  const password = input.password.trim();
+
+  if (username.length < 3) {
+    throw new Error('Username must be at least 3 characters.');
+  }
+
+  if (password.length < 8) {
+    throw new Error('Password must be at least 8 characters.');
+  }
+
+  if (users.some((user) => normalizeUsername(user.username) === normalizedUsername)) {
+    throw new Error('Username already exists.');
   }
 
   const created: User = {
     id: nextId('u'),
-    email: input.email,
-    username: input.username,
+    username,
     role: 'user',
     capabilities: [],
     created_at: now(),
@@ -522,11 +556,12 @@ export async function register(input: RegisterInput): Promise<User> {
   };
 
   users.push(created);
+  userPasswordHashes[created.id] = hashPassword(password);
   logAudit(
     'user_registered',
     'User',
     created.id,
-    { email: created.email, role: created.role },
+    { username: created.username, role: created.role },
     created.id
   );
   return created;
@@ -535,12 +570,18 @@ export async function register(input: RegisterInput): Promise<User> {
 export async function login(input: LoginInput): Promise<User> {
   await delay();
 
-  const matched = users.find((user) => user.email.toLowerCase() === input.email.toLowerCase());
+  const normalizedUsername = normalizeUsername(input.username);
+  const matched = users.find((user) => normalizeUsername(user.username) === normalizedUsername);
   if (!matched) {
-    throw new Error('User not found in mock environment.');
+    throw new Error('Invalid username or password.');
   }
 
-  logAudit('user_logged_in', 'User', matched.id, { email: matched.email }, matched.id);
+  const expectedHash = userPasswordHashes[matched.id];
+  if (!expectedHash || !verifyPassword(input.password.trim(), expectedHash)) {
+    throw new Error('Invalid username or password.');
+  }
+
+  logAudit('user_logged_in', 'User', matched.id, { username: matched.username }, matched.id);
   return matched;
 }
 
@@ -629,6 +670,55 @@ export async function uploadConversationAttachment(filename: string): Promise<Fi
     filename: created.filename
   });
   return created;
+}
+
+export async function listConversations(): Promise<ConversationRecord[]> {
+  await delay(100);
+  const currentUser = findCurrentUser();
+
+  const visible = conversations.filter(
+    (conversation) => currentUser.role === 'admin' || conversation.created_by === currentUser.id
+  );
+
+  return [...visible].sort(
+    (a, b) => Date.parse(b.updated_at || b.created_at) - Date.parse(a.updated_at || a.created_at)
+  );
+}
+
+export async function getConversationDetail(
+  conversationId: string
+): Promise<{ conversation: ConversationRecord; messages: MessageRecord[] }> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  const conversation = assertConversationAccess(conversationId, currentUser);
+
+  return {
+    conversation,
+    messages: conversationMessages(conversation.id)
+  };
+}
+
+export async function renameConversation(
+  conversationId: string,
+  input: RenameConversationInput
+): Promise<ConversationRecord> {
+  await delay(90);
+  const currentUser = findCurrentUser();
+  const conversation = assertConversationAccess(conversationId, currentUser);
+  const nextTitle = input.title.trim();
+
+  if (nextTitle.length < 1 || nextTitle.length > 120) {
+    throw new Error('Conversation title must be between 1 and 120 characters.');
+  }
+
+  conversation.title = nextTitle;
+  conversation.updated_at = now();
+
+  logAudit('conversation_renamed', 'Conversation', conversation.id, {
+    title: conversation.title
+  });
+
+  return conversation;
 }
 
 export async function listModelAttachments(modelId: string): Promise<FileAttachment[]> {
@@ -769,15 +859,7 @@ export async function sendConversationMessage(
 ): Promise<{ messages: MessageRecord[] }> {
   await delay();
   const currentUser = findCurrentUser();
-
-  const conversation = conversations.find((item) => item.id === input.conversation_id);
-  if (!conversation) {
-    throw new Error('Conversation not found.');
-  }
-
-  if (!(currentUser.role === 'admin' || conversation.created_by === currentUser.id)) {
-    throw new Error('No permission to message in this conversation.');
-  }
+  const conversation = assertConversationAccess(input.conversation_id, currentUser);
 
   const userMessage: MessageRecord = {
     id: nextId('msg'),
@@ -1683,6 +1765,15 @@ export async function sendInferenceFeedback(input: InferenceFeedbackInput): Prom
   return run;
 }
 
+export async function getRuntimeConnectivity(
+  framework?: 'paddleocr' | 'doctr' | 'yolo'
+): Promise<RuntimeConnectivityRecord[]> {
+  await delay(80);
+  const targets = framework ? [framework] : (['paddleocr', 'doctr', 'yolo'] as const);
+  const checks = await Promise.all(targets.map((item) => checkRuntimeConnectivity(item)));
+  return checks;
+}
+
 export async function listApprovalRequests(): Promise<ApprovalRequest[]> {
   await delay(120);
   const currentUser = findCurrentUser();
@@ -1701,6 +1792,100 @@ export async function listAuditLogs(): Promise<AuditLogRecord[]> {
     throw new Error('Only admin can view audit logs.');
   }
   return auditLogs;
+}
+
+export async function listVerificationReports(): Promise<VerificationReportRecord[]> {
+  await delay(120);
+  const currentUser = findCurrentUser();
+  if (currentUser.role !== 'admin') {
+    throw new Error('Only admin can view verification reports.');
+  }
+
+  let files: string[] = [];
+  try {
+    files = (await fs.readdir(verificationReportsDir))
+      .filter((file) => file.startsWith('docker-verify-full-') && file.endsWith('.json'))
+      .sort((a, b) => b.localeCompare(a));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      return [];
+    }
+    throw new Error('Failed to read verification reports directory.');
+  }
+
+  const reports: VerificationReportRecord[] = [];
+
+  for (const filename of files) {
+    const fullPath = path.join(verificationReportsDir, filename);
+
+    try {
+      const content = await fs.readFile(fullPath, 'utf8');
+      const parsed = JSON.parse(content) as {
+        status?: string;
+        summary?: string;
+        started_at_utc?: string;
+        finished_at_utc?: string;
+        target?: { base_url?: string; business_username?: string; probe_username?: string };
+        checks?: Array<{ name?: string; status?: string; detail?: string }>;
+        entities?: Record<string, unknown>;
+      };
+
+      const checks: VerificationCheckRecord[] = Array.isArray(parsed.checks)
+        ? parsed.checks.map((item) => ({
+            name: typeof item.name === 'string' ? item.name : 'unknown',
+            status: typeof item.status === 'string' ? item.status : 'unknown',
+            detail: typeof item.detail === 'string' ? item.detail : ''
+          }))
+        : [];
+
+      const checksFailed = checks.filter((item) => item.status !== 'passed').length;
+      const normalizedStatus: VerificationReportRecord['status'] =
+        parsed.status === 'passed' || parsed.status === 'failed'
+          ? parsed.status
+          : checksFailed > 0
+            ? 'failed'
+            : 'unknown';
+
+      const entities = Object.fromEntries(
+        Object.entries(parsed.entities ?? {}).map(([key, value]) => [key, String(value ?? '')])
+      );
+
+      reports.push({
+        id: filename.replace(/\.json$/i, ''),
+        filename,
+        status: normalizedStatus,
+        summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+        started_at_utc: typeof parsed.started_at_utc === 'string' ? parsed.started_at_utc : '',
+        finished_at_utc: typeof parsed.finished_at_utc === 'string' ? parsed.finished_at_utc : '',
+        target_base_url: parsed.target?.base_url ?? '',
+        business_username: parsed.target?.business_username ?? '',
+        probe_username: parsed.target?.probe_username ?? '',
+        checks_total: checks.length,
+        checks_failed: checksFailed,
+        checks,
+        entities
+      });
+    } catch {
+      reports.push({
+        id: filename.replace(/\.json$/i, ''),
+        filename,
+        status: 'unknown',
+        summary: 'Report file is unreadable or invalid JSON.',
+        started_at_utc: '',
+        finished_at_utc: '',
+        target_base_url: '',
+        business_username: '',
+        probe_username: '',
+        checks_total: 0,
+        checks_failed: 0,
+        checks: [],
+        entities: {}
+      });
+    }
+  }
+
+  return reports;
 }
 
 export async function approveRequest(input: { approval_id: string; notes?: string }): Promise<ApprovalRequest> {

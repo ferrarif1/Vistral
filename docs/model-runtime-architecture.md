@@ -77,11 +77,17 @@ interface UnifiedInferenceOutput {
 4. adapter maps output into unified inference output
 5. platform stores run record and supports feedback-to-dataset action
 
-### 6.1 YOLO Runtime Bridge (current progress)
-- If `YOLO_RUNTIME_ENDPOINT` is configured, YOLO adapter sends predict requests to that endpoint.
-- If runtime call fails or endpoint is unset, adapter falls back to mock output to keep prototype flow unblocked.
-- Optional auth header is supported through `YOLO_RUNTIME_API_KEY`.
-- This bridge is the first step from pure mock to real framework runtime integration.
+### 6.1 Runtime Bridge (current progress)
+- Predict runtime bridge is now available for all frameworks:
+  - PaddleOCR: `PADDLEOCR_RUNTIME_ENDPOINT`, `PADDLEOCR_RUNTIME_API_KEY`
+  - docTR: `DOCTR_RUNTIME_ENDPOINT`, `DOCTR_RUNTIME_API_KEY`
+  - YOLO: `YOLO_RUNTIME_ENDPOINT`, `YOLO_RUNTIME_API_KEY`
+- Request payload includes `framework`, `model_id`, `model_version_id`, `input_attachment_id`, `filename`, `task_type`.
+- Response is normalized into the unified inference contract (`boxes` / `rotated_boxes` / `polygons` / `masks` / `labels` / `ocr`).
+- If runtime call fails or endpoint is unset, adapter falls back to mock output to keep prototype loop unblocked (`normalized_output.source = mock_fallback`).
+- This bridge is still predict-path only; train/evaluate/export/load remain mock in current phase.
+- Runtime diagnostics endpoint: `GET /api/runtime/connectivity` for in-app connectivity checks.
+  - Includes structured `error_kind` (`none|timeout|network|http_status|invalid_payload|unknown`) for faster troubleshooting.
 
 ## 7. Execution Layers
 - control layer: API + state machine + permissions
@@ -91,6 +97,12 @@ interface UnifiedInferenceOutput {
 
 ## 8. Phase Scope
 - Phase 1: define interfaces and mock adapters
-- Phase 2.5: optional YOLO runtime bridge (predict path) with mock fallback
+- Phase 2.5: optional runtime bridge (predict path) with mock fallback
 - Phase 3: connect real framework runtimes
 - Phase 4: run OCR and detection loops on unified contracts
+
+## 9. Verification Baseline
+- `npm run smoke:phase2`
+  - verifies fallback behavior when runtime endpoints are unavailable.
+- `npm run smoke:runtime-success`
+  - boots a local runtime mock server and verifies runtime success path for PaddleOCR/docTR/YOLO (`*_runtime` source).

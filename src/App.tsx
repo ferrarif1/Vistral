@@ -9,6 +9,7 @@ import CreateModelPage from './pages/CreateModelPage';
 import LlmSettingsPage from './pages/LlmSettingsPage';
 import AdminApprovalsPage from './pages/AdminApprovalsPage';
 import AdminAuditPage from './pages/AdminAuditPage';
+import AdminVerificationReportsPage from './pages/AdminVerificationReportsPage';
 import AuthRegisterPage from './pages/AuthRegisterPage';
 import AuthLoginPage from './pages/AuthLoginPage';
 import DatasetsPage from './pages/DatasetsPage';
@@ -19,6 +20,7 @@ import CreateTrainingJobPage from './pages/CreateTrainingJobPage';
 import TrainingJobDetailPage from './pages/TrainingJobDetailPage';
 import ModelVersionsPage from './pages/ModelVersionsPage';
 import InferenceValidationPage from './pages/InferenceValidationPage';
+import RuntimeSettingsPage from './pages/RuntimeSettingsPage';
 
 export default function App() {
   return (
@@ -28,6 +30,7 @@ export default function App() {
         <Route path="/workspace/chat" element={<ConversationPage />} />
         <Route path="/workspace/console" element={<ProfessionalConsolePage />} />
         <Route path="/settings/llm" element={<LlmSettingsPage />} />
+        <Route path="/settings/runtime" element={<RuntimeSettingsPage />} />
         <Route path="/conversation" element={<Navigate to="/workspace/chat" replace />} />
         <Route path="/models/explore" element={<ModelsExplorePage />} />
         <Route path="/models/my-models" element={<MyModelsPage />} />
@@ -42,6 +45,7 @@ export default function App() {
         <Route path="/inference/validate" element={<InferenceValidationPage />} />
         <Route path="/admin/models/pending" element={<AdminApprovalsPage />} />
         <Route path="/admin/audit" element={<AdminAuditPage />} />
+        <Route path="/admin/verification-reports" element={<AdminVerificationReportsPage />} />
         <Route path="/auth/register" element={<AuthRegisterPage />} />
         <Route path="/auth/login" element={<AuthLoginPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

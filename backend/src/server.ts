@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
+import { normalizeApiError } from './apiError';
 import * as handlers from './handlers';
 import { loadPersistedLlmConfigs } from './store';
 
@@ -63,12 +64,17 @@ const methodNotAllowed = (res: ServerResponse) => {
   sendJson(res, 405, errorJson('Method not allowed.', 'METHOD_NOT_ALLOWED'));
 };
 
+const sendError = (res: ServerResponse, error: unknown): void => {
+  const normalized = normalizeApiError(error);
+  sendJson(res, normalized.status, errorJson(normalized.message, normalized.code));
+};
+
 const withHandler = async (res: ServerResponse, fn: () => Promise<unknown>) => {
   try {
     const data = await fn();
     sendJson(res, 200, json(data));
   } catch (error) {
-    sendJson(res, 400, errorJson((error as Error).message));
+    sendError(res, error);
   }
 };
 
@@ -191,7 +197,7 @@ const withUserMutation = async (
   try {
     requireCsrf(req, session.state.csrfToken);
   } catch (error) {
-    return sendJson(res, 403, errorJson((error as Error).message, 'CSRF_VALIDATION_FAILED'));
+    return sendError(res, error);
   }
 
   await withHandler(res, () =>
@@ -224,7 +230,6 @@ const server = createServer(async (req, res) => {
       }
 
       const body = (await readBody(req)) as {
-        email: string;
         username: string;
         password: string;
       };
@@ -234,7 +239,7 @@ const server = createServer(async (req, res) => {
         setSessionCookie(res, user.id);
         return sendJson(res, 200, json(user));
       } catch (error) {
-        return sendJson(res, 400, errorJson((error as Error).message));
+        return sendError(res, error);
       }
     }
 
@@ -243,14 +248,14 @@ const server = createServer(async (req, res) => {
         return methodNotAllowed(res);
       }
 
-      const body = (await readBody(req)) as { email: string; password: string };
+      const body = (await readBody(req)) as { username: string; password: string };
 
       try {
         const user = await handlers.login(body);
         setSessionCookie(res, user.id);
         return sendJson(res, 200, json(user));
       } catch (error) {
-        return sendJson(res, 400, errorJson((error as Error).message));
+        return sendError(res, error);
       }
     }
 
@@ -263,7 +268,7 @@ const server = createServer(async (req, res) => {
       try {
         requireCsrf(req, session.state.csrfToken);
       } catch (error) {
-        return sendJson(res, 403, errorJson((error as Error).message, 'CSRF_VALIDATION_FAILED'));
+        return sendError(res, error);
       }
 
       sessions.delete(session.sessionId);
@@ -513,6 +518,10 @@ const server = createServer(async (req, res) => {
       return withUserMutation(req, res, () => handlers.uploadConversationAttachment(body.filename));
     }
 
+    if (path === '/api/conversations' && req.method === 'GET') {
+      return withUser(req, res, () => handlers.listConversations());
+    }
+
     const modelFilesMatch = path.match(/^\/api\/files\/model\/([^/]+)$/);
     if (modelFilesMatch) {
       const modelId = decodeURIComponent(modelFilesMatch[1]);
@@ -594,6 +603,21 @@ const server = createServer(async (req, res) => {
       };
 
       return withUserMutation(req, res, () => handlers.sendConversationMessage(body));
+    }
+
+    const conversationDetailMatch = path.match(/^\/api\/conversations\/([^/]+)$/);
+    if (conversationDetailMatch) {
+      const conversationId = decodeURIComponent(conversationDetailMatch[1]);
+      if (req.method === 'GET') {
+        return withUser(req, res, () => handlers.getConversationDetail(conversationId));
+      }
+
+      if (req.method === 'PATCH') {
+        const body = (await readBody(req)) as { title: string };
+        return withUserMutation(req, res, () => handlers.renameConversation(conversationId, body));
+      }
+
+      return methodNotAllowed(res);
     }
 
     if (path === '/api/training/jobs' && req.method === 'GET') {
@@ -709,12 +733,31 @@ const server = createServer(async (req, res) => {
       );
     }
 
+    if (path === '/api/runtime/connectivity') {
+      if (req.method !== 'GET') {
+        return methodNotAllowed(res);
+      }
+
+      const framework = url.searchParams.get('framework');
+      if (framework && !['paddleocr', 'doctr', 'yolo'].includes(framework)) {
+        return sendJson(res, 400, errorJson('Invalid framework query.', 'VALIDATION_ERROR'));
+      }
+
+      return withUser(req, res, () =>
+        handlers.getRuntimeConnectivity(framework as 'paddleocr' | 'doctr' | 'yolo' | undefined)
+      );
+    }
+
     if (path === '/api/approvals' && req.method === 'GET') {
       return withUser(req, res, () => handlers.listApprovalRequests());
     }
 
     if (path === '/api/audit/logs' && req.method === 'GET') {
       return withUser(req, res, () => handlers.listAuditLogs());
+    }
+
+    if (path === '/api/admin/verification-reports' && req.method === 'GET') {
+      return withUser(req, res, () => handlers.listVerificationReports());
     }
 
     if (path === '/api/approvals/submit') {
@@ -811,16 +854,17 @@ const server = createServer(async (req, res) => {
 
     return notFound(res);
   } catch (error) {
-    return sendJson(res, 400, errorJson((error as Error).message));
+    return sendError(res, error);
   }
 });
 
 const apiPort = Number(process.env.API_PORT ?? 8787);
+const apiHost = process.env.API_HOST ?? '127.0.0.1';
 
 (async () => {
   await loadPersistedLlmConfigs();
 
-  server.listen(apiPort, '127.0.0.1', () => {
-    console.log(`[vistral-api] listening on http://127.0.0.1:${apiPort}`);
+  server.listen(apiPort, apiHost, () => {
+    console.log(`[vistral-api] listening on http://${apiHost}:${apiPort}`);
   });
 })();

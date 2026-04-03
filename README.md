@@ -17,6 +17,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
 - Multi-step processes with progress indicators
 - Advanced parameter controls (collapsed by default)
 - Persistent file upload states (visible, deletable, status-indicated)
+- Built-in UI language switch (Chinese default, English optional)
 
 ## Architecture
 - Frontend: AI-native interface with conversational flow
@@ -66,26 +67,44 @@ License file is not yet added in this baseline; add one before production distri
 ## Development (Round 1 Baseline)
 1. `npm install`
 2. `npm run dev` (runs API + web together)
-3. Open `http://localhost:5173`
+3. Open `http://127.0.0.1:5173`
+
+### Auth (username/password)
+- Public registration and login are username/password based.
+- Default seeded accounts in mock store:
+  - `alice / mock-pass` (user)
+  - `admin / mock-pass-admin` (admin)
+- Public registration always creates role `user`; it never creates `admin`.
 
 ### Validation Commands
 - `npm run typecheck`
 - `npm run lint`
 - `npm run build`
 - `npm run smoke:phase2`
-  - verifies segmentation annotation persistence and YOLO runtime fallback behavior in the mock loop
+  - verifies segmentation annotation persistence plus YOLO/PaddleOCR/docTR runtime fallback behavior in the mock loop
+- `npm run smoke:runtime-success`
+  - verifies YOLO/PaddleOCR/docTR runtime success path with a local runtime mock server
+- `npm run smoke:admin:verification-reports`
+  - verifies `/api/admin/verification-reports` permission boundary (`user` denied, `admin` allowed)
+- `npm run smoke:demo:train-data`
+  - imports images from `demo_data/train` into a new detection dataset, waits for upload lifecycle completion, then creates split + dataset version
 
 ### Implemented in this round
 - Shared app shell and unified theme
 - Dual work entry: AI-native conversation workspace + professional console
 - Conversation workflow with attachment upload/status/delete and assistant responses
+  - conversation workspace now uses an immersive chat-style shell (left chat sidebar + centered timeline + floating composer)
 - Bring-your-own LLM settings page (`/settings/llm`) for OpenAI-compatible providers (for example ChatAnywhere)
+- Runtime settings page (`/settings/runtime`) for in-app runtime connectivity diagnostics and integration templates
 - Model pages: explore / my-models / create (stepper + advanced collapsed)
 - Auth mock: login/register/logout with browser session cookie (`register` cannot create `admin`)
 - Admin approval queue page (`/admin/models/pending`) with approve/reject actions
 - Admin audit page (`/admin/audit`) for governance event visibility
+- Admin verification reports page (`/admin/verification-reports`) for deployment acceptance evidence
+  - includes filter/search/date-range/sort, quick range shortcuts (7/30 days), pagination, collapsible check details, and filtered JSON export
 - Ownership-based model filtering and create permission via capabilities
 - Initial schema in `db/schema.sql`
+- Inference page runtime diagnostics panel (in-app connectivity check for PaddleOCR/docTR/YOLO)
 
 ### LLM Key Safety
 - Do not commit API keys into repository files.
@@ -93,9 +112,30 @@ License file is not yet added in this baseline; add one before production distri
 - Browser holds only masked key view; raw key is submitted on save/test and managed server-side for this prototype.
 - Ensure `.data/` remains git-ignored and set `LLM_CONFIG_SECRET` before local usage.
 - Mutating API calls in prototype mode are protected with `X-CSRF-Token` tied to session.
+- Error responses follow contract-aligned status/code semantics (e.g. `INSUFFICIENT_PERMISSIONS` => `403`).
+  - classification is pattern-first to reduce future unmapped errors.
 
 
 ## Docker Deployment
 - Quick guide: `docs/deployment.docker.md`
-- Build: `docker build -t vistral-web:round1 .`
-- Run: `docker run --rm -p 8080:80 vistral-web:round1`
+- Copy env template: `cp .env.example .env` (update secrets if needed)
+- Start full stack: `docker compose up --build -d`
+- Internal registry mode (no local build): `docker compose -f docker-compose.registry.yml up -d`
+- Build images helper: `npm run docker:images:build`
+- Build and push helper: `npm run docker:images:build-push`
+- Offline export helper: `npm run docker:images:save`
+- Offline import + up helper: `npm run docker:images:load-up`
+- Deployment self-check: `npm run docker:healthcheck`
+- Full deployment E2E verify: `npm run docker:verify:full`
+- Release bundle generator: `npm run docker:release:bundle`
+- Release bundle with fresh verification: `VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified`
+- Pin report for bundle: `VERIFY_REPORT_PATH=.data/verify-reports/<report>.json npm run docker:release:bundle`
+- Enforce report freshness: `VERIFY_REPORT_MAX_AGE_SECONDS=1800 npm run docker:release:bundle`
+- E2E verify outputs report files under `.data/verify-reports/` (JSON + Markdown)
+- Web entry: `http://127.0.0.1:8080`
+- API health: `http://127.0.0.1:8080/api/health`
+- Stop: `docker compose down`
+
+Docker services:
+- `vistral-web`: nginx serving frontend + reverse proxy for `/api/*`
+- `vistral-api`: Node backend runtime (session auth, mock workflows, runtime bridge diagnostics)

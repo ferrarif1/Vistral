@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import type { TrainingJobRecord, TrainingMetricRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 const STATUS_STEPS: Array<TrainingJobRecord['status']> = [
@@ -15,6 +16,7 @@ const STATUS_STEPS: Array<TrainingJobRecord['status']> = [
 ];
 
 export default function TrainingJobDetailPage() {
+  const { t } = useI18n();
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<TrainingJobRecord | null>(null);
   const [metrics, setMetrics] = useState<TrainingMetricRecord[]>([]);
@@ -79,7 +81,7 @@ export default function TrainingJobDetailPage() {
     try {
       await api.cancelTrainingJob(jobId);
       await load();
-      setFeedback({ variant: 'success', text: 'Training job cancelled.' });
+      setFeedback({ variant: 'success', text: t('Training job cancelled.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -98,7 +100,7 @@ export default function TrainingJobDetailPage() {
     try {
       await api.retryTrainingJob(jobId);
       await load();
-      setFeedback({ variant: 'success', text: 'Training job retried.' });
+      setFeedback({ variant: 'success', text: t('Training job retried.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -109,8 +111,8 @@ export default function TrainingJobDetailPage() {
   if (!jobId) {
     return (
       <div className="stack">
-        <h2>Training Job Detail</h2>
-        <StateBlock variant="error" title="Missing Job ID" description="Open from training jobs list." />
+        <h2>{t('Training Job Detail')}</h2>
+        <StateBlock variant="error" title={t('Missing Job ID')} description={t('Open from training jobs list.')} />
       </div>
     );
   }
@@ -118,8 +120,8 @@ export default function TrainingJobDetailPage() {
   if (loading) {
     return (
       <div className="stack">
-        <h2>Training Job Detail</h2>
-        <StateBlock variant="loading" title="Loading" description="Fetching training job detail." />
+        <h2>{t('Training Job Detail')}</h2>
+        <StateBlock variant="loading" title={t('Loading')} description={t('Fetching training job detail.')} />
       </div>
     );
   }
@@ -127,28 +129,28 @@ export default function TrainingJobDetailPage() {
   if (!job) {
     return (
       <div className="stack">
-        <h2>Training Job Detail</h2>
-        <StateBlock variant="error" title="Not Found" description="Training job does not exist." />
+        <h2>{t('Training Job Detail')}</h2>
+        <StateBlock variant="error" title={t('Not Found')} description={t('Training job does not exist.')} />
       </div>
     );
   }
 
   return (
     <div className="stack">
-      <h2>Training Job Detail</h2>
+      <h2>{t('Training Job Detail')}</h2>
       <p className="muted">
-        {job.name} · {job.task_type} · {job.framework}
+        {job.name} · {t(job.task_type)} · {t(job.framework)}
       </p>
 
       <StepIndicator
-        steps={['Draft', 'Queued', 'Preparing', 'Running', 'Evaluating', 'Completed']}
+        steps={[t('Draft'), t('Queued'), t('Preparing'), t('Running'), t('Evaluating'), t('Completed')]}
         current={stepIndex}
       />
 
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
-          title={feedback.variant === 'success' ? 'Completed' : 'Failed'}
+          title={feedback.variant === 'success' ? t('Completed') : t('Failed')}
           description={feedback.text}
         />
       ) : null}
@@ -156,29 +158,31 @@ export default function TrainingJobDetailPage() {
       {(job.status === 'failed' || job.status === 'cancelled') && !feedback ? (
         <StateBlock
           variant="error"
-          title="Training Interrupted"
-          description={`Job is currently ${job.status}. You can retry from detail page.`}
+          title={t('Training Interrupted')}
+          description={t('Job is currently {status}. You can retry from detail page.', {
+            status: t(job.status)
+          })}
         />
       ) : null}
 
       {job.status === 'completed' ? (
-        <StateBlock variant="success" title="Training Completed" description="Job reached completed state." />
+        <StateBlock variant="success" title={t('Training Completed')} description={t('Job reached completed state.')} />
       ) : null}
 
       <section className="card stack">
-        <h3>Runtime Status</h3>
+        <h3>{t('Runtime Status')}</h3>
         <small className="muted">{job.log_excerpt}</small>
-        <small className="muted">Dataset: {job.dataset_id}</small>
-        <small className="muted">Base model: {job.base_model}</small>
+        <small className="muted">{t('Dataset')}: {job.dataset_id}</small>
+        <small className="muted">{t('Base model')}: {job.base_model}</small>
       </section>
 
       <section className="card stack">
-        <h3>Metrics</h3>
+        <h3>{t('Metrics')}</h3>
         {metrics.length === 0 ? (
           <StateBlock
             variant="empty"
-            title="No Metrics Yet"
-            description="Metrics will appear after evaluation stage."
+            title={t('No Metrics Yet')}
+            description={t('Metrics will appear after evaluation stage.')}
           />
         ) : (
           <ul className="list">
@@ -197,10 +201,10 @@ export default function TrainingJobDetailPage() {
           onClick={cancelJob}
           disabled={busy || !['queued', 'preparing', 'running'].includes(job.status)}
         >
-          Cancel
+          {t('Cancel')}
         </button>
         <button onClick={retryJob} disabled={busy || !['failed', 'cancelled'].includes(job.status)}>
-          Retry
+          {t('Retry')}
         </button>
       </div>
     </div>

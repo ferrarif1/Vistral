@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useI18n } from '../i18n/I18nProvider';
 
 export interface AnnotationBox {
   id: string;
@@ -74,6 +75,7 @@ export default function AnnotationCanvas({
   width = 700,
   height = 380
 }: AnnotationCanvasProps) {
+  const { t } = useI18n();
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [interaction, setInteraction] = useState<InteractionState | null>(null);
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
@@ -342,8 +344,8 @@ export default function AnnotationCanvas({
   return (
     <section className="card stack">
       <div className="row between gap align-center">
-        <h3>{title}</h3>
-        <span className="muted">Drag to create box. Click box to edit.</span>
+        <h3>{t(title)}</h3>
+        <span className="muted">{t('Drag to create box. Click box to edit.')}</span>
       </div>
 
       <div
@@ -437,17 +439,17 @@ export default function AnnotationCanvas({
 
       <div className="row gap wrap">
         <button onClick={removeSelected} disabled={disabled || !selectedBoxId}>
-          Delete Selected Box
+          {t('Delete Selected Box')}
         </button>
         <button onClick={clearAll} disabled={disabled || boxes.length === 0}>
-          Clear All Boxes
+          {t('Clear All Boxes')}
         </button>
       </div>
 
       {selectedBox ? (
         <div className="annotation-box-editor">
           <label>
-            Label
+            {t('Label')}
             <input
               value={selectedBox.label}
               onChange={(event) => updateSelected({ label: event.target.value })}
@@ -471,7 +473,7 @@ export default function AnnotationCanvas({
             />
           </label>
           <label>
-            Width
+            {t('Width')}
             <input
               value={selectedBox.width}
               onChange={(event) => updateSelected({ width: Number(event.target.value) || 0 })}
@@ -479,7 +481,7 @@ export default function AnnotationCanvas({
             />
           </label>
           <label>
-            Height
+            {t('Height')}
             <input
               value={selectedBox.height}
               onChange={(event) => updateSelected({ height: Number(event.target.value) || 0 })}
@@ -488,7 +490,7 @@ export default function AnnotationCanvas({
           </label>
         </div>
       ) : (
-        <small className="muted">No box selected.</small>
+        <small className="muted">{t('No box selected.')}</small>
       )}
     </section>
   );

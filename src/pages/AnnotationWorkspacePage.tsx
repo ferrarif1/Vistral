@@ -11,9 +11,8 @@ import PolygonCanvas, { type PolygonAnnotation } from '../components/PolygonCanv
 import StateBlock from '../components/StateBlock';
 import StatusBadge from '../components/StatusBadge';
 import StepIndicator from '../components/StepIndicator';
+import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
-
-const STEPS = ['Select Item', 'Annotate', 'Review'];
 
 interface OcrLine {
   id: string;
@@ -33,6 +32,8 @@ const toNumber = (value: unknown, fallback: number): number => {
 };
 
 export default function AnnotationWorkspacePage() {
+  const { t } = useI18n();
+  const steps = useMemo(() => [t('Select Item'), t('Annotate'), t('Review')], [t]);
   const { datasetId } = useParams<{ datasetId: string }>();
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
@@ -112,11 +113,11 @@ export default function AnnotationWorkspacePage() {
 
   const selectedFilename = useMemo(() => {
     if (!selectedItem) {
-      return 'No dataset item selected';
+      return t('No dataset item selected');
     }
 
     return attachmentById.get(selectedItem.attachment_id)?.filename ?? selectedItem.attachment_id;
-  }, [attachmentById, selectedItem]);
+  }, [attachmentById, selectedItem, t]);
 
   const currentStep = useMemo(() => {
     if (!selectedItemId) {
@@ -245,13 +246,13 @@ export default function AnnotationWorkspacePage() {
 
   const addOcrLine = () => {
     if (!lineText.trim()) {
-      setFeedback({ variant: 'error', text: 'OCR line text cannot be empty.' });
+      setFeedback({ variant: 'error', text: t('OCR line text cannot be empty.') });
       return;
     }
 
     const confidence = Number(lineConfidence);
     if (Number.isNaN(confidence)) {
-      setFeedback({ variant: 'error', text: 'OCR confidence must be a valid number.' });
+      setFeedback({ variant: 'error', text: t('OCR confidence must be a valid number.') });
       return;
     }
 
@@ -322,7 +323,10 @@ export default function AnnotationWorkspacePage() {
 
       setFeedback({
         variant: 'success',
-        text: `Annotation ${upserted.id} saved as ${upserted.status}.`
+        text: t('Annotation {annotationId} saved as {status}.', {
+          annotationId: upserted.id,
+          status: t(upserted.status)
+        })
       });
 
       await load();
@@ -343,7 +347,7 @@ export default function AnnotationWorkspacePage() {
 
     try {
       await api.submitAnnotationForReview(datasetId, selectedAnnotation.id);
-      setFeedback({ variant: 'success', text: 'Annotation submitted for review.' });
+      setFeedback({ variant: 'success', text: t('Annotation submitted for review.') });
       await load();
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -369,7 +373,7 @@ export default function AnnotationWorkspacePage() {
 
       setFeedback({
         variant: 'success',
-        text: `Annotation ${status}.`
+        text: t('Annotation {status}.', { status: t(status) })
       });
       await load();
     } catch (error) {
@@ -391,7 +395,10 @@ export default function AnnotationWorkspacePage() {
       const result = await api.runDatasetPreAnnotations(datasetId);
       setFeedback({
         variant: 'success',
-        text: `Pre-annotation completed. created ${result.created}, updated ${result.updated}.`
+        text: t('Pre-annotation completed. created {created}, updated {updated}.', {
+          created: result.created,
+          updated: result.updated
+        })
       });
       await load();
     } catch (error) {
@@ -431,7 +438,7 @@ export default function AnnotationWorkspacePage() {
         status: 'in_progress',
         payload
       });
-      setFeedback({ variant: 'success', text: 'Rejected annotation moved back to in_progress.' });
+      setFeedback({ variant: 'success', text: t('Rejected annotation moved back to in_progress.') });
       await load();
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -443,8 +450,8 @@ export default function AnnotationWorkspacePage() {
   if (!datasetId) {
     return (
       <div className="stack">
-        <h2>Annotation Workspace</h2>
-        <StateBlock variant="error" title="Missing Dataset ID" description="Open from dataset detail page." />
+        <h2>{t('Annotation Workspace')}</h2>
+        <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset detail page.')} />
       </div>
     );
   }
@@ -452,8 +459,8 @@ export default function AnnotationWorkspacePage() {
   if (loading) {
     return (
       <div className="stack">
-        <h2>Annotation Workspace</h2>
-        <StateBlock variant="loading" title="Loading" description="Preparing annotation workspace." />
+        <h2>{t('Annotation Workspace')}</h2>
+        <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation workspace.')} />
       </div>
     );
   }
@@ -461,8 +468,8 @@ export default function AnnotationWorkspacePage() {
   if (!dataset) {
     return (
       <div className="stack">
-        <h2>Annotation Workspace</h2>
-        <StateBlock variant="error" title="Dataset Not Found" description="Requested dataset is unavailable." />
+        <h2>{t('Annotation Workspace')}</h2>
+        <StateBlock variant="error" title={t('Dataset Not Found')} description={t('Requested dataset is unavailable.')} />
       </div>
     );
   }
@@ -471,35 +478,35 @@ export default function AnnotationWorkspacePage() {
     <div className="stack">
       <div className="row between gap align-center">
         <div className="stack tight">
-          <h2>Annotation Workspace</h2>
+          <h2>{t('Annotation Workspace')}</h2>
           <small className="muted">
-            {dataset.name} · task {dataset.task_type}
+            {dataset.name} · {t('task')} {t(dataset.task_type)}
           </small>
         </div>
         <Link to={`/datasets/${dataset.id}`} className="quick-link">
-          Back to Dataset Detail
+          {t('Back to Dataset Detail')}
         </Link>
       </div>
 
-      <StepIndicator steps={STEPS} current={currentStep} />
+      <StepIndicator steps={steps} current={currentStep} />
 
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
-          title={feedback.variant === 'success' ? 'Action Completed' : 'Action Failed'}
+          title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
       ) : null}
 
       <section className="card stack">
         <div className="row between gap align-center">
-          <h3>Dataset Items</h3>
+          <h3>{t('Dataset Items')}</h3>
           <button onClick={runPreAnnotation} disabled={busy || items.length === 0}>
-            Run Pre-Annotation
+            {t('Run Pre-Annotation')}
           </button>
         </div>
         {items.length === 0 ? (
-          <StateBlock variant="empty" title="No Items" description="Upload dataset files first." />
+          <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files first.')} />
         ) : (
           <ul className="list">
             {items.map((item) => {
@@ -514,9 +521,9 @@ export default function AnnotationWorkspacePage() {
                       onChange={() => setSelectedItemId(item.id)}
                     />
                     <span>{item.id}</span>
-                    <span className="chip">{item.split}</span>
+                    <span className="chip">{t(item.split)}</span>
                     <StatusBadge status={item.status} />
-                    {itemAnnotation ? <span className="chip">ann: {itemAnnotation.status}</span> : null}
+                    {itemAnnotation ? <span className="chip">{t('Annotation')}: {t(itemAnnotation.status)}</span> : null}
                   </label>
                 </li>
               );
@@ -527,7 +534,7 @@ export default function AnnotationWorkspacePage() {
 
       <section className="stack">
         <AnnotationCanvas
-          title="Annotation Canvas"
+          title={t('Annotation Canvas')}
           filename={selectedFilename}
           boxes={boxes}
           onChange={setBoxes}
@@ -536,14 +543,14 @@ export default function AnnotationWorkspacePage() {
 
         {dataset.task_type === 'ocr' ? (
           <section className="card stack">
-            <h3>OCR Text Lines</h3>
+            <h3>{t('OCR Text Lines')}</h3>
             <div className="annotation-ocr-grid">
               <label>
-                Line Text
+                {t('Line Text')}
                 <input value={lineText} onChange={(event) => setLineText(event.target.value)} />
               </label>
               <label>
-                Confidence
+                {t('Confidence')}
                 <input
                   value={lineConfidence}
                   onChange={(event) => setLineConfidence(event.target.value)}
@@ -551,9 +558,9 @@ export default function AnnotationWorkspacePage() {
                 />
               </label>
               <label>
-                Region Binding
+                {t('Region Binding')}
                 <select value={lineRegionId} onChange={(event) => setLineRegionId(event.target.value)}>
-                  <option value="">Unbound</option>
+                  <option value="">{t('unbound')}</option>
                   {boxes.map((box) => (
                     <option key={box.id} value={box.id}>
                       {box.label}
@@ -563,14 +570,14 @@ export default function AnnotationWorkspacePage() {
               </label>
             </div>
             <button onClick={addOcrLine} disabled={busy}>
-              Add OCR Line
+              {t('Add OCR Line')}
             </button>
 
             {ocrLines.length === 0 ? (
               <StateBlock
                 variant="empty"
-                title="No OCR Lines"
-                description="Add OCR text lines and optionally bind to regions."
+                title={t('No OCR Lines')}
+                description={t('Add OCR text lines and optionally bind to regions.')}
               />
             ) : (
               <ul className="list">
@@ -579,11 +586,11 @@ export default function AnnotationWorkspacePage() {
                     <div className="stack tight">
                       <strong>{line.text}</strong>
                       <small className="muted">
-                        confidence {line.confidence.toFixed(2)} · region {line.region_id ?? 'unbound'}
+                        {t('confidence')} {line.confidence.toFixed(2)} · {t('region')} {line.region_id ?? t('unbound')}
                       </small>
                     </div>
                     <button onClick={() => removeOcrLine(line.id)} disabled={busy}>
-                      Delete
+                      {t('Delete')}
                     </button>
                   </li>
                 ))}
@@ -594,7 +601,7 @@ export default function AnnotationWorkspacePage() {
 
         {dataset.task_type === 'segmentation' ? (
           <PolygonCanvas
-            title="Segmentation Polygon Canvas"
+            title={t('Segmentation Polygon Canvas')}
             filename={selectedFilename}
             polygons={polygons}
             onChange={setPolygons}
@@ -604,17 +611,17 @@ export default function AnnotationWorkspacePage() {
       </section>
 
       <section className="card stack">
-        <h3>Annotation Actions</h3>
+        <h3>{t('Annotation Actions')}</h3>
         {selectedAnnotation ? (
           <div className="row gap align-center">
-            <span className="chip">status: {selectedAnnotation.status}</span>
-            <span className="chip">source: {selectedAnnotation.source}</span>
+            <span className="chip">{t('Status')}: {t(selectedAnnotation.status)}</span>
+            <span className="chip">{t('Source')}: {t(selectedAnnotation.source)}</span>
             {selectedAnnotation.latest_review ? (
-              <span className="chip">latest review: {selectedAnnotation.latest_review.status}</span>
+              <span className="chip">{t('Latest Review')}: {t(selectedAnnotation.latest_review.status)}</span>
             ) : null}
           </div>
         ) : (
-          <small className="muted">No annotation yet for selected item.</small>
+          <small className="muted">{t('No annotation yet for selected item.')}</small>
         )}
 
         <div className="row gap wrap">
@@ -622,37 +629,37 @@ export default function AnnotationWorkspacePage() {
             onClick={undoLast}
             disabled={busy || (!boxes.length && !ocrLines.length && !polygons.length)}
           >
-            Undo Last Change
+            {t('Undo Last Change')}
           </button>
           <button onClick={() => saveAnnotation('in_progress')} disabled={busy || !selectedItem}>
-            Save In Progress
+            {t('Save In Progress')}
           </button>
           <button onClick={() => saveAnnotation('annotated')} disabled={busy || !selectedItem}>
-            Mark Annotated
+            {t('Mark Annotated')}
           </button>
           <button
             onClick={submitReview}
             disabled={busy || !selectedAnnotation || selectedAnnotation.status !== 'annotated'}
           >
-            Submit Review
+            {t('Submit Review')}
           </button>
         </div>
       </section>
 
       <section className="card stack">
-        <h3>Review</h3>
+        <h3>{t('Review')}</h3>
         {!selectedAnnotation ? (
-          <StateBlock variant="empty" title="No Annotation" description="Create or update annotation first." />
+          <StateBlock variant="empty" title={t('No Annotation')} description={t('Create or update annotation first.')} />
         ) : selectedAnnotation.status !== 'in_review' ? (
           <StateBlock
             variant="empty"
-            title="Not In Review"
-            description="Move annotation to in_review before approve/reject."
+            title={t('Not In Review')}
+            description={t('Move annotation to in_review before approve/reject.')}
           />
         ) : (
           <>
             <label>
-              Quality Score
+              {t('Quality Score')}
               <input
                 value={reviewQuality}
                 onChange={(event) => setReviewQuality(event.target.value)}
@@ -660,7 +667,7 @@ export default function AnnotationWorkspacePage() {
               />
             </label>
             <label>
-              Review Comment
+              {t('Review Comment')}
               <textarea
                 value={reviewComment}
                 rows={3}
@@ -669,10 +676,10 @@ export default function AnnotationWorkspacePage() {
             </label>
             <div className="row gap">
               <button onClick={() => reviewAnnotation('approved')} disabled={busy}>
-                Approve
+                {t('Approve')}
               </button>
               <button onClick={() => reviewAnnotation('rejected')} disabled={busy}>
-                Reject
+                {t('Reject')}
               </button>
             </div>
           </>
@@ -680,7 +687,7 @@ export default function AnnotationWorkspacePage() {
 
         {selectedAnnotation?.status === 'rejected' ? (
           <button onClick={moveRejectedToProgress} disabled={busy}>
-            Move Rejected Annotation Back to In Progress
+            {t('Move Rejected Annotation Back to In Progress')}
           </button>
         ) : null}
       </section>
