@@ -15,11 +15,14 @@ import type {
   ModelRecord,
   ModelVersionRecord,
   RegisterInput,
+  RequirementTaskDraft,
   ReviewAnnotationInput,
   RuntimeConnectivityRecord,
+  RuntimeMetricsRetentionSummary,
   SubmitApprovalInput,
   TrainingJobRecord,
   TrainingMetricRecord,
+  TrainingMetricsExport,
   UpsertAnnotationInput,
   VerificationReportRecord,
   User
@@ -41,8 +44,47 @@ type ApiEnvelope<T> =
 let csrfToken: string | null = null;
 
 const csrfExemptPaths = new Set(['/api/auth/login', '/api/auth/register', '/api/auth/csrf']);
+const responsePreviewMaxLength = 180;
 
 const isMutationMethod = (method: string) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+
+const normalizeResponsePreview = (rawText: string): string => {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return 'empty response body (API service may be unavailable or proxy failed)';
+  }
+
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith('<!doctype') || lowered.startsWith('<html')) {
+    return 'non-JSON response body';
+  }
+
+  return trimmed.replace(/\s+/g, ' ').slice(0, responsePreviewMaxLength);
+};
+
+const buildRequestErrorMessage = (status: number, rawText: string): string =>
+  `Request failed (${status}): ${normalizeResponsePreview(rawText)}`;
+
+const readApiEnvelope = async <T>(
+  response: Response
+): Promise<{ envelope: ApiEnvelope<T> | null; rawText: string }> => {
+  const rawText = await response.text();
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return { envelope: null, rawText };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || !('success' in parsed)) {
+      return { envelope: null, rawText };
+    }
+
+    return { envelope: parsed as ApiEnvelope<T>, rawText };
+  } catch {
+    return { envelope: null, rawText };
+  }
+};
 
 async function fetchCsrfToken(): Promise<string> {
   const response = await fetch('/api/auth/csrf', {
@@ -53,12 +95,28 @@ async function fetchCsrfToken(): Promise<string> {
     }
   });
 
-  const payload = (await response.json()) as ApiEnvelope<{ csrf_token: string }>;
-  if (!response.ok || !payload.success) {
-    throw new Error(payload.success ? `Request failed (${response.status})` : payload.error.message);
+  const { envelope, rawText } = await readApiEnvelope<{ csrf_token: string }>(response);
+  if (!response.ok) {
+    if (envelope && !envelope.success) {
+      throw new Error(envelope.error.message);
+    }
+
+    throw new Error(
+      `Failed to fetch CSRF token (${response.status}): ${normalizeResponsePreview(rawText)}`
+    );
   }
 
-  csrfToken = payload.data.csrf_token;
+  if (!envelope || !envelope.success) {
+    if (envelope && !envelope.success) {
+      throw new Error(envelope.error.message);
+    }
+
+    throw new Error(
+      `Failed to fetch CSRF token: ${normalizeResponsePreview(rawText)}`
+    );
+  }
+
+  csrfToken = envelope.data.csrf_token;
   return csrfToken;
 }
 
@@ -77,8 +135,10 @@ function invalidateCsrfToken(): void {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
   const headers = new Headers(init?.headers ?? {});
+  const isFormDataBody =
+    typeof FormData !== 'undefined' && init?.body instanceof FormData;
 
-  if (!headers.has('Content-Type')) {
+  if (!isFormDataBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -94,16 +154,48 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers
   });
 
-  const payload = (await response.json()) as ApiEnvelope<T>;
+  const { envelope, rawText } = await readApiEnvelope<T>(response);
 
-  if (!response.ok || !payload.success) {
-    throw new Error(payload.success ? `Request failed (${response.status})` : payload.error.message);
+  if (!response.ok) {
+    if (envelope && !envelope.success) {
+      throw new Error(envelope.error.message);
+    }
+
+    throw new Error(buildRequestErrorMessage(response.status, rawText));
   }
 
-  return payload.data;
+  if (!envelope) {
+    throw new Error(buildRequestErrorMessage(response.status, rawText));
+  }
+
+  if (!envelope.success) {
+    throw new Error(envelope.error.message);
+  }
+
+  return envelope.data;
 }
 
+const parseDownloadFilename = (contentDisposition: string | null): string | null => {
+  if (!contentDisposition) {
+    return null;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? null;
+};
+
 export const api = {
+  health: () => request<{ status: string }>('/api/health'),
+
   register: async (input: RegisterInput) => {
     const user = await request<User>('/api/auth/register', {
       method: 'POST',
@@ -154,6 +246,15 @@ export const api = {
       body: JSON.stringify({ filename })
     }),
 
+  uploadConversationFile: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request<FileAttachment>('/api/files/conversation/upload', {
+      method: 'POST',
+      body: formData
+    });
+  },
+
   listModelAttachments: (modelId: string) =>
     request<FileAttachment[]>(`/api/files/model/${encodeURIComponent(modelId)}`),
 
@@ -162,6 +263,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ filename })
     }),
+
+  uploadModelFile: (modelId: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request<FileAttachment>(`/api/files/model/${encodeURIComponent(modelId)}/upload`, {
+      method: 'POST',
+      body: formData
+    });
+  },
 
   listDatasetAttachments: (datasetId: string) =>
     request<FileAttachment[]>(`/api/files/dataset/${encodeURIComponent(datasetId)}`),
@@ -172,10 +282,22 @@ export const api = {
       body: JSON.stringify({ filename })
     }),
 
+  uploadDatasetFile: (datasetId: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request<FileAttachment>(`/api/files/dataset/${encodeURIComponent(datasetId)}/upload`, {
+      method: 'POST',
+      body: formData
+    });
+  },
+
   removeAttachment: (attachmentId: string) =>
     request<{ deleted: boolean }>(`/api/files/${encodeURIComponent(attachmentId)}`, {
       method: 'DELETE'
     }),
+
+  attachmentContentUrl: (attachmentId: string) =>
+    `/api/files/${encodeURIComponent(attachmentId)}/content`,
 
   startConversation: (input: {
     model_id: string;
@@ -336,6 +458,12 @@ export const api = {
       }
     ),
 
+  draftTaskFromRequirement: (description: string) =>
+    request<RequirementTaskDraft>('/api/task-drafts/from-requirement', {
+      method: 'POST',
+      body: JSON.stringify({ description })
+    }),
+
   listTrainingJobs: () => request<TrainingJobRecord[]>('/api/training/jobs'),
 
   createTrainingJob: (input: {
@@ -353,9 +481,41 @@ export const api = {
     }),
 
   getTrainingJobDetail: (jobId: string) =>
-    request<{ job: TrainingJobRecord; metrics: TrainingMetricRecord[] }>(
+    request<{
+      job: TrainingJobRecord;
+      metrics: TrainingMetricRecord[];
+      logs: string[];
+      artifact_attachment_id: string | null;
+      workspace_dir: string | null;
+    }>(
       `/api/training/jobs/${encodeURIComponent(jobId)}`
     ),
+
+  exportTrainingJobMetrics: (jobId: string) =>
+    request<TrainingMetricsExport>(`/api/training/jobs/${encodeURIComponent(jobId)}/metrics-export`),
+
+  downloadTrainingJobMetricsCsv: async (jobId: string) => {
+    const path = `/api/training/jobs/${encodeURIComponent(jobId)}/metrics-export?format=csv`;
+    const response = await fetch(path, {
+      method: 'GET',
+      credentials: 'include'
+    });
+
+    if (!response.ok) {
+      const { envelope, rawText } = await readApiEnvelope<unknown>(response);
+      if (envelope && !envelope.success) {
+        throw new Error(envelope.error.message);
+      }
+
+      throw new Error(buildRequestErrorMessage(response.status, rawText));
+    }
+
+    const blob = await response.blob();
+    const filename =
+      parseDownloadFilename(response.headers.get('Content-Disposition')) ??
+      `training-metrics-${jobId}.csv`;
+    return { blob, filename };
+  },
 
   cancelTrainingJob: (jobId: string) =>
     request<TrainingJobRecord>(`/api/training/jobs/${encodeURIComponent(jobId)}/cancel`, {
@@ -403,6 +563,9 @@ export const api = {
         framework ? `?framework=${encodeURIComponent(framework)}` : ''
       }`
     ),
+
+  getRuntimeMetricsRetentionSummary: () =>
+    request<RuntimeMetricsRetentionSummary>('/api/runtime/metrics-retention'),
 
   sendInferenceFeedback: (input: { run_id: string; dataset_id: string; reason: string }) =>
     request<InferenceRunRecord>(`/api/inference/runs/${encodeURIComponent(input.run_id)}/feedback`, {

@@ -38,6 +38,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/annotation-workflow.md`
    - `docs/model-runtime-architecture.md`
 4. Follow local setup instructions in `docs/setup.md`.
+5. If a new request interrupts unfinished work, append a handoff entry to `docs/work-handoff.md` before switching context.
 
 ## Repository Working Model (How Codex should work in this repo)
 - Collaboration and execution rules: `AGENTS.md`
@@ -82,18 +83,68 @@ License file is not yet added in this baseline; add one before production distri
 - `npm run build`
 - `npm run smoke:phase2`
   - verifies segmentation annotation persistence plus YOLO/PaddleOCR/docTR runtime fallback behavior in the mock loop
+- `npm run smoke:attachments`
+  - verifies multipart upload/read/delete loops for conversation/model/dataset attachments
+- `npm run smoke:conversation-context`
+  - verifies conversation message attachment order follows the selected context order
 - `npm run smoke:runtime-success`
   - verifies YOLO/PaddleOCR/docTR runtime success path with a local runtime mock server
 - `npm run smoke:admin:verification-reports`
   - verifies `/api/admin/verification-reports` permission boundary (`user` denied, `admin` allowed)
 - `npm run smoke:demo:train-data`
   - imports images from `demo_data/train` into a new detection dataset, waits for upload lifecycle completion, then creates split + dataset version
+- `npm run smoke:restart-resume`
+  - verifies app-state persistence and automatic training-job resume after API restart
+- `npm run smoke:local-command`
+  - verifies YOLO local train/predict command adapters (`*_LOCAL_*_COMMAND`) and real metric/source plumbing
+- `npm run smoke:execution-fields`
+  - verifies explicit persistence contract for `training_jobs.execution_mode` and `inference_runs.execution_source`
+- `npm run smoke:runner-real-fallback`
+  - verifies `VISTRAL_RUNNER_ENABLE_REAL=1` fallback behavior (`meta.mode=template` + `meta.fallback_reason`) when real dependencies/model path are unavailable
+- `npm run smoke:runner-real-upload`
+  - verifies real file upload path + YOLO real-runner fallback reason (`model_path_not_found`) under `VISTRAL_RUNNER_ENABLE_REAL=1`
+- `npm run smoke:runner-real-positive`
+  - optional positive test for real YOLO branch (`meta.mode=real`); skips automatically when model/dependency prerequisites are missing
+- `npm run smoke:runtime-metrics-retention`
+  - verifies runtime metrics-retention summary endpoint and per-job series downsampling caps
+- `npm run smoke:training-metrics-export`
+  - verifies `/api/training/jobs/{id}/metrics-export` payload for metric timeline download
+- `npm run smoke:training-metrics-export-csv`
+  - verifies `/api/training/jobs/{id}/metrics-export?format=csv` download headers and csv rows
+- `npm run smoke:admin:verification-retention`
+  - verifies `/api/admin/verification-reports` exposes `runtime_metrics_retention` from verify report JSON
+- `npm run smoke:verify-report-retention-e2e`
+  - runs `docker-verify-full` against local API and asserts `runtime_metrics_retention` is consistent between report file and admin API
+
+### Prototype persistence and restart behavior
+- Business state is persisted to local JSON snapshot file (`.data/app-state.json` by default).
+- Configure path with `APP_STATE_STORE_PATH`.
+- Flush interval is configurable with `APP_STATE_PERSIST_INTERVAL_MS` (minimum 400ms, default 1200ms).
+- Verification report directory can be overridden by `VERIFICATION_REPORTS_DIR`.
+- Training metric retention controls:
+  - `TRAINING_METRICS_MAX_POINTS_PER_JOB` (default `180`)
+  - `TRAINING_METRICS_MAX_TOTAL_ROWS` (default `20000`)
+- On API restart, unfinished training jobs (`queued/preparing/running/evaluating`) are automatically re-queued and resumed by the local executor.
+- LLM settings remain separately encrypted in `.data/llm-config.enc.json`.
+- Optional local command adapters:
+  - `YOLO_LOCAL_TRAIN_COMMAND`, `PADDLEOCR_LOCAL_TRAIN_COMMAND`, `DOCTR_LOCAL_TRAIN_COMMAND`
+  - `YOLO_LOCAL_PREDICT_COMMAND`, `PADDLEOCR_LOCAL_PREDICT_COMMAND`, `DOCTR_LOCAL_PREDICT_COMMAND`
+  - command timeout: `LOCAL_RUNNER_TIMEOUT_MS`
+  - optional real-runner switch: `VISTRAL_RUNNER_ENABLE_REAL=1`
+  - optional real-runner hints:
+    - `VISTRAL_YOLO_MODEL_PATH`
+    - `VISTRAL_PADDLEOCR_LANG`, `VISTRAL_PADDLEOCR_USE_GPU`
+    - `VISTRAL_DOCTR_DET_ARCH`, `VISTRAL_DOCTR_RECO_ARCH`
+  - reusable runner templates: `scripts/local-runners/`
+  - template placeholders include `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 
 ### Implemented in this round
 - Shared app shell and unified theme
 - Dual work entry: AI-native conversation workspace + professional console
 - Conversation workflow with attachment upload/status/delete and assistant responses
   - conversation workspace now uses an immersive chat-style shell (left chat sidebar + centered timeline + floating composer)
+  - attachment controls include local file picker, open/preview support, and in-context include/exclude actions
+  - current-message attachment context now has explicit selection chips, quick include-all-ready, and clear-context actions
 - Bring-your-own LLM settings page (`/settings/llm`) for OpenAI-compatible providers (for example ChatAnywhere)
 - Runtime settings page (`/settings/runtime`) for in-app runtime connectivity diagnostics and integration templates
 - Model pages: explore / my-models / create (stepper + advanced collapsed)
@@ -111,6 +162,9 @@ License file is not yet added in this baseline; add one before production distri
 - LLM key configuration is encrypted at rest in local prototype data (`.data/llm-config.enc.json`) using `LLM_CONFIG_SECRET`.
 - Browser holds only masked key view; raw key is submitted on save/test and managed server-side for this prototype.
 - Ensure `.data/` remains git-ignored and set `LLM_CONFIG_SECRET` before local usage.
+- For ChatAnywhere compatibility, `Base URL` accepts:
+  - `https://api.chatanywhere.tech/v1`
+  - `https://api.chatanywhere.tech/v1/chat/completions`
 - Mutating API calls in prototype mode are protected with `X-CSRF-Token` tied to session.
 - Error responses follow contract-aligned status/code semantics (e.g. `INSUFFICIENT_PERMISSIONS` => `403`).
   - classification is pattern-first to reduce future unmapped errors.

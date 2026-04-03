@@ -102,6 +102,16 @@ export default function CreateModelPage() {
     await refreshModelFiles();
   };
 
+  const onUploadModelFiles = async (files: File[]) => {
+    if (!draftModel) {
+      throw new Error(t('Create metadata draft first.'));
+    }
+    for (const file of files) {
+      await api.uploadModelFile(draftModel.id, file);
+    }
+    await refreshModelFiles();
+  };
+
   const onDeleteModelFile = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
     await refreshModelFiles();
@@ -239,6 +249,8 @@ export default function CreateModelPage() {
           title={t('Step 2. Model File Upload')}
           items={modelFiles}
           onUpload={onUploadModelFile}
+          onUploadFiles={onUploadModelFiles}
+          contentUrlBuilder={api.attachmentContentUrl}
           onDelete={onDeleteModelFile}
           emptyDescription={t('Upload model artifact files here. Status will transition from uploading to ready.')}
           uploadButtonLabel={t('Upload Model File')}

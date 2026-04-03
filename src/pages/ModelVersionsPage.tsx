@@ -89,7 +89,7 @@ export default function ModelVersionsPage() {
           <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
             {models.map((model) => (
               <option key={model.id} value={model.id}>
-                {model.name} ({model.model_type})
+                {model.name} ({t(model.model_type)})
               </option>
             ))}
           </select>
@@ -99,7 +99,7 @@ export default function ModelVersionsPage() {
           <select value={jobId} onChange={(event) => setJobId(event.target.value)}>
             {completedJobs.map((job) => (
               <option key={job.id} value={job.id}>
-                {job.name} ({job.framework})
+                {job.name} ({t(job.framework)})
               </option>
             ))}
           </select>
@@ -109,7 +109,7 @@ export default function ModelVersionsPage() {
           <input
             value={versionName}
             onChange={(event) => setVersionName(event.target.value)}
-            placeholder="v2026.04.02"
+            placeholder={t('for example: v2026.04.02')}
           />
         </label>
         <button onClick={registerVersion} disabled={submitting || completedJobs.length === 0}>
@@ -140,16 +140,19 @@ export default function ModelVersionsPage() {
               <div className="row between gap">
                 <strong>{version.version_name}</strong>
                 <span className="chip">
-                  {version.task_type} · {version.framework}
+                  {t(version.task_type)} · {t(version.framework)}
                 </span>
               </div>
               <small className="muted">
-                model {version.model_id} · job {version.training_job_id ?? 'manual'} · status {version.status}
+                {t('model')} {version.model_id} · {t('job')} {version.training_job_id ?? t('manual')} · {t('status')} {t(version.status)}
               </small>
               <small className="muted">
-                metrics: {Object.entries(version.metrics_summary)
+                {t('metrics')}: {Object.entries(version.metrics_summary)
                   .map(([key, value]) => `${key}=${value}`)
-                  .join(', ') || 'N/A'}
+                  .join(', ') || t('N/A')}
+              </small>
+              <small className="muted">
+                {t('artifact')}: {version.artifact_attachment_id ?? t('pending')}
               </small>
             </li>
           ))}

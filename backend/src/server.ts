@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { Readable } from 'node:stream';
 import { URL } from 'node:url';
 import { normalizeApiError } from './apiError';
 import * as handlers from './handlers';
-import { loadPersistedLlmConfigs } from './store';
+import { loadPersistedAppState, loadPersistedLlmConfigs, persistAppState } from './store';
 
 type ApiSuccess<T> = {
   success: true;
@@ -54,6 +55,72 @@ const readBody = async (req: IncomingMessage): Promise<unknown> => {
   } catch {
     throw new Error('Invalid JSON body.');
   }
+};
+
+const readMultipartFileUpload = async (
+  req: IncomingMessage
+): Promise<{ filename: string; byte_size: number; mime_type: string; content: Buffer }> => {
+  const requestInit: RequestInit & { duplex: 'half' } = {
+    method: req.method,
+    headers: req.headers as HeadersInit,
+    body: Readable.toWeb(req) as unknown as BodyInit,
+    duplex: 'half'
+  };
+
+  const proxyRequest = new Request('http://localhost/internal-upload', requestInit);
+  const formData = await proxyRequest.formData();
+  const filePart = formData.get('file');
+  if (
+    !filePart ||
+    typeof filePart === 'string' ||
+    typeof (filePart as { arrayBuffer?: unknown }).arrayBuffer !== 'function'
+  ) {
+    throw new Error('Upload file is required.');
+  }
+
+  const fileMeta = filePart as Blob & { name?: unknown; size?: unknown; type?: unknown };
+  const rawBuffer = await fileMeta.arrayBuffer();
+  const content = Buffer.from(rawBuffer);
+  const filename =
+    typeof fileMeta.name === 'string' && fileMeta.name.trim()
+      ? fileMeta.name.trim()
+      : `file-${Date.now()}.bin`;
+  const byteSize =
+    typeof fileMeta.size === 'number' && Number.isFinite(fileMeta.size) ? fileMeta.size : 0;
+  const mimeType =
+    typeof fileMeta.type === 'string' && fileMeta.type.trim()
+      ? fileMeta.type.trim()
+      : 'application/octet-stream';
+
+  return {
+    filename,
+    byte_size: content.byteLength || byteSize,
+    mime_type: mimeType,
+    content
+  };
+};
+
+const toSafeAttachmentFilename = (filename: string): string =>
+  filename.trim().replace(/[\r\n"]/g, '_') || 'attachment.bin';
+
+const readContentType = (req: IncomingMessage): string => {
+  const contentTypeHeader = req.headers['content-type'];
+  const fromHeaders = Array.isArray(contentTypeHeader)
+    ? contentTypeHeader[0] ?? ''
+    : contentTypeHeader ?? '';
+  if (fromHeaders) {
+    return fromHeaders;
+  }
+
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    const key = req.rawHeaders[index];
+    const value = req.rawHeaders[index + 1];
+    if (typeof key === 'string' && key.toLowerCase() === 'content-type' && typeof value === 'string') {
+      return value;
+    }
+  }
+
+  return '';
 };
 
 const notFound = (res: ServerResponse) => {
@@ -203,6 +270,19 @@ const withUserMutation = async (
   await withHandler(res, () =>
     handlers.runAsUser(session.state.userId, () => fn(session.state.userId))
   );
+};
+
+const withUserDirect = async (
+  req: IncomingMessage,
+  res: ServerResponse,
+  fn: (userId: string) => Promise<void>
+): Promise<void> => {
+  const session = resolveSession(req, res);
+  try {
+    await handlers.runAsUser(session.state.userId, () => fn(session.state.userId));
+  } catch (error) {
+    sendError(res, error);
+  }
 };
 
 const server = createServer(async (req, res) => {
@@ -514,6 +594,15 @@ const server = createServer(async (req, res) => {
         return methodNotAllowed(res);
       }
 
+      const contentType = readContentType(req);
+
+      if (contentType.toLowerCase().includes('multipart/form-data')) {
+        return withUserMutation(req, res, async () => {
+          const fileUpload = await readMultipartFileUpload(req);
+          return handlers.uploadConversationAttachment(fileUpload);
+        });
+      }
+
       const body = (await readBody(req)) as { filename: string };
       return withUserMutation(req, res, () => handlers.uploadConversationAttachment(body.filename));
     }
@@ -539,6 +628,14 @@ const server = createServer(async (req, res) => {
         return methodNotAllowed(res);
       }
 
+      const contentType = readContentType(req);
+      if (contentType.toLowerCase().includes('multipart/form-data')) {
+        return withUserMutation(req, res, async () => {
+          const fileUpload = await readMultipartFileUpload(req);
+          return handlers.uploadModelAttachment(modelId, fileUpload);
+        });
+      }
+
       const body = (await readBody(req)) as { filename: string };
       return withUserMutation(req, res, () => handlers.uploadModelAttachment(modelId, body.filename));
     }
@@ -553,11 +650,40 @@ const server = createServer(async (req, res) => {
       return withUser(req, res, () => handlers.listDatasetAttachments(datasetId));
     }
 
+    const fileContentMatch = path.match(/^\/api\/files\/([^/]+)\/content$/);
+    if (fileContentMatch) {
+      if (req.method !== 'GET') {
+        return methodNotAllowed(res);
+      }
+
+      const attachmentId = decodeURIComponent(fileContentMatch[1]);
+      return withUserDirect(req, res, async () => {
+        const payload = await handlers.getAttachmentContent(attachmentId);
+        const safeFilename = toSafeAttachmentFilename(payload.filename);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', payload.mime_type || 'application/octet-stream');
+        res.setHeader('Content-Length', String(payload.byte_size));
+        res.setHeader(
+          'Content-Disposition',
+          `inline; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(payload.filename)}`
+        );
+        res.end(payload.content);
+      });
+    }
+
     const datasetUploadMatch = path.match(/^\/api\/files\/dataset\/([^/]+)\/upload$/);
     if (datasetUploadMatch) {
       const datasetId = decodeURIComponent(datasetUploadMatch[1]);
       if (req.method !== 'POST') {
         return methodNotAllowed(res);
+      }
+
+      const contentType = readContentType(req);
+      if (contentType.toLowerCase().includes('multipart/form-data')) {
+        return withUserMutation(req, res, async () => {
+          const fileUpload = await readMultipartFileUpload(req);
+          return handlers.uploadDatasetAttachment(datasetId, fileUpload);
+        });
       }
 
       const body = (await readBody(req)) as { filename: string };
@@ -605,6 +731,19 @@ const server = createServer(async (req, res) => {
       return withUserMutation(req, res, () => handlers.sendConversationMessage(body));
     }
 
+    if (path === '/api/task-drafts/from-requirement') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+
+      const body = (await readBody(req)) as { description: string };
+      return withUserMutation(req, res, () =>
+        handlers.draftTaskFromRequirement({
+          description: body.description
+        })
+      );
+    }
+
     const conversationDetailMatch = path.match(/^\/api\/conversations\/([^/]+)$/);
     if (conversationDetailMatch) {
       const conversationId = decodeURIComponent(conversationDetailMatch[1]);
@@ -646,6 +785,35 @@ const server = createServer(async (req, res) => {
       }
 
       return withUser(req, res, () => handlers.getTrainingJobDetail(jobId));
+    }
+
+    const trainingMetricsExportMatch = path.match(/^\/api\/training\/jobs\/([^/]+)\/metrics-export$/);
+    if (trainingMetricsExportMatch) {
+      const jobId = decodeURIComponent(trainingMetricsExportMatch[1]);
+      if (req.method !== 'GET') {
+        return methodNotAllowed(res);
+      }
+
+      const format = (url.searchParams.get('format') ?? 'json').toLowerCase();
+      if (!['json', 'csv'].includes(format)) {
+        return sendJson(res, 400, errorJson('Invalid format query.', 'VALIDATION_ERROR'));
+      }
+
+      if (format === 'csv') {
+        return withUserDirect(req, res, async () => {
+          const payload = await handlers.exportTrainingJobMetricsCsv(jobId);
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+          const safeFilename = toSafeAttachmentFilename(payload.filename);
+          res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(payload.filename)}`
+          );
+          res.end(payload.content);
+        });
+      }
+
+      return withUser(req, res, () => handlers.exportTrainingJobMetrics(jobId));
     }
 
     const trainingCancelMatch = path.match(/^\/api\/training\/jobs\/([^/]+)\/cancel$/);
@@ -746,6 +914,14 @@ const server = createServer(async (req, res) => {
       return withUser(req, res, () =>
         handlers.getRuntimeConnectivity(framework as 'paddleocr' | 'doctr' | 'yolo' | undefined)
       );
+    }
+
+    if (path === '/api/runtime/metrics-retention') {
+      if (req.method !== 'GET') {
+        return methodNotAllowed(res);
+      }
+
+      return withUser(req, res, () => handlers.getRuntimeMetricsRetentionSummary());
     }
 
     if (path === '/api/approvals' && req.method === 'GET') {
@@ -860,9 +1036,48 @@ const server = createServer(async (req, res) => {
 
 const apiPort = Number(process.env.API_PORT ?? 8787);
 const apiHost = process.env.API_HOST ?? '127.0.0.1';
+const appStatePersistIntervalMs = (() => {
+  const parsed = Number.parseInt(process.env.APP_STATE_PERSIST_INTERVAL_MS ?? '1200', 10);
+  if (!Number.isFinite(parsed) || parsed < 400) {
+    return 1200;
+  }
+  return parsed;
+})();
 
 (async () => {
+  await loadPersistedAppState();
   await loadPersistedLlmConfigs();
+  handlers.syncRuntimeIdSeed();
+  const resumeSummary = handlers.resumePendingTrainingJobs();
+  if (resumeSummary.resumed_job_ids.length > 0) {
+    console.log(
+      `[vistral-api] resumed training jobs after restart: ${resumeSummary.resumed_job_ids.join(', ')}`
+    );
+  }
+
+  const persistInterval = setInterval(() => {
+    void persistAppState().catch((error) => {
+      console.warn('[vistral-api] Failed to persist app state:', (error as Error).message);
+    });
+  }, appStatePersistIntervalMs);
+  persistInterval.unref();
+
+  const shutdown = async () => {
+    clearInterval(persistInterval);
+    await persistAppState(true).catch((error) => {
+      console.warn('[vistral-api] Failed to flush app state on shutdown:', (error as Error).message);
+    });
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGINT', () => {
+    void shutdown();
+  });
+  process.on('SIGTERM', () => {
+    void shutdown();
+  });
 
   server.listen(apiPort, apiHost, () => {
     console.log(`[vistral-api] listening on http://${apiHost}:${apiPort}`);

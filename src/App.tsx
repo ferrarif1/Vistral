@@ -21,35 +21,39 @@ import TrainingJobDetailPage from './pages/TrainingJobDetailPage';
 import ModelVersionsPage from './pages/ModelVersionsPage';
 import InferenceValidationPage from './pages/InferenceValidationPage';
 import RuntimeSettingsPage from './pages/RuntimeSettingsPage';
+import ApiHealthBanner from './components/ApiHealthBanner';
 
 export default function App() {
   return (
-    <AppShell>
-      <Routes>
-        <Route path="/" element={<DualEntryPage />} />
-        <Route path="/workspace/chat" element={<ConversationPage />} />
-        <Route path="/workspace/console" element={<ProfessionalConsolePage />} />
-        <Route path="/settings/llm" element={<LlmSettingsPage />} />
-        <Route path="/settings/runtime" element={<RuntimeSettingsPage />} />
-        <Route path="/conversation" element={<Navigate to="/workspace/chat" replace />} />
-        <Route path="/models/explore" element={<ModelsExplorePage />} />
-        <Route path="/models/my-models" element={<MyModelsPage />} />
-        <Route path="/models/create" element={<CreateModelPage />} />
-        <Route path="/models/versions" element={<ModelVersionsPage />} />
-        <Route path="/datasets" element={<DatasetsPage />} />
-        <Route path="/datasets/:datasetId" element={<DatasetDetailPage />} />
-        <Route path="/datasets/:datasetId/annotate" element={<AnnotationWorkspacePage />} />
-        <Route path="/training/jobs" element={<TrainingJobsPage />} />
-        <Route path="/training/jobs/new" element={<CreateTrainingJobPage />} />
-        <Route path="/training/jobs/:jobId" element={<TrainingJobDetailPage />} />
-        <Route path="/inference/validate" element={<InferenceValidationPage />} />
-        <Route path="/admin/models/pending" element={<AdminApprovalsPage />} />
-        <Route path="/admin/audit" element={<AdminAuditPage />} />
-        <Route path="/admin/verification-reports" element={<AdminVerificationReportsPage />} />
-        <Route path="/auth/register" element={<AuthRegisterPage />} />
-        <Route path="/auth/login" element={<AuthLoginPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </AppShell>
+    <>
+      <ApiHealthBanner />
+      <AppShell>
+        <Routes>
+          <Route path="/" element={<DualEntryPage />} />
+          <Route path="/workspace/chat" element={<ConversationPage />} />
+          <Route path="/workspace/console" element={<ProfessionalConsolePage />} />
+          <Route path="/settings/llm" element={<LlmSettingsPage />} />
+          <Route path="/settings/runtime" element={<RuntimeSettingsPage />} />
+          <Route path="/conversation" element={<Navigate to="/workspace/chat" replace />} />
+          <Route path="/models/explore" element={<ModelsExplorePage />} />
+          <Route path="/models/my-models" element={<MyModelsPage />} />
+          <Route path="/models/create" element={<CreateModelPage />} />
+          <Route path="/models/versions" element={<ModelVersionsPage />} />
+          <Route path="/datasets" element={<DatasetsPage />} />
+          <Route path="/datasets/:datasetId" element={<DatasetDetailPage />} />
+          <Route path="/datasets/:datasetId/annotate" element={<AnnotationWorkspacePage />} />
+          <Route path="/training/jobs" element={<TrainingJobsPage />} />
+          <Route path="/training/jobs/new" element={<CreateTrainingJobPage />} />
+          <Route path="/training/jobs/:jobId" element={<TrainingJobDetailPage />} />
+          <Route path="/inference/validate" element={<InferenceValidationPage />} />
+          <Route path="/admin/models/pending" element={<AdminApprovalsPage />} />
+          <Route path="/admin/audit" element={<AdminAuditPage />} />
+          <Route path="/admin/verification-reports" element={<AdminVerificationReportsPage />} />
+          <Route path="/auth/register" element={<AuthRegisterPage />} />
+          <Route path="/auth/login" element={<AuthLoginPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AppShell>
+    </>
   );
 }

@@ -4,7 +4,8 @@ import type {
   AnnotationWithReview,
   DatasetItemRecord,
   DatasetRecord,
-  FileAttachment
+  FileAttachment,
+  ModelVersionRecord
 } from '../../shared/domain';
 import AnnotationCanvas, { type AnnotationBox } from '../components/AnnotationCanvas';
 import PolygonCanvas, { type PolygonAnnotation } from '../components/PolygonCanvas';
@@ -38,8 +39,10 @@ export default function AnnotationWorkspacePage() {
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+  const [modelVersions, setModelVersions] = useState<ModelVersionRecord[]>([]);
   const [annotations, setAnnotations] = useState<AnnotationWithReview[]>([]);
   const [selectedItemId, setSelectedItemId] = useState('');
+  const [selectedModelVersionId, setSelectedModelVersionId] = useState('');
   const [boxes, setBoxes] = useState<AnnotationBox[]>([]);
   const [ocrLines, setOcrLines] = useState<OcrLine[]>([]);
   const [polygons, setPolygons] = useState<PolygonAnnotation[]>([]);
@@ -57,15 +60,19 @@ export default function AnnotationWorkspacePage() {
       return;
     }
 
-    const [detail, annotationList] = await Promise.all([
+    const [detail, annotationList, versions] = await Promise.all([
       api.getDatasetDetail(datasetId),
-      api.listDatasetAnnotations(datasetId)
+      api.listDatasetAnnotations(datasetId),
+      api.listModelVersions()
     ]);
 
     setDataset(detail.dataset);
     setItems(detail.items);
     setAttachments(detail.attachments);
     setAnnotations(annotationList);
+    const matchedVersions = versions.filter((version) => version.task_type === detail.dataset.task_type);
+    setModelVersions(matchedVersions);
+    setSelectedModelVersionId((prev) => prev || matchedVersions[0]?.id || '');
     setSelectedItemId((prev) => prev || detail.items[0]?.id || '');
   }, [datasetId]);
 
@@ -392,7 +399,10 @@ export default function AnnotationWorkspacePage() {
     setFeedback(null);
 
     try {
-      const result = await api.runDatasetPreAnnotations(datasetId);
+      const result = await api.runDatasetPreAnnotations(
+        datasetId,
+        selectedModelVersionId || undefined
+      );
       setFeedback({
         variant: 'success',
         text: t('Pre-annotation completed. created {created}, updated {updated}.', {
@@ -501,10 +511,35 @@ export default function AnnotationWorkspacePage() {
       <section className="card stack">
         <div className="row between gap align-center">
           <h3>{t('Dataset Items')}</h3>
-          <button onClick={runPreAnnotation} disabled={busy || items.length === 0}>
-            {t('Run Pre-Annotation')}
-          </button>
+          <div className="row gap align-center">
+            <label>
+              {t('Model Version')}
+              <select
+                value={selectedModelVersionId}
+                onChange={(event) => setSelectedModelVersionId(event.target.value)}
+              >
+                {modelVersions.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    {version.version_name} ({t(version.framework)})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              onClick={runPreAnnotation}
+              disabled={busy || items.length === 0 || modelVersions.length === 0}
+            >
+              {t('Run Pre-Annotation')}
+            </button>
+          </div>
         </div>
+        {modelVersions.length === 0 ? (
+          <StateBlock
+            variant="empty"
+            title={t('No Matching Model Version')}
+            description={t('Register a model version with same task type before pre-annotation.')}
+          />
+        ) : null}
         {items.length === 0 ? (
           <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files first.')} />
         ) : (

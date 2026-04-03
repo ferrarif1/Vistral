@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ModelFramework, RuntimeConnectivityRecord } from '../../shared/domain';
+import type {
+  ModelFramework,
+  RuntimeConnectivityRecord,
+  RuntimeMetricsRetentionSummary
+} from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import { useI18n } from '../i18n/I18nProvider';
@@ -83,6 +87,10 @@ export default function RuntimeSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [inferenceSourceSummary, setInferenceSourceSummary] = useState<Array<{ key: string; count: number }>>([]);
+  const [trainingModeSummary, setTrainingModeSummary] = useState<Array<{ key: string; count: number }>>([]);
+  const [metricsRetentionSummary, setMetricsRetentionSummary] = useState<RuntimeMetricsRetentionSummary | null>(null);
   const [frameworkFilter, setFrameworkFilter] = useState<'all' | ModelFramework>('all');
   const [templateFramework, setTemplateFramework] = useState<ModelFramework>('yolo');
   const [copyMessage, setCopyMessage] = useState('');
@@ -140,8 +148,54 @@ export default function RuntimeSettingsPage() {
     }
   };
 
+  const refreshExecutionSummary = async () => {
+    setSummaryLoading(true);
+    try {
+      const [runs, jobs, retention] = await Promise.all([
+        api.listInferenceRuns(),
+        api.listTrainingJobs(),
+        api.getRuntimeMetricsRetentionSummary()
+      ]);
+      const sourceCounter = new Map<string, number>();
+      runs.forEach((run) => {
+        const source =
+          typeof run.execution_source === 'string' && run.execution_source.trim()
+            ? run.execution_source
+            : typeof run.normalized_output?.normalized_output?.source === 'string'
+              ? run.normalized_output.normalized_output.source
+              : 'unknown';
+        sourceCounter.set(source, (sourceCounter.get(source) ?? 0) + 1);
+      });
+
+      const modeCounter = new Map<string, number>();
+      jobs.forEach((job) => {
+        const mode = job.execution_mode || 'unknown';
+        modeCounter.set(mode, (modeCounter.get(mode) ?? 0) + 1);
+      });
+
+      setInferenceSourceSummary(
+        Array.from(sourceCounter.entries())
+          .sort((left, right) => right[1] - left[1])
+          .map(([key, count]) => ({ key, count }))
+      );
+      setTrainingModeSummary(
+        Array.from(modeCounter.entries())
+          .sort((left, right) => right[1] - left[1])
+          .map(([key, count]) => ({ key, count }))
+      );
+      setMetricsRetentionSummary(retention);
+    } catch {
+      setInferenceSourceSummary([]);
+      setTrainingModeSummary([]);
+      setMetricsRetentionSummary(null);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
   useEffect(() => {
     void refresh();
+    void refreshExecutionSummary();
   }, []);
 
   const checkByFramework = useMemo(
@@ -244,6 +298,96 @@ export default function RuntimeSettingsPage() {
             </article>
           );
         })}
+      </section>
+
+      <section className="card stack">
+        <h3>{t('Recent Execution Summary')}</h3>
+        {summaryLoading ? (
+          <StateBlock
+            variant="loading"
+            title={t('Loading Summary')}
+            description={t('Collecting recent training and inference execution sources.')}
+          />
+        ) : (
+          <>
+            <div className="stack tight">
+              <strong>{t('Inference source distribution')}</strong>
+              {inferenceSourceSummary.length === 0 ? (
+                <small className="muted">{t('No inference runs yet.')}</small>
+              ) : (
+                <div className="row gap wrap">
+                  {inferenceSourceSummary.map((entry) => (
+                    <span key={entry.key} className="chip">
+                      {entry.key}: {entry.count}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="stack tight">
+              <strong>{t('Training execution mode distribution')}</strong>
+              {trainingModeSummary.length === 0 ? (
+                <small className="muted">{t('No training jobs yet.')}</small>
+              ) : (
+                <div className="row gap wrap">
+                  {trainingModeSummary.map((entry) => (
+                    <span key={entry.key} className="chip">
+                      {entry.key}: {entry.count}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="stack tight">
+              <strong>{t('Training metric retention')}</strong>
+              {!metricsRetentionSummary ? (
+                <small className="muted">{t('Retention summary unavailable.')}</small>
+              ) : (
+                <>
+                  <div className="row gap wrap">
+                    <span className="chip">
+                      {t('Current rows')}: {metricsRetentionSummary.current_total_rows}
+                    </span>
+                    <span className="chip">
+                      {t('Total cap')}: {metricsRetentionSummary.max_total_rows}
+                    </span>
+                    <span className="chip">
+                      {t('Per-job cap')}: {metricsRetentionSummary.max_points_per_job}
+                    </span>
+                    <span className="chip">
+                      {t('Jobs with metrics')}: {metricsRetentionSummary.jobs_with_metrics}
+                    </span>
+                    <span className="chip">
+                      {t('Visible jobs')}: {metricsRetentionSummary.visible_job_count}
+                    </span>
+                    <span className="chip">
+                      {t('Max rows (single job)')}: {metricsRetentionSummary.max_rows_single_job}
+                    </span>
+                  </div>
+                  <small className="muted">
+                    {metricsRetentionSummary.near_total_cap
+                      ? t('Retention usage is close to cap. Consider lowering metric density or increasing cap.')
+                      : t('Retention usage is within normal range.')}
+                  </small>
+                  {metricsRetentionSummary.top_jobs.length > 0 ? (
+                    <div className="row gap wrap">
+                      {metricsRetentionSummary.top_jobs.map((item) => (
+                        <span key={item.training_job_id} className="chip">
+                          {item.training_job_id}: {item.rows}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+            <div className="row gap wrap">
+              <button type="button" onClick={() => void refreshExecutionSummary()} disabled={summaryLoading}>
+                {summaryLoading ? t('Refreshing...') : t('Refresh Summary')}
+              </button>
+            </div>
+          </>
+        )}
       </section>
 
       <AdvancedSection

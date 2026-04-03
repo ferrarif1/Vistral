@@ -9,10 +9,39 @@ import {
   normalizeLlmConfig
 } from '../services/llmConfig';
 
+const CHATANYWHERE_MODEL_PRESETS = ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-3.5-turbo'] as const;
+
+const resolveConnectionAdvice = (message: string, t: (source: string) => string): string => {
+  const lower = message.toLowerCase();
+
+  if (lower.includes('(401') || lower.includes('unauthorized') || lower.includes('invalid api key')) {
+    return t('API key appears invalid or expired. Re-copy key and retry.');
+  }
+
+  if (lower.includes('(403') || lower.includes('forbidden')) {
+    return t('Current key may not access this model. Try gpt-4o-mini first.');
+  }
+
+  if (lower.includes('(429') || lower.includes('rate limit') || lower.includes('quota')) {
+    return t('Rate limit reached. Wait and retry, or switch to a lower-cost model.');
+  }
+
+  if (lower.includes('(404') || lower.includes('not found')) {
+    return t('Endpoint or model not found. Check Base URL and model name.');
+  }
+
+  if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('etimedout')) {
+    return t('Connection timed out. Retry later or use a more stable network.');
+  }
+
+  return t('Apply ChatAnywhere preset and test with gpt-4o-mini.');
+};
+
 export default function LlmSettingsPage() {
   const { t } = useI18n();
   const [form, setForm] = useState<LlmConfig>({ ...DEFAULT_LLM_CONFIG });
   const [status, setStatus] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const [connectionAdvice, setConnectionAdvice] = useState('');
   const [testing, setTesting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [apiKeyMasked, setApiKeyMasked] = useState('Not set');
@@ -45,11 +74,22 @@ export default function LlmSettingsPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const applyChatAnywherePreset = () => {
+    setForm((prev) => ({
+      ...prev,
+      provider: 'chatanywhere',
+      base_url: 'https://api.chatanywhere.tech/v1',
+      model: prev.model.trim() || 'gpt-3.5-turbo'
+    }));
+    setStatus({ variant: 'success', text: t('ChatAnywhere preset applied.') });
+  };
+
   const save = async () => {
     const normalized = normalizeLlmConfig(form);
 
     if (!normalized.base_url || !normalized.model) {
       setStatus({ variant: 'error', text: t('Base URL and model are required.') });
+      setConnectionAdvice(t('Apply ChatAnywhere preset and test with gpt-4o-mini.'));
       return;
     }
 
@@ -58,6 +98,7 @@ export default function LlmSettingsPage() {
         variant: 'error',
         text: t('Enable mode requires an API key. Please input key at least once.')
       });
+      setConnectionAdvice(t('API key appears invalid or expired. Re-copy key and retry.'));
       return;
     }
 
@@ -72,9 +113,11 @@ export default function LlmSettingsPage() {
           key: saved.api_key_masked
         })
       });
+      setConnectionAdvice('');
       emitLlmConfigUpdated();
     } catch (error) {
       setStatus({ variant: 'error', text: (error as Error).message });
+      setConnectionAdvice(resolveConnectionAdvice((error as Error).message, t));
     }
   };
 
@@ -92,9 +135,11 @@ export default function LlmSettingsPage() {
       setApiKeyMasked(cleared.api_key_masked);
       setHasApiKey(cleared.has_api_key);
       setStatus({ variant: 'success', text: t('Configuration cleared from server memory.') });
+      setConnectionAdvice('');
       emitLlmConfigUpdated();
     } catch (error) {
       setStatus({ variant: 'error', text: (error as Error).message });
+      setConnectionAdvice(resolveConnectionAdvice((error as Error).message, t));
     }
   };
 
@@ -110,6 +155,7 @@ export default function LlmSettingsPage() {
         variant: 'error',
         text: t('Connection test requires API key input for this test run.')
       });
+      setConnectionAdvice(t('API key appears invalid or expired. Re-copy key and retry.'));
       return;
     }
 
@@ -124,11 +170,14 @@ export default function LlmSettingsPage() {
           preview: result.preview.slice(0, 140)
         })
       });
+      setConnectionAdvice('');
     } catch (error) {
+      const message = (error as Error).message;
       setStatus({
         variant: 'error',
-        text: t('Connection failed: {message}', { message: (error as Error).message })
+        text: t('Connection failed: {message}', { message })
       });
+      setConnectionAdvice(resolveConnectionAdvice(message, t));
     } finally {
       setTesting(false);
     }
@@ -142,6 +191,12 @@ export default function LlmSettingsPage() {
           'Configure your own OpenAI-compatible endpoint. Key is managed server-side and encrypted in local prototype storage; it is never committed into repository files.'
         )}
       </p>
+      <small className="muted">
+        {t('Supports base URL like {baseUrl} and full endpoint {endpoint}.', {
+          baseUrl: 'https://api.chatanywhere.tech/v1',
+          endpoint: 'https://api.chatanywhere.tech/v1/chat/completions'
+        })}
+      </small>
 
       {loading ? (
         <StateBlock variant="loading" title={t('Loading Settings')} description={t('Fetching current LLM settings.')} />
@@ -161,12 +216,18 @@ export default function LlmSettingsPage() {
           <input value="chatanywhere (OpenAI compatible)" disabled />
         </label>
 
+        <div className="row gap wrap">
+          <button type="button" className="small-btn" onClick={applyChatAnywherePreset}>
+            {t('Apply ChatAnywhere Preset')}
+          </button>
+        </div>
+
         <label>
           {t('Base URL')}
           <input
             value={form.base_url}
             onChange={(event) => update('base_url', event.target.value)}
-            placeholder="https://api.chatanywhere.tech"
+            placeholder="https://api.chatanywhere.tech/v1"
           />
         </label>
 
@@ -189,6 +250,25 @@ export default function LlmSettingsPage() {
             onChange={(event) => update('model', event.target.value)}
             placeholder="gpt-3.5-turbo"
           />
+        </label>
+
+        <label>
+          {t('Recommended Models')}
+          <select
+            value=""
+            onChange={(event) => {
+              if (event.target.value) {
+                update('model', event.target.value);
+              }
+            }}
+          >
+            <option value="">{t('Select recommended model')}</option>
+            {CHATANYWHERE_MODEL_PRESETS.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
         </label>
 
         <label>
@@ -221,6 +301,8 @@ export default function LlmSettingsPage() {
           </button>
           <button onClick={clear}>{t('Clear')}</button>
         </div>
+        {connectionAdvice ? <small className="muted">{t('Troubleshooting')}: {connectionAdvice}</small> : null}
+        <small className="muted">{t('Free key may have per-day quota and per-IP limits.')}</small>
         <small className="muted">
           {t(
             'Security note: rotate your key if it was ever exposed in public channels and keep `LLM_CONFIG_SECRET` private.'

@@ -56,7 +56,40 @@ npm run docker:release:bundle
 VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified
 npm run smoke:admin:verification-reports
 npm run smoke:demo:train-data
+npm run smoke:restart-resume
+npm run smoke:local-command
+npm run smoke:execution-fields
+npm run smoke:runner-real-fallback
+npm run smoke:runner-real-upload
+npm run smoke:runner-real-positive
+npm run smoke:runtime-metrics-retention
+npm run smoke:training-metrics-export
+npm run smoke:training-metrics-export-csv
+npm run smoke:admin:verification-retention
+npm run smoke:verify-report-retention-e2e
 ```
+
+可选正向 real-runner 验证：
+- `REAL_YOLO_MODEL_PATH=/abs/path/to/yolo.pt npm run smoke:runner-real-positive`
+- 当模型文件或 `ultralytics` 依赖缺失时，该脚本会自动跳过。
+
+与持久化相关的原型环境变量：
+- `UPLOAD_STORAGE_ROOT`（默认 `.data/uploads`）
+- `TRAINING_WORKDIR_ROOT`（默认 `.data/training-jobs`）
+- `APP_STATE_STORE_PATH`（默认 `.data/app-state.json`）
+- `APP_STATE_PERSIST_INTERVAL_MS`（默认 `1200`，最小 `400`）
+- `VERIFICATION_REPORTS_DIR`（默认 `.data/verify-reports`）
+- `TRAINING_METRICS_MAX_POINTS_PER_JOB`（默认 `180`）
+- `TRAINING_METRICS_MAX_TOTAL_ROWS`（默认 `20000`）
+- `YOLO_LOCAL_TRAIN_COMMAND` / `PADDLEOCR_LOCAL_TRAIN_COMMAND` / `DOCTR_LOCAL_TRAIN_COMMAND`
+- `YOLO_LOCAL_PREDICT_COMMAND` / `PADDLEOCR_LOCAL_PREDICT_COMMAND` / `DOCTR_LOCAL_PREDICT_COMMAND`
+- `LOCAL_RUNNER_TIMEOUT_MS`（默认 `1800000`）
+- `VISTRAL_RUNNER_ENABLE_REAL`（设为 `1` 时尝试本地 runner 的真实框架分支）
+- `VISTRAL_YOLO_MODEL_PATH`
+- `VISTRAL_PADDLEOCR_LANG` / `VISTRAL_PADDLEOCR_USE_GPU`
+- `VISTRAL_DOCTR_DET_ARCH` / `VISTRAL_DOCTR_RECO_ARCH`
+- 本地命令模板脚本目录：`scripts/local-runners/`
+- 占位符示例：`{{repo_root}}`、`{{job_id}}`、`{{dataset_id}}`、`{{task_type}}`、`{{metrics_path}}`、`{{output_path}}`
 
 `docker:verify:full` 会在 `.data/verify-reports/` 生成验收报告。
 `docker:release:bundle` 支持可选约束：

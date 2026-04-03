@@ -463,6 +463,13 @@ export default function AdminVerificationReportsPage() {
                 <small className="muted">
                   {t('checks')}: {item.checks_total} {t('total')}, {item.checks_failed} {t('failed')}
                 </small>
+                {item.runtime_metrics_retention ? (
+                  <small className="muted">
+                    {t('metrics rows')}: {item.runtime_metrics_retention.current_total_rows} /{' '}
+                    {item.runtime_metrics_retention.max_total_rows} · {t('Per-job cap')}:{' '}
+                    {item.runtime_metrics_retention.max_points_per_job}
+                  </small>
+                ) : null}
                 <details className="report-details">
                   <summary>{t('Checks detail ({count})', { count: visibleChecks.length })}</summary>
                   {visibleChecks.length > 0 ? (

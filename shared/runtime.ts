@@ -17,13 +17,26 @@ export interface ValidateDatasetResult {
 export interface TrainInput {
   trainingJobId: string;
   datasetId: string;
+  taskType: TaskType;
   baseModel: string;
   config: Record<string, string>;
+  workspaceDir?: string;
+  configPath?: string;
+  summaryPath?: string;
+  metricsPath?: string;
+  artifactPath?: string;
 }
 
 export interface TrainResult {
   accepted: boolean;
   logPreview: string;
+  execution_mode?: 'simulated' | 'local_command';
+  logs?: string[];
+  metrics?: Record<string, number>;
+  metric_series?: Array<{
+    step: number;
+    metrics: Record<string, number>;
+  }>;
 }
 
 export interface EvaluateInput {
@@ -40,6 +53,9 @@ export interface PredictInput {
   inputAttachmentId: string;
   filename: string;
   taskType: TaskType;
+  inputMimeType?: string | null;
+  inputByteSize?: number | null;
+  inputStoragePath?: string | null;
 }
 
 export interface ExportInput {

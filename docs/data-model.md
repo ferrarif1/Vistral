@@ -109,11 +109,16 @@ Attributes:
 - `owner_user_id` (FK User)
 - `attached_to_type` (`Conversation` | `Model` | `Dataset` | `InferenceRun`)
 - `attached_to_id` (nullable)
+- `mime_type` (nullable, inferred from upload payload or extension)
+- `byte_size` (nullable int)
+- `storage_backend` (nullable, current implementation: `local`)
+- `storage_path` (nullable absolute path on server)
 - `upload_error` (nullable)
 - `created_at`, `updated_at`
 
 Rule:
 - upload lists must stay visible in UI and support delete actions.
+- multipart uploaded binaries are persisted under configurable local storage root (`UPLOAD_STORAGE_ROOT`).
 
 ### 4.6 ApprovalRequest
 Attributes:
@@ -198,6 +203,7 @@ Attributes:
 - `dataset_version_id` (FK DatasetVersion, nullable)
 - `base_model`
 - `config` (JSON)
+- `execution_mode` (`simulated` | `local_command` | `unknown`)
 - `log_excerpt` (nullable)
 - `submitted_by` (FK User)
 - `created_at`, `updated_at`
@@ -205,6 +211,15 @@ Attributes:
 Relationships:
 - has many `TrainingMetric`
 - can produce one or more `ModelVersion`
+
+Runtime notes (current implementation):
+- each job gets a local workspace under `TRAINING_WORKDIR_ROOT/{job_id}`
+- runtime writes `job-config.json`, `dataset-summary.json`, `train.log`, `metrics.json`, and artifact file
+- `train.log` lines are exposed via training detail API
+- app state snapshots are persisted to `APP_STATE_STORE_PATH` (default `.data/app-state.json`)
+- after API restart, non-terminal jobs (`queued`, `preparing`, `running`, `evaluating`) are re-queued and resumed automatically
+- optional local framework command execution is enabled via `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` and can emit metrics to `metrics.json`
+- `execution_mode` is explicitly persisted per training job (no longer inferred only from logs)
 
 ### 4.13 TrainingMetric
 Attributes:
@@ -229,6 +244,9 @@ Attributes:
 - `created_by` (FK User)
 - `created_at`
 
+Runtime rule (current implementation):
+- when a completed training job is registered, `artifact_attachment_id` is bound to the generated training artifact attachment (local file-backed).
+
 ### 4.15 InferenceRun
 Attributes:
 - `id` (PK)
@@ -237,6 +255,7 @@ Attributes:
 - `task_type` (TaskType)
 - `framework` (Framework)
 - `status` (`queued` | `running` | `completed` | `failed`)
+- `execution_source` (for example `yolo_runtime`, `yolo_local_command`, `yolo_local`, `mock_fallback`)
 - `raw_output` (JSON)
 - `normalized_output` (JSON)
 - `feedback_dataset_id` (FK Dataset, nullable)
@@ -266,6 +285,12 @@ Attributes:
 - `boxes`, `rotated_boxes`, `polygons`, `masks`, `labels`
 - OCR lines/words/confidence
 - full `raw_output`
+
+`normalized_output.source` currently distinguishes:
+- `<framework>_runtime` (external runtime endpoint result)
+- `<framework>_local_command` (local predict command result via `<FRAMEWORK>_LOCAL_PREDICT_COMMAND`)
+- `<framework>_local` (local deterministic inferencer result)
+- `mock_fallback` (runtime endpoint configured but failed, fallback applied)
 
 ## 7. Indexes and Constraints (minimum)
 - unique: `users.username`

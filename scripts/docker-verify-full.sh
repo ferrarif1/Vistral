@@ -7,6 +7,7 @@ BUSINESS_USERNAME="${BUSINESS_USERNAME:-alice}"
 BUSINESS_PASSWORD="${BUSINESS_PASSWORD:-mock-pass}"
 POLL_MAX_TRIES="${POLL_MAX_TRIES:-20}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-0.3}"
+VERIFY_SKIP_HEALTHZ="${VERIFY_SKIP_HEALTHZ:-0}"
 RUN_TAG="$(date +%Y%m%d%H%M%S)"
 REPORT_DIR="${REPORT_DIR:-.data/verify-reports}"
 REPORT_BASENAME="${REPORT_BASENAME:-docker-verify-full-${RUN_TAG}}"
@@ -32,6 +33,7 @@ APPROVAL_ID=''
 DETECTION_RUN_ID=''
 OCR_RUN_ID=''
 ATTACHMENT_ID=''
+RUNTIME_METRICS_RETENTION_JSON='null'
 
 cleanup() {
   rm -f "${PROBE_COOKIE}" "${BUSINESS_COOKIE}"
@@ -75,6 +77,7 @@ finalize_report() {
     --arg ocr_run_id "${OCR_RUN_ID}" \
     --arg attachment_id "${ATTACHMENT_ID}" \
     --argjson checks "${CHECKS_JSON}" \
+    --argjson runtime_metrics_retention "${RUNTIME_METRICS_RETENTION_JSON}" \
     '{
       status: $status,
       summary: $summary,
@@ -93,11 +96,17 @@ finalize_report() {
         ocr_run_id: $ocr_run_id,
         attachment_id: $attachment_id
       },
-      checks: $checks
+      checks: $checks,
+      runtime_metrics_retention: $runtime_metrics_retention
     }' > "${REPORT_JSON_PATH}"
 
   local check_rows
   check_rows="$(jq -r '.checks[] | "| " + .name + " | " + .status + " | " + (.detail // "") + " |"' "${REPORT_JSON_PATH}")"
+  local retention_current retention_total_cap retention_per_job_cap retention_near_cap
+  retention_current="$(jq -r '.runtime_metrics_retention.current_total_rows // "n/a"' "${REPORT_JSON_PATH}")"
+  retention_total_cap="$(jq -r '.runtime_metrics_retention.max_total_rows // "n/a"' "${REPORT_JSON_PATH}")"
+  retention_per_job_cap="$(jq -r '.runtime_metrics_retention.max_points_per_job // "n/a"' "${REPORT_JSON_PATH}")"
+  retention_near_cap="$(jq -r '.runtime_metrics_retention.near_total_cap // "n/a"' "${REPORT_JSON_PATH}")"
 
   cat > "${REPORT_MD_PATH}" <<MD
 # Docker Verify Full Report
@@ -117,6 +126,12 @@ finalize_report() {
 - approval_id: ${APPROVAL_ID}
 - detection_run_id: ${DETECTION_RUN_ID}
 - ocr_run_id: ${OCR_RUN_ID}
+
+## Runtime Metrics Retention
+- current_total_rows: ${retention_current}
+- max_total_rows: ${retention_total_cap}
+- max_points_per_job: ${retention_per_job_cap}
+- near_total_cap: ${retention_near_cap}
 
 ## Checks
 | Check | Status | Detail |
@@ -153,9 +168,15 @@ get_csrf_token() {
 
 CURRENT_STEP='infrastructure health checks'
 echo "[docker-verify-full] 1/9 ${CURRENT_STEP}"
-curl -fsS "${BASE_URL}/healthz" >/dev/null
+if [[ "${VERIFY_SKIP_HEALTHZ}" != "1" ]]; then
+  curl -fsS "${BASE_URL}/healthz" >/dev/null
+fi
 curl -fsS "${BASE_URL}/api/health" >/dev/null
-append_check "${CURRENT_STEP}" "passed" "health endpoints are reachable"
+if [[ "${VERIFY_SKIP_HEALTHZ}" == "1" ]]; then
+  append_check "${CURRENT_STEP}" "passed" "api health endpoint is reachable (/healthz check skipped)"
+else
+  append_check "${CURRENT_STEP}" "passed" "health endpoints are reachable"
+fi
 
 CURRENT_STEP='probe register + login'
 echo "[docker-verify-full] 2/9 ${CURRENT_STEP}"
@@ -305,7 +326,11 @@ echo "[docker-verify-full] 7/9 ${CURRENT_STEP}"
 RUNTIME_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/runtime/connectivity")"
 echo "${RUNTIME_RESPONSE}" | jq -e '.success == true and (.data | length) >= 3 and ([.data[].error_kind] | all(. != null))' >/dev/null
-append_check "${CURRENT_STEP}" "passed" "runtime connectivity returns frameworks and error_kind"
+RUNTIME_METRICS_RETENTION_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/runtime/metrics-retention")"
+echo "${RUNTIME_METRICS_RETENTION_RESPONSE}" | jq -e '.success == true and (.data.max_points_per_job | tonumber) >= 8 and (.data.max_total_rows | tonumber) >= 1000 and (.data.current_total_rows | tonumber) >= 0' >/dev/null
+RUNTIME_METRICS_RETENTION_JSON="$(echo "${RUNTIME_METRICS_RETENTION_RESPONSE}" | jq -c '.data')"
+append_check "${CURRENT_STEP}" "passed" "runtime connectivity + metrics retention summary available"
 
 CURRENT_STEP='detection + ocr inference'
 echo "[docker-verify-full] 8/9 ${CURRENT_STEP}"

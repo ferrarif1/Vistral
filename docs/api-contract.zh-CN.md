@@ -63,6 +63,9 @@
 - `GET /conversations/{id}`：会话详情（含消息）
 - `PATCH /conversations/{id}`：重命名会话标题（owner/admin）
 
+说明：
+- `attachment_ids` 会按客户端传入顺序保留，用作该条消息的附件上下文顺序。
+
 `PATCH /conversations/{id}` 请求体：
 ```json
 {
@@ -73,6 +76,53 @@
 约束：
 - `title` 去空格后不能为空
 - 标题长度 1-120
+
+## 文件附件接口（补充）
+- `GET /files/conversation`：获取当前用户会话附件列表
+- `POST /files/conversation/upload`：上传会话附件
+  - 兼容 JSON 文件名模式：
+    ```json
+    { "filename": "sample.jpg" }
+    ```
+  - 推荐 `multipart/form-data`：
+    - 字段名 `file`
+    - 服务端落盘到 `.data/uploads/conversation`
+    - 返回仍为标准 `FileAttachment` JSON 包装
+- `GET /files/model/{modelId}`：模型附件列表
+- `POST /files/model/{modelId}/upload`：上传模型附件
+  - 兼容 JSON 文件名模式
+  - 推荐 `multipart/form-data`（字段名 `file`）
+- `GET /files/dataset/{datasetId}`：数据集附件列表
+- `POST /files/dataset/{datasetId}/upload`：上传数据集附件
+  - 兼容 JSON 文件名模式
+  - 推荐 `multipart/form-data`（字段名 `file`）
+- `GET /files/{id}/content`：获取 ready 附件的二进制内容（原始流，不走 JSON envelope）
+- `DELETE /files/{id}`：删除附件（所有者范围内）
+
+附件状态：
+- `uploading`
+- `processing`
+- `ready`
+- `error`
+
+## 训练与推理接口补充（当前实现）
+- 训练任务详情中的 `job` 现在显式返回 `execution_mode`：
+  - `simulated`（模拟执行）
+  - `local_command`（本地命令执行）
+  - `unknown`
+- 新增 `GET /training/jobs/{id}/metrics-export`：
+  - 返回任务指标导出 JSON（`latest_metrics` + `metrics_by_name` 序列）
+  - 供训练详情页下载排障
+  - 支持 `?format=csv`，返回 CSV 下载（`training_job_id, metric_name, step, metric_value, recorded_at`）
+- 推理结果显式返回 `execution_source`，与 `normalized_output.source` 一致，用于区分：
+  - `<framework>_runtime`
+  - `<framework>_local_command`
+  - `<framework>_local`
+  - `mock_fallback`
+- 新增 `GET /runtime/metrics-retention`：
+  - 返回当前用户可见训练任务范围内的指标保留摘要
+  - 包含 `max_points_per_job`、`max_total_rows`、`current_total_rows`、`near_total_cap`、`top_jobs`
+  - 用于运行时页面查看指标保留占用情况
 
 ### GET /admin/verification-reports 返回项
 ```json
@@ -95,6 +145,18 @@
       "detail": "health endpoints are reachable"
     }
   ],
+  "runtime_metrics_retention": {
+    "max_points_per_job": 180,
+    "max_total_rows": 20000,
+    "current_total_rows": 428,
+    "visible_job_count": 12,
+    "jobs_with_metrics": 9,
+    "max_rows_single_job": 90,
+    "near_total_cap": false,
+    "top_jobs": [
+      { "training_job_id": "tj-982", "rows": 90 }
+    ]
+  },
   "entities": {
     "model_id": "m-1",
     "approval_id": "ar-1"
@@ -106,6 +168,7 @@
 - 仅 `admin` 可访问；普通 `user` 请求应返回失败。
 - `status` 取值：`passed` / `failed` / `unknown`。
 - 普通 `user` 调用建议返回：`403 + INSUFFICIENT_PERMISSIONS`。
+- 当验收报告 JSON 包含该字段时，返回项会带 `runtime_metrics_retention` 摘要。
 
 ## 错误码与状态码映射（原型已实现）
 - `AUTHENTICATION_REQUIRED` -> `401`

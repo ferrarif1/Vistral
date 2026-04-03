@@ -13,6 +13,7 @@ import {
   datasetVersions,
   inferenceRuns,
   llmConfigsByUser,
+  markAppStateDirty,
   messages,
   models,
   modelVersions,
@@ -48,15 +49,20 @@ import type {
   MessageRecord,
   ModelRecord,
   ModelVersionRecord,
+  RequirementTaskDraft,
   RegisterInput,
   RenameConversationInput,
   RegisterModelVersionInput,
   ReviewAnnotationInput,
   RuntimeConnectivityRecord,
+  RuntimeMetricsRetentionSummary,
   RunInferenceInput,
   SendMessageInput,
   StartConversationInput,
   SubmitApprovalInput,
+  TrainingMetricsExport,
+  TaskType,
+  ModelFramework,
   TrainingJobRecord,
   TrainingMetricRecord,
   UpsertAnnotationInput,
@@ -68,7 +74,38 @@ import type {
 const delay = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
 const normalizeUsername = (value: string) => value.trim().toLowerCase();
-const verificationReportsDir = path.resolve(process.cwd(), '.data', 'verify-reports');
+const verificationReportsDir = path.resolve(
+  process.cwd(),
+  (process.env.VERIFICATION_REPORTS_DIR ?? '.data/verify-reports').trim()
+);
+const uploadStorageRoot = path.resolve(
+  process.cwd(),
+  (process.env.UPLOAD_STORAGE_ROOT ?? '.data/uploads').trim()
+);
+const attachmentStorageDirByTarget: Record<FileAttachment['attached_to_type'], string> = {
+  Conversation: 'conversation',
+  Model: 'model',
+  Dataset: 'dataset',
+  InferenceRun: 'inference'
+};
+type StoredAttachmentBinary = {
+  file_path: string;
+  mime_type: string;
+  byte_size: number;
+};
+type AttachmentUploadInput = string | {
+  filename: string;
+  byte_size?: number;
+  mime_type?: string;
+  content?: Buffer;
+};
+type NormalizedAttachmentUploadInput = {
+  filename: string;
+  byte_size: number;
+  mime_type: string;
+  content: Buffer | null;
+};
+const storedAttachmentBinaryById = new Map<string, StoredAttachmentBinary>();
 
 let idSeed = 400;
 const currentUserId = process.env.DEFAULT_USER_ID ?? 'u-1';
@@ -77,13 +114,55 @@ const actorStore = new AsyncLocalStorage<{ userId: string }>();
 const defaultLlmConfig: LlmConfig = {
   enabled: false,
   provider: 'chatanywhere',
-  base_url: process.env.VITE_DEFAULT_LLM_BASE_URL ?? 'https://api.chatanywhere.tech',
+  base_url: process.env.VITE_DEFAULT_LLM_BASE_URL ?? 'https://api.chatanywhere.tech/v1',
   api_key: '',
   model: process.env.VITE_DEFAULT_LLM_MODEL ?? 'gpt-3.5-turbo',
   temperature: 0.2
 };
 
 const nextId = (prefix: string) => `${prefix}-${idSeed++}`;
+
+const idSuffix = (value: string): number => {
+  const match = value.match(/-(\d+)$/);
+  if (!match?.[1]) {
+    return 0;
+  }
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const resolveMaxIdSeedFromState = (): number => {
+  const sources: Array<Array<{ id: string }>> = [
+    users,
+    models,
+    conversations,
+    messages,
+    attachments,
+    datasets,
+    datasetItems,
+    annotations,
+    annotationReviews,
+    datasetVersions,
+    trainingJobs,
+    trainingMetrics,
+    modelVersions,
+    inferenceRuns,
+    approvalRequests,
+    auditLogs
+  ];
+
+  let maxId = 0;
+  sources.forEach((collection) => {
+    collection.forEach((entry) => {
+      maxId = Math.max(maxId, idSuffix(entry.id));
+    });
+  });
+  return maxId;
+};
+
+export const syncRuntimeIdSeed = (): void => {
+  idSeed = Math.max(400, resolveMaxIdSeedFromState() + 1);
+};
 
 const resolveActorUserId = (): string => actorStore.getStore()?.userId ?? currentUserId;
 
@@ -204,6 +283,7 @@ const startAttachmentLifecycle = (
   setTimeout(() => {
     attachment.status = 'processing';
     attachment.updated_at = now();
+    markAppStateDirty();
     onStatusChange?.('processing');
   }, 450);
 
@@ -216,8 +296,204 @@ const startAttachmentLifecycle = (
       attachment.upload_error = null;
     }
     attachment.updated_at = now();
+    markAppStateDirty();
     onStatusChange?.(attachment.status);
   }, 1000);
+};
+
+const sanitizeFilename = (value: string): string =>
+  value
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, '_')
+    .slice(0, 140) || `file-${Date.now()}.bin`;
+
+const guessMimeType = (filename: string): string => {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.png')) {
+    return 'image/png';
+  }
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+    return 'image/jpeg';
+  }
+  if (lower.endsWith('.webp')) {
+    return 'image/webp';
+  }
+  if (lower.endsWith('.gif')) {
+    return 'image/gif';
+  }
+  if (lower.endsWith('.svg')) {
+    return 'image/svg+xml';
+  }
+  if (lower.endsWith('.pdf')) {
+    return 'application/pdf';
+  }
+  if (lower.endsWith('.txt')) {
+    return 'text/plain; charset=utf-8';
+  }
+  if (lower.endsWith('.json')) {
+    return 'application/json';
+  }
+  return 'application/octet-stream';
+};
+
+const normalizeAttachmentUploadInput = (input: AttachmentUploadInput): NormalizedAttachmentUploadInput => {
+  const filename =
+    typeof input === 'string'
+      ? input
+      : typeof input.filename === 'string'
+        ? input.filename
+        : '';
+  const normalizedFilename = filename.trim() || `file-${Date.now()}.bin`;
+  const contentBuffer =
+    typeof input === 'string'
+      ? null
+      : Buffer.isBuffer(input.content)
+        ? input.content
+        : null;
+  const byteSize =
+    contentBuffer?.byteLength ??
+    (typeof input === 'string'
+      ? 0
+      : typeof input.byte_size === 'number' && Number.isFinite(input.byte_size)
+        ? input.byte_size
+        : 0);
+  const mimeType =
+    typeof input === 'string'
+      ? guessMimeType(normalizedFilename)
+      : typeof input.mime_type === 'string' && input.mime_type.trim()
+        ? input.mime_type.trim()
+        : guessMimeType(normalizedFilename);
+
+  return {
+    filename: normalizedFilename,
+    byte_size: byteSize,
+    mime_type: mimeType,
+    content: contentBuffer
+  };
+};
+
+const resolveAttachmentStorageDir = (target: FileAttachment['attached_to_type']): string =>
+  path.join(uploadStorageRoot, attachmentStorageDirByTarget[target]);
+
+const storeAttachmentBinary = async (
+  attachment: FileAttachment,
+  filename: string,
+  content: Buffer,
+  mimeType?: string
+): Promise<StoredAttachmentBinary> => {
+  const targetDir = resolveAttachmentStorageDir(attachment.attached_to_type);
+  await fs.mkdir(targetDir, { recursive: true });
+  const safeName = sanitizeFilename(filename);
+  const diskPath = path.join(targetDir, `${attachment.id}__${safeName}`);
+  await fs.writeFile(diskPath, content);
+
+  const stored: StoredAttachmentBinary = {
+    file_path: diskPath,
+    mime_type: mimeType?.trim() || guessMimeType(filename),
+    byte_size: content.byteLength
+  };
+  storedAttachmentBinaryById.set(attachment.id, stored);
+  return stored;
+};
+
+const findStoredAttachmentBinary = async (
+  attachment: FileAttachment
+): Promise<StoredAttachmentBinary | null> => {
+  const inMemory = storedAttachmentBinaryById.get(attachment.id);
+  if (inMemory) {
+    try {
+      const stats = await fs.stat(inMemory.file_path);
+      if (stats.isFile()) {
+        return {
+          ...inMemory,
+          byte_size: stats.size
+        };
+      }
+    } catch {
+      storedAttachmentBinaryById.delete(attachment.id);
+    }
+  }
+
+  if (attachment.storage_path) {
+    try {
+      const stats = await fs.stat(attachment.storage_path);
+      if (stats.isFile()) {
+        const resolved: StoredAttachmentBinary = {
+          file_path: attachment.storage_path,
+          mime_type: attachment.mime_type?.trim() || guessMimeType(attachment.filename),
+          byte_size: stats.size
+        };
+        storedAttachmentBinaryById.set(attachment.id, resolved);
+        return resolved;
+      }
+    } catch {
+      // continue with prefix scan fallback
+    }
+  }
+
+  try {
+    const targetDir = resolveAttachmentStorageDir(attachment.attached_to_type);
+    const entries = await fs.readdir(targetDir);
+    const matched = entries.find((item) => item.startsWith(`${attachment.id}__`));
+    if (!matched) {
+      return null;
+    }
+    const diskPath = path.join(targetDir, matched);
+    const stats = await fs.stat(diskPath);
+    if (!stats.isFile()) {
+      return null;
+    }
+
+    const resolved: StoredAttachmentBinary = {
+      file_path: diskPath,
+      mime_type: attachment.mime_type?.trim() || guessMimeType(attachment.filename),
+      byte_size: stats.size
+    };
+    storedAttachmentBinaryById.set(attachment.id, resolved);
+    return resolved;
+  } catch {
+    return null;
+  }
+};
+
+const removeStoredAttachmentBinary = async (attachment: FileAttachment): Promise<void> => {
+  const known = storedAttachmentBinaryById.get(attachment.id);
+  storedAttachmentBinaryById.delete(attachment.id);
+
+  const candidatePaths = new Set<string>();
+  if (known?.file_path) {
+    candidatePaths.add(known.file_path);
+  }
+  if (attachment.storage_path) {
+    candidatePaths.add(attachment.storage_path);
+  }
+
+  for (const candidate of candidatePaths) {
+    try {
+      await fs.unlink(candidate);
+      return;
+    } catch {
+      // continue and fallback to prefix scan
+    }
+  }
+
+  try {
+    const targetDir = resolveAttachmentStorageDir(attachment.attached_to_type);
+    const entries = await fs.readdir(targetDir);
+    const matched = entries.filter((item) => item.startsWith(`${attachment.id}__`));
+    await Promise.all(
+      matched.map(async (name) => {
+        try {
+          await fs.unlink(path.join(targetDir, name));
+        } catch {
+          // ignore best-effort cleanup failures
+        }
+      })
+    );
+  } catch {
+    // ignore
+  }
 };
 
 const buildAssistantReply = (content: string, fileNames: string[]) => {
@@ -231,8 +507,97 @@ const buildAttachmentContext = (fileNames: string[]) =>
     ? `Attached files: ${fileNames.join(', ')}.`
     : 'No files attached in this turn.';
 
-const toCompletionEndpoint = (baseUrl: string) =>
-  `${baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+const providerResponsePreviewMaxLength = 200;
+
+const normalizeProviderResponsePreview = (rawText: string): string => {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return 'empty response body';
+  }
+
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith('<!doctype') || lowered.startsWith('<html')) {
+    return 'non-JSON response body';
+  }
+
+  return trimmed.replace(/\s+/g, ' ').slice(0, providerResponsePreviewMaxLength);
+};
+
+const readJsonObjectFromResponse = async (
+  response: Response
+): Promise<{ payload: Record<string, unknown> | null; rawText: string }> => {
+  const rawText = await response.text();
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return { payload: null, rawText };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { payload: null, rawText };
+    }
+
+    return { payload: parsed as Record<string, unknown>, rawText };
+  } catch {
+    return { payload: null, rawText };
+  }
+};
+
+const readMessageFromPayload = (payload: Record<string, unknown>): string => {
+  const errorPart = payload.error;
+  if (errorPart && typeof errorPart === 'object' && !Array.isArray(errorPart)) {
+    const nestedMessage = (errorPart as { message?: unknown }).message;
+    if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
+      return nestedMessage.trim();
+    }
+  }
+
+  const directMessage = payload.message;
+  if (typeof directMessage === 'string' && directMessage.trim()) {
+    return directMessage.trim();
+  }
+
+  const detail = payload.detail;
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail.trim();
+  }
+
+  return '';
+};
+
+const toCompletionEndpoint = (baseUrl: string) => {
+  const normalized = baseUrl.trim().replace(/\/+$/, '');
+  if (!normalized) {
+    return '/v1/chat/completions';
+  }
+
+  if (/\/v1\/chat\/completions$/i.test(normalized)) {
+    return normalized;
+  }
+
+  if (/\/chat\/completions$/i.test(normalized)) {
+    return normalized;
+  }
+
+  if (/\/v1$/i.test(normalized)) {
+    return `${normalized}/chat/completions`;
+  }
+
+  return `${normalized}/v1/chat/completions`;
+};
+
+const readProviderErrorMessage = async (response: Response): Promise<string> => {
+  try {
+    const { payload } = await readJsonObjectFromResponse(response);
+    if (!payload) {
+      return '';
+    }
+    return readMessageFromPayload(payload);
+  } catch {
+    return '';
+  }
+};
 
 const callConfiguredLlm = async (
   content: string,
@@ -268,14 +633,34 @@ const callConfiguredLlm = async (
   });
 
   if (!response.ok) {
+    const providerMessage = await readProviderErrorMessage(response);
+    if (providerMessage) {
+      throw new Error(`LLM provider request failed (${response.status}): ${providerMessage}`);
+    }
     throw new Error(`LLM provider request failed (${response.status}).`);
   }
 
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
+  const { payload, rawText } = await readJsonObjectFromResponse(response);
+  if (!payload) {
+    throw new Error(
+      `LLM provider returned non-JSON payload: ${normalizeProviderResponsePreview(rawText)}`
+    );
+  }
 
-  const output = payload.choices?.[0]?.message?.content?.trim();
+  const choicesRaw = payload.choices;
+  const firstChoice =
+    Array.isArray(choicesRaw) && choicesRaw.length > 0
+      ? choicesRaw[0]
+      : null;
+  const messagePart =
+    firstChoice && typeof firstChoice === 'object' && !Array.isArray(firstChoice)
+      ? (firstChoice as { message?: unknown }).message
+      : null;
+  const outputRaw =
+    messagePart && typeof messagePart === 'object' && !Array.isArray(messagePart)
+      ? (messagePart as { content?: unknown }).content
+      : null;
+  const output = typeof outputRaw === 'string' ? outputRaw.trim() : '';
   if (!output) {
     throw new Error('LLM provider returned empty content.');
   }
@@ -298,6 +683,118 @@ const generateAssistantReply = async (
     const reason = (error as Error).message;
     return `${buildAssistantReply(content, fileNames)}\n\nFallback reason: ${reason}`;
   }
+};
+
+const buildRuleBasedTaskDraft = (description: string): RequirementTaskDraft => {
+  const normalized = description.toLowerCase();
+  const has = (...keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
+
+  if (has('ocr', '识别', '文字', '文本', '车号', '编号', 'read text', 'text line')) {
+    return {
+      task_type: 'ocr',
+      recommended_framework: 'paddleocr',
+      annotation_type: 'ocr_text',
+      label_hints: ['text_line', 'serial_number', 'region'],
+      dataset_suggestions: ['采集不同光照与角度的车体编号样本', '保留高分辨率原图，标注文本行与关键字段'],
+      rationale: '需求描述以文字识别为核心，优先 OCR 任务与 PaddleOCR 基线。',
+      source: 'rule'
+    };
+  }
+
+  if (has('旋转', 'obb', 'oriented', '倾斜框')) {
+    return {
+      task_type: 'obb',
+      recommended_framework: 'yolo',
+      annotation_type: 'rotated_bbox',
+      label_hints: ['target', 'defect', 'component'],
+      dataset_suggestions: ['优先标注旋转框并覆盖不同方位', '补充密集目标场景样本'],
+      rationale: '需求强调旋转目标，采用 YOLO OBB 路线更直接。',
+      source: 'rule'
+    };
+  }
+
+  if (has('分割', '轮廓', 'mask', 'segmentation')) {
+    return {
+      task_type: 'segmentation',
+      recommended_framework: 'yolo',
+      annotation_type: 'polygon',
+      label_hints: ['defect_region', 'background'],
+      dataset_suggestions: ['优先清晰边界样本', '保持多边形点位精度并覆盖复杂背景'],
+      rationale: '需求指向像素级区域识别，建议分割任务。',
+      source: 'rule'
+    };
+  }
+
+  if (has('分类', '是否', '判断', 'classif', 'normal vs abnormal', '开闭')) {
+    return {
+      task_type: 'classification',
+      recommended_framework: 'yolo',
+      annotation_type: 'classification',
+      label_hints: ['open', 'closed', 'normal', 'abnormal'],
+      dataset_suggestions: ['正负样本比例保持平衡', '覆盖同一部件的不同拍摄距离与角度'],
+      rationale: '需求更像状态判断，采用分类任务更轻量。',
+      source: 'rule'
+    };
+  }
+
+  return {
+    task_type: 'detection',
+    recommended_framework: 'yolo',
+    annotation_type: 'bbox',
+    label_hints: ['defect', 'scratch', 'component'],
+    dataset_suggestions: ['先做目标框标注并建立统一标签定义', '样本覆盖白天/夜晚/运动模糊等场景'],
+    rationale: '默认走检测任务，适合多数目标定位类需求。',
+    source: 'rule'
+  };
+};
+
+const parseDraftFromLlmText = (text: string): RequirementTaskDraft | null => {
+  const trimmed = text.trim();
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const jsonText = fencedMatch?.[1]?.trim() || trimmed;
+
+  try {
+    const parsed = JSON.parse(jsonText) as Partial<RequirementTaskDraft>;
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    if (!parsed.task_type || !parsed.recommended_framework || !parsed.annotation_type) {
+      return null;
+    }
+
+    return {
+      task_type: parsed.task_type,
+      recommended_framework: parsed.recommended_framework,
+      annotation_type: parsed.annotation_type,
+      label_hints: Array.isArray(parsed.label_hints)
+        ? parsed.label_hints.map((item) => String(item)).filter(Boolean)
+        : [],
+      dataset_suggestions: Array.isArray(parsed.dataset_suggestions)
+        ? parsed.dataset_suggestions.map((item) => String(item)).filter(Boolean)
+        : [],
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale : 'LLM generated draft.',
+      source: 'llm'
+    };
+  } catch {
+    return null;
+  }
+};
+
+const generateTaskDraftFromLlm = async (description: string, llmConfig: LlmConfig): Promise<RequirementTaskDraft | null> => {
+  const response = await callConfiguredLlm(
+    [
+      '请根据下面需求生成任务草案，严格返回 JSON，不要输出额外文本。',
+      '字段：task_type, recommended_framework, annotation_type, label_hints, dataset_suggestions, rationale。',
+      "task_type 只能是: ocr, detection, classification, segmentation, obb。",
+      "recommended_framework 只能是: paddleocr, doctr, yolo。",
+      "annotation_type 只能是: ocr_text, bbox, rotated_bbox, polygon, classification。",
+      `需求：${description}`
+    ].join('\n'),
+    [],
+    llmConfig
+  );
+
+  return parseDraftFromLlmText(response);
 };
 
 const getCurrentUserLlmConfigView = (): LlmConfigView => {
@@ -363,6 +860,7 @@ const logAudit = (
   };
 
   auditLogs.unshift(entry);
+  markAppStateDirty();
 };
 
 const annotationCoverageForDataset = (datasetId: string): number => {
@@ -428,88 +926,1371 @@ const listDatasetAnnotationsInternal = (datasetId: string): AnnotationWithReview
     }));
 };
 
-const buildMockPreAnnotationPayload = (taskType: DatasetRecord['task_type'], index: number) => {
-  if (taskType === 'ocr') {
-    return {
-      lines: [
-        {
-          text: `pre-annotated line ${index + 1}`,
-          confidence: 0.74
-        }
-      ]
-    };
+type DetectionImportEntry = {
+  filename: string;
+  boxes: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    label: string;
+    score: number;
+  }>;
+};
+
+type OcrImportEntry = {
+  filename: string;
+  lines: Array<{
+    text: string;
+    confidence: number;
+  }>;
+};
+
+type GenericImportEntry = {
+  filename: string;
+  payload: Record<string, unknown>;
+};
+
+const normalizeImportFilename = (filename: string): string => path.basename(filename.trim()).toLowerCase();
+
+const parseJsonObject = (content: string): unknown => {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    throw new Error('Import file is empty.');
   }
 
-  if (taskType === 'detection') {
-    return {
-      boxes: [{ x: 120 + index * 10, y: 90, width: 160, height: 100, label: 'defect', score: 0.71 }]
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    throw new Error('Import file JSON is invalid.');
+  }
+};
+
+const toNumberOrNull = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const parseYoloImportFromJson = (raw: unknown): DetectionImportEntry[] => {
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { items?: unknown }).items)
+      ? ((raw as { items: unknown[] }).items ?? [])
+      : [];
+
+  return list
+    .map((entry): DetectionImportEntry | null => {
+      const record = entry as { filename?: unknown; boxes?: unknown };
+      if (typeof record.filename !== 'string' || !record.filename.trim()) {
+        return null;
+      }
+
+      const boxesRaw = Array.isArray(record.boxes) ? record.boxes : [];
+      const boxes = boxesRaw
+        .map((boxEntry) => {
+          const box = boxEntry as {
+            x?: unknown;
+            y?: unknown;
+            width?: unknown;
+            height?: unknown;
+            label?: unknown;
+            score?: unknown;
+          };
+          const x = toNumberOrNull(box.x);
+          const y = toNumberOrNull(box.y);
+          const width = toNumberOrNull(box.width);
+          const height = toNumberOrNull(box.height);
+          if (
+            x === null ||
+            y === null ||
+            width === null ||
+            height === null ||
+            width <= 0 ||
+            height <= 0
+          ) {
+            return null;
+          }
+
+          return {
+            x,
+            y,
+            width,
+            height,
+            label: typeof box.label === 'string' && box.label.trim() ? box.label.trim() : 'object',
+            score: toNumberOrNull(box.score) ?? 0.5
+          };
+        })
+        .filter(
+          (
+            value
+          ): value is {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            label: string;
+            score: number;
+          } => value !== null
+        );
+
+      if (boxes.length === 0) {
+        return null;
+      }
+
+      return {
+        filename: record.filename.trim(),
+        boxes
+      };
+    })
+    .filter((value): value is DetectionImportEntry => value !== null);
+};
+
+const parseYoloImportFromTxt = (content: string): DetectionImportEntry[] => {
+  const grouped = new Map<string, DetectionImportEntry['boxes']>();
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    if (line.startsWith('#')) {
+      continue;
+    }
+
+    const parts = line.split(/\s+/);
+    if (parts.length < 6) {
+      continue;
+    }
+
+    const [filename, label, xRaw, yRaw, widthRaw, heightRaw, scoreRaw] = parts;
+    const x = toNumberOrNull(xRaw);
+    const y = toNumberOrNull(yRaw);
+    const width = toNumberOrNull(widthRaw);
+    const height = toNumberOrNull(heightRaw);
+    if (x === null || y === null || width === null || height === null || width <= 0 || height <= 0) {
+      continue;
+    }
+
+    const key = normalizeImportFilename(filename);
+    const existing = grouped.get(key) ?? [];
+    existing.push({
+      x,
+      y,
+      width,
+      height,
+      label: label?.trim() || 'object',
+      score: toNumberOrNull(scoreRaw) ?? 0.5
+    });
+    grouped.set(key, existing);
+  }
+
+  return Array.from(grouped.entries()).map(([filename, boxes]) => ({
+    filename,
+    boxes
+  }));
+};
+
+const parseYoloImport = (content: string, filename: string): DetectionImportEntry[] => {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.json')) {
+    return parseYoloImportFromJson(parseJsonObject(content));
+  }
+
+  return parseYoloImportFromTxt(content);
+};
+
+const parseOcrImportFromJson = (raw: unknown): OcrImportEntry[] => {
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { items?: unknown }).items)
+      ? ((raw as { items: unknown[] }).items ?? [])
+      : [];
+
+  return list
+    .map((entry) => {
+      const record = entry as { filename?: unknown; lines?: unknown };
+      if (typeof record.filename !== 'string' || !record.filename.trim()) {
+        return null;
+      }
+
+      const linesRaw = Array.isArray(record.lines) ? record.lines : [];
+      const lines = linesRaw
+        .map((lineEntry) => {
+          const line = lineEntry as { text?: unknown; confidence?: unknown };
+          if (typeof line.text !== 'string' || !line.text.trim()) {
+            return null;
+          }
+
+          return {
+            text: line.text.trim(),
+            confidence: toNumberOrNull(line.confidence) ?? 0.9
+          };
+        })
+        .filter((value): value is { text: string; confidence: number } => value !== null);
+
+      if (lines.length === 0) {
+        return null;
+      }
+
+      return {
+        filename: record.filename.trim(),
+        lines
+      };
+    })
+    .filter((value): value is OcrImportEntry => value !== null);
+};
+
+const parseOcrImportFromTxt = (content: string): OcrImportEntry[] => {
+  const grouped = new Map<string, OcrImportEntry['lines']>();
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    if (line.startsWith('#')) {
+      continue;
+    }
+
+    const [filenamePart, textPart, confidencePart] = line.split('\t');
+    if (!filenamePart || !textPart) {
+      continue;
+    }
+
+    const key = normalizeImportFilename(filenamePart);
+    const existing = grouped.get(key) ?? [];
+    existing.push({
+      text: textPart.trim(),
+      confidence: toNumberOrNull(confidencePart) ?? 0.9
+    });
+    grouped.set(key, existing);
+  }
+
+  return Array.from(grouped.entries()).map(([filename, lineItems]) => ({
+    filename,
+    lines: lineItems
+  }));
+};
+
+const parseOcrImport = (content: string, filename: string): OcrImportEntry[] => {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.json')) {
+    return parseOcrImportFromJson(parseJsonObject(content));
+  }
+
+  return parseOcrImportFromTxt(content);
+};
+
+const parseCocoImport = (content: string): DetectionImportEntry[] => {
+  const raw = parseJsonObject(content) as {
+    images?: unknown;
+    annotations?: unknown;
+    categories?: unknown;
+  };
+
+  const images = Array.isArray(raw.images) ? raw.images : [];
+  const imageNameById = new Map<string, string>();
+  images.forEach((entry) => {
+    const record = entry as { id?: unknown; file_name?: unknown; filename?: unknown };
+    const imageId = record.id;
+    const fileName = typeof record.file_name === 'string'
+      ? record.file_name
+      : typeof record.filename === 'string'
+        ? record.filename
+        : null;
+    if ((typeof imageId === 'string' || typeof imageId === 'number') && fileName?.trim()) {
+      imageNameById.set(String(imageId), fileName.trim());
+    }
+  });
+
+  const categories = Array.isArray(raw.categories) ? raw.categories : [];
+  const categoryNameById = new Map<string, string>();
+  categories.forEach((entry) => {
+    const record = entry as { id?: unknown; name?: unknown };
+    if (
+      (typeof record.id === 'string' || typeof record.id === 'number') &&
+      typeof record.name === 'string' &&
+      record.name.trim()
+    ) {
+      categoryNameById.set(String(record.id), record.name.trim());
+    }
+  });
+
+  const grouped = new Map<string, DetectionImportEntry['boxes']>();
+  const annotationsRaw = Array.isArray(raw.annotations) ? raw.annotations : [];
+  annotationsRaw.forEach((entry) => {
+    const record = entry as {
+      image_id?: unknown;
+      category_id?: unknown;
+      bbox?: unknown;
+      score?: unknown;
     };
+
+    const imageId = record.image_id;
+    if (!(typeof imageId === 'string' || typeof imageId === 'number')) {
+      return;
+    }
+    const filename = imageNameById.get(String(imageId));
+    if (!filename) {
+      return;
+    }
+
+    const bbox = Array.isArray(record.bbox) ? record.bbox : [];
+    if (bbox.length < 4) {
+      return;
+    }
+    const x = toNumberOrNull(bbox[0]);
+    const y = toNumberOrNull(bbox[1]);
+    const width = toNumberOrNull(bbox[2]);
+    const height = toNumberOrNull(bbox[3]);
+    if (x === null || y === null || width === null || height === null || width <= 0 || height <= 0) {
+      return;
+    }
+
+    const categoryId = record.category_id;
+    const label =
+      (typeof categoryId === 'string' || typeof categoryId === 'number'
+        ? categoryNameById.get(String(categoryId))
+        : null) ?? 'object';
+
+    const key = normalizeImportFilename(filename);
+    const boxes = grouped.get(key) ?? [];
+    boxes.push({
+      x,
+      y,
+      width,
+      height,
+      label,
+      score: toNumberOrNull(record.score) ?? 0.5
+    });
+    grouped.set(key, boxes);
+  });
+
+  return Array.from(grouped.entries()).map(([filename, boxes]) => ({
+    filename,
+    boxes
+  }));
+};
+
+const toBoundingBoxFromPoints = (pointsRaw: unknown): { x: number; y: number; width: number; height: number } | null => {
+  const points = Array.isArray(pointsRaw) ? pointsRaw : [];
+  if (points.length < 2) {
+    return null;
+  }
+
+  const coords = points
+    .map((point) => {
+      if (Array.isArray(point) && point.length >= 2) {
+        const x = toNumberOrNull(point[0]);
+        const y = toNumberOrNull(point[1]);
+        if (x !== null && y !== null) {
+          return { x, y };
+        }
+      }
+
+      const record = point as { x?: unknown; y?: unknown };
+      const x = toNumberOrNull(record.x);
+      const y = toNumberOrNull(record.y);
+      if (x !== null && y !== null) {
+        return { x, y };
+      }
+      return null;
+    })
+    .filter((value): value is { x: number; y: number } => value !== null);
+
+  if (coords.length < 2) {
+    return null;
+  }
+
+  const xs = coords.map((item) => item.x);
+  const ys = coords.map((item) => item.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (width <= 0 || height <= 0) {
+    return null;
   }
 
   return {
-    labels: [{ label: 'pre-annotation', score: 0.68 }]
+    x: minX,
+    y: minY,
+    width,
+    height
   };
 };
 
-const scheduleTrainingLifecycle = (jobId: string): void => {
-  const run = async () => {
-    await delay(220);
-    const job = trainingJobs.find((item) => item.id === jobId);
-    if (!job || job.status === 'cancelled' || job.status === 'failed') {
-      return;
-    }
+const parseLabelMeImport = (
+  content: string,
+  taskType: DatasetRecord['task_type']
+): GenericImportEntry[] => {
+  const raw = parseJsonObject(content);
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { items?: unknown }).items)
+      ? ((raw as { items: unknown[] }).items ?? [])
+      : [raw];
 
-    job.status = 'preparing';
-    job.log_excerpt = `Preparing runtime for ${job.framework}.`;
-    job.updated_at = now();
-
-    await delay(260);
-    const runningJob = trainingJobs.find((item) => item.id === jobId);
-    if (!runningJob || runningJob.status === 'cancelled' || runningJob.status === 'failed') {
-      return;
-    }
-
-    runningJob.status = 'running';
-    runningJob.log_excerpt = `Running ${runningJob.framework} fine-tuning with base ${runningJob.base_model}.`;
-    runningJob.updated_at = now();
-
-    const trainer = getTrainerByFramework(runningJob.framework);
-    const evaluateResult = await trainer.evaluate({ trainingJobId: runningJob.id });
-
-    await delay(220);
-    const evaluatingJob = trainingJobs.find((item) => item.id === jobId);
-    if (!evaluatingJob || evaluatingJob.status === 'cancelled' || evaluatingJob.status === 'failed') {
-      return;
-    }
-
-    evaluatingJob.status = 'evaluating';
-    evaluatingJob.log_excerpt = 'Evaluating metrics...';
-    evaluatingJob.updated_at = now();
-
-    Object.entries(evaluateResult.metrics).forEach(([metricName, metricValue], index) => {
-      const metric: TrainingMetricRecord = {
-        id: nextId('tm'),
-        training_job_id: evaluatingJob.id,
-        metric_name: metricName,
-        metric_value: metricValue,
-        step: 1 + index,
-        recorded_at: now()
+  return list
+    .map((entry) => {
+      const record = entry as {
+        imagePath?: unknown;
+        filename?: unknown;
+        image_filename?: unknown;
+        shapes?: unknown;
       };
-      trainingMetrics.unshift(metric);
+      const filename =
+        typeof record.imagePath === 'string'
+          ? record.imagePath
+          : typeof record.filename === 'string'
+            ? record.filename
+            : typeof record.image_filename === 'string'
+              ? record.image_filename
+              : null;
+      if (!filename?.trim()) {
+        return null;
+      }
+
+      const shapesRaw = Array.isArray(record.shapes) ? record.shapes : [];
+      const boxes: DetectionImportEntry['boxes'] = [];
+      const polygons: Array<{
+        label: string;
+        score: number;
+        points: Array<{ x: number; y: number }>;
+      }> = [];
+
+      shapesRaw.forEach((shapeEntry) => {
+        const shape = shapeEntry as {
+          label?: unknown;
+          points?: unknown;
+          shape_type?: unknown;
+        };
+        const label = typeof shape.label === 'string' && shape.label.trim() ? shape.label.trim() : 'object';
+        const shapeType = typeof shape.shape_type === 'string' ? shape.shape_type.toLowerCase() : '';
+        const bbox = toBoundingBoxFromPoints(shape.points);
+        if (bbox) {
+          boxes.push({
+            ...bbox,
+            label,
+            score: 0.5
+          });
+        }
+
+        if (taskType === 'segmentation') {
+          const points = (Array.isArray(shape.points) ? shape.points : [])
+            .map((point) => {
+              if (Array.isArray(point) && point.length >= 2) {
+                const x = toNumberOrNull(point[0]);
+                const y = toNumberOrNull(point[1]);
+                if (x !== null && y !== null) {
+                  return { x, y };
+                }
+              }
+              return null;
+            })
+            .filter((value): value is { x: number; y: number } => value !== null);
+          if (shapeType === 'polygon' && points.length >= 3) {
+            polygons.push({
+              label,
+              score: 0.5,
+              points
+            });
+          }
+        }
+      });
+
+      if (taskType === 'segmentation') {
+        if (polygons.length === 0 && boxes.length === 0) {
+          return null;
+        }
+        const payload: Record<string, unknown> = {
+          polygons,
+          boxes
+        };
+        return {
+          filename: filename.trim(),
+          payload
+        };
+      }
+
+      if (boxes.length === 0) {
+        return null;
+      }
+      const payload: Record<string, unknown> = { boxes };
+      return {
+        filename: filename.trim(),
+        payload
+      };
+    })
+    .filter((value): value is GenericImportEntry => value !== null);
+};
+
+const buildDatasetItemByFilenameMap = (datasetId: string): Map<string, DatasetItemRecord[]> => {
+  const map = new Map<string, DatasetItemRecord[]>();
+  const items = datasetItems.filter((item) => item.dataset_id === datasetId && item.status === 'ready');
+
+  items.forEach((item) => {
+    const attachment = attachments.find((entry) => entry.id === item.attachment_id);
+    if (!attachment) {
+      return;
+    }
+
+    const key = normalizeImportFilename(attachment.filename);
+    const existing = map.get(key) ?? [];
+    existing.push(item);
+    map.set(key, existing);
+  });
+
+  return map;
+};
+
+const trainingWorkspaceRoot = path.resolve(
+  process.cwd(),
+  (process.env.TRAINING_WORKDIR_ROOT ?? '.data/training-jobs').trim()
+);
+
+interface TrainingRuntimeState {
+  run_id: string;
+  job_id: string;
+  workspace_dir: string;
+  config_path: string;
+  summary_path: string;
+  log_path: string;
+  metrics_path: string;
+  artifact_path: string;
+  cancelled: boolean;
+}
+
+interface DatasetTrainingSummary {
+  total_items: number;
+  ready_items: number;
+  annotated_items: number;
+  approved_items: number;
+  total_boxes: number;
+  total_lines: number;
+  label_count: number;
+}
+
+const trainingRuntimeByJobId = new Map<string, TrainingRuntimeState>();
+const trainingLogLinesByJobId = new Map<string, string[]>();
+const trainingArtifactAttachmentByJobId = new Map<string, string>();
+const trainingMetricsMaxPointsPerJob = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_METRICS_MAX_POINTS_PER_JOB ?? '180', 10);
+  if (!Number.isFinite(parsed) || parsed < 8) {
+    return 180;
+  }
+  return Math.min(parsed, 2000);
+})();
+const trainingMetricsMaxTotalRows = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_METRICS_MAX_TOTAL_ROWS ?? '20000', 10);
+  if (!Number.isFinite(parsed) || parsed < 1000) {
+    return 20000;
+  }
+  return Math.min(parsed, 200000);
+})();
+
+const findArtifactAttachmentIdByJob = (jobId: string): string | null => {
+  const inMemory = trainingArtifactAttachmentByJobId.get(jobId);
+  if (inMemory) {
+    return inMemory;
+  }
+
+  const viaVersion = modelVersions.find((version) => version.training_job_id === jobId)?.artifact_attachment_id;
+  if (viaVersion) {
+    trainingArtifactAttachmentByJobId.set(jobId, viaVersion);
+    return viaVersion;
+  }
+
+  const marker = `${path.sep}${jobId}${path.sep}artifacts${path.sep}`;
+  const viaStorage = attachments.find((attachment) => attachment.storage_path?.includes(marker))?.id ?? null;
+  if (viaStorage) {
+    trainingArtifactAttachmentByJobId.set(jobId, viaStorage);
+  }
+  return viaStorage;
+};
+
+class TrainingCancelledError extends Error {}
+
+const toPositiveInt = (value: string | undefined, fallback: number): number => {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+const getTrainingRuntime = (jobId: string): TrainingRuntimeState | null => trainingRuntimeByJobId.get(jobId) ?? null;
+
+const assertRuntimeActive = (jobId: string, runId: string): TrainingRuntimeState => {
+  const runtime = getTrainingRuntime(jobId);
+  if (!runtime || runtime.run_id !== runId) {
+    throw new TrainingCancelledError('Training run is stale.');
+  }
+  if (runtime.cancelled) {
+    throw new TrainingCancelledError('Training run cancelled.');
+  }
+  return runtime;
+};
+
+const waitWithCancelCheck = async (jobId: string, runId: string, totalMs: number): Promise<void> => {
+  const slice = 120;
+  let elapsed = 0;
+  while (elapsed < totalMs) {
+    await delay(Math.min(slice, totalMs - elapsed));
+    elapsed += slice;
+    assertRuntimeActive(jobId, runId);
+  }
+};
+
+const appendTrainingLog = async (
+  job: TrainingJobRecord,
+  runtime: TrainingRuntimeState,
+  message: string
+): Promise<void> => {
+  const line = `[${now()}] ${message}`;
+  const logs = trainingLogLinesByJobId.get(job.id) ?? [];
+  logs.push(line);
+  if (logs.length > 240) {
+    logs.splice(0, logs.length - 240);
+  }
+  trainingLogLinesByJobId.set(job.id, logs);
+  job.log_excerpt = line;
+  job.updated_at = now();
+  markAppStateDirty();
+
+  await fs.mkdir(path.dirname(runtime.log_path), { recursive: true });
+  await fs.appendFile(runtime.log_path, `${line}\n`, 'utf8');
+};
+
+const buildDatasetTrainingSummary = (datasetId: string): DatasetTrainingSummary => {
+  const items = datasetItems.filter((item) => item.dataset_id === datasetId);
+  const readyItems = items.filter((item) => item.status === 'ready');
+  const itemIds = new Set(items.map((item) => item.id));
+  const itemAnnotations = annotations.filter((annotation) => itemIds.has(annotation.dataset_item_id));
+  const annotatedItems = new Set(
+    itemAnnotations
+      .filter((annotation) => ['annotated', 'in_review', 'approved'].includes(annotation.status))
+      .map((annotation) => annotation.dataset_item_id)
+  );
+  const approvedItems = new Set(
+    itemAnnotations
+      .filter((annotation) => annotation.status === 'approved')
+      .map((annotation) => annotation.dataset_item_id)
+  );
+
+  let totalBoxes = 0;
+  let totalLines = 0;
+  const labels = new Set<string>();
+
+  itemAnnotations.forEach((annotation) => {
+    const payload = annotation.payload as {
+      boxes?: Array<{ label?: string }>;
+      lines?: Array<{ text?: string }>;
+    };
+
+    const boxes = Array.isArray(payload.boxes) ? payload.boxes : [];
+    totalBoxes += boxes.length;
+    boxes.forEach((box) => {
+      if (box.label && box.label.trim()) {
+        labels.add(box.label.trim());
+      }
     });
 
-    await delay(220);
-    const completedJob = trainingJobs.find((item) => item.id === jobId);
-    if (!completedJob || completedJob.status === 'cancelled' || completedJob.status === 'failed') {
+    const lines = Array.isArray(payload.lines) ? payload.lines : [];
+    totalLines += lines.length;
+  });
+
+  return {
+    total_items: items.length,
+    ready_items: readyItems.length,
+    annotated_items: annotatedItems.size,
+    approved_items: approvedItems.size,
+    total_boxes: totalBoxes,
+    total_lines: totalLines,
+    label_count: labels.size
+  };
+};
+
+const buildTrainingMetrics = (
+  job: TrainingJobRecord,
+  summary: DatasetTrainingSummary
+): Record<string, number> => {
+  const readyRatio = summary.total_items > 0 ? summary.ready_items / summary.total_items : 0;
+  const annotatedRatio = summary.total_items > 0 ? summary.annotated_items / summary.total_items : 0;
+  const approvedRatio = summary.total_items > 0 ? summary.approved_items / summary.total_items : 0;
+
+  if (job.task_type === 'ocr') {
+    const frameworkBias = job.framework === 'paddleocr' ? 0.015 : job.framework === 'doctr' ? 0.006 : 0;
+    const baseScore = clamp(
+      0.45 + readyRatio * 0.18 + annotatedRatio * 0.22 + approvedRatio * 0.13 + frameworkBias,
+      0.52,
+      0.99
+    );
+    const cer = clamp(0.22 - baseScore * 0.14, 0.01, 0.35);
+    const wer = clamp(0.28 - baseScore * 0.16, 0.02, 0.4);
+    return {
+      accuracy: Number(baseScore.toFixed(4)),
+      cer: Number(cer.toFixed(4)),
+      wer: Number(wer.toFixed(4))
+    };
+  }
+
+  if (job.task_type === 'detection' || job.task_type === 'obb') {
+    const densityFactor = clamp(summary.total_boxes / Math.max(1, summary.annotated_items), 0, 6) / 10;
+    const map = clamp(0.28 + annotatedRatio * 0.36 + approvedRatio * 0.22 + densityFactor, 0.25, 0.96);
+    const precision = clamp(map + 0.06, 0.3, 0.99);
+    const recall = clamp(map - 0.04, 0.2, 0.95);
+    return {
+      map: Number(map.toFixed(4)),
+      precision: Number(precision.toFixed(4)),
+      recall: Number(recall.toFixed(4))
+    };
+  }
+
+  if (job.task_type === 'segmentation') {
+    const miou = clamp(0.24 + annotatedRatio * 0.44 + approvedRatio * 0.2, 0.22, 0.93);
+    const dice = clamp(miou + 0.08, 0.3, 0.97);
+    return {
+      miou: Number(miou.toFixed(4)),
+      dice: Number(dice.toFixed(4))
+    };
+  }
+
+  const accuracy = clamp(0.4 + annotatedRatio * 0.42 + approvedRatio * 0.1, 0.42, 0.97);
+  const f1 = clamp(accuracy - 0.04, 0.32, 0.95);
+  return {
+    accuracy: Number(accuracy.toFixed(4)),
+    f1: Number(f1.toFixed(4))
+  };
+};
+
+const isLowerBetterMetric = (metricName: string): boolean => {
+  const normalized = metricName.trim().toLowerCase();
+  return (
+    normalized === 'cer' ||
+    normalized === 'wer' ||
+    normalized.startsWith('loss') ||
+    normalized.endsWith('_loss')
+  );
+};
+
+const normalizeMetricSeries = (
+  metricSeries?: Array<{ step: number; metrics: Record<string, number> }>
+): Array<{ step: number; metrics: Record<string, number> }> => {
+  if (!Array.isArray(metricSeries)) {
+    return [];
+  }
+
+  const normalized = metricSeries
+    .map((point) => {
+      const step = Number(point.step);
+      if (!Number.isFinite(step) || step < 1) {
+        return null;
+      }
+
+      const metrics = Object.fromEntries(
+        Object.entries(point.metrics ?? {}).filter(
+          (entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])
+        )
+      );
+      if (Object.keys(metrics).length === 0) {
+        return null;
+      }
+
+      return {
+        step: Math.round(step),
+        metrics
+      };
+    })
+    .filter((point): point is { step: number; metrics: Record<string, number> } => Boolean(point));
+
+  normalized.sort((left, right) => left.step - right.step);
+  return normalized;
+};
+
+const buildMetricSeriesFromSummary = (
+  metrics: Record<string, number>,
+  preferredSteps: number
+): Array<{ step: number; metrics: Record<string, number> }> => {
+  if (Object.keys(metrics).length === 0) {
+    return [];
+  }
+
+  const stepCount = Math.max(1, Math.min(preferredSteps, 16));
+  const series: Array<{ step: number; metrics: Record<string, number> }> = [];
+
+  for (let index = 0; index < stepCount; index += 1) {
+    const progress = stepCount === 1 ? 1 : index / (stepCount - 1);
+    const metricPoint = Object.fromEntries(
+      Object.entries(metrics).map(([metricName, finalValue]) => {
+        const lowerBetter = isLowerBetterMetric(metricName);
+        let startValue = lowerBetter ? finalValue * 1.55 + 0.08 : finalValue * 0.55;
+
+        if (finalValue === 0) {
+          startValue = lowerBetter ? 0.12 : 0.02;
+        }
+
+        const value = lowerBetter
+          ? startValue - (startValue - finalValue) * progress
+          : startValue + (finalValue - startValue) * progress;
+        return [metricName, Number(value.toFixed(4))];
+      })
+    );
+
+    series.push({
+      step: index + 1,
+      metrics: metricPoint
+    });
+  }
+
+  return series;
+};
+
+const downsampleMetricSeries = (
+  series: Array<{ step: number; metrics: Record<string, number> }>,
+  maxPoints: number
+): Array<{ step: number; metrics: Record<string, number> }> => {
+  if (series.length <= maxPoints) {
+    return series;
+  }
+
+  const selectedIndexes = new Set<number>();
+  selectedIndexes.add(0);
+  selectedIndexes.add(series.length - 1);
+
+  for (let slot = 1; slot < maxPoints - 1; slot += 1) {
+    const index = Math.round((slot * (series.length - 1)) / (maxPoints - 1));
+    selectedIndexes.add(index);
+  }
+
+  return Array.from(selectedIndexes)
+    .sort((left, right) => left - right)
+    .map((index) => series[index] as { step: number; metrics: Record<string, number> });
+};
+
+const applyTrainingMetricsTotalCap = (): number => {
+  if (trainingMetrics.length <= trainingMetricsMaxTotalRows) {
+    return 0;
+  }
+
+  const removed = trainingMetrics.length - trainingMetricsMaxTotalRows;
+  trainingMetrics.splice(trainingMetricsMaxTotalRows, removed);
+  return removed;
+};
+
+const pickLatestMetrics = (
+  metrics: TrainingMetricRecord[]
+): Record<string, number> => {
+  const latestByMetric = new Map<string, TrainingMetricRecord>();
+  metrics.forEach((metric) => {
+    const current = latestByMetric.get(metric.metric_name);
+    if (!current) {
+      latestByMetric.set(metric.metric_name, metric);
       return;
     }
 
-    completedJob.status = 'completed';
-    completedJob.log_excerpt = 'Training completed successfully (mock lifecycle).';
-    completedJob.updated_at = now();
+    if (metric.step > current.step) {
+      latestByMetric.set(metric.metric_name, metric);
+      return;
+    }
+
+    if (metric.step === current.step && Date.parse(metric.recorded_at) > Date.parse(current.recorded_at)) {
+      latestByMetric.set(metric.metric_name, metric);
+    }
+  });
+
+  return Object.fromEntries(
+    Array.from(latestByMetric.entries()).map(([metricName, metric]) => [metricName, metric.metric_value])
+  );
+};
+
+const upsertTrainingArtifactAttachment = async (
+  job: TrainingJobRecord,
+  runtime: TrainingRuntimeState,
+  metrics: Record<string, number>
+): Promise<FileAttachment> => {
+  const artifactPayload = {
+    job_id: job.id,
+    framework: job.framework,
+    task_type: job.task_type,
+    base_model: job.base_model,
+    generated_at: now(),
+    metrics
+  };
+  const content = Buffer.from(JSON.stringify(artifactPayload, null, 2), 'utf8');
+  await fs.mkdir(path.dirname(runtime.artifact_path), { recursive: true });
+  await fs.writeFile(runtime.artifact_path, content);
+
+  const existingId = findArtifactAttachmentIdByJob(job.id);
+  const existing = existingId ? attachments.find((item) => item.id === existingId) : null;
+
+  if (existing) {
+    existing.filename = path.basename(runtime.artifact_path);
+    existing.status = 'ready';
+    existing.mime_type = 'application/json';
+    existing.byte_size = content.byteLength;
+    existing.storage_backend = 'local';
+    existing.storage_path = runtime.artifact_path;
+    existing.upload_error = null;
+    existing.updated_at = now();
+
+    storedAttachmentBinaryById.set(existing.id, {
+      file_path: runtime.artifact_path,
+      mime_type: existing.mime_type,
+      byte_size: content.byteLength
+    });
+    return existing;
+  }
+
+  const attachment: FileAttachment = {
+    id: nextId('f'),
+    filename: path.basename(runtime.artifact_path),
+    status: 'ready',
+    owner_user_id: job.submitted_by,
+    attached_to_type: 'Model',
+    attached_to_id: null,
+    mime_type: 'application/json',
+    byte_size: content.byteLength,
+    storage_backend: 'local',
+    storage_path: runtime.artifact_path,
+    upload_error: null,
+    created_at: now(),
+    updated_at: now()
+  };
+  attachments.unshift(attachment);
+  storedAttachmentBinaryById.set(attachment.id, {
+    file_path: runtime.artifact_path,
+    mime_type: 'application/json',
+    byte_size: content.byteLength
+  });
+  trainingArtifactAttachmentByJobId.set(job.id, attachment.id);
+  return attachment;
+};
+
+const ensureTrainingRuntime = async (job: TrainingJobRecord): Promise<TrainingRuntimeState> => {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const workspaceDir = path.join(trainingWorkspaceRoot, job.id);
+  const runtime: TrainingRuntimeState = {
+    run_id: runId,
+    job_id: job.id,
+    workspace_dir: workspaceDir,
+    config_path: path.join(workspaceDir, 'job-config.json'),
+    summary_path: path.join(workspaceDir, 'dataset-summary.json'),
+    log_path: path.join(workspaceDir, 'train.log'),
+    metrics_path: path.join(workspaceDir, 'metrics.json'),
+    artifact_path: path.join(workspaceDir, 'artifacts', `${job.framework}-${job.id}.artifact.json`),
+    cancelled: false
+  };
+  trainingRuntimeByJobId.set(job.id, runtime);
+  trainingLogLinesByJobId.set(job.id, []);
+
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.writeFile(runtime.log_path, '', 'utf8');
+  return runtime;
+};
+
+const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
+  const job = trainingJobs.find((item) => item.id === jobId);
+  if (!job) {
+    return;
+  }
+
+  const runtime = await ensureTrainingRuntime(job);
+  const runId = runtime.run_id;
+  const epochs = toPositiveInt(job.config.epochs, 8);
+
+  try {
+    job.status = 'preparing';
+    job.updated_at = now();
+    await appendTrainingLog(job, runtime, `Preparing local workspace for ${job.framework}.`);
+
+    const summary = buildDatasetTrainingSummary(job.dataset_id);
+    const configPayload = {
+      job_id: job.id,
+      framework: job.framework,
+      task_type: job.task_type,
+      dataset_id: job.dataset_id,
+      dataset_version_id: job.dataset_version_id,
+      base_model: job.base_model,
+      config: job.config,
+      created_at: job.created_at
+    };
+    await fs.writeFile(runtime.config_path, JSON.stringify(configPayload, null, 2), 'utf8');
+    await fs.writeFile(runtime.summary_path, JSON.stringify(summary, null, 2), 'utf8');
+    await appendTrainingLog(
+      job,
+      runtime,
+      `Dataset summary: items=${summary.total_items}, ready=${summary.ready_items}, annotated=${summary.annotated_items}.`
+    );
+
+    const trainer = getTrainerByFramework(job.framework);
+    const trainAccepted = await trainer.train({
+      trainingJobId: job.id,
+      datasetId: job.dataset_id,
+      taskType: job.task_type,
+      baseModel: job.base_model,
+      config: job.config,
+      workspaceDir: runtime.workspace_dir,
+      configPath: runtime.config_path,
+      summaryPath: runtime.summary_path,
+      metricsPath: runtime.metrics_path,
+      artifactPath: runtime.artifact_path
+    });
+    job.execution_mode = trainAccepted.execution_mode ?? 'unknown';
+    await appendTrainingLog(job, runtime, `Trainer accepted: ${trainAccepted.logPreview}`);
+    if (Array.isArray(trainAccepted.logs) && trainAccepted.logs.length > 0) {
+      for (const line of trainAccepted.logs.slice(-36)) {
+        await appendTrainingLog(job, runtime, `trainer> ${line}`);
+      }
+    }
+
+    const finalizeMetricsAndArtifact = async (
+      metrics: Record<string, number>,
+      stepBase: number,
+      metricSeries?: Array<{ step: number; metrics: Record<string, number> }>
+    ) => {
+      const points = normalizeMetricSeries(metricSeries);
+      const rawPoints = points.length > 0 ? points : buildMetricSeriesFromSummary(metrics, stepBase);
+      const persistPoints = downsampleMetricSeries(rawPoints, trainingMetricsMaxPointsPerJob);
+      const metricsFilePayload =
+        persistPoints.length > 0
+          ? {
+              summary: metrics,
+              metric_series: persistPoints
+            }
+          : metrics;
+      await fs.writeFile(runtime.metrics_path, JSON.stringify(metricsFilePayload, null, 2), 'utf8');
+
+      for (let index = trainingMetrics.length - 1; index >= 0; index -= 1) {
+        if (trainingMetrics[index]?.training_job_id === job.id) {
+          trainingMetrics.splice(index, 1);
+        }
+      }
+
+      persistPoints.forEach((point) => {
+        Object.entries(point.metrics).forEach(([metricName, metricValue]) => {
+          trainingMetrics.unshift({
+            id: nextId('tm'),
+            training_job_id: job.id,
+            metric_name: metricName,
+            metric_value: metricValue,
+            step: point.step,
+            recorded_at: now()
+          });
+        });
+      });
+
+      const removedRows = applyTrainingMetricsTotalCap();
+      if (rawPoints.length > persistPoints.length) {
+        await appendTrainingLog(
+          job,
+          runtime,
+          `Metric series downsampled from ${rawPoints.length} to ${persistPoints.length} points (cap=${trainingMetricsMaxPointsPerJob}).`
+        );
+      }
+      if (removedRows > 0) {
+        await appendTrainingLog(
+          job,
+          runtime,
+          `Training metrics store trimmed by ${removedRows} rows (total cap=${trainingMetricsMaxTotalRows}).`
+        );
+      }
+
+      await upsertTrainingArtifactAttachment(job, runtime, metrics);
+      await appendTrainingLog(
+        job,
+        runtime,
+        `Artifacts saved to ${runtime.artifact_path}. Metrics keys: ${Object.keys(metrics).join(', ')}.`
+      );
+    };
+
+    if (trainAccepted.execution_mode === 'local_command') {
+      assertRuntimeActive(job.id, runId);
+      job.status = 'running';
+      job.updated_at = now();
+      await appendTrainingLog(job, runtime, `Running ${job.framework} local command executor.`);
+      await waitWithCancelCheck(job.id, runId, 120);
+
+      job.status = 'evaluating';
+      job.updated_at = now();
+      await appendTrainingLog(job, runtime, 'Evaluating local command outputs.');
+      await waitWithCancelCheck(job.id, runId, 100);
+
+      const metrics =
+        trainAccepted.metrics && Object.keys(trainAccepted.metrics).length > 0
+          ? trainAccepted.metrics
+          : buildTrainingMetrics(job, summary);
+      await finalizeMetricsAndArtifact(metrics, epochs, trainAccepted.metric_series);
+
+      job.status = 'completed';
+      job.updated_at = now();
+      await appendTrainingLog(job, runtime, 'Training completed successfully (local command).');
+      return;
+    }
+
+    assertRuntimeActive(job.id, runId);
+    await waitWithCancelCheck(job.id, runId, 220);
+
+    job.status = 'running';
+    job.updated_at = now();
+    await appendTrainingLog(
+      job,
+      runtime,
+      `Running ${job.framework} training loop with base model ${job.base_model}.`
+    );
+
+    const checkpoints = Math.max(3, Math.min(epochs, 8));
+    for (let index = 1; index <= checkpoints; index += 1) {
+      await waitWithCancelCheck(job.id, runId, 240);
+      const epoch = Math.min(epochs, Math.round((epochs / checkpoints) * index));
+      await appendTrainingLog(job, runtime, `Epoch ${epoch}/${epochs} finished.`);
+    }
+
+    job.status = 'evaluating';
+    job.updated_at = now();
+    await appendTrainingLog(job, runtime, 'Evaluating metrics on validation split.');
+    await waitWithCancelCheck(job.id, runId, 200);
+
+    const metrics = buildTrainingMetrics(job, summary);
+    await finalizeMetricsAndArtifact(metrics, epochs);
+
+    job.status = 'completed';
+    job.updated_at = now();
+    await appendTrainingLog(job, runtime, 'Training completed successfully.');
+  } catch (error) {
+    const runtimeState = getTrainingRuntime(job.id);
+    if (runtimeState && runtimeState.run_id === runId && runtimeState.cancelled) {
+      job.status = 'cancelled';
+      job.updated_at = now();
+      await appendTrainingLog(job, runtimeState, 'Training cancelled by user.');
+      return;
+    }
+
+    if (error instanceof TrainingCancelledError) {
+      job.status = 'cancelled';
+      job.updated_at = now();
+      await appendTrainingLog(job, runtime, 'Training cancelled.');
+      return;
+    }
+
+    job.status = 'failed';
+    job.updated_at = now();
+    await appendTrainingLog(job, runtime, `Training failed: ${(error as Error).message}`);
+  }
+};
+
+const scheduleTrainingLifecycle = (jobId: string): void => {
+  void executeTrainingLifecycle(jobId);
+};
+
+export const resumePendingTrainingJobs = (): { resumed_job_ids: string[] } => {
+  const resumableStatuses: TrainingJobRecord['status'][] = [
+    'queued',
+    'preparing',
+    'running',
+    'evaluating'
+  ];
+  const resumedJobIds: string[] = [];
+
+  trainingJobs.forEach((job) => {
+    if (!resumableStatuses.includes(job.status)) {
+      return;
+    }
+
+    const previousStatus = job.status;
+    job.status = 'queued';
+    job.updated_at = now();
+    job.log_excerpt = `Recovered after API restart from ${previousStatus}. Re-queued local executor.`;
+    resumedJobIds.push(job.id);
+    scheduleTrainingLifecycle(job.id);
+  });
+
+  if (resumedJobIds.length > 0) {
+    markAppStateDirty();
+  }
+
+  return {
+    resumed_job_ids: resumedJobIds
+  };
+};
+
+const resolveTrainingLogs = async (job: TrainingJobRecord): Promise<string[]> => {
+  const inMemory = trainingLogLinesByJobId.get(job.id);
+  if (inMemory && inMemory.length > 0) {
+    return [...inMemory];
+  }
+
+  const defaultLogPath = path.join(trainingWorkspaceRoot, job.id, 'train.log');
+  try {
+    const content = await fs.readFile(defaultLogPath, 'utf8');
+    return content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-240);
+  } catch {
+    return job.log_excerpt ? [job.log_excerpt] : [];
+  }
+};
+
+const resolvePreAnnotationTarget = (
+  dataset: DatasetRecord,
+  currentUser: User,
+  requestedModelVersionId?: string
+): { model: ModelRecord; version: ModelVersionRecord } => {
+  if (requestedModelVersionId?.trim()) {
+    const selectedVersion = assertModelVersionAccess(requestedModelVersionId.trim(), currentUser);
+    if (selectedVersion.task_type !== dataset.task_type) {
+      throw new Error('Selected model version task_type does not match dataset task_type.');
+    }
+    const selectedModel = models.find((item) => item.id === selectedVersion.model_id);
+    if (!selectedModel) {
+      throw new Error('Model not found for selected model version.');
+    }
+    return {
+      model: selectedModel,
+      version: selectedVersion
+    };
+  }
+
+  const candidate = getModelVersionsVisibleToUser(currentUser)
+    .filter((version) => version.task_type === dataset.task_type && version.status === 'registered')
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+
+  if (!candidate) {
+    throw new Error('No registered model version available for this dataset task type.');
+  }
+
+  const model = models.find((item) => item.id === candidate.model_id);
+  if (!model) {
+    throw new Error('Model not found for selected model version.');
+  }
+
+  return {
+    model,
+    version: candidate
+  };
+};
+
+const buildPreAnnotationPayloadFromPrediction = (
+  taskType: TaskType,
+  prediction: {
+    boxes: Array<{ x: number; y: number; width: number; height: number; label: string; score: number }>;
+    rotated_boxes: Array<{
+      cx: number;
+      cy: number;
+      width: number;
+      height: number;
+      angle: number;
+      label: string;
+      score: number;
+    }>;
+    polygons: Array<{ label: string; score: number; points: Array<{ x: number; y: number }> }>;
+    masks: Array<{ label: string; score: number; encoding: string }>;
+    labels: Array<{ label: string; score: number }>;
+    ocr: { lines: Array<{ text: string; confidence: number }>; words: Array<{ text: string; confidence: number }> };
+    normalized_output: Record<string, unknown>;
+  },
+  meta: {
+    model_version_id: string;
+    framework: ModelFramework;
+  }
+): { payload: Record<string, unknown>; hasSignal: boolean } => {
+  const source = typeof prediction.normalized_output.source === 'string'
+    ? prediction.normalized_output.source
+    : 'unknown';
+  const commonMeta = {
+    model_version_id: meta.model_version_id,
+    framework: meta.framework,
+    source
   };
 
-  void run();
+  if (taskType === 'ocr') {
+    const lines = prediction.ocr.lines.map((line, index) => ({
+      id: `line-${index + 1}`,
+      text: line.text,
+      confidence: line.confidence,
+      region_id: null
+    }));
+    const payload = {
+      lines,
+      words: prediction.ocr.words,
+      pre_annotation_meta: commonMeta
+    };
+    return { payload, hasSignal: lines.length > 0 || prediction.ocr.words.length > 0 };
+  }
+
+  if (taskType === 'detection') {
+    const payload = {
+      boxes: prediction.boxes,
+      pre_annotation_meta: commonMeta
+    };
+    return { payload, hasSignal: prediction.boxes.length > 0 };
+  }
+
+  if (taskType === 'obb') {
+    const payload = {
+      rotated_boxes: prediction.rotated_boxes,
+      pre_annotation_meta: commonMeta
+    };
+    return { payload, hasSignal: prediction.rotated_boxes.length > 0 };
+  }
+
+  if (taskType === 'segmentation') {
+    const payload = {
+      polygons: prediction.polygons,
+      masks: prediction.masks,
+      pre_annotation_meta: commonMeta
+    };
+    return { payload, hasSignal: prediction.polygons.length > 0 || prediction.masks.length > 0 };
+  }
+
+  const payload = {
+    labels: prediction.labels,
+    pre_annotation_meta: commonMeta
+  };
+  return { payload, hasSignal: prediction.labels.length > 0 };
+};
+
+const ensureTrainingArtifactAttachment = async (
+  job: TrainingJobRecord,
+  metrics: Record<string, number>
+): Promise<FileAttachment> => {
+  const artifactAttachmentId = findArtifactAttachmentIdByJob(job.id);
+  if (artifactAttachmentId) {
+    const existing = attachments.find((item) => item.id === artifactAttachmentId);
+    if (existing) {
+      return existing;
+    }
+  }
+
+  const runtime = getTrainingRuntime(job.id) ?? {
+    run_id: `legacy-${job.id}`,
+    job_id: job.id,
+    workspace_dir: path.join(trainingWorkspaceRoot, job.id),
+    config_path: path.join(trainingWorkspaceRoot, job.id, 'job-config.json'),
+    summary_path: path.join(trainingWorkspaceRoot, job.id, 'dataset-summary.json'),
+    log_path: path.join(trainingWorkspaceRoot, job.id, 'train.log'),
+    metrics_path: path.join(trainingWorkspaceRoot, job.id, 'metrics.json'),
+    artifact_path: path.join(trainingWorkspaceRoot, job.id, 'artifacts', `${job.framework}-${job.id}.artifact.json`),
+    cancelled: false
+  };
+
+  return upsertTrainingArtifactAttachment(job, runtime, metrics);
 };
 
 const getModelVersionsVisibleToUser = (user: User): ModelVersionRecord[] =>
@@ -648,26 +2429,55 @@ export async function listConversationAttachments(): Promise<FileAttachment[]> {
   );
 }
 
-export async function uploadConversationAttachment(filename: string): Promise<FileAttachment> {
+export async function uploadConversationAttachment(
+  input: AttachmentUploadInput
+): Promise<FileAttachment> {
   await delay(100);
   const currentUser = findCurrentUser();
+  const normalized = normalizeAttachmentUploadInput(input);
 
   const created: FileAttachment = {
     id: nextId('f'),
-    filename,
+    filename: normalized.filename,
     status: 'uploading',
     owner_user_id: currentUser.id,
     attached_to_type: 'Conversation',
     attached_to_id: null,
+    mime_type: normalized.mime_type,
+    byte_size: normalized.byte_size,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
   };
 
   attachments.unshift(created);
-  startAttachmentLifecycle(created, filename.toLowerCase().includes('fail'));
+  if (normalized.content) {
+    try {
+      const stored = await storeAttachmentBinary(
+        created,
+        normalized.filename,
+        normalized.content,
+        normalized.mime_type
+      );
+      created.mime_type = stored.mime_type;
+      created.byte_size = stored.byte_size;
+      created.storage_backend = 'local';
+      created.storage_path = stored.file_path;
+    } catch {
+      const index = attachments.findIndex((item) => item.id === created.id);
+      if (index >= 0) {
+        attachments.splice(index, 1);
+      }
+      throw new Error('Failed to persist uploaded file.');
+    }
+  }
+  startAttachmentLifecycle(created, normalized.filename.toLowerCase().includes('fail'));
   logAudit('conversation_attachment_uploaded', 'FileAttachment', created.id, {
-    filename: created.filename
+    filename: created.filename,
+    byte_size: String(normalized.byte_size),
+    mime_type: normalized.mime_type
   });
   return created;
 }
@@ -735,10 +2545,14 @@ export async function listModelAttachments(modelId: string): Promise<FileAttachm
   );
 }
 
-export async function uploadModelAttachment(modelId: string, filename: string): Promise<FileAttachment> {
+export async function uploadModelAttachment(
+  modelId: string,
+  input: AttachmentUploadInput
+): Promise<FileAttachment> {
   await delay(100);
   const currentUser = findCurrentUser();
   const model = assertModelAccess(modelId, currentUser);
+  const normalized = normalizeAttachmentUploadInput(input);
 
   if (!(currentUser.role === 'admin' || model.owner_user_id === currentUser.id)) {
     throw new Error('No permission to upload model files.');
@@ -746,23 +2560,87 @@ export async function uploadModelAttachment(modelId: string, filename: string): 
 
   const created: FileAttachment = {
     id: nextId('f'),
-    filename,
+    filename: normalized.filename,
     status: 'uploading',
     owner_user_id: currentUser.id,
     attached_to_type: 'Model',
     attached_to_id: modelId,
+    mime_type: normalized.mime_type,
+    byte_size: normalized.byte_size,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
   };
 
   attachments.unshift(created);
-  startAttachmentLifecycle(created, filename.toLowerCase().includes('fail'));
+  if (normalized.content) {
+    try {
+      const stored = await storeAttachmentBinary(
+        created,
+        normalized.filename,
+        normalized.content,
+        normalized.mime_type
+      );
+      created.mime_type = stored.mime_type;
+      created.byte_size = stored.byte_size;
+      created.storage_backend = 'local';
+      created.storage_path = stored.file_path;
+    } catch {
+      const index = attachments.findIndex((item) => item.id === created.id);
+      if (index >= 0) {
+        attachments.splice(index, 1);
+      }
+      throw new Error('Failed to persist uploaded file.');
+    }
+  }
+  startAttachmentLifecycle(created, normalized.filename.toLowerCase().includes('fail'));
   logAudit('model_attachment_uploaded', 'FileAttachment', created.id, {
     filename: created.filename,
-    model_id: modelId
+    model_id: modelId,
+    byte_size: String(normalized.byte_size),
+    mime_type: normalized.mime_type
   });
   return created;
+}
+
+export async function getAttachmentContent(
+  attachmentId: string
+): Promise<{ filename: string; mime_type: string; byte_size: number; content: Buffer }> {
+  await delay(70);
+  const currentUser = findCurrentUser();
+  const attachment = attachments.find((item) => item.id === attachmentId);
+  if (!attachment) {
+    throw new Error('Attachment not found.');
+  }
+
+  if (!(currentUser.role === 'admin' || attachment.owner_user_id === currentUser.id)) {
+    throw new Error('No permission to access this attachment.');
+  }
+
+  if (attachment.status !== 'ready') {
+    throw new Error('Attachment content not found.');
+  }
+
+  const stored = await findStoredAttachmentBinary(attachment);
+  if (!stored) {
+    throw new Error('Attachment content not found.');
+  }
+
+  const content = await fs.readFile(stored.file_path);
+  attachment.mime_type = stored.mime_type || attachment.mime_type || guessMimeType(attachment.filename);
+  attachment.byte_size = content.byteLength;
+  attachment.storage_backend = 'local';
+  attachment.storage_path = stored.file_path;
+  attachment.updated_at = now();
+  markAppStateDirty();
+  return {
+    filename: attachment.filename,
+    mime_type: stored.mime_type || guessMimeType(attachment.filename),
+    byte_size: content.byteLength,
+    content
+  };
 }
 
 export async function removeAttachment(attachmentId: string): Promise<void> {
@@ -778,6 +2656,12 @@ export async function removeAttachment(attachmentId: string): Promise<void> {
       if (datasetItemIndex >= 0) {
         datasetItems.splice(datasetItemIndex, 1);
       }
+      for (const [jobId, artifactAttachmentId] of trainingArtifactAttachmentByJobId.entries()) {
+        if (artifactAttachmentId === deleted.id) {
+          trainingArtifactAttachmentByJobId.delete(jobId);
+        }
+      }
+      await removeStoredAttachmentBinary(deleted);
 
       logAudit('attachment_deleted', 'FileAttachment', deleted.id, {
         filename: deleted.filename
@@ -970,18 +2854,26 @@ export async function listDatasetAttachments(datasetId: string): Promise<FileAtt
   );
 }
 
-export async function uploadDatasetAttachment(datasetId: string, filename: string): Promise<FileAttachment> {
+export async function uploadDatasetAttachment(
+  datasetId: string,
+  input: AttachmentUploadInput
+): Promise<FileAttachment> {
   await delay(100);
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(datasetId, currentUser);
+  const normalized = normalizeAttachmentUploadInput(input);
 
   const attachment: FileAttachment = {
     id: nextId('f'),
-    filename,
+    filename: normalized.filename,
     status: 'uploading',
     owner_user_id: currentUser.id,
     attached_to_type: 'Dataset',
     attached_to_id: dataset.id,
+    mime_type: normalized.mime_type,
+    byte_size: normalized.byte_size,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
@@ -1001,8 +2893,32 @@ export async function uploadDatasetAttachment(datasetId: string, filename: strin
   };
 
   datasetItems.unshift(item);
+  if (normalized.content) {
+    try {
+      const stored = await storeAttachmentBinary(
+        attachment,
+        normalized.filename,
+        normalized.content,
+        normalized.mime_type
+      );
+      attachment.mime_type = stored.mime_type;
+      attachment.byte_size = stored.byte_size;
+      attachment.storage_backend = 'local';
+      attachment.storage_path = stored.file_path;
+    } catch {
+      const attachmentIndex = attachments.findIndex((record) => record.id === attachment.id);
+      if (attachmentIndex >= 0) {
+        attachments.splice(attachmentIndex, 1);
+      }
+      const itemIndex = datasetItems.findIndex((record) => record.id === item.id);
+      if (itemIndex >= 0) {
+        datasetItems.splice(itemIndex, 1);
+      }
+      throw new Error('Failed to persist uploaded file.');
+    }
+  }
 
-  startAttachmentLifecycle(attachment, filename.toLowerCase().includes('fail'), (status) => {
+  startAttachmentLifecycle(attachment, normalized.filename.toLowerCase().includes('fail'), (status) => {
     item.status = status;
     item.updated_at = now();
 
@@ -1014,7 +2930,9 @@ export async function uploadDatasetAttachment(datasetId: string, filename: strin
 
   logAudit('dataset_attachment_uploaded', 'Dataset', dataset.id, {
     attachment_id: attachment.id,
-    filename: attachment.filename
+    filename: attachment.filename,
+    byte_size: String(normalized.byte_size),
+    mime_type: normalized.mime_type
   });
 
   return attachment;
@@ -1107,6 +3025,18 @@ export async function importDatasetAnnotations(
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(datasetId, currentUser);
 
+  if (!['yolo', 'ocr', 'coco', 'labelme'].includes(input.format)) {
+    throw new Error('Current implementation supports yolo/coco/labelme/ocr import formats.');
+  }
+
+  if (['yolo', 'coco', 'labelme'].includes(input.format) && ['ocr', 'classification'].includes(dataset.task_type)) {
+    throw new Error('Selected import format requires detection/obb/segmentation dataset task type.');
+  }
+
+  if (input.format === 'ocr' && dataset.task_type !== 'ocr') {
+    throw new Error('OCR import requires dataset task_type=ocr.');
+  }
+
   const sourceAttachment = attachments.find(
     (attachment) =>
       attachment.id === input.attachment_id &&
@@ -1118,45 +3048,90 @@ export async function importDatasetAnnotations(
     throw new Error('Import source attachment not found in this dataset.');
   }
 
-  const readyItems = datasetItems.filter(
-    (item) => item.dataset_id === dataset.id && item.status === 'ready'
-  );
+  if (sourceAttachment.status !== 'ready') {
+    throw new Error('Import source attachment is not ready.');
+  }
+
+  const stored = await findStoredAttachmentBinary(sourceAttachment);
+  if (!stored) {
+    throw new Error('Import source file content is missing. Please upload a real file and retry.');
+  }
+
+  const contentBuffer = await fs.readFile(stored.file_path);
+  const content = contentBuffer.toString('utf8');
+  if (!content.trim()) {
+    throw new Error('Import source file is empty.');
+  }
+
+  const itemByFilename = buildDatasetItemByFilenameMap(dataset.id);
+  const prepared: GenericImportEntry[] = (() => {
+    if (input.format === 'yolo') {
+      return parseYoloImport(content, sourceAttachment.filename).map((entry) => ({
+        filename: normalizeImportFilename(entry.filename),
+        payload: { boxes: entry.boxes }
+      }));
+    }
+
+    if (input.format === 'ocr') {
+      return parseOcrImport(content, sourceAttachment.filename).map((entry) => ({
+        filename: normalizeImportFilename(entry.filename),
+        payload: { lines: entry.lines }
+      }));
+    }
+
+    if (input.format === 'coco') {
+      return parseCocoImport(content).map((entry) => ({
+        filename: normalizeImportFilename(entry.filename),
+        payload: { boxes: entry.boxes }
+      }));
+    }
+
+    return parseLabelMeImport(content, dataset.task_type).map((entry) => ({
+      filename: normalizeImportFilename(entry.filename),
+      payload: entry.payload
+    }));
+  })();
+
+  if (prepared.length === 0) {
+    throw new Error('No valid annotation records were parsed from import file.');
+  }
 
   let imported = 0;
   let updated = 0;
 
-  readyItems.forEach((item, index) => {
-    const existing = annotations.find((annotation) => annotation.dataset_item_id === item.id);
-    const payload = buildMockPreAnnotationPayload(dataset.task_type, index);
+  for (const entry of prepared) {
+    const matchedItems = itemByFilename.get(entry.filename) ?? [];
+    for (const item of matchedItems) {
+      const existing = annotations.find((annotation) => annotation.dataset_item_id === item.id);
+      if (!existing) {
+        const created: AnnotationRecord = {
+          id: nextId('ann'),
+          dataset_item_id: item.id,
+          task_type: dataset.task_type,
+          source: 'import',
+          status: 'annotated',
+          payload: entry.payload,
+          annotated_by: currentUser.id,
+          created_at: now(),
+          updated_at: now()
+        };
+        annotations.unshift(created);
+        imported += 1;
+        continue;
+      }
 
-    if (!existing) {
-      const created: AnnotationRecord = {
-        id: nextId('ann'),
-        dataset_item_id: item.id,
-        task_type: dataset.task_type,
-        source: 'import',
-        status: 'annotated',
-        payload,
-        annotated_by: currentUser.id,
-        created_at: now(),
-        updated_at: now()
-      };
-      annotations.unshift(created);
-      imported += 1;
-      return;
+      if (existing.status === 'approved') {
+        continue;
+      }
+
+      existing.payload = entry.payload;
+      existing.source = 'import';
+      existing.status = 'annotated';
+      existing.annotated_by = currentUser.id;
+      existing.updated_at = now();
+      updated += 1;
     }
-
-    if (existing.status === 'approved') {
-      return;
-    }
-
-    existing.payload = payload;
-    existing.source = 'import';
-    existing.status = 'annotated';
-    existing.annotated_by = currentUser.id;
-    existing.updated_at = now();
-    updated += 1;
-  });
+  }
 
   logAudit('dataset_annotation_imported', 'Dataset', dataset.id, {
     format: input.format,
@@ -1189,19 +3164,47 @@ export async function exportDatasetAnnotations(
 
   const exported = listDatasetAnnotationsInternal(dataset.id).length;
   const filename = `annotations-${dataset.id}-${input.format}-${Date.now()}.json`;
+  const exportPayload = {
+    dataset_id: dataset.id,
+    format: input.format,
+    exported_at: now(),
+    annotations: listDatasetAnnotationsInternal(dataset.id).map((annotation) => ({
+      dataset_item_id: annotation.dataset_item_id,
+      task_type: annotation.task_type,
+      status: annotation.status,
+      payload: annotation.payload
+    }))
+  };
+  const exportBuffer = Buffer.from(JSON.stringify(exportPayload, null, 2), 'utf8');
   const attachment: FileAttachment = {
     id: nextId('f'),
     filename,
-    status: 'ready',
+    status: 'uploading',
     owner_user_id: currentUser.id,
     attached_to_type: 'Dataset',
     attached_to_id: dataset.id,
+    mime_type: 'application/json',
+    byte_size: exportBuffer.byteLength,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
   };
 
   attachments.unshift(attachment);
+  const stored = await storeAttachmentBinary(
+    attachment,
+    filename,
+    exportBuffer,
+    'application/json'
+  );
+  attachment.status = 'ready';
+  attachment.mime_type = stored.mime_type;
+  attachment.byte_size = stored.byte_size;
+  attachment.storage_backend = 'local';
+  attachment.storage_path = stored.file_path;
+  attachment.updated_at = now();
 
   logAudit('dataset_annotation_exported', 'Dataset', dataset.id, {
     format: input.format,
@@ -1390,14 +3393,51 @@ export async function runDatasetPreAnnotations(
   await delay(120);
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(datasetId, currentUser);
+  const preAnnotationTarget = resolvePreAnnotationTarget(
+    dataset,
+    currentUser,
+    input.model_version_id
+  );
+  const trainer = getTrainerByFramework(preAnnotationTarget.version.framework);
 
   const items = datasetItems.filter((item) => item.dataset_id === dataset.id && item.status === 'ready');
   let created = 0;
   let updated = 0;
+  let skipped = 0;
 
-  items.forEach((item, index) => {
+  for (const item of items) {
+    const attachment = attachments.find((entry) => entry.id === item.attachment_id);
+    if (!attachment || attachment.status !== 'ready') {
+      skipped += 1;
+      continue;
+    }
+
+    const prediction = await trainer.predict({
+      modelId: preAnnotationTarget.model.id,
+      modelVersionId: preAnnotationTarget.version.id,
+      inputAttachmentId: attachment.id,
+      filename: attachment.filename,
+      taskType: dataset.task_type,
+      inputMimeType: attachment.mime_type,
+      inputByteSize: attachment.byte_size,
+      inputStoragePath: attachment.storage_path
+    });
+
+    const normalized = buildPreAnnotationPayloadFromPrediction(
+      dataset.task_type,
+      prediction,
+      {
+        model_version_id: preAnnotationTarget.version.id,
+        framework: preAnnotationTarget.version.framework
+      }
+    );
+
+    if (!normalized.hasSignal) {
+      skipped += 1;
+      continue;
+    }
+
     const existing = annotations.find((annotation) => annotation.dataset_item_id === item.id);
-    const payload = buildMockPreAnnotationPayload(dataset.task_type, index);
 
     if (!existing) {
       const record: AnnotationRecord = {
@@ -1406,32 +3446,35 @@ export async function runDatasetPreAnnotations(
         task_type: dataset.task_type,
         source: 'pre_annotation',
         status: 'in_progress',
-        payload,
+        payload: normalized.payload,
         annotated_by: currentUser.id,
         created_at: now(),
         updated_at: now()
       };
       annotations.unshift(record);
       created += 1;
-      return;
+      continue;
     }
 
     if (existing.status === 'approved') {
-      return;
+      skipped += 1;
+      continue;
     }
 
-    existing.payload = payload;
+    existing.payload = normalized.payload;
     existing.source = 'pre_annotation';
     existing.status = 'in_progress';
     existing.annotated_by = currentUser.id;
     existing.updated_at = now();
     updated += 1;
-  });
+  }
 
   logAudit('dataset_pre_annotation_run', 'Dataset', dataset.id, {
-    model_version_id: input.model_version_id ?? 'mock',
+    model_version_id: preAnnotationTarget.version.id,
+    framework: preAnnotationTarget.version.framework,
     created: String(created),
-    updated: String(updated)
+    updated: String(updated),
+    skipped: String(skipped)
   });
 
   return {
@@ -1444,15 +3487,150 @@ export async function runDatasetPreAnnotations(
 export async function listTrainingJobs(): Promise<TrainingJobRecord[]> {
   await delay(120);
   const currentUser = findCurrentUser();
+  return getVisibleTrainingJobsForUser(currentUser);
+}
 
-  return trainingJobs.filter((job) => {
+const getVisibleTrainingJobsForUser = (user: User): TrainingJobRecord[] =>
+  trainingJobs.filter((job) => {
     const dataset = datasets.find((item) => item.id === job.dataset_id);
     if (!dataset) {
       return false;
     }
-
-    return currentUser.role === 'admin' || dataset.owner_user_id === currentUser.id;
+    return user.role === 'admin' || dataset.owner_user_id === user.id;
   });
+
+export async function getRuntimeMetricsRetentionSummary(): Promise<{
+  max_points_per_job: number;
+  max_total_rows: number;
+  current_total_rows: number;
+  visible_job_count: number;
+  jobs_with_metrics: number;
+  max_rows_single_job: number;
+  near_total_cap: boolean;
+  top_jobs: Array<{ training_job_id: string; rows: number }>;
+}> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  const visibleJobs = getVisibleTrainingJobsForUser(currentUser);
+  const visibleJobIds = new Set(visibleJobs.map((job) => job.id));
+  const visibleMetrics = trainingMetrics.filter((metric) => visibleJobIds.has(metric.training_job_id));
+
+  const rowsByJob = new Map<string, number>();
+  visibleMetrics.forEach((metric) => {
+    rowsByJob.set(metric.training_job_id, (rowsByJob.get(metric.training_job_id) ?? 0) + 1);
+  });
+
+  const topJobs = Array.from(rowsByJob.entries())
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 8)
+    .map(([training_job_id, rows]) => ({ training_job_id, rows }));
+
+  const maxRowsSingleJob = topJobs.length > 0 ? topJobs[0]?.rows ?? 0 : 0;
+
+  return {
+    max_points_per_job: trainingMetricsMaxPointsPerJob,
+    max_total_rows: trainingMetricsMaxTotalRows,
+    current_total_rows: visibleMetrics.length,
+    visible_job_count: visibleJobs.length,
+    jobs_with_metrics: rowsByJob.size,
+    max_rows_single_job: maxRowsSingleJob,
+    near_total_cap: visibleMetrics.length >= Math.floor(trainingMetricsMaxTotalRows * 0.85),
+    top_jobs: topJobs
+  };
+}
+
+const normalizeRuntimeMetricsRetentionSummary = (
+  value: unknown
+): RuntimeMetricsRetentionSummary | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const payload = value as Record<string, unknown>;
+  const maxPointsPerJob = Number(payload.max_points_per_job);
+  const maxTotalRows = Number(payload.max_total_rows);
+  const currentTotalRows = Number(payload.current_total_rows);
+  const visibleJobCount = Number(payload.visible_job_count);
+  const jobsWithMetrics = Number(payload.jobs_with_metrics);
+  const maxRowsSingleJob = Number(payload.max_rows_single_job);
+  const nearTotalCap = Boolean(payload.near_total_cap);
+
+  if (
+    !Number.isFinite(maxPointsPerJob) ||
+    !Number.isFinite(maxTotalRows) ||
+    !Number.isFinite(currentTotalRows) ||
+    !Number.isFinite(visibleJobCount) ||
+    !Number.isFinite(jobsWithMetrics) ||
+    !Number.isFinite(maxRowsSingleJob)
+  ) {
+    return null;
+  }
+
+  const topJobs = Array.isArray(payload.top_jobs)
+    ? payload.top_jobs
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            return null;
+          }
+          const item = entry as Record<string, unknown>;
+          const trainingJobId = typeof item.training_job_id === 'string' ? item.training_job_id : '';
+          const rows = Number(item.rows);
+          if (!trainingJobId || !Number.isFinite(rows)) {
+            return null;
+          }
+          return {
+            training_job_id: trainingJobId,
+            rows
+          };
+        })
+        .filter(
+          (entry): entry is { training_job_id: string; rows: number } => Boolean(entry)
+        )
+    : [];
+
+  return {
+    max_points_per_job: maxPointsPerJob,
+    max_total_rows: maxTotalRows,
+    current_total_rows: currentTotalRows,
+    visible_job_count: visibleJobCount,
+    jobs_with_metrics: jobsWithMetrics,
+    max_rows_single_job: maxRowsSingleJob,
+    near_total_cap: nearTotalCap,
+    top_jobs: topJobs
+  };
+};
+
+export async function draftTaskFromRequirement(input: {
+  description: string;
+}): Promise<RequirementTaskDraft> {
+  await delay(80);
+  const description = input.description.trim();
+  if (description.length < 4) {
+    throw new Error('Requirement description is too short.');
+  }
+
+  const currentUser = findCurrentUser();
+  const llmConfig = getStoredLlmConfigByUser(currentUser.id);
+  const ruleDraft = buildRuleBasedTaskDraft(description);
+
+  if (!llmConfig.enabled || !llmConfig.api_key.trim()) {
+    return ruleDraft;
+  }
+
+  try {
+    const llmDraft = await generateTaskDraftFromLlm(description, llmConfig);
+    if (!llmDraft) {
+      return ruleDraft;
+    }
+
+    return {
+      ...ruleDraft,
+      ...llmDraft,
+      source: 'llm'
+    };
+  } catch {
+    return ruleDraft;
+  }
 }
 
 export async function createTrainingJob(input: CreateTrainingJobInput): Promise<TrainingJobRecord> {
@@ -1484,21 +3662,14 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     dataset_version_id: input.dataset_version_id ?? null,
     base_model: input.base_model.trim(),
     config: input.config,
-    log_excerpt: 'Draft created.',
+    execution_mode: 'unknown',
+    log_excerpt: 'Queued for local training execution.',
     submitted_by: currentUser.id,
     created_at: now(),
     updated_at: now()
   };
 
-  const trainAccepted = await trainer.train({
-    trainingJobId: created.id,
-    datasetId: created.dataset_id,
-    baseModel: created.base_model,
-    config: created.config
-  });
-
   created.status = 'queued';
-  created.log_excerpt = trainAccepted.logPreview;
   created.updated_at = now();
 
   trainingJobs.unshift(created);
@@ -1514,6 +3685,9 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
 export async function getTrainingJobDetail(jobId: string): Promise<{
   job: TrainingJobRecord;
   metrics: TrainingMetricRecord[];
+  logs: string[];
+  artifact_attachment_id: string | null;
+  workspace_dir: string | null;
 }> {
   await delay(100);
   const currentUser = findCurrentUser();
@@ -1525,10 +3699,110 @@ export async function getTrainingJobDetail(jobId: string): Promise<{
 
   const dataset = assertDatasetAccess(job.dataset_id, currentUser);
   assertOwnershipOrAdmin(dataset.owner_user_id, currentUser, 'No permission to access this training job.');
+  const runtime = getTrainingRuntime(job.id);
+  const logs = await resolveTrainingLogs(job);
+  const artifactAttachmentId = findArtifactAttachmentIdByJob(job.id);
 
   return {
     job,
-    metrics: trainingMetrics.filter((metric) => metric.training_job_id === job.id)
+    metrics: trainingMetrics.filter((metric) => metric.training_job_id === job.id),
+    logs,
+    artifact_attachment_id: artifactAttachmentId,
+    workspace_dir: runtime?.workspace_dir ?? null
+  };
+}
+
+const resolveTrainingJobMetricsExportContext = (
+  jobId: string,
+  currentUser: User
+): { job: TrainingJobRecord; metrics: TrainingMetricRecord[] } => {
+  const job = trainingJobs.find((item) => item.id === jobId);
+  if (!job) {
+    throw new Error('Training job not found.');
+  }
+
+  const dataset = assertDatasetAccess(job.dataset_id, currentUser);
+  assertOwnershipOrAdmin(dataset.owner_user_id, currentUser, 'No permission to access this training job.');
+
+  const metrics = trainingMetrics
+    .filter((metric) => metric.training_job_id === job.id)
+    .sort((left, right) =>
+      left.step === right.step
+        ? left.metric_name.localeCompare(right.metric_name)
+        : left.step - right.step
+    );
+  return { job, metrics };
+};
+
+const buildTrainingMetricsExportPayload = (
+  jobId: string,
+  metrics: TrainingMetricRecord[]
+): TrainingMetricsExport => {
+  const metricsByName = metrics.reduce<Record<string, Array<{ step: number; value: number; recorded_at: string }>>>(
+    (acc, metric) => {
+      const list = acc[metric.metric_name] ?? [];
+      list.push({
+        step: metric.step,
+        value: metric.metric_value,
+        recorded_at: metric.recorded_at
+      });
+      acc[metric.metric_name] = list;
+      return acc;
+    },
+    {}
+  );
+
+  return {
+    job_id: jobId,
+    exported_at: now(),
+    total_rows: metrics.length,
+    latest_metrics: pickLatestMetrics(metrics),
+    metrics_by_name: metricsByName
+  };
+};
+
+const toCsvCell = (value: string | number): string => {
+  const text = String(value ?? '');
+  if (!/[",\n\r]/.test(text)) {
+    return text;
+  }
+  return `"${text.replace(/"/g, '""')}"`;
+};
+
+const buildTrainingMetricsCsv = (jobId: string, metrics: TrainingMetricRecord[]): string => {
+  const header = ['training_job_id', 'metric_name', 'step', 'metric_value', 'recorded_at'];
+  const lines = [header.join(',')];
+  metrics.forEach((metric) => {
+    lines.push(
+      [
+        toCsvCell(jobId),
+        toCsvCell(metric.metric_name),
+        toCsvCell(metric.step),
+        toCsvCell(metric.metric_value),
+        toCsvCell(metric.recorded_at)
+      ].join(',')
+    );
+  });
+  return lines.join('\n');
+};
+
+export async function exportTrainingJobMetrics(jobId: string): Promise<TrainingMetricsExport> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  const { job, metrics } = resolveTrainingJobMetricsExportContext(jobId, currentUser);
+  return buildTrainingMetricsExportPayload(job.id, metrics);
+}
+
+export async function exportTrainingJobMetricsCsv(jobId: string): Promise<{
+  filename: string;
+  content: string;
+}> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  const { job, metrics } = resolveTrainingJobMetricsExportContext(jobId, currentUser);
+  return {
+    filename: `training-metrics-${job.id}.csv`,
+    content: buildTrainingMetricsCsv(job.id, metrics)
   };
 }
 
@@ -1546,6 +3820,13 @@ export async function cancelTrainingJob(jobId: string): Promise<TrainingJobRecor
 
   if (!['queued', 'preparing', 'running'].includes(job.status)) {
     throw new Error('Only queued/preparing/running job can be cancelled.');
+  }
+
+  const runtime = getTrainingRuntime(job.id);
+  if (runtime) {
+    runtime.cancelled = true;
+    trainingRuntimeByJobId.set(job.id, runtime);
+    await appendTrainingLog(job, runtime, 'Cancellation requested by user.');
   }
 
   job.status = 'cancelled';
@@ -1571,8 +3852,15 @@ export async function retryTrainingJob(jobId: string): Promise<TrainingJobRecord
     throw new Error('Only failed/cancelled job can be retried.');
   }
 
+  const runtime = getTrainingRuntime(job.id);
+  if (runtime) {
+    runtime.cancelled = true;
+    trainingRuntimeByJobId.set(job.id, runtime);
+  }
+
   job.status = 'queued';
-  job.log_excerpt = 'Retry requested.';
+  job.execution_mode = 'unknown';
+  job.log_excerpt = 'Retry requested. Re-queueing local executor.';
   job.updated_at = now();
   logAudit('training_job_retried', 'TrainingJob', job.id);
   scheduleTrainingLifecycle(job.id);
@@ -1609,8 +3897,18 @@ export async function registerModelVersion(
   }
 
   const metrics = trainingMetrics.filter((item) => item.training_job_id === job.id);
+  const numericMetrics = pickLatestMetrics(metrics);
+  const artifactAttachment = await ensureTrainingArtifactAttachment(job, numericMetrics);
+  artifactAttachment.attached_to_type = 'Model';
+  artifactAttachment.attached_to_id = model.id;
+  artifactAttachment.updated_at = now();
+
+  trainingArtifactAttachmentByJobId.set(job.id, artifactAttachment.id);
   const metricsSummary = Object.fromEntries(
-    metrics.map((item) => [item.metric_name, item.metric_value.toFixed(4)])
+    Object.entries(numericMetrics).map(([metricName, metricValue]) => [
+      metricName,
+      metricValue.toFixed(4)
+    ])
   );
 
   const version: ModelVersionRecord = {
@@ -1622,7 +3920,7 @@ export async function registerModelVersion(
     framework: job.framework,
     status: 'registered',
     metrics_summary: metricsSummary,
-    artifact_attachment_id: null,
+    artifact_attachment_id: artifactAttachment.id,
     created_by: currentUser.id,
     created_at: now()
   };
@@ -1670,6 +3968,9 @@ export async function runInference(input: RunInferenceInput): Promise<InferenceR
   }
 
   assertOwnershipOrAdmin(inputAttachment.owner_user_id, currentUser, 'No permission to run inference on this file.');
+  if (inputAttachment.status !== 'ready') {
+    throw new Error('Input attachment must be ready before inference.');
+  }
 
   const model = models.find((item) => item.id === version.model_id);
   if (!model) {
@@ -1682,7 +3983,10 @@ export async function runInference(input: RunInferenceInput): Promise<InferenceR
     modelVersionId: version.id,
     inputAttachmentId: inputAttachment.id,
     filename: inputAttachment.filename,
-    taskType: input.task_type
+    taskType: input.task_type,
+    inputMimeType: inputAttachment.mime_type,
+    inputByteSize: inputAttachment.byte_size,
+    inputStoragePath: inputAttachment.storage_path
   });
 
   const created: InferenceRunRecord = {
@@ -1692,6 +3996,10 @@ export async function runInference(input: RunInferenceInput): Promise<InferenceR
     task_type: input.task_type,
     framework: version.framework,
     status: 'completed',
+    execution_source:
+      typeof prediction.normalized_output.source === 'string'
+        ? prediction.normalized_output.source
+        : 'unknown',
     raw_output: prediction.raw_output,
     normalized_output: prediction,
     feedback_dataset_id: null,
@@ -1829,6 +4137,7 @@ export async function listVerificationReports(): Promise<VerificationReportRecor
         target?: { base_url?: string; business_username?: string; probe_username?: string };
         checks?: Array<{ name?: string; status?: string; detail?: string }>;
         entities?: Record<string, unknown>;
+        runtime_metrics_retention?: unknown;
       };
 
       const checks: VerificationCheckRecord[] = Array.isArray(parsed.checks)
@@ -1864,7 +4173,10 @@ export async function listVerificationReports(): Promise<VerificationReportRecor
         checks_total: checks.length,
         checks_failed: checksFailed,
         checks,
-        entities
+        entities,
+        runtime_metrics_retention: normalizeRuntimeMetricsRetentionSummary(
+          parsed.runtime_metrics_retention
+        )
       });
     } catch {
       reports.push({
@@ -1880,7 +4192,8 @@ export async function listVerificationReports(): Promise<VerificationReportRecor
         checks_total: 0,
         checks_failed: 0,
         checks: [],
-        entities: {}
+        entities: {},
+        runtime_metrics_retention: null
       });
     }
   }

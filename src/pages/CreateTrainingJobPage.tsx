@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { DatasetRecord } from '../../shared/domain';
+import type { DatasetRecord, RequirementTaskDraft } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
@@ -24,6 +24,9 @@ export default function CreateTrainingJobPage() {
   const [learningRate, setLearningRate] = useState('0.001');
   const [warmupRatio, setWarmupRatio] = useState('0.1');
   const [weightDecay, setWeightDecay] = useState('0.0001');
+  const [requirementDescription, setRequirementDescription] = useState('');
+  const [drafting, setDrafting] = useState(false);
+  const [taskDraft, setTaskDraft] = useState<RequirementTaskDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
@@ -122,10 +125,71 @@ export default function CreateTrainingJobPage() {
     }
   };
 
+  const createTaskDraft = async () => {
+    if (!requirementDescription.trim()) {
+      setFeedback({ variant: 'error', text: t('Please describe your requirement first.') });
+      return;
+    }
+
+    setDrafting(true);
+    setFeedback(null);
+
+    try {
+      const draft = await api.draftTaskFromRequirement(requirementDescription.trim());
+      setTaskDraft(draft);
+      setTaskType(draft.task_type);
+      setFramework(draft.recommended_framework);
+      if (!name.trim()) {
+        setName(`${draft.task_type}-job-${Date.now().toString().slice(-6)}`);
+      }
+      setFeedback({
+        variant: 'success',
+        text: t('Task draft generated from requirement ({source}).', { source: draft.source })
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   return (
     <div className="stack page-width">
       <h2>{t('Create Training Job')}</h2>
       <StepIndicator steps={steps} current={step} />
+
+      <section className="card stack">
+        <h3>{t('Requirement to Task Draft')}</h3>
+        <label>
+          {t('Requirement Description')}
+          <textarea
+            value={requirementDescription}
+            onChange={(event) => setRequirementDescription(event.target.value)}
+            rows={4}
+            placeholder={t('Example: detect train body defects or read train serial number')}
+          />
+        </label>
+        <button onClick={createTaskDraft} disabled={drafting || loading}>
+          {drafting ? t('Generating...') : t('Generate Task Draft')}
+        </button>
+        {taskDraft ? (
+          <div className="stack tight">
+            <small className="muted">
+              {t('task_type')}: {t(taskDraft.task_type)} · {t('Framework')}: {t(taskDraft.recommended_framework)} ·{' '}
+              {t('annotation')}: {taskDraft.annotation_type}
+            </small>
+            <small className="muted">
+              {t('labels')}: {taskDraft.label_hints.join(', ') || t('N/A')}
+            </small>
+            <small className="muted">
+              {t('dataset suggestions')}: {taskDraft.dataset_suggestions.join('；') || t('N/A')}
+            </small>
+            <small className="muted">
+              {t('rationale')}: {taskDraft.rationale}
+            </small>
+          </div>
+        ) : null}
+      </section>
 
       {loading ? (
         <StateBlock variant="loading" title={t('Preparing')} description={t('Loading dataset options.')} />
@@ -204,7 +268,7 @@ export default function CreateTrainingJobPage() {
             <input
               value={datasetVersionId}
               onChange={(event) => setDatasetVersionId(event.target.value)}
-              placeholder="dv-1"
+              placeholder={t('for example: dv-1')}
             />
           </label>
           <label>

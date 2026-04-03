@@ -43,6 +43,7 @@ export type TrainingJobStatus =
   | 'completed'
   | 'failed'
   | 'cancelled';
+export type TrainingExecutionMode = 'simulated' | 'local_command' | 'unknown';
 
 export type ModelVersionStatus = 'registered' | 'deprecated';
 export type InferenceRunStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -103,6 +104,10 @@ export interface FileAttachment {
   owner_user_id: string;
   attached_to_type: AttachmentTargetType;
   attached_to_id: string | null;
+  mime_type: string | null;
+  byte_size: number | null;
+  storage_backend: 'local' | null;
+  storage_path: string | null;
   upload_error: string | null;
   created_at: string;
   updated_at: string;
@@ -151,6 +156,7 @@ export interface VerificationReportRecord {
   checks_failed: number;
   checks: VerificationCheckRecord[];
   entities: Record<string, string>;
+  runtime_metrics_retention?: RuntimeMetricsRetentionSummary | null;
 }
 
 export interface DatasetRecord {
@@ -231,6 +237,7 @@ export interface TrainingJobRecord {
   dataset_version_id: string | null;
   base_model: string;
   config: Record<string, string>;
+  execution_mode: TrainingExecutionMode;
   log_excerpt: string;
   submitted_by: string;
   created_at: string;
@@ -244,6 +251,21 @@ export interface TrainingMetricRecord {
   metric_value: number;
   step: number;
   recorded_at: string;
+}
+
+export interface TrainingMetricsExport {
+  job_id: string;
+  exported_at: string;
+  total_rows: number;
+  latest_metrics: Record<string, number>;
+  metrics_by_name: Record<
+    string,
+    Array<{
+      step: number;
+      value: number;
+      recorded_at: string;
+    }>
+  >;
 }
 
 export interface ModelVersionRecord {
@@ -336,6 +358,7 @@ export interface InferenceRunRecord {
   task_type: TaskType;
   framework: ModelFramework;
   status: InferenceRunStatus;
+  execution_source: string;
   raw_output: Record<string, unknown>;
   normalized_output: UnifiedInferenceOutput;
   feedback_dataset_id: string | null;
@@ -353,6 +376,22 @@ export interface RuntimeConnectivityRecord {
   error_kind: RuntimeConnectivityErrorKind;
   checked_at: string;
   message: string;
+}
+
+export interface RuntimeMetricsRetentionItem {
+  training_job_id: string;
+  rows: number;
+}
+
+export interface RuntimeMetricsRetentionSummary {
+  max_points_per_job: number;
+  max_total_rows: number;
+  current_total_rows: number;
+  visible_job_count: number;
+  jobs_with_metrics: number;
+  max_rows_single_job: number;
+  near_total_cap: boolean;
+  top_jobs: RuntimeMetricsRetentionItem[];
 }
 
 export interface RegisterInput {
@@ -464,4 +503,14 @@ export interface SubmitApprovalInput {
   model_id: string;
   review_notes?: string;
   parameter_snapshot: Record<string, string>;
+}
+
+export interface RequirementTaskDraft {
+  task_type: TaskType;
+  recommended_framework: ModelFramework;
+  annotation_type: 'ocr_text' | 'bbox' | 'rotated_bbox' | 'polygon' | 'classification';
+  label_hints: string[];
+  dataset_suggestions: string[];
+  rationale: string;
+  source: 'rule' | 'llm';
 }

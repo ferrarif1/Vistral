@@ -19,18 +19,43 @@ import type {
   ModelVersionRecord,
   TrainingJobRecord,
   TrainingMetricRecord,
+  TrainingExecutionMode,
   User
 } from '../../shared/domain';
 
 const now = () => new Date().toISOString();
 
 const llmConfigDataFile = path.resolve(process.cwd(), '.data', 'llm-config.enc.json');
+const appStateDataFile = path.resolve(
+  process.cwd(),
+  (process.env.APP_STATE_STORE_PATH ?? '.data/app-state.json').trim()
+);
 const devFallbackSecret = 'vistral-dev-only-secret-change-me';
 
 interface EncryptedPayload {
   iv: string;
   tag: string;
   data: string;
+}
+
+interface AppStatePayload {
+  users: User[];
+  userPasswordHashes: Record<string, string>;
+  models: ModelRecord[];
+  conversations: ConversationRecord[];
+  messages: MessageRecord[];
+  attachments: FileAttachment[];
+  datasets: DatasetRecord[];
+  datasetItems: DatasetItemRecord[];
+  annotations: AnnotationRecord[];
+  annotationReviews: AnnotationReviewRecord[];
+  datasetVersions: DatasetVersionRecord[];
+  trainingJobs: TrainingJobRecord[];
+  trainingMetrics: TrainingMetricRecord[];
+  modelVersions: ModelVersionRecord[];
+  inferenceRuns: InferenceRunRecord[];
+  approvalRequests: ApprovalRequest[];
+  auditLogs: AuditLogRecord[];
 }
 
 const deriveKey = (): Buffer => {
@@ -141,6 +166,10 @@ export const attachments: FileAttachment[] = [
     owner_user_id: 'u-1',
     attached_to_type: 'Conversation',
     attached_to_id: null,
+    mime_type: 'image/jpeg',
+    byte_size: null,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
@@ -152,6 +181,10 @@ export const attachments: FileAttachment[] = [
     owner_user_id: 'u-1',
     attached_to_type: 'Conversation',
     attached_to_id: null,
+    mime_type: 'application/pdf',
+    byte_size: null,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
@@ -163,6 +196,10 @@ export const attachments: FileAttachment[] = [
     owner_user_id: 'u-1',
     attached_to_type: 'Dataset',
     attached_to_id: 'd-1',
+    mime_type: 'image/jpeg',
+    byte_size: null,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
@@ -174,6 +211,10 @@ export const attachments: FileAttachment[] = [
     owner_user_id: 'u-1',
     attached_to_type: 'Dataset',
     attached_to_id: 'd-2',
+    mime_type: 'image/jpeg',
+    byte_size: null,
+    storage_backend: null,
+    storage_path: null,
     upload_error: null,
     created_at: now(),
     updated_at: now()
@@ -323,6 +364,7 @@ export const trainingJobs: TrainingJobRecord[] = [
       batch_size: '16',
       learning_rate: '0.001'
     },
+    execution_mode: 'simulated',
     log_excerpt: 'Training completed with stable CER improvement.',
     submitted_by: 'u-1',
     created_at: now(),
@@ -342,6 +384,7 @@ export const trainingJobs: TrainingJobRecord[] = [
       batch_size: '8',
       learning_rate: '0.0005'
     },
+    execution_mode: 'simulated',
     log_excerpt: 'Epoch 12/80, improving recall.',
     submitted_by: 'u-1',
     created_at: now(),
@@ -419,6 +462,169 @@ export const approvalRequests: ApprovalRequest[] = [];
 export const auditLogs: AuditLogRecord[] = [];
 
 export const llmConfigsByUser: Record<string, LlmConfig> = {};
+
+let appStateDirty = false;
+let appStatePersistPromise: Promise<void> | null = null;
+
+const replaceArray = <T>(target: T[], incoming: T[]): void => {
+  target.splice(0, target.length, ...incoming);
+};
+
+const normalizeAttachment = (entry: FileAttachment): FileAttachment => ({
+  ...entry,
+  mime_type: entry.mime_type ?? null,
+  byte_size: typeof entry.byte_size === 'number' ? entry.byte_size : null,
+  storage_backend: entry.storage_backend ?? null,
+  storage_path: entry.storage_path ?? null
+});
+
+const normalizeTrainingExecutionMode = (
+  value: unknown
+): TrainingExecutionMode => {
+  if (value === 'simulated' || value === 'local_command' || value === 'unknown') {
+    return value;
+  }
+  return 'unknown';
+};
+
+const normalizeTrainingJob = (entry: TrainingJobRecord): TrainingJobRecord => ({
+  ...entry,
+  execution_mode: normalizeTrainingExecutionMode(entry.execution_mode)
+});
+
+const normalizeInferenceRun = (entry: InferenceRunRecord): InferenceRunRecord => ({
+  ...entry,
+  execution_source:
+    typeof entry.execution_source === 'string' && entry.execution_source.trim()
+      ? entry.execution_source
+      : typeof entry.normalized_output?.normalized_output?.source === 'string' &&
+          entry.normalized_output.normalized_output.source.trim()
+        ? entry.normalized_output.normalized_output.source
+        : 'unknown'
+});
+
+const buildAppStatePayload = (): AppStatePayload => ({
+  users: [...users],
+  userPasswordHashes: { ...userPasswordHashes },
+  models: [...models],
+  conversations: [...conversations],
+  messages: [...messages],
+  attachments: attachments.map(normalizeAttachment),
+  datasets: [...datasets],
+  datasetItems: [...datasetItems],
+  annotations: [...annotations],
+  annotationReviews: [...annotationReviews],
+  datasetVersions: [...datasetVersions],
+  trainingJobs: trainingJobs.map(normalizeTrainingJob),
+  trainingMetrics: [...trainingMetrics],
+  modelVersions: [...modelVersions],
+  inferenceRuns: inferenceRuns.map(normalizeInferenceRun),
+  approvalRequests: [...approvalRequests],
+  auditLogs: [...auditLogs]
+});
+
+export const markAppStateDirty = (): void => {
+  appStateDirty = true;
+};
+
+export const loadPersistedAppState = async (): Promise<void> => {
+  try {
+    const raw = await fs.readFile(appStateDataFile, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<AppStatePayload>;
+
+    if (Array.isArray(parsed.users)) {
+      replaceArray(users, parsed.users);
+    }
+    if (parsed.userPasswordHashes && typeof parsed.userPasswordHashes === 'object') {
+      Object.keys(userPasswordHashes).forEach((key) => {
+        delete userPasswordHashes[key];
+      });
+      Object.assign(userPasswordHashes, parsed.userPasswordHashes);
+    }
+    if (Array.isArray(parsed.models)) {
+      replaceArray(models, parsed.models);
+    }
+    if (Array.isArray(parsed.conversations)) {
+      replaceArray(conversations, parsed.conversations);
+    }
+    if (Array.isArray(parsed.messages)) {
+      replaceArray(messages, parsed.messages);
+    }
+    if (Array.isArray(parsed.attachments)) {
+      replaceArray(attachments, parsed.attachments.map(normalizeAttachment));
+    }
+    if (Array.isArray(parsed.datasets)) {
+      replaceArray(datasets, parsed.datasets);
+    }
+    if (Array.isArray(parsed.datasetItems)) {
+      replaceArray(datasetItems, parsed.datasetItems);
+    }
+    if (Array.isArray(parsed.annotations)) {
+      replaceArray(annotations, parsed.annotations);
+    }
+    if (Array.isArray(parsed.annotationReviews)) {
+      replaceArray(annotationReviews, parsed.annotationReviews);
+    }
+    if (Array.isArray(parsed.datasetVersions)) {
+      replaceArray(datasetVersions, parsed.datasetVersions);
+    }
+    if (Array.isArray(parsed.trainingJobs)) {
+      replaceArray(trainingJobs, parsed.trainingJobs.map(normalizeTrainingJob));
+    }
+    if (Array.isArray(parsed.trainingMetrics)) {
+      replaceArray(trainingMetrics, parsed.trainingMetrics);
+    }
+    if (Array.isArray(parsed.modelVersions)) {
+      replaceArray(modelVersions, parsed.modelVersions);
+    }
+    if (Array.isArray(parsed.inferenceRuns)) {
+      replaceArray(inferenceRuns, parsed.inferenceRuns.map(normalizeInferenceRun));
+    }
+    if (Array.isArray(parsed.approvalRequests)) {
+      replaceArray(approvalRequests, parsed.approvalRequests);
+    }
+    if (Array.isArray(parsed.auditLogs)) {
+      replaceArray(auditLogs, parsed.auditLogs);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      return;
+    }
+    console.warn('[vistral-api] Failed to load app state store:', (error as Error).message);
+  } finally {
+    appStateDirty = false;
+  }
+};
+
+export const persistAppState = async (force = false): Promise<void> => {
+  if (!force && !appStateDirty) {
+    return;
+  }
+
+  if (appStatePersistPromise) {
+    await appStatePersistPromise;
+    if (!force && !appStateDirty) {
+      return;
+    }
+  }
+
+  appStatePersistPromise = (async () => {
+    const payload = buildAppStatePayload();
+    const targetDir = path.dirname(appStateDataFile);
+    const tempFile = `${appStateDataFile}.tmp`;
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(tempFile, JSON.stringify(payload, null, 2), 'utf8');
+    await fs.rename(tempFile, appStateDataFile);
+    appStateDirty = false;
+  })();
+
+  try {
+    await appStatePersistPromise;
+  } finally {
+    appStatePersistPromise = null;
+  }
+};
 
 export const loadPersistedLlmConfigs = async (): Promise<void> => {
   try {

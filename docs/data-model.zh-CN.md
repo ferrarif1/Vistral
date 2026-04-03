@@ -35,6 +35,14 @@
 - 会话与消息维持对话上下文
 - 附件状态：`uploading | processing | ready | error`
 
+### TrainingJob / InferenceRun（补充）
+- `training_jobs.execution_mode`：
+  - `simulated`
+  - `local_command`
+  - `unknown`
+- `inference_runs.execution_source`：
+  - 保存当前推理来源标记（例如 `yolo_runtime`、`yolo_local_command`、`mock_fallback`）
+
 ### ApprovalRequest
 - 审批请求主体（提交人、审核人、状态、时间戳）
 

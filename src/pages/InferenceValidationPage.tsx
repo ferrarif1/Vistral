@@ -24,7 +24,7 @@ export default function InferenceValidationPage() {
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
   const [selectedAttachmentId, setSelectedAttachmentId] = useState('');
-  const [feedbackReason, setFeedbackReason] = useState('missed_detection');
+  const [feedbackReason, setFeedbackReason] = useState('missing_detection');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
@@ -155,6 +155,13 @@ export default function InferenceValidationPage() {
     await loadAll();
   };
 
+  const uploadInputFiles = async (files: File[]) => {
+    for (const file of files) {
+      await api.uploadConversationFile(file);
+    }
+    await loadAll();
+  };
+
   const removeInput = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
     await loadAll();
@@ -235,6 +242,8 @@ export default function InferenceValidationPage() {
         title={t('Inference Inputs')}
         items={attachments}
         onUpload={uploadInput}
+        onUploadFiles={uploadInputFiles}
+        contentUrlBuilder={api.attachmentContentUrl}
         onDelete={removeInput}
         emptyDescription={t('Upload image inputs for inference validation.')}
         uploadButtonLabel={t('Upload Inference Input')}
@@ -251,7 +260,7 @@ export default function InferenceValidationPage() {
           >
             {versions.map((version) => (
               <option key={version.id} value={version.id}>
-                {version.version_name} ({version.task_type} / {version.framework})
+                {version.version_name} ({t(version.task_type)} / {t(version.framework)})
               </option>
             ))}
           </select>
@@ -294,17 +303,17 @@ export default function InferenceValidationPage() {
 
             return (
               <article key={framework} className="card stack tight">
-                <strong>{framework}</strong>
+                <strong>{t(framework)}</strong>
                 <span className="chip">
                   {source === 'reachable'
-                    ? 'reachable'
+                    ? t('reachable')
                     : source === 'unreachable'
-                      ? 'unreachable'
-                      : 'not configured'}
+                      ? t('unreachable')
+                      : t('not configured')}
                 </span>
-                <small className="muted">endpoint: {item?.endpoint ?? 'not set'}</small>
-                <small className="muted">error kind: {item?.error_kind ?? 'none'}</small>
-                <small className="muted">{item?.message ?? 'No check data yet.'}</small>
+                <small className="muted">{t('endpoint')}: {item?.endpoint ?? t('not set')}</small>
+                <small className="muted">{t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}</small>
+                <small className="muted">{item?.message ?? t('No check data yet.')}</small>
                 {isReady ? (
                   <StateBlock
                     variant="success"
@@ -341,17 +350,25 @@ export default function InferenceValidationPage() {
               <select value={selectedRun.id} onChange={(event) => setSelectedRunId(event.target.value)}>
                 {runs.map((run) => (
                   <option key={run.id} value={run.id}>
-                    {run.id} ({run.task_type} / {run.framework} / {run.status})
+                    {run.id} ({t(run.task_type)} / {t(run.framework)} / {t(run.status)})
                   </option>
                 ))}
               </select>
             </label>
             <small className="muted">
-              run {selectedRun.id} · task {selectedRun.task_type} · framework {selectedRun.framework}
+              {t('Run {runId} · Task {task} · Framework {framework}', {
+                runId: selectedRun.id,
+                task: t(selectedRun.task_type),
+                framework: t(selectedRun.framework)
+              })}
             </small>
             <div className="row gap wrap">
-              <span className="chip">runtime source: {runtimeInsight?.source ?? 'unknown'}</span>
-              <span className="chip">runtime framework: {runtimeInsight?.runtimeFramework ?? 'unknown'}</span>
+              <span className="chip">
+                {t('runtime source')}: {runtimeInsight?.source ? t(runtimeInsight.source) : t('unknown')}
+              </span>
+              <span className="chip">
+                {t('runtime framework')}: {runtimeInsight?.runtimeFramework ? t(runtimeInsight.runtimeFramework) : t('unknown')}
+              </span>
             </div>
             {runtimeInsight?.isFallback ? (
               <StateBlock
@@ -391,7 +408,7 @@ export default function InferenceValidationPage() {
           >
             {datasets.map((dataset) => (
               <option key={dataset.id} value={dataset.id}>
-                {dataset.name} ({dataset.task_type})
+                {dataset.name} ({t(dataset.task_type)})
               </option>
             ))}
           </select>
@@ -401,7 +418,7 @@ export default function InferenceValidationPage() {
           <input
             value={feedbackReason}
             onChange={(event) => setFeedbackReason(event.target.value)}
-            placeholder="missed_detection"
+            placeholder={t('for example: missing_detection')}
           />
         </label>
         <button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>

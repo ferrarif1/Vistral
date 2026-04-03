@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent as ReactChangeEvent,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -431,7 +432,6 @@ export default function ConversationPage() {
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
   const [editingConversationTitle, setEditingConversationTitle] = useState('');
   const [input, setInput] = useState('');
-  const [uploadFilename, setUploadFilename] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -442,6 +442,7 @@ export default function ConversationPage() {
   const [longPressingConversationId, setLongPressingConversationId] = useState<string | null>(null);
   const [draggingPinnedConversationId, setDraggingPinnedConversationId] = useState<string | null>(null);
   const [dragOverPinnedConversationId, setDragOverPinnedConversationId] = useState<string | null>(null);
+  const [attachmentListExpanded, setAttachmentListExpanded] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [llmView, setLlmView] = useState<LlmConfigView | null>(null);
@@ -449,6 +450,8 @@ export default function ConversationPage() {
   const hiddenHistoryIdsRef = useRef<string[]>(hiddenHistoryIds);
   const pinnedHistoryOrderRef = useRef<string[]>(pinnedHistoryOrder);
   const historyMenuButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const uploadFileInputRef = useRef<HTMLInputElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const historyLongPressTimerRef = useRef<number | null>(null);
   const historyLongPressTriggeredRef = useRef(false);
 
@@ -566,10 +569,42 @@ export default function ConversationPage() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    if (attachments.length === 0 && attachmentListExpanded) {
+      setAttachmentListExpanded(false);
+    }
+  }, [attachments.length, attachmentListExpanded]);
+
+  useEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = '0px';
+    const nextHeight = Math.max(44, Math.min(textarea.scrollHeight, 180));
+    textarea.style.height = `${nextHeight}px`;
+  }, [input]);
+
   const readyAttachmentIds = useMemo(
     () => attachments.filter((item) => item.status === 'ready').map((item) => item.id),
     [attachments]
   );
+
+  const attachmentStatusSummary = useMemo(() => {
+    const summary = {
+      uploading: 0,
+      processing: 0,
+      ready: 0,
+      error: 0
+    };
+
+    attachments.forEach((item) => {
+      summary[item.status] += 1;
+    });
+
+    return summary;
+  }, [attachments]);
 
   const llmModeText = useMemo(() => {
     if (!llmView || !llmView.enabled || !llmView.has_api_key) {
@@ -594,20 +629,40 @@ export default function ConversationPage() {
     });
   }, []);
 
-  const uploadAttachment = async () => {
-    const finalName = uploadFilename.trim() || `file-${Date.now()}.bin`;
+  const uploadAttachmentsByFiles = useCallback(async (files: File[]) => {
+    const targets = files.filter((item) => item && item.name.trim().length > 0);
+    if (targets.length === 0) {
+      return;
+    }
+
     setUploading(true);
     setError('');
 
     try {
-      await api.uploadConversationAttachment(finalName);
-      setUploadFilename('');
+      for (const file of targets) {
+        await api.uploadConversationFile(file);
+      }
       await refreshAttachments();
+      setNotice(t('{count} file(s) queued for upload.', { count: targets.length }));
     } catch (uploadError) {
       setError((uploadError as Error).message);
     } finally {
       setUploading(false);
     }
+  }, [refreshAttachments, t]);
+
+  const openUploadFileDialog = () => {
+    uploadFileInputRef.current?.click();
+  };
+
+  const onUploadFileInputChange = async (event: ReactChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files ? Array.from(event.target.files) : [];
+    event.target.value = '';
+    if (selected.length === 0) {
+      return;
+    }
+
+    await uploadAttachmentsByFiles(selected);
   };
 
   const removeAttachment = async (attachmentId: string) => {
@@ -622,6 +677,10 @@ export default function ConversationPage() {
     } finally {
       setUploading(false);
     }
+  };
+
+  const openAttachment = (attachmentId: string) => {
+    window.open(api.attachmentContentUrl(attachmentId), '_blank', 'noopener,noreferrer');
   };
 
   const sendWithContent = async (content: string) => {
@@ -1167,10 +1226,6 @@ export default function ConversationPage() {
     }
   };
 
-  const applyQuickPrompt = (prompt: string) => {
-    setInput(prompt);
-  };
-
   const copyMessage = async (content: string) => {
     const copied = await copyToClipboard(content);
     setNotice(
@@ -1187,6 +1242,7 @@ export default function ConversationPage() {
 
   const messageCount = messages.length;
   const hasActiveConversation = Boolean(conversation);
+  const canSend = !sending && !loading && models.length > 0 && Boolean(input.trim());
   const historyGroupLabels: Record<HistoryGroupKey, string> = useMemo(
     () => ({
       pinned: t('Pinned'),
@@ -1202,8 +1258,13 @@ export default function ConversationPage() {
     [t]
   );
   const conversationInfo = conversation
-    ? `${renderConversationTitle(conversation.title)} (${conversation.id})`
+    ? renderConversationTitle(conversation.title)
     : t('not started');
+  const attachmentSummaryTitle = `${t('Attachments:')} ${attachments.length} · ${t('ready')}: ${attachmentStatusSummary.ready}${
+    attachmentStatusSummary.uploading > 0 ? ` · ${t('uploading')}: ${attachmentStatusSummary.uploading}` : ''
+  }${attachmentStatusSummary.processing > 0 ? ` · ${t('processing')}: ${attachmentStatusSummary.processing}` : ''}${
+    attachmentStatusSummary.error > 0 ? ` · ${t('error')}: ${attachmentStatusSummary.error}` : ''
+  }`;
 
   return (
     <section className="chat-workspace-page">
@@ -1460,35 +1521,31 @@ export default function ConversationPage() {
 
       <div className="chat-main-area">
         <header className="chat-main-header">
-          <div className="row between align-center gap wrap">
-            <div className="row gap align-center wrap">
-              <label className="chat-model-select">
-                <span>{t('Model')}</span>
-                <select
-                  value={selectedModelId}
-                  onChange={(event) => setSelectedModelId(event.target.value)}
-                  disabled={sending || hasActiveConversation}
-                >
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.name} ({model.status})
-                    </option>
-                  ))}
-                </select>
-              </label>
+          <div className="chat-main-header-row">
+            <label className="chat-model-select">
+              <span>{t('Model')}</span>
+              <select
+                value={selectedModelId}
+                onChange={(event) => setSelectedModelId(event.target.value)}
+                disabled={sending || hasActiveConversation}
+              >
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name} ({model.status})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="chat-main-header-meta">
               <div className="chat-mode-chip">{t('Mode:')} {llmModeText}</div>
-            </div>
-            <div className="chat-header-user-badge">
-              <div className="chat-user-avatar">{getInitials(currentUser?.username)}</div>
-              <span>{currentUser?.username || t('guest')}</span>
+              <small className="chat-main-header-summary muted">
+                {t('Conversation {conversationInfo} · messages {messageCount}', {
+                  conversationInfo,
+                  messageCount
+                })}
+              </small>
             </div>
           </div>
-          <small className="muted">
-            {t('Conversation {conversationInfo} · messages {messageCount}', {
-              conversationInfo,
-              messageCount
-            })}
-          </small>
         </header>
 
         <section className="chat-message-stage">
@@ -1568,86 +1625,116 @@ export default function ConversationPage() {
         </section>
 
         <footer className="chat-composer-wrap">
-          <section className="chat-attachment-strip">
-            <div className="row between align-center">
-              <small className="muted">{t('Attachments in current context')}</small>
-              <small className="muted">{t('Ready: {count}', { count: readyAttachmentIds.length })}</small>
-            </div>
-
-            <div className="chat-upload-row">
+          <section className="chat-composer-panel chat-simple-composer-panel">
+            <div className="chat-simple-composer-row">
+              <button
+                type="button"
+                className="chat-attachment-plus-btn chat-simple-plus-btn"
+                onClick={openUploadFileDialog}
+                disabled={uploading || sending}
+                aria-label={t('Upload')}
+              >
+                +
+              </button>
+              <textarea
+                className="chat-simple-input"
+                ref={composerTextareaRef}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={onTextareaKeyDown}
+                rows={1}
+                placeholder={t('Message Vistral...')}
+                disabled={sending || loading || models.length === 0}
+              />
+              <button
+                className={`chat-simple-send-btn${canSend ? ' active' : ''}`}
+                onClick={send}
+                disabled={!canSend}
+                aria-label={hasActiveConversation ? t('Send') : t('Start')}
+                title={hasActiveConversation ? t('Send') : t('Start')}
+              >
+                ↑
+              </button>
               <input
-                value={uploadFilename}
-                onChange={(event) => setUploadFilename(event.target.value)}
-                placeholder={t('Enter filename, for example: invoice-sample.jpg')}
+                ref={uploadFileInputRef}
+                type="file"
+                multiple
+                className="chat-hidden-file-input"
+                onChange={onUploadFileInputChange}
                 disabled={uploading || sending}
               />
-              <button onClick={uploadAttachment} disabled={uploading || sending}>
-                {uploading ? t('Working...') : t('Attach')}
-              </button>
             </div>
-
-            {attachments.length === 0 ? (
-              <small className="muted">{t('No files yet. Uploaded files stay visible and deletable here.')}</small>
-            ) : (
-              <ul className="chat-attachment-list">
-                {attachments.map((item) => (
-                  <li key={item.id} className="chat-attachment-item">
-                    <span className="chat-attachment-name" title={item.filename}>
-                      {item.filename}
-                    </span>
-                    <StatusBadge status={item.status} />
-                    <button
-                      className="small-btn chat-delete-btn"
-                      onClick={() => removeAttachment(item.id)}
-                      disabled={uploading || sending}
-                    >
-                      {t('Delete')}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="chat-composer-panel">
-            <div className="chat-composer-toolbar row gap wrap">
-              <button
-                className="small-btn chat-action-btn"
-                onClick={() => applyQuickPrompt('Please summarize the ready attachments.')}
-                disabled={sending || loading || models.length === 0}
-              >
-                {t('Summarize files')}
-              </button>
-              <button
-                className="small-btn chat-action-btn"
-                onClick={() => applyQuickPrompt('Please extract key visual findings with confidence scores.')}
-                disabled={sending || loading || models.length === 0}
-              >
-                {t('Key findings')}
-              </button>
-              <button
-                className="small-btn chat-action-btn"
-                onClick={() => applyQuickPrompt('Please provide a concise risk assessment and next steps.')}
-                disabled={sending || loading || models.length === 0}
-              >
-                {t('Risk assessment')}
-              </button>
-            </div>
-
-            <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={onTextareaKeyDown}
-              rows={3}
-              placeholder={t('Message Vistral...')}
-              disabled={sending || loading || models.length === 0}
-            />
-            <div className="row between align-center gap wrap">
-              <small className="muted">{notice || t('Press Enter to send, Shift + Enter for newline.')}</small>
-              <button onClick={send} disabled={sending || loading || models.length === 0 || !input.trim()}>
-                {sending ? `${t('Sending')}...` : hasActiveConversation ? t('Send') : t('Start')}
-              </button>
-            </div>
+            {notice ? (
+              <div className="chat-simple-meta">
+                <small className="muted">{notice}</small>
+              </div>
+            ) : null}
+            {attachments.length > 0 ? (
+              <div className="chat-simple-attachment-section">
+                <button
+                  type="button"
+                  className="chat-simple-attachment-pill"
+                  onClick={() => setAttachmentListExpanded((previous) => !previous)}
+                  disabled={uploading || sending}
+                  aria-expanded={attachmentListExpanded}
+                  title={`${attachmentSummaryTitle} · ${attachmentListExpanded ? t('Hide') : t('Show')}`}
+                  aria-label={`${attachmentSummaryTitle} · ${attachmentListExpanded ? t('Hide') : t('Show')}`}
+                >
+                  <span className="chat-simple-attachment-pill-main">
+                    {t('Attachments:')} {attachments.length}
+                  </span>
+                  <span className="chat-simple-attachment-indicators" aria-hidden="true">
+                    {attachmentStatusSummary.ready > 0 ? (
+                      <span className="chat-simple-attachment-dot ready" />
+                    ) : null}
+                    {attachmentStatusSummary.uploading > 0 ? (
+                      <span className="chat-simple-attachment-dot uploading" />
+                    ) : null}
+                    {attachmentStatusSummary.processing > 0 ? (
+                      <span className="chat-simple-attachment-dot processing" />
+                    ) : null}
+                    {attachmentStatusSummary.error > 0 ? (
+                      <span className="chat-simple-attachment-dot error" />
+                    ) : null}
+                  </span>
+                  <span className="chat-simple-attachment-pill-action" aria-hidden="true">
+                    {attachmentListExpanded ? '▾' : '▸'}
+                  </span>
+                </button>
+                {attachmentListExpanded ? (
+                  <ul className="chat-simple-attachment-list">
+                    {attachments.map((item) => (
+                      <li key={item.id} className="chat-simple-attachment-item">
+                        {item.status === 'ready' ? (
+                          <button
+                            className="chat-simple-attachment-open"
+                            onClick={() => openAttachment(item.id)}
+                            disabled={uploading || sending}
+                            title={item.filename}
+                          >
+                            {item.filename}
+                          </button>
+                        ) : (
+                          <span className="chat-simple-attachment-name" title={item.filename}>
+                            {item.filename}
+                          </span>
+                        )}
+                        <StatusBadge status={item.status} />
+                        <button
+                          className="chat-simple-attachment-delete"
+                          onClick={() => removeAttachment(item.id)}
+                          disabled={uploading || sending}
+                          title={t('Delete')}
+                          aria-label={t('Delete')}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
           </section>
         </footer>
       </div>

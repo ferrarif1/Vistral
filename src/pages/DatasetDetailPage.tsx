@@ -97,6 +97,17 @@ export default function DatasetDetailPage() {
     await loadDetail();
   };
 
+  const uploadDatasetFiles = async (files: File[]) => {
+    if (!datasetId) {
+      throw new Error(t('Missing Dataset ID'));
+    }
+
+    for (const file of files) {
+      await api.uploadDatasetFile(datasetId, file);
+    }
+    await loadDetail();
+  };
+
   const deleteAttachment = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
     await loadDetail();
@@ -280,6 +291,8 @@ export default function DatasetDetailPage() {
         title={t('Step 1. Dataset File Upload')}
         items={attachments}
         onUpload={uploadDatasetFile}
+        onUploadFiles={uploadDatasetFiles}
+        contentUrlBuilder={api.attachmentContentUrl}
         onDelete={deleteAttachment}
         emptyDescription={t('Upload images or archives. Files stay visible for this dataset context.')}
         uploadButtonLabel={t('Upload Dataset File')}
@@ -314,7 +327,7 @@ export default function DatasetDetailPage() {
           <input
             value={versionName}
             onChange={(event) => setVersionName(event.target.value)}
-            placeholder="v2"
+            placeholder={t('for example: v2')}
           />
         </label>
         <button onClick={createVersion} disabled={busy || items.length === 0}>
@@ -336,10 +349,10 @@ export default function DatasetDetailPage() {
                 setImportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
               }
             >
-              <option value="yolo">yolo</option>
-              <option value="coco">coco</option>
-              <option value="labelme">labelme</option>
-              <option value="ocr">ocr</option>
+              <option value="yolo">{t('yolo')}</option>
+              <option value="coco">{t('coco')}</option>
+              <option value="labelme">{t('labelme')}</option>
+              <option value="ocr">{t('ocr')}</option>
             </select>
           </label>
           <label>
@@ -372,10 +385,10 @@ export default function DatasetDetailPage() {
                 setExportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
               }
             >
-              <option value="yolo">yolo</option>
-              <option value="coco">coco</option>
-              <option value="labelme">labelme</option>
-              <option value="ocr">ocr</option>
+              <option value="yolo">{t('yolo')}</option>
+              <option value="coco">{t('coco')}</option>
+              <option value="labelme">{t('labelme')}</option>
+              <option value="ocr">{t('ocr')}</option>
             </select>
           </label>
           <button onClick={exportAnnotations} disabled={busy}>

@@ -5,7 +5,7 @@ export const LLM_CONFIG_UPDATED_EVENT = 'vistral:llm-config-updated';
 export const DEFAULT_LLM_CONFIG: LlmConfig = {
   enabled: false,
   provider: 'chatanywhere',
-  base_url: import.meta.env.VITE_DEFAULT_LLM_BASE_URL ?? 'https://api.chatanywhere.tech',
+  base_url: import.meta.env.VITE_DEFAULT_LLM_BASE_URL ?? 'https://api.chatanywhere.tech/v1',
   api_key: '',
   model: import.meta.env.VITE_DEFAULT_LLM_MODEL ?? 'gpt-3.5-turbo',
   temperature: 0.2
