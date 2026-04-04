@@ -4,7 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8787}"
-BASE_URL="http://${API_HOST}:${API_PORT}"
+BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
+START_API="${START_API:-true}"
+AUTH_USERNAME="${AUTH_USERNAME:-}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-real-closure] jq is required."
@@ -17,6 +20,8 @@ TMP_YOLO="$(mktemp)"
 TMP_OCR="$(mktemp)"
 TMP_COCO="$(mktemp)"
 TMP_LABELME="$(mktemp)"
+TMP_EXPORT="$(mktemp)"
+TMP_FALLBACK_IMAGE="$(mktemp)"
 API_PID=""
 
 cleanup() {
@@ -24,19 +29,21 @@ cleanup() {
     kill "${API_PID}" >/dev/null 2>&1 || true
     wait "${API_PID}" >/dev/null 2>&1 || true
   fi
-  rm -f "${COOKIE_FILE}" "${API_LOG}" "${TMP_YOLO}" "${TMP_OCR}" "${TMP_COCO}" "${TMP_LABELME}"
+  rm -f "${COOKIE_FILE}" "${API_LOG}" "${TMP_YOLO}" "${TMP_OCR}" "${TMP_COCO}" "${TMP_LABELME}" "${TMP_EXPORT}" "${TMP_FALLBACK_IMAGE}"
 }
 trap cleanup EXIT
 
 cd "${ROOT_DIR}"
 
-API_HOST="${API_HOST}" \
-API_PORT="${API_PORT}" \
-PADDLEOCR_RUNTIME_ENDPOINT="" \
-DOCTR_RUNTIME_ENDPOINT="" \
-YOLO_RUNTIME_ENDPOINT="" \
-npm run dev:api >"${API_LOG}" 2>&1 &
-API_PID=$!
+if [[ "${START_API}" == "true" ]]; then
+  API_HOST="${API_HOST}" \
+  API_PORT="${API_PORT}" \
+  PADDLEOCR_RUNTIME_ENDPOINT="" \
+  DOCTR_RUNTIME_ENDPOINT="" \
+  YOLO_RUNTIME_ENDPOINT="" \
+  npm run dev:api >"${API_LOG}" 2>&1 &
+  API_PID=$!
+fi
 
 for _ in {1..80}; do
   if curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then
@@ -46,8 +53,12 @@ for _ in {1..80}; do
 done
 
 if ! curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then
-  echo "[smoke-real-closure] API failed to start."
-  cat "${API_LOG}"
+  if [[ "${START_API}" == "true" ]]; then
+    echo "[smoke-real-closure] API failed to start."
+    cat "${API_LOG}"
+  else
+    echo "[smoke-real-closure] API is unreachable at ${BASE_URL}."
+  fi
   exit 1
 fi
 
@@ -59,10 +70,50 @@ if [[ -z "${csrf_token}" ]]; then
   exit 1
 fi
 
+if [[ -n "${AUTH_USERNAME}" ]]; then
+  if [[ -z "${AUTH_PASSWORD}" ]]; then
+    echo "[smoke-real-closure] AUTH_PASSWORD is required when AUTH_USERNAME is set."
+    exit 1
+  fi
+
+  login_response="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -X POST "${BASE_URL}/api/auth/login" \
+    -d "{\"username\":\"${AUTH_USERNAME}\",\"password\":\"${AUTH_PASSWORD}\"}")"
+  login_success="$(echo "${login_response}" | jq -r '.success // false')"
+  if [[ "${login_success}" != "true" ]]; then
+    echo "[smoke-real-closure] login failed for AUTH_USERNAME=${AUTH_USERNAME}."
+    echo "${login_response}"
+    exit 1
+  fi
+
+  csrf_response="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/auth/csrf")"
+  csrf_token="$(echo "${csrf_response}" | jq -r '.data.csrf_token // empty')"
+  if [[ -z "${csrf_token}" ]]; then
+    echo "[smoke-real-closure] failed to refresh CSRF token after login."
+    echo "${csrf_response}"
+    exit 1
+  fi
+fi
+
+task_draft_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/task-drafts/from-requirement" \
+  -d '{"description":"识别列车编号并评估识别准确率"}')"
+task_type="$(echo "${task_draft_resp}" | jq -r '.data.task_type // empty')"
+recommended_annotation_type="$(echo "${task_draft_resp}" | jq -r '.data.recommended_annotation_type // empty')"
+metric_suggestion_count="$(echo "${task_draft_resp}" | jq -r '.data.evaluation_metric_suggestions | length // 0')"
+if [[ -z "${task_type}" || -z "${recommended_annotation_type}" || "${metric_suggestion_count}" -lt 1 ]]; then
+  echo "[smoke-real-closure] requirement draft response missing required fields."
+  echo "${task_draft_resp}"
+  exit 1
+fi
+
 image_file="$(find "${ROOT_DIR}/demo_data" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit)"
 if [[ -z "${image_file}" ]]; then
-  echo "[smoke-real-closure] no demo image found under ${ROOT_DIR}/demo_data."
-  exit 1
+  printf 'real closure synthetic image payload\n' >"${TMP_FALLBACK_IMAGE}"
+  image_file="${TMP_FALLBACK_IMAGE}"
 fi
 
 dataset_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -218,6 +269,30 @@ if [[ "${labelme_import_total}" -lt 1 ]]; then
   exit 1
 fi
 
+export_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${dataset_id}/export" \
+  -d '{"format":"yolo"}')"
+export_attachment_id="$(echo "${export_resp}" | jq -r '.data.attachment_id // empty')"
+export_total="$(echo "${export_resp}" | jq -r '.data.exported // 0')"
+if [[ -z "${export_attachment_id}" || "${export_total}" -lt 1 ]]; then
+  echo "[smoke-real-closure] yolo export did not produce attachment/content."
+  echo "${export_resp}"
+  exit 1
+fi
+
+curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  "${BASE_URL}/api/files/${export_attachment_id}/content" >"${TMP_EXPORT}"
+export_format="$(jq -r '.format // empty' "${TMP_EXPORT}")"
+export_items_count="$(jq -r '.items | length // 0' "${TMP_EXPORT}")"
+export_box_count="$(jq -r '.items[0].boxes | length // 0' "${TMP_EXPORT}")"
+if [[ "${export_format}" != "yolo" || "${export_items_count}" -lt 1 || "${export_box_count}" -lt 1 ]]; then
+  echo "[smoke-real-closure] yolo export attachment content is invalid."
+  cat "${TMP_EXPORT}"
+  exit 1
+fi
+
 train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
@@ -307,7 +382,7 @@ fi
 
 infer_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
-  -X POST "${BASE_URL}/api/files/conversation/upload" \
+  -X POST "${BASE_URL}/api/files/inference/upload" \
   -F "file=@${image_file}")"
 infer_attachment_id="$(echo "${infer_upload_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${infer_attachment_id}" ]]; then
@@ -317,7 +392,7 @@ if [[ -z "${infer_attachment_id}" ]]; then
 fi
 
 for _ in {1..40}; do
-  files_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/conversation")"
+  files_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/inference")"
   status="$(echo "${files_resp}" | jq -r --arg id "${infer_attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
   [[ "${status}" == "ready" ]] && break
   sleep 0.2
@@ -328,18 +403,47 @@ infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/inference/runs" \
   -d "{\"model_version_id\":\"${model_version_id}\",\"input_attachment_id\":\"${infer_attachment_id}\",\"task_type\":\"detection\"}")"
+yolo_run_id="$(echo "${infer_resp}" | jq -r '.data.id // empty')"
 yolo_source="$(echo "${infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 yolo_box_count="$(echo "${infer_resp}" | jq -r '.data.normalized_output.boxes | length // 0')"
-if [[ "${yolo_box_count}" -lt 1 ]]; then
+if [[ -z "${yolo_run_id}" || "${yolo_box_count}" -lt 1 ]]; then
   echo "[smoke-real-closure] yolo inference produced no boxes."
   echo "${infer_resp}"
+  exit 1
+fi
+
+feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/inference/runs/${yolo_run_id}/feedback" \
+  -d "{\"dataset_id\":\"${dataset_id}\",\"reason\":\"missed_detection\"}")"
+feedback_dataset_id="$(echo "${feedback_resp}" | jq -r '.data.feedback_dataset_id // empty')"
+if [[ "${feedback_dataset_id}" != "${dataset_id}" ]]; then
+  echo "[smoke-real-closure] inference feedback did not bind target dataset."
+  echo "${feedback_resp}"
+  exit 1
+fi
+
+dataset_after_feedback="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${dataset_id}")"
+feedback_item_count="$(echo "${dataset_after_feedback}" | jq -r --arg run_id "${yolo_run_id}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
+if [[ "${feedback_item_count}" -lt 1 ]]; then
+  echo "[smoke-real-closure] feedback dataset item was not created."
+  echo "${dataset_after_feedback}"
+  exit 1
+fi
+
+feedback_attachment_id="$(echo "${dataset_after_feedback}" | jq -r --arg run_id "${yolo_run_id}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .attachment_id // empty' | head -n 1)"
+dataset_attachment_count="$(echo "${dataset_after_feedback}" | jq -r --arg attachment_id "${feedback_attachment_id}" '[.data.attachments[] | select(.id == $attachment_id)] | length')"
+if [[ -z "${feedback_attachment_id}" || "${dataset_attachment_count}" -lt 1 ]]; then
+  echo "[smoke-real-closure] feedback attachment is not dataset-scoped."
+  echo "${dataset_after_feedback}"
   exit 1
 fi
 
 echo "Train No: CRH380A-1234" >"${TMP_OCR}"
 ocr_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
-  -X POST "${BASE_URL}/api/files/conversation/upload" \
+  -X POST "${BASE_URL}/api/files/inference/upload" \
   -F "file=@${TMP_OCR};filename=ocr-sample.txt;type=text/plain")"
 ocr_attachment_id="$(echo "${ocr_upload_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${ocr_attachment_id}" ]]; then
@@ -349,7 +453,7 @@ if [[ -z "${ocr_attachment_id}" ]]; then
 fi
 
 for _ in {1..40}; do
-  files_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/conversation")"
+  files_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/inference")"
   status="$(echo "${files_resp}" | jq -r --arg id "${ocr_attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
   [[ "${status}" == "ready" ]] && break
   sleep 0.2
@@ -368,9 +472,90 @@ if [[ "${ocr_lines}" -lt 1 ]]; then
   exit 1
 fi
 
+ocr_dataset_id="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets" | jq -r '.data[] | select(.task_type == "ocr") | .id' | head -n 1)"
+if [[ -z "${ocr_dataset_id}" ]]; then
+  echo "[smoke-real-closure] no OCR dataset found for doctr training."
+  exit 1
+fi
+
+doctr_train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/training/jobs" \
+  -d "{\"name\":\"real-doctr-job-$(date +%s)\",\"task_type\":\"ocr\",\"framework\":\"doctr\",\"dataset_id\":\"${ocr_dataset_id}\",\"base_model\":\"doctr-crnn\",\"config\":{\"epochs\":\"3\",\"batch_size\":\"2\",\"learning_rate\":\"0.001\"}}")"
+doctr_job_id="$(echo "${doctr_train_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${doctr_job_id}" ]]; then
+  echo "[smoke-real-closure] doctr training job create failed."
+  echo "${doctr_train_resp}"
+  exit 1
+fi
+
+doctr_job_status=""
+doctr_job_detail=""
+for _ in {1..80}; do
+  doctr_job_detail="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/training/jobs/${doctr_job_id}")"
+  doctr_job_status="$(echo "${doctr_job_detail}" | jq -r '.data.job.status // empty')"
+  if [[ "${doctr_job_status}" == "completed" ]]; then
+    break
+  fi
+  if [[ "${doctr_job_status}" == "failed" || "${doctr_job_status}" == "cancelled" ]]; then
+    echo "[smoke-real-closure] doctr training job ended with ${doctr_job_status}."
+    echo "${doctr_job_detail}"
+    exit 1
+  fi
+  sleep 0.3
+done
+
+if [[ "${doctr_job_status}" != "completed" ]]; then
+  echo "[smoke-real-closure] doctr training job timeout."
+  echo "${doctr_job_detail}"
+  exit 1
+fi
+
+doctr_model_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/models/draft" \
+  -d "{\"name\":\"real-doctr-model-$(date +%s)\",\"description\":\"real closure doctr model\",\"model_type\":\"ocr\",\"visibility\":\"workspace\"}")"
+doctr_model_id="$(echo "${doctr_model_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${doctr_model_id}" ]]; then
+  echo "[smoke-real-closure] doctr model draft creation failed."
+  echo "${doctr_model_resp}"
+  exit 1
+fi
+
+doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/model-versions/register" \
+  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"real-doctr-v1\"}")"
+doctr_model_version_id="$(echo "${doctr_register_resp}" | jq -r '.data.id // empty')"
+doctr_artifact_id="$(echo "${doctr_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_id}" ]]; then
+  echo "[smoke-real-closure] doctr model version registration failed."
+  echo "${doctr_register_resp}"
+  exit 1
+fi
+
+doctr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/inference/runs" \
+  -d "{\"model_version_id\":\"${doctr_model_version_id}\",\"input_attachment_id\":\"${ocr_attachment_id}\",\"task_type\":\"ocr\"}")"
+doctr_source="$(echo "${doctr_infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
+doctr_lines="$(echo "${doctr_infer_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
+if [[ "${doctr_lines}" -lt 1 ]]; then
+  echo "[smoke-real-closure] doctr inference produced no text lines."
+  echo "${doctr_infer_resp}"
+  exit 1
+fi
+
 echo "[smoke-real-closure] PASS"
 echo "dataset_id=${dataset_id}"
 echo "job_id=${job_id}"
 echo "model_version_id=${model_version_id}"
+echo "doctr_job_id=${doctr_job_id}"
+echo "doctr_model_version_id=${doctr_model_version_id}"
 echo "yolo_source=${yolo_source}"
 echo "ocr_source=${ocr_source}"
+echo "doctr_source=${doctr_source}"

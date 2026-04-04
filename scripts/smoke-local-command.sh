@@ -202,6 +202,14 @@ if [[ "${paddle_accuracy_series}" -lt 3 ]]; then
   exit 1
 fi
 
+paddle_norm_edit_distance_series="$(echo "${paddle_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="norm_edit_distance")] | length')"
+paddle_norm_edit_distance_key="$(echo "${paddle_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]? | select(.=="norm_edit_distance")] | length')"
+if [[ "${paddle_norm_edit_distance_series}" -lt 3 || "${paddle_norm_edit_distance_key}" -lt 1 ]]; then
+  echo "[smoke-local-command] expected PaddleOCR norm_edit_distance metric persistence."
+  echo "${paddle_job_detail}"
+  exit 1
+fi
+
 doctr_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
@@ -250,11 +258,51 @@ if [[ "${doctr_f1_series}" -lt 3 ]]; then
   exit 1
 fi
 
+doctr_norm_edit_distance_series="$(echo "${doctr_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="norm_edit_distance")] | length')"
+if [[ "${doctr_norm_edit_distance_series}" -lt 3 ]]; then
+  echo "[smoke-local-command] expected docTR norm_edit_distance series."
+  echo "${doctr_job_detail}"
+  exit 1
+fi
+
+doctr_artifact_mode="$(echo "${doctr_job_detail}" | jq -r '.data.artifact_summary.mode // empty')"
+if [[ -z "${doctr_artifact_mode}" ]]; then
+  echo "[smoke-local-command] expected artifact_summary.mode for docTR job detail."
+  echo "${doctr_job_detail}"
+  exit 1
+fi
+
+doctr_artifact_metrics_keys="$(echo "${doctr_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]?] | length')"
+if [[ "${doctr_artifact_metrics_keys}" -lt 1 ]]; then
+  echo "[smoke-local-command] expected artifact_summary.metrics_keys for docTR job detail."
+  echo "${doctr_job_detail}"
+  exit 1
+fi
+
+doctr_norm_edit_distance_key="$(echo "${doctr_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]? | select(.=="norm_edit_distance")] | length')"
+if [[ "${doctr_norm_edit_distance_key}" -lt 1 ]]; then
+  echo "[smoke-local-command] expected docTR norm_edit_distance artifact key."
+  echo "${doctr_job_detail}"
+  exit 1
+fi
+
+doctr_model_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/models/draft" \
+  -d '{"name":"local-command-doctr-model","description":"docTR local command smoke model","model_type":"ocr","visibility":"workspace"}')"
+doctr_model_id="$(echo "${doctr_model_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${doctr_model_id}" ]]; then
+  echo "[smoke-local-command] failed to create docTR model draft."
+  echo "${doctr_model_resp}"
+  exit 1
+fi
+
 register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/model-versions/register" \
-  -d "{\"model_id\":\"m-3\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"doctr-local-command-v1\"}")"
+  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"doctr-local-command-v1\"}")"
 doctr_model_version_id="$(echo "${register_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${doctr_model_version_id}" ]]; then
   echo "[smoke-local-command] failed to register docTR model version."
@@ -281,6 +329,7 @@ echo "paddle_job_id=${paddle_job_id}"
 echo "paddle_accuracy=${paddle_accuracy}"
 echo "doctr_job_id=${doctr_job_id}"
 echo "doctr_f1=${doctr_f1}"
+echo "doctr_artifact_mode=${doctr_artifact_mode}"
 echo "inference_source=${source}"
 echo "paddle_source=${paddle_source}"
 echo "doctr_source=${doctr_source}"

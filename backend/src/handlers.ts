@@ -2,6 +2,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
+  isFixtureAttachmentFilename,
+  isFixtureModelVersionRecord
+} from '../../shared/catalogFixtures';
+import {
   annotationReviews,
   annotations,
   approvalRequests,
@@ -32,7 +36,10 @@ import type {
   AnnotationStatus,
   ApprovalRequest,
   AuditLogRecord,
+  ChangePasswordInput,
+  ConversationActionMetadata,
   ConversationRecord,
+  CreateUserInput,
   CreateDatasetInput,
   CreateModelDraftInput,
   CreateTrainingJobInput,
@@ -47,12 +54,15 @@ import type {
   LlmConfigView,
   LoginInput,
   MessageRecord,
+  MessageMetadata,
   ModelRecord,
   ModelVersionRecord,
+  RequirementAnnotationType,
   RequirementTaskDraft,
   RegisterInput,
   RenameConversationInput,
   RegisterModelVersionInput,
+  ResetUserPasswordInput,
   ReviewAnnotationInput,
   RuntimeConnectivityRecord,
   RuntimeMetricsRetentionSummary,
@@ -64,7 +74,9 @@ import type {
   TaskType,
   ModelFramework,
   TrainingJobRecord,
+  TrainingArtifactSummary,
   TrainingMetricRecord,
+  UpdateUserStatusInput,
   UpsertAnnotationInput,
   VerificationCheckRecord,
   VerificationReportRecord,
@@ -98,6 +110,18 @@ type AttachmentUploadInput = string | {
   byte_size?: number;
   mime_type?: string;
   content?: Buffer;
+};
+type CreateDatasetItemInput = {
+  attachment_id?: string;
+  filename?: string;
+  split?: DatasetItemRecord['split'];
+  status?: DatasetItemRecord['status'];
+  metadata?: Record<string, string>;
+};
+type UpdateDatasetItemInput = {
+  split?: DatasetItemRecord['split'];
+  status?: DatasetItemRecord['status'];
+  metadata?: Record<string, string>;
 };
 type NormalizedAttachmentUploadInput = {
   filename: string;
@@ -171,6 +195,7 @@ const findCurrentUser = (): User => {
   if (!found) {
     throw new Error('Current user not found in mock store.');
   }
+  assertUserAccountActive(found);
   return found;
 };
 
@@ -179,6 +204,33 @@ export const runAsUser = async <T>(userId: string, fn: () => Promise<T>): Promis
 
 const canManageModels = (user: User) =>
   user.role === 'admin' || user.capabilities.includes('manage_models');
+
+const defaultCapabilitiesByRole = (role: User['role']): User['capabilities'] =>
+  role === 'admin' ? ['manage_models', 'global_governance'] : ['manage_models'];
+
+const assertAdmin = (user: User, message: string): void => {
+  if (user.role !== 'admin') {
+    throw new Error(message);
+  }
+};
+
+const assertUserAccountActive = (user: User): void => {
+  if (user.status === 'disabled') {
+    throw new Error('Account is disabled. Ask an administrator to reactivate it.');
+  }
+};
+
+const findUserById = (userId: string): User => {
+  const matched = users.find((user) => user.id === userId);
+  if (!matched) {
+    throw new Error('User not found.');
+  }
+
+  return matched;
+};
+
+const countActiveAdminUsers = (): number =>
+  users.filter((user) => user.role === 'admin' && user.status === 'active').length;
 
 const assertOwnershipOrAdmin = (ownerUserId: string, user: User, message: string): void => {
   if (!(user.role === 'admin' || ownerUserId === user.id)) {
@@ -685,6 +737,27 @@ const generateAssistantReply = async (
   }
 };
 
+const requirementAnnotationTypeSet = new Set<RequirementAnnotationType>([
+  'ocr_text',
+  'bbox',
+  'rotated_bbox',
+  'polygon',
+  'classification'
+]);
+
+const taskTypeSet = new Set<TaskType>(['ocr', 'detection', 'classification', 'segmentation', 'obb']);
+
+const frameworkSet = new Set<ModelFramework>(['paddleocr', 'doctr', 'yolo']);
+
+const isRequirementAnnotationType = (value: unknown): value is RequirementAnnotationType =>
+  typeof value === 'string' && requirementAnnotationTypeSet.has(value as RequirementAnnotationType);
+
+const isTaskType = (value: unknown): value is TaskType =>
+  typeof value === 'string' && taskTypeSet.has(value as TaskType);
+
+const isModelFramework = (value: unknown): value is ModelFramework =>
+  typeof value === 'string' && frameworkSet.has(value as ModelFramework);
+
 const buildRuleBasedTaskDraft = (description: string): RequirementTaskDraft => {
   const normalized = description.toLowerCase();
   const has = (...keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
@@ -693,9 +766,11 @@ const buildRuleBasedTaskDraft = (description: string): RequirementTaskDraft => {
     return {
       task_type: 'ocr',
       recommended_framework: 'paddleocr',
+      recommended_annotation_type: 'ocr_text',
       annotation_type: 'ocr_text',
       label_hints: ['text_line', 'serial_number', 'region'],
       dataset_suggestions: ['采集不同光照与角度的车体编号样本', '保留高分辨率原图，标注文本行与关键字段'],
+      evaluation_metric_suggestions: ['accuracy', 'cer', 'wer'],
       rationale: '需求描述以文字识别为核心，优先 OCR 任务与 PaddleOCR 基线。',
       source: 'rule'
     };
@@ -705,9 +780,11 @@ const buildRuleBasedTaskDraft = (description: string): RequirementTaskDraft => {
     return {
       task_type: 'obb',
       recommended_framework: 'yolo',
+      recommended_annotation_type: 'rotated_bbox',
       annotation_type: 'rotated_bbox',
       label_hints: ['target', 'defect', 'component'],
       dataset_suggestions: ['优先标注旋转框并覆盖不同方位', '补充密集目标场景样本'],
+      evaluation_metric_suggestions: ['map', 'precision', 'recall'],
       rationale: '需求强调旋转目标，采用 YOLO OBB 路线更直接。',
       source: 'rule'
     };
@@ -717,9 +794,11 @@ const buildRuleBasedTaskDraft = (description: string): RequirementTaskDraft => {
     return {
       task_type: 'segmentation',
       recommended_framework: 'yolo',
+      recommended_annotation_type: 'polygon',
       annotation_type: 'polygon',
       label_hints: ['defect_region', 'background'],
       dataset_suggestions: ['优先清晰边界样本', '保持多边形点位精度并覆盖复杂背景'],
+      evaluation_metric_suggestions: ['miou', 'dice'],
       rationale: '需求指向像素级区域识别，建议分割任务。',
       source: 'rule'
     };
@@ -729,9 +808,11 @@ const buildRuleBasedTaskDraft = (description: string): RequirementTaskDraft => {
     return {
       task_type: 'classification',
       recommended_framework: 'yolo',
+      recommended_annotation_type: 'classification',
       annotation_type: 'classification',
       label_hints: ['open', 'closed', 'normal', 'abnormal'],
       dataset_suggestions: ['正负样本比例保持平衡', '覆盖同一部件的不同拍摄距离与角度'],
+      evaluation_metric_suggestions: ['accuracy', 'f1'],
       rationale: '需求更像状态判断，采用分类任务更轻量。',
       source: 'rule'
     };
@@ -740,9 +821,11 @@ const buildRuleBasedTaskDraft = (description: string): RequirementTaskDraft => {
   return {
     task_type: 'detection',
     recommended_framework: 'yolo',
+    recommended_annotation_type: 'bbox',
     annotation_type: 'bbox',
     label_hints: ['defect', 'scratch', 'component'],
     dataset_suggestions: ['先做目标框标注并建立统一标签定义', '样本覆盖白天/夜晚/运动模糊等场景'],
+    evaluation_metric_suggestions: ['map', 'precision', 'recall'],
     rationale: '默认走检测任务，适合多数目标定位类需求。',
     source: 'rule'
   };
@@ -758,19 +841,29 @@ const parseDraftFromLlmText = (text: string): RequirementTaskDraft | null => {
     if (!parsed || typeof parsed !== 'object') {
       return null;
     }
-    if (!parsed.task_type || !parsed.recommended_framework || !parsed.annotation_type) {
+    const annotationTypeCandidate =
+      parsed.recommended_annotation_type ?? parsed.annotation_type;
+    if (
+      !isTaskType(parsed.task_type) ||
+      !isModelFramework(parsed.recommended_framework) ||
+      !isRequirementAnnotationType(annotationTypeCandidate)
+    ) {
       return null;
     }
 
     return {
       task_type: parsed.task_type,
       recommended_framework: parsed.recommended_framework,
-      annotation_type: parsed.annotation_type,
+      recommended_annotation_type: annotationTypeCandidate,
+      annotation_type: annotationTypeCandidate,
       label_hints: Array.isArray(parsed.label_hints)
         ? parsed.label_hints.map((item) => String(item)).filter(Boolean)
         : [],
       dataset_suggestions: Array.isArray(parsed.dataset_suggestions)
         ? parsed.dataset_suggestions.map((item) => String(item)).filter(Boolean)
+        : [],
+      evaluation_metric_suggestions: Array.isArray(parsed.evaluation_metric_suggestions)
+        ? parsed.evaluation_metric_suggestions.map((item) => String(item)).filter(Boolean)
         : [],
       rationale: typeof parsed.rationale === 'string' ? parsed.rationale : 'LLM generated draft.',
       source: 'llm'
@@ -784,10 +877,10 @@ const generateTaskDraftFromLlm = async (description: string, llmConfig: LlmConfi
   const response = await callConfiguredLlm(
     [
       '请根据下面需求生成任务草案，严格返回 JSON，不要输出额外文本。',
-      '字段：task_type, recommended_framework, annotation_type, label_hints, dataset_suggestions, rationale。',
+      '字段：task_type, recommended_framework, recommended_annotation_type, label_hints, dataset_suggestions, evaluation_metric_suggestions, rationale。',
       "task_type 只能是: ocr, detection, classification, segmentation, obb。",
       "recommended_framework 只能是: paddleocr, doctr, yolo。",
-      "annotation_type 只能是: ocr_text, bbox, rotated_bbox, polygon, classification。",
+      "recommended_annotation_type 只能是: ocr_text, bbox, rotated_bbox, polygon, classification。",
       `需求：${description}`
     ].join('\n'),
     [],
@@ -823,6 +916,745 @@ const getEffectiveConversationLlmConfig = (override?: LlmConfig | null): LlmConf
     return null;
   }
   return config;
+};
+
+type ConversationActionResolution = {
+  content: string;
+  metadata: MessageMetadata;
+};
+
+const hasChineseText = (value: string): boolean => /[\u4e00-\u9fff]/.test(value);
+
+const compactWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
+
+const sanitizeCapturedValue = (value: string): string =>
+  compactWhitespace(value)
+    .replace(/^[`"'“”]+/, '')
+    .replace(/[`"'“”]+$/, '')
+    .replace(/[。！？.!?]+$/, '')
+    .trim();
+
+const extractPatternValue = (text: string, patterns: RegExp[]): string => {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const candidate = sanitizeCapturedValue(match?.[1] ?? '');
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return '';
+};
+
+const extractQuotedValue = (text: string): string =>
+  extractPatternValue(text, [/[“"'`](.{2,80}?)[”"'`]/]);
+
+const detectConversationActionType = (text: string): ConversationActionMetadata['action'] | null => {
+  const looksLikeQuestion =
+    /(如何|怎么|what is|what are|why|解释|介绍)/i.test(text) &&
+    !/(帮我|请|直接|现在|立即|马上)/i.test(text);
+  const hasCreateIntent =
+    /(创建|新建|建立|帮我建|帮我创建|生成|create|set up|setup|start)/i.test(text);
+  const hasDirectExecutionIntent = /(帮我|请|直接|现在|立即|马上|run|train|启动)/i.test(text);
+
+  if (looksLikeQuestion) {
+    return null;
+  }
+
+  if (
+    (hasCreateIntent || hasDirectExecutionIntent) &&
+    /(训练任务|训练|微调|train(?:ing)? job|fine[- ]?tune|training)/i.test(text)
+  ) {
+    return 'create_training_job';
+  }
+
+  if (hasCreateIntent && /(数据集|dataset)/i.test(text)) {
+    return 'create_dataset';
+  }
+
+  if (hasCreateIntent && /(模型草稿|模型|model draft|model)/i.test(text)) {
+    return 'create_model_draft';
+  }
+
+  return null;
+};
+
+const detectCancelIntent = (text: string): boolean =>
+  /(取消|算了|不用了|先不用|停止|cancel|never mind|forget it)/i.test(text);
+
+const inferTaskTypeFromText = (text: string): TaskType | null => {
+  if (/(obb|rotated box|rotated bbox|旋转框|旋转目标)/i.test(text)) {
+    return 'obb';
+  }
+  if (/(segmentation|segment|polygon|mask|分割|多边形)/i.test(text)) {
+    return 'segmentation';
+  }
+  if (/(classification|classify|分类)/i.test(text)) {
+    return 'classification';
+  }
+  if (/(ocr|文字|文本|serial number|read text|text line|车号|编号|识别)/i.test(text)) {
+    return 'ocr';
+  }
+  if (/(detection|detect|bbox|检测|框选)/i.test(text)) {
+    return 'detection';
+  }
+  return null;
+};
+
+const inferFrameworkFromText = (text: string): ModelFramework | null => {
+  if (/paddleocr/i.test(text)) {
+    return 'paddleocr';
+  }
+  if (/doctr/i.test(text)) {
+    return 'doctr';
+  }
+  if (/yolo/i.test(text)) {
+    return 'yolo';
+  }
+  return null;
+};
+
+const inferVisibilityFromText = (
+  text: string
+): CreateModelDraftInput['visibility'] | null => {
+  if (/(公开|public)/i.test(text)) {
+    return 'public';
+  }
+  if (/(工作区|workspace)/i.test(text)) {
+    return 'workspace';
+  }
+  if (/(私有|private)/i.test(text)) {
+    return 'private';
+  }
+  return null;
+};
+
+const inferActionNameFromText = (text: string): string =>
+  extractPatternValue(text, [
+    /(?:名字叫|名称叫|叫|命名为|名称(?:是|为)?|名字(?:是|为)?|named|called|name\s*(?:is|as)?)[：:\s]*[“"'`]?([^”"'`\n，。,；;]+)/i
+  ]) || extractQuotedValue(text);
+
+const inferDescriptionFromText = (text: string): string =>
+  extractPatternValue(text, [
+    /(?:描述(?:是|为)?|description(?:\s+is)?|用于|用来)[：:\s]*([^\n]+)/i
+  ]);
+
+const inferLabelClassesFromText = (text: string): string[] => {
+  const raw = extractPatternValue(text, [
+    /(?:labels?|label classes|标签(?:类别)?|类别)[：:\s]*([^\n]+)/i
+  ]);
+
+  if (!raw) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      raw
+        .split(/[，,、;；|]/)
+        .map((item) => sanitizeCapturedValue(item))
+        .filter(Boolean)
+    )
+  ).slice(0, 12);
+};
+
+const inferDatasetReferenceFromText = (text: string): string =>
+  extractPatternValue(text, [
+    /\b(d-\d+)\b/i,
+    /(?:数据集|dataset)(?:是|为|:|：)?\s*[“"'`]?([^”"'`\n，。,；;]+)/i,
+    /(?:用|使用|就用|选择|选用)\s*[“"'`]?([^”"'`\n，。,；;]+?)(?:数据集|dataset)?(?:$|[，。,；;\n])/i
+  ]) || (compactWhitespace(text).length <= 48 ? extractQuotedValue(text) : '');
+
+const inferBaseModelFromText = (text: string): string =>
+  extractPatternValue(text, [
+    /(?:base model|基座模型|基础模型|预训练模型|base_model)[：:\s]*([^\s，。,；;]+)/i
+  ]);
+
+const inferDatasetVersionIdFromText = (text: string): string =>
+  extractPatternValue(text, [/\b(dv-\d+)\b/i]);
+
+const inferNumericConfigFromText = (text: string): Record<string, string> => {
+  const epochs = extractPatternValue(text, [/(?:epochs?|轮次)[：:\s]*([0-9]+)/i]);
+  const batchSize = extractPatternValue(text, [/(?:batch size|batch_size|批大小)[：:\s]*([0-9]+)/i]);
+  const learningRate = extractPatternValue(text, [/(?:learning rate|lr|学习率)[：:\s]*([0-9.]+)/i]);
+  const warmupRatio = extractPatternValue(text, [/(?:warmup ratio|warmup|预热比例)[：:\s]*([0-9.]+)/i]);
+  const weightDecay = extractPatternValue(text, [/(?:weight decay|权重衰减)[：:\s]*([0-9.]+)/i]);
+
+  return Object.fromEntries(
+    Object.entries({
+      epochs,
+      batch_size: batchSize,
+      learning_rate: learningRate,
+      warmup_ratio: warmupRatio,
+      weight_decay: weightDecay
+    }).filter(([, value]) => Boolean(value))
+  );
+};
+
+const listAccessibleDatasetsForConversation = (currentUser: User): DatasetRecord[] =>
+  datasets.filter((dataset) => currentUser.role === 'admin' || dataset.owner_user_id === currentUser.id);
+
+const normalizeSearchToken = (value: string): string =>
+  compactWhitespace(value).toLowerCase().replace(/[“”"'`]/g, '');
+
+const formatDatasetSuggestion = (dataset: DatasetRecord): string =>
+  `${dataset.name} (${dataset.id})`;
+
+const findDatasetByReference = (
+  reference: string,
+  currentUser: User
+): { dataset: DatasetRecord | null; matches: DatasetRecord[] } => {
+  const accessible = listAccessibleDatasetsForConversation(currentUser);
+  const normalizedReference = normalizeSearchToken(reference);
+  if (!normalizedReference) {
+    return { dataset: null, matches: [] };
+  }
+
+  const byId = accessible.find((dataset) => dataset.id.toLowerCase() === normalizedReference) ?? null;
+  if (byId) {
+    return { dataset: byId, matches: [byId] };
+  }
+
+  const exactNameMatches = accessible.filter(
+    (dataset) => normalizeSearchToken(dataset.name) === normalizedReference
+  );
+  if (exactNameMatches.length === 1) {
+    return { dataset: exactNameMatches[0] ?? null, matches: exactNameMatches };
+  }
+
+  const partialMatches = accessible.filter((dataset) =>
+    normalizeSearchToken(dataset.name).includes(normalizedReference)
+  );
+  if (partialMatches.length === 1) {
+    return { dataset: partialMatches[0] ?? null, matches: partialMatches };
+  }
+
+  return {
+    dataset: null,
+    matches: exactNameMatches.length > 1 ? exactNameMatches : partialMatches
+  };
+};
+
+const isTaskTypeValue = (value: string): value is TaskType =>
+  value === 'ocr' ||
+  value === 'detection' ||
+  value === 'classification' ||
+  value === 'segmentation' ||
+  value === 'obb';
+
+const isFrameworkValue = (value: string): value is ModelFramework =>
+  value === 'paddleocr' || value === 'doctr' || value === 'yolo';
+
+const normalizeCollectedFields = (input: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(input)
+      .map(([key, value]) => [key, sanitizeCapturedValue(value)] as const)
+      .filter(([, value]) => Boolean(value))
+  );
+
+const getPendingConversationAction = (conversationId: string): ConversationActionMetadata | null => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.conversation_id !== conversationId) {
+      continue;
+    }
+
+    const action = message.metadata?.conversation_action;
+    if (!action) {
+      continue;
+    }
+
+    if (action.status === 'requires_input') {
+      return action;
+    }
+
+    if (action.status === 'completed' || action.status === 'failed' || action.status === 'cancelled') {
+      return null;
+    }
+  }
+
+  return null;
+};
+
+const buildActionSummary = (
+  action: ConversationActionMetadata['action'],
+  status: ConversationActionMetadata['status'],
+  inputText: string,
+  detail: string
+): string => {
+  const chinese = hasChineseText(inputText);
+  if (action === 'create_training_job') {
+    if (status === 'requires_input') {
+      return chinese
+        ? `我可以继续创建训练任务，但还缺少这些信息：${detail}`
+        : `I can continue creating the training job, but I still need: ${detail}`;
+    }
+    if (status === 'completed') {
+      return chinese ? `训练任务已创建：${detail}` : `Training job created: ${detail}`;
+    }
+    if (status === 'cancelled') {
+      return chinese ? '已取消这次训练任务创建。' : 'Cancelled this training-job creation flow.';
+    }
+    return chinese ? `训练任务创建失败：${detail}` : `Training job creation failed: ${detail}`;
+  }
+
+  if (action === 'create_dataset') {
+    if (status === 'requires_input') {
+      return chinese
+        ? `我可以继续创建数据集，但还缺少这些信息：${detail}`
+        : `I can continue creating the dataset, but I still need: ${detail}`;
+    }
+    if (status === 'completed') {
+      return chinese ? `数据集已创建：${detail}` : `Dataset created: ${detail}`;
+    }
+    if (status === 'cancelled') {
+      return chinese ? '已取消这次数据集创建。' : 'Cancelled this dataset-creation flow.';
+    }
+    return chinese ? `数据集创建失败：${detail}` : `Dataset creation failed: ${detail}`;
+  }
+
+  if (status === 'requires_input') {
+    return chinese
+      ? `我可以继续创建模型草稿，但还缺少这些信息：${detail}`
+      : `I can continue creating the model draft, but I still need: ${detail}`;
+  }
+  if (status === 'completed') {
+    return chinese ? `模型草稿已创建：${detail}` : `Model draft created: ${detail}`;
+  }
+  if (status === 'cancelled') {
+    return chinese ? '已取消这次模型草稿创建。' : 'Cancelled this model-draft creation flow.';
+  }
+  return chinese ? `模型草稿创建失败：${detail}` : `Model draft creation failed: ${detail}`;
+};
+
+const toActionMetadata = (
+  action: ConversationActionMetadata['action'],
+  status: ConversationActionMetadata['status'],
+  summary: string,
+  collectedFields: Record<string, string>,
+  options?: {
+    missingFields?: string[];
+    suggestions?: string[];
+    createdEntityType?: ConversationActionMetadata['created_entity_type'];
+    createdEntityId?: string | null;
+    createdEntityLabel?: string | null;
+  }
+): MessageMetadata => ({
+  conversation_action: {
+    action,
+    status,
+    summary,
+    missing_fields: options?.missingFields ?? [],
+    collected_fields: normalizeCollectedFields(collectedFields),
+    suggestions: options?.suggestions ?? [],
+    created_entity_type: options?.createdEntityType ?? null,
+    created_entity_id: options?.createdEntityId ?? null,
+    created_entity_label: options?.createdEntityLabel ?? null
+  }
+});
+
+const resolveCreateTrainingJobAction = async (
+  content: string,
+  currentUser: User,
+  pendingAction: ConversationActionMetadata | null
+): Promise<ConversationActionResolution> => {
+  const numericFields = {
+    ...(pendingAction?.collected_fields ?? {}),
+    ...inferNumericConfigFromText(content)
+  };
+  const collectedFields = normalizeCollectedFields({
+    ...(pendingAction?.collected_fields ?? {}),
+    task_type: inferTaskTypeFromText(content) ?? pendingAction?.collected_fields.task_type ?? '',
+    framework: inferFrameworkFromText(content) ?? pendingAction?.collected_fields.framework ?? '',
+    name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
+    dataset_reference:
+      inferDatasetReferenceFromText(content) || pendingAction?.collected_fields.dataset_reference || '',
+    dataset_version_id:
+      inferDatasetVersionIdFromText(content) || pendingAction?.collected_fields.dataset_version_id || '',
+    base_model: inferBaseModelFromText(content) || pendingAction?.collected_fields.base_model || '',
+    epochs: numericFields.epochs ?? '',
+    batch_size: numericFields.batch_size ?? '',
+    learning_rate: numericFields.learning_rate ?? '',
+    warmup_ratio: numericFields.warmup_ratio ?? '',
+    weight_decay: numericFields.weight_decay ?? ''
+  });
+
+  const datasetLookup = findDatasetByReference(collectedFields.dataset_reference ?? '', currentUser);
+  const taskTypeCandidate =
+    collectedFields.task_type && isTaskTypeValue(collectedFields.task_type)
+      ? collectedFields.task_type
+      : datasetLookup.dataset?.task_type ?? null;
+  const frameworkCandidate =
+    collectedFields.framework && isFrameworkValue(collectedFields.framework)
+      ? collectedFields.framework
+      : null;
+  const validFrameworks: ModelFramework[] =
+    taskTypeCandidate === 'ocr' ? ['paddleocr', 'doctr'] : taskTypeCandidate ? ['yolo'] : [];
+
+  if ((collectedFields.dataset_reference ?? '') && !datasetLookup.dataset && datasetLookup.matches.length > 1) {
+    const suggestions = datasetLookup.matches.slice(0, 5).map(formatDatasetSuggestion);
+    const summary = buildActionSummary(
+      'create_training_job',
+      'requires_input',
+      content,
+      hasChineseText(content)
+        ? '数据集匹配不唯一，请从建议列表里指定一个数据集名称或 ID。'
+        : 'dataset selection is ambiguous. Please reply with one dataset name or ID from the suggestions.'
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields: ['dataset_id'],
+        suggestions
+      })
+    };
+  }
+
+  const missingFields: string[] = [];
+  const suggestions: string[] = [];
+
+  if (!datasetLookup.dataset) {
+    missingFields.push('dataset_id');
+    suggestions.push(
+      ...listAccessibleDatasetsForConversation(currentUser)
+        .filter((dataset) => !taskTypeCandidate || dataset.task_type === taskTypeCandidate)
+        .slice(0, 5)
+        .map(formatDatasetSuggestion)
+    );
+  }
+
+  if (!taskTypeCandidate && !datasetLookup.dataset) {
+    missingFields.push('task_type');
+  }
+
+  if (datasetLookup.dataset && taskTypeCandidate && datasetLookup.dataset.task_type !== taskTypeCandidate) {
+    const summary = buildActionSummary(
+      'create_training_job',
+      'requires_input',
+      content,
+      hasChineseText(content)
+        ? `当前数据集任务类型为 ${datasetLookup.dataset.task_type}，与请求不一致，请换一个数据集或明确改用匹配的任务类型。`
+        : `selected dataset uses task type ${datasetLookup.dataset.task_type}. Please choose a matching dataset or revise the task type.`
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields: ['dataset_id'],
+        suggestions: listAccessibleDatasetsForConversation(currentUser)
+          .filter((dataset) => dataset.task_type === taskTypeCandidate)
+          .slice(0, 5)
+          .map(formatDatasetSuggestion)
+      })
+    };
+  }
+
+  if (frameworkCandidate && taskTypeCandidate && !validFrameworks.includes(frameworkCandidate)) {
+    const summary = buildActionSummary(
+      'create_training_job',
+      'requires_input',
+      content,
+      hasChineseText(content)
+        ? `当前任务类型只支持这些框架：${validFrameworks.join(' / ')}`
+        : `valid frameworks for this task are: ${validFrameworks.join(' / ')}`
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields: ['framework'],
+        suggestions: validFrameworks
+      })
+    };
+  }
+
+  if (missingFields.length > 0) {
+    const summary = buildActionSummary('create_training_job', 'requires_input', content, missingFields.join(', '));
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields,
+        suggestions
+      })
+    };
+  }
+
+  const dataset = datasetLookup.dataset;
+  if (!dataset || !taskTypeCandidate) {
+    const summary = buildActionSummary(
+      'create_training_job',
+      'failed',
+      content,
+      hasChineseText(content) ? '无法解析训练任务所需的基础信息。' : 'unable to resolve training inputs.'
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'failed', summary, collectedFields)
+    };
+  }
+
+  const finalFramework =
+    frameworkCandidate ?? (taskTypeCandidate === 'ocr' ? 'paddleocr' : 'yolo');
+  const finalName =
+    collectedFields.name || `${dataset.name}-${taskTypeCandidate}-job-${Date.now().toString().slice(-6)}`;
+  const finalBaseModel = collectedFields.base_model || `${finalFramework}-base`;
+  const finalConfig = {
+    epochs: collectedFields.epochs || '20',
+    batch_size: collectedFields.batch_size || '16',
+    learning_rate: collectedFields.learning_rate || '0.001',
+    warmup_ratio: collectedFields.warmup_ratio || '0.1',
+    weight_decay: collectedFields.weight_decay || '0.0001'
+  };
+
+  try {
+    const created = await createTrainingJob({
+      name: finalName,
+      task_type: taskTypeCandidate,
+      framework: finalFramework,
+      dataset_id: dataset.id,
+      dataset_version_id: collectedFields.dataset_version_id || null,
+      base_model: finalBaseModel,
+      config: finalConfig
+    });
+    const completedFields = normalizeCollectedFields({
+      ...collectedFields,
+      dataset_id: dataset.id,
+      dataset_name: dataset.name,
+      task_type: taskTypeCandidate,
+      framework: finalFramework,
+      name: created.name,
+      base_model: finalBaseModel
+    });
+    const summary = buildActionSummary(
+      'create_training_job',
+      'completed',
+      content,
+      `${created.name} (${created.id})`
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'completed', summary, completedFields, {
+        createdEntityType: 'TrainingJob',
+        createdEntityId: created.id,
+        createdEntityLabel: created.name
+      })
+    };
+  } catch (error) {
+    const summary = buildActionSummary(
+      'create_training_job',
+      'failed',
+      content,
+      (error as Error).message
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'failed', summary, {
+        ...collectedFields,
+        dataset_id: dataset.id,
+        dataset_name: dataset.name,
+        task_type: taskTypeCandidate,
+        framework: finalFramework,
+        name: finalName
+      })
+    };
+  }
+};
+
+const resolveCreateDatasetAction = async (
+  content: string,
+  pendingAction: ConversationActionMetadata | null
+): Promise<ConversationActionResolution> => {
+  const collectedFields = normalizeCollectedFields({
+    ...(pendingAction?.collected_fields ?? {}),
+    name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
+    task_type:
+      inferTaskTypeFromText(content) ?? pendingAction?.collected_fields.task_type ?? '',
+    description:
+      inferDescriptionFromText(content) || pendingAction?.collected_fields.description || '',
+    label_classes:
+      inferLabelClassesFromText(content).join(', ') || pendingAction?.collected_fields.label_classes || ''
+  });
+
+  const missingFields: string[] = [];
+  if (!collectedFields.name) {
+    missingFields.push('name');
+  }
+  if (!collectedFields.task_type || !isTaskTypeValue(collectedFields.task_type)) {
+    missingFields.push('task_type');
+  }
+
+  if (missingFields.length > 0) {
+    const summary = buildActionSummary('create_dataset', 'requires_input', content, missingFields.join(', '));
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_dataset', 'requires_input', summary, collectedFields, {
+        missingFields
+      })
+    };
+  }
+
+  const taskType = collectedFields.task_type as TaskType;
+  const description =
+    collectedFields.description ||
+    (hasChineseText(content)
+      ? `由对话请求创建：${content.slice(0, 120)}`
+      : `Created from conversation request: ${content.slice(0, 120)}`);
+  const labelClasses = collectedFields.label_classes
+    ? collectedFields.label_classes.split(/[，,、;；|]/).map((item) => sanitizeCapturedValue(item)).filter(Boolean)
+    : [];
+
+  try {
+    const created = await createDataset({
+      name: collectedFields.name,
+      description,
+      task_type: taskType,
+      label_schema: {
+        classes: labelClasses
+      }
+    });
+    const completedFields = normalizeCollectedFields({
+      ...collectedFields,
+      description,
+      task_type: taskType,
+      label_classes: labelClasses.join(', ')
+    });
+    const summary = buildActionSummary(
+      'create_dataset',
+      'completed',
+      content,
+      `${created.name} (${created.id})`
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_dataset', 'completed', summary, completedFields, {
+        createdEntityType: 'Dataset',
+        createdEntityId: created.id,
+        createdEntityLabel: created.name
+      })
+    };
+  } catch (error) {
+    const summary = buildActionSummary('create_dataset', 'failed', content, (error as Error).message);
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_dataset', 'failed', summary, {
+        ...collectedFields,
+        description
+      })
+    };
+  }
+};
+
+const resolveCreateModelDraftAction = async (
+  content: string,
+  pendingAction: ConversationActionMetadata | null
+): Promise<ConversationActionResolution> => {
+  const collectedFields = normalizeCollectedFields({
+    ...(pendingAction?.collected_fields ?? {}),
+    name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
+    model_type:
+      inferTaskTypeFromText(content) ?? pendingAction?.collected_fields.model_type ?? '',
+    description:
+      inferDescriptionFromText(content) || pendingAction?.collected_fields.description || '',
+    visibility:
+      inferVisibilityFromText(content) ?? pendingAction?.collected_fields.visibility ?? ''
+  });
+
+  const missingFields: string[] = [];
+  if (!collectedFields.name) {
+    missingFields.push('name');
+  }
+  if (!collectedFields.model_type || !isTaskTypeValue(collectedFields.model_type)) {
+    missingFields.push('model_type');
+  }
+
+  if (missingFields.length > 0) {
+    const summary = buildActionSummary('create_model_draft', 'requires_input', content, missingFields.join(', '));
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_model_draft', 'requires_input', summary, collectedFields, {
+        missingFields,
+        suggestions: ['private', 'workspace', 'public']
+      })
+    };
+  }
+
+  const description =
+    collectedFields.description ||
+    (hasChineseText(content)
+      ? `由对话请求创建：${content.slice(0, 120)}`
+      : `Created from conversation request: ${content.slice(0, 120)}`);
+  const visibility =
+    collectedFields.visibility === 'public' ||
+    collectedFields.visibility === 'workspace' ||
+    collectedFields.visibility === 'private'
+      ? collectedFields.visibility
+      : 'private';
+
+  try {
+    const created = await createModelDraft({
+      name: collectedFields.name,
+      description,
+      model_type: collectedFields.model_type as TaskType,
+      visibility
+    });
+    const completedFields = normalizeCollectedFields({
+      ...collectedFields,
+      description,
+      visibility,
+      model_type: created.model_type
+    });
+    const summary = buildActionSummary(
+      'create_model_draft',
+      'completed',
+      content,
+      `${created.name} (${created.id})`
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_model_draft', 'completed', summary, completedFields, {
+        createdEntityType: 'Model',
+        createdEntityId: created.id,
+        createdEntityLabel: created.name
+      })
+    };
+  } catch (error) {
+    const summary = buildActionSummary('create_model_draft', 'failed', content, (error as Error).message);
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_model_draft', 'failed', summary, {
+        ...collectedFields,
+        description,
+        visibility
+      })
+    };
+  }
+};
+
+const resolveConversationAction = async (
+  conversationId: string,
+  content: string,
+  currentUser: User
+): Promise<ConversationActionResolution | null> => {
+  const explicitAction = detectConversationActionType(content);
+  const pendingAction = getPendingConversationAction(conversationId);
+  const action = explicitAction ?? pendingAction?.action ?? null;
+
+  if (!action) {
+    return null;
+  }
+
+  if (pendingAction && !explicitAction && detectCancelIntent(content)) {
+    const summary = buildActionSummary(action, 'cancelled', content, '');
+    return {
+      content: summary,
+      metadata: toActionMetadata(action, 'cancelled', summary, pendingAction.collected_fields)
+    };
+  }
+
+  if (action === 'create_training_job') {
+    return resolveCreateTrainingJobAction(content, currentUser, explicitAction ? null : pendingAction);
+  }
+  if (action === 'create_dataset') {
+    return resolveCreateDatasetAction(content, explicitAction ? null : pendingAction);
+  }
+  return resolveCreateModelDraftAction(content, explicitAction ? null : pendingAction);
 };
 
 const conversationMessages = (conversationId: string): MessageRecord[] =>
@@ -1433,6 +2265,260 @@ const parseLabelMeImport = (
     .filter((value): value is GenericImportEntry => value !== null);
 };
 
+type DatasetAnnotationExportEntry = {
+  annotation: AnnotationWithReview;
+  item: DatasetItemRecord;
+  filename: string;
+};
+
+const listDatasetAnnotationExportEntries = (datasetId: string): DatasetAnnotationExportEntry[] => {
+  const items = datasetItems.filter((item) => item.dataset_id === datasetId);
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  const attachmentById = new Map(
+    attachments
+      .filter((attachment) => attachment.attached_to_type === 'Dataset' && attachment.attached_to_id === datasetId)
+      .map((attachment) => [attachment.id, attachment])
+  );
+
+  return listDatasetAnnotationsInternal(datasetId)
+    .map((annotation) => {
+      const item = itemById.get(annotation.dataset_item_id);
+      if (!item) {
+        return null;
+      }
+      const attachment = attachmentById.get(item.attachment_id);
+      const filename =
+        (attachment?.filename && attachment.filename.trim()) ||
+        item.metadata.original_filename ||
+        `dataset-item-${item.id}.bin`;
+
+      return {
+        annotation,
+        item,
+        filename
+      };
+    })
+    .filter((entry): entry is DatasetAnnotationExportEntry => entry !== null);
+};
+
+const toExportDetectionBoxes = (payload: Record<string, unknown>): DetectionImportEntry['boxes'] => {
+  const boxesRaw = Array.isArray(payload.boxes) ? payload.boxes : [];
+  return boxesRaw
+    .map((boxEntry) => {
+      const box = boxEntry as {
+        x?: unknown;
+        y?: unknown;
+        width?: unknown;
+        height?: unknown;
+        label?: unknown;
+        score?: unknown;
+      };
+      const x = toNumberOrNull(box.x);
+      const y = toNumberOrNull(box.y);
+      const width = toNumberOrNull(box.width);
+      const height = toNumberOrNull(box.height);
+      if (x === null || y === null || width === null || height === null || width <= 0 || height <= 0) {
+        return null;
+      }
+      return {
+        x,
+        y,
+        width,
+        height,
+        label: typeof box.label === 'string' && box.label.trim() ? box.label.trim() : 'object',
+        score: toNumberOrNull(box.score) ?? 0.5
+      };
+    })
+    .filter((entry): entry is DetectionImportEntry['boxes'][number] => entry !== null);
+};
+
+const toExportOcrLines = (payload: Record<string, unknown>): OcrImportEntry['lines'] => {
+  const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+  return linesRaw
+    .map((lineEntry) => {
+      const line = lineEntry as { text?: unknown; confidence?: unknown };
+      if (typeof line.text !== 'string' || !line.text.trim()) {
+        return null;
+      }
+      return {
+        text: line.text.trim(),
+        confidence: toNumberOrNull(line.confidence) ?? 0.9
+      };
+    })
+    .filter((entry): entry is OcrImportEntry['lines'][number] => entry !== null);
+};
+
+const toExportSegmentationPolygons = (
+  payload: Record<string, unknown>
+): Array<{ label: string; score: number; points: Array<{ x: number; y: number }> }> => {
+  const polygonsRaw = Array.isArray(payload.polygons) ? payload.polygons : [];
+  return polygonsRaw
+    .map((polygonEntry) => {
+      const polygon = polygonEntry as { label?: unknown; score?: unknown; points?: unknown };
+      const pointsRaw = Array.isArray(polygon.points) ? polygon.points : [];
+      const points = pointsRaw
+        .map((pointEntry) => {
+          const point = pointEntry as { x?: unknown; y?: unknown };
+          const x = toNumberOrNull(point.x);
+          const y = toNumberOrNull(point.y);
+          if (x === null || y === null) {
+            return null;
+          }
+          return { x, y };
+        })
+        .filter((point): point is { x: number; y: number } => point !== null);
+      if (points.length < 3) {
+        return null;
+      }
+      return {
+        label: typeof polygon.label === 'string' && polygon.label.trim() ? polygon.label.trim() : 'object',
+        score: toNumberOrNull(polygon.score) ?? 0.5,
+        points
+      };
+    })
+    .filter(
+      (
+        polygon
+      ): polygon is { label: string; score: number; points: Array<{ x: number; y: number }> } =>
+        polygon !== null
+    );
+};
+
+const buildYoloExportPayload = (
+  entries: DatasetAnnotationExportEntry[]
+): Array<{ filename: string; boxes: DetectionImportEntry['boxes'] }> => {
+  const grouped = new Map<string, { filename: string; boxes: DetectionImportEntry['boxes'] }>();
+  entries.forEach((entry) => {
+    const boxes = toExportDetectionBoxes(entry.annotation.payload);
+    if (boxes.length === 0) {
+      return;
+    }
+    const key = normalizeImportFilename(entry.filename);
+    const existing = grouped.get(key) ?? { filename: entry.filename, boxes: [] };
+    existing.boxes.push(...boxes);
+    grouped.set(key, existing);
+  });
+  return Array.from(grouped.values());
+};
+
+const buildOcrExportPayload = (
+  entries: DatasetAnnotationExportEntry[]
+): Array<{ filename: string; lines: OcrImportEntry['lines'] }> => {
+  const grouped = new Map<string, { filename: string; lines: OcrImportEntry['lines'] }>();
+  entries.forEach((entry) => {
+    const lines = toExportOcrLines(entry.annotation.payload);
+    if (lines.length === 0) {
+      return;
+    }
+    const key = normalizeImportFilename(entry.filename);
+    const existing = grouped.get(key) ?? { filename: entry.filename, lines: [] };
+    existing.lines.push(...lines);
+    grouped.set(key, existing);
+  });
+  return Array.from(grouped.values());
+};
+
+const buildCocoExportPayload = (entries: DatasetAnnotationExportEntry[]): {
+  images: Array<{ id: number; file_name: string }>;
+  categories: Array<{ id: number; name: string }>;
+  annotations: Array<{
+    id: number;
+    image_id: number;
+    category_id: number;
+    bbox: [number, number, number, number];
+    score: number;
+  }>;
+} => {
+  const grouped = buildYoloExportPayload(entries);
+  const labels = new Set<string>();
+  grouped.forEach((entry) => {
+    entry.boxes.forEach((box) => labels.add(box.label.trim() || 'object'));
+  });
+  const categories = Array.from(labels)
+    .sort((left, right) => left.localeCompare(right))
+    .map((name, index) => ({ id: index + 1, name }));
+  const categoryIdByName = new Map(categories.map((category) => [category.name, category.id]));
+
+  const images = grouped.map((entry, index) => ({
+    id: index + 1,
+    file_name: entry.filename
+  }));
+  const imageIdByFilename = new Map(images.map((image) => [normalizeImportFilename(image.file_name), image.id]));
+
+  const annotationsOut: Array<{
+    id: number;
+    image_id: number;
+    category_id: number;
+    bbox: [number, number, number, number];
+    score: number;
+  }> = [];
+  let annotationId = 1;
+  grouped.forEach((entry) => {
+    const imageId = imageIdByFilename.get(normalizeImportFilename(entry.filename));
+    if (!imageId) {
+      return;
+    }
+    entry.boxes.forEach((box) => {
+      const categoryId = categoryIdByName.get(box.label.trim() || 'object') ?? 1;
+      annotationsOut.push({
+        id: annotationId,
+        image_id: imageId,
+        category_id: categoryId,
+        bbox: [box.x, box.y, box.width, box.height],
+        score: box.score
+      });
+      annotationId += 1;
+    });
+  });
+
+  return {
+    images,
+    categories,
+    annotations: annotationsOut
+  };
+};
+
+const buildLabelMeExportPayload = (
+  entries: DatasetAnnotationExportEntry[],
+  taskType: DatasetRecord['task_type']
+): Array<{ imagePath: string; shapes: Array<{ label: string; shape_type: string; points: Array<[number, number]> }> }> => {
+  const grouped = new Map<
+    string,
+    { imagePath: string; shapes: Array<{ label: string; shape_type: string; points: Array<[number, number]> }> }
+  >();
+
+  entries.forEach((entry) => {
+    const key = normalizeImportFilename(entry.filename);
+    const existing = grouped.get(key) ?? { imagePath: entry.filename, shapes: [] };
+    const boxes = toExportDetectionBoxes(entry.annotation.payload);
+    boxes.forEach((box) => {
+      existing.shapes.push({
+        label: box.label,
+        shape_type: 'rectangle',
+        points: [
+          [box.x, box.y],
+          [box.x + box.width, box.y + box.height]
+        ]
+      });
+    });
+
+    if (taskType === 'segmentation') {
+      const polygons = toExportSegmentationPolygons(entry.annotation.payload);
+      polygons.forEach((polygon) => {
+        existing.shapes.push({
+          label: polygon.label,
+          shape_type: 'polygon',
+          points: polygon.points.map((point) => [point.x, point.y] as [number, number])
+        });
+      });
+    }
+
+    grouped.set(key, existing);
+  });
+
+  return Array.from(grouped.values()).filter((entry) => entry.shapes.length > 0);
+};
+
 const buildDatasetItemByFilenameMap = (datasetId: string): Map<string, DatasetItemRecord[]> => {
   const map = new Map<string, DatasetItemRecord[]>();
   const items = datasetItems.filter((item) => item.dataset_id === datasetId && item.status === 'ready');
@@ -1450,6 +2536,664 @@ const buildDatasetItemByFilenameMap = (datasetId: string): Map<string, DatasetIt
   });
 
   return map;
+};
+
+const parseDatasetItemSplit = (
+  input: unknown,
+  fallback: DatasetItemRecord['split'] = 'unassigned'
+): DatasetItemRecord['split'] => {
+  if (typeof input !== 'string' || !input.trim()) {
+    return fallback;
+  }
+  if (input === 'train' || input === 'val' || input === 'test' || input === 'unassigned') {
+    return input;
+  }
+  throw new Error('Invalid dataset item split.');
+};
+
+const parseDatasetItemStatus = (
+  input: unknown,
+  fallback: DatasetItemRecord['status'] = 'ready'
+): DatasetItemRecord['status'] => {
+  if (typeof input !== 'string' || !input.trim()) {
+    return fallback;
+  }
+  if (input === 'uploading' || input === 'processing' || input === 'ready' || input === 'error') {
+    return input;
+  }
+  throw new Error('Invalid dataset item status.');
+};
+
+const normalizeDatasetItemMetadata = (input: unknown): Record<string, string> => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(input)
+      .map(([key, value]) => [String(key).trim(), String(value).trim()] as const)
+      .filter(([key, value]) => key.length > 0 && value.length > 0)
+  );
+};
+
+const findDatasetReadyAttachmentByFilename = (datasetId: string, filename: string): FileAttachment | null => {
+  const key = normalizeImportFilename(filename);
+  const matched = attachments.find(
+    (attachment) =>
+      attachment.attached_to_type === 'Dataset' &&
+      attachment.attached_to_id === datasetId &&
+      attachment.status === 'ready' &&
+      normalizeImportFilename(attachment.filename) === key
+  );
+  return matched ?? null;
+};
+
+const createDatasetReferenceAttachment = (
+  dataset: DatasetRecord,
+  currentUser: User,
+  filename: string
+): FileAttachment => {
+  const created: FileAttachment = {
+    id: nextId('f'),
+    filename: filename.trim() || `dataset-reference-${Date.now()}.bin`,
+    status: 'ready',
+    owner_user_id: currentUser.id,
+    attached_to_type: 'Dataset',
+    attached_to_id: dataset.id,
+    mime_type: guessMimeType(filename),
+    byte_size: null,
+    storage_backend: null,
+    storage_path: null,
+    upload_error: null,
+    created_at: now(),
+    updated_at: now()
+  };
+  attachments.unshift(created);
+  return created;
+};
+
+const cloneAttachmentToDatasetScope = async (
+  sourceAttachment: FileAttachment,
+  dataset: DatasetRecord,
+  currentUser: User
+): Promise<FileAttachment> => {
+  const cloned: FileAttachment = {
+    id: nextId('f'),
+    filename: sourceAttachment.filename,
+    status: sourceAttachment.status,
+    owner_user_id: currentUser.id,
+    attached_to_type: 'Dataset',
+    attached_to_id: dataset.id,
+    mime_type: sourceAttachment.mime_type ?? guessMimeType(sourceAttachment.filename),
+    byte_size: sourceAttachment.byte_size,
+    storage_backend: null,
+    storage_path: null,
+    upload_error: sourceAttachment.upload_error,
+    created_at: now(),
+    updated_at: now()
+  };
+  attachments.unshift(cloned);
+
+  const sourceStored = await findStoredAttachmentBinary(sourceAttachment);
+  if (!sourceStored) {
+    return cloned;
+  }
+
+  try {
+    const content = await fs.readFile(sourceStored.file_path);
+    const stored = await storeAttachmentBinary(
+      cloned,
+      sourceAttachment.filename,
+      content,
+      sourceAttachment.mime_type ?? sourceStored.mime_type
+    );
+    cloned.status = 'ready';
+    cloned.mime_type = stored.mime_type;
+    cloned.byte_size = stored.byte_size;
+    cloned.storage_backend = 'local';
+    cloned.storage_path = stored.file_path;
+    cloned.upload_error = null;
+    cloned.updated_at = now();
+    return cloned;
+  } catch {
+    const index = attachments.findIndex((item) => item.id === cloned.id);
+    if (index >= 0) {
+      attachments.splice(index, 1);
+    }
+    throw new Error('Failed to copy inference attachment into dataset scope.');
+  }
+};
+
+const upsertDatasetItemForAttachment = (
+  dataset: DatasetRecord,
+  attachment: FileAttachment,
+  options?: {
+    split?: unknown;
+    status?: unknown;
+    metadata?: unknown;
+  }
+): { item: DatasetItemRecord; created: boolean } => {
+  const existing = datasetItems.find(
+    (item) => item.dataset_id === dataset.id && item.attachment_id === attachment.id
+  );
+  const nextMetadata = normalizeDatasetItemMetadata(options?.metadata);
+  const nextSplit = parseDatasetItemSplit(options?.split, existing?.split ?? 'unassigned');
+  const nextStatus = parseDatasetItemStatus(
+    options?.status,
+    existing?.status ?? parseDatasetItemStatus(attachment.status, 'ready')
+  );
+
+  if (existing) {
+    const mergedMetadata =
+      Object.keys(nextMetadata).length > 0
+        ? {
+            ...existing.metadata,
+            ...nextMetadata
+          }
+        : existing.metadata;
+    const changed =
+      existing.split !== nextSplit ||
+      existing.status !== nextStatus ||
+      JSON.stringify(existing.metadata) !== JSON.stringify(mergedMetadata);
+    if (changed) {
+      existing.split = nextSplit;
+      existing.status = nextStatus;
+      existing.metadata = mergedMetadata;
+      existing.updated_at = now();
+    }
+    return {
+      item: existing,
+      created: false
+    };
+  }
+
+  const created: DatasetItemRecord = {
+    id: nextId('di'),
+    dataset_id: dataset.id,
+    attachment_id: attachment.id,
+    split: nextSplit,
+    status: nextStatus,
+    metadata: nextMetadata,
+    created_at: now(),
+    updated_at: now()
+  };
+  datasetItems.unshift(created);
+  return {
+    item: created,
+    created: true
+  };
+};
+
+interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+const parsePngDimensions = (content: Buffer): ImageDimensions | null => {
+  if (content.byteLength < 24) {
+    return null;
+  }
+
+  const signature = '89504e470d0a1a0a';
+  if (content.subarray(0, 8).toString('hex') !== signature) {
+    return null;
+  }
+
+  const width = content.readUInt32BE(16);
+  const height = content.readUInt32BE(20);
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { width, height };
+};
+
+const parseGifDimensions = (content: Buffer): ImageDimensions | null => {
+  if (content.byteLength < 10) {
+    return null;
+  }
+
+  const header = content.subarray(0, 6).toString('ascii');
+  if (header !== 'GIF87a' && header !== 'GIF89a') {
+    return null;
+  }
+
+  const width = content.readUInt16LE(6);
+  const height = content.readUInt16LE(8);
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { width, height };
+};
+
+const parseJpegDimensions = (content: Buffer): ImageDimensions | null => {
+  if (content.byteLength < 4 || content[0] !== 0xff || content[1] !== 0xd8) {
+    return null;
+  }
+
+  let offset = 2;
+  while (offset < content.byteLength - 9) {
+    if (content[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+
+    let markerOffset = offset + 1;
+    while (markerOffset < content.byteLength && content[markerOffset] === 0xff) {
+      markerOffset += 1;
+    }
+    if (markerOffset >= content.byteLength) {
+      break;
+    }
+
+    const marker = content[markerOffset] as number;
+    offset = markerOffset + 1;
+
+    if (marker === 0xd8 || marker === 0xd9) {
+      continue;
+    }
+
+    if (offset + 1 >= content.byteLength) {
+      break;
+    }
+
+    const segmentLength = content.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > content.byteLength) {
+      break;
+    }
+
+    const isStartOfFrame =
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf);
+
+    if (isStartOfFrame && offset + 7 < content.byteLength) {
+      const height = content.readUInt16BE(offset + 3);
+      const width = content.readUInt16BE(offset + 5);
+      if (width > 0 && height > 0) {
+        return { width, height };
+      }
+      return null;
+    }
+
+    offset += segmentLength;
+  }
+
+  return null;
+};
+
+const readImageDimensions = async (filePath: string): Promise<ImageDimensions | null> => {
+  try {
+    const content = await fs.readFile(filePath);
+    return parsePngDimensions(content) ?? parseGifDimensions(content) ?? parseJpegDimensions(content);
+  } catch {
+    return null;
+  }
+};
+
+const uniqueStrings = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+
+  values.forEach((value) => {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  });
+
+  return ordered;
+};
+
+const trainingAnnotationStatusPriority: Record<AnnotationStatus, number> = {
+  approved: 6,
+  in_review: 5,
+  annotated: 4,
+  in_progress: 3,
+  unannotated: 2,
+  rejected: 1
+};
+
+const pickTrainingAnnotationForItem = (datasetItemId: string): AnnotationRecord | null =>
+  annotations
+    .filter((annotation) => annotation.dataset_item_id === datasetItemId && annotation.status !== 'rejected')
+    .sort((left, right) => {
+      const priorityDelta =
+        (trainingAnnotationStatusPriority[right.status] ?? 0) -
+        (trainingAnnotationStatusPriority[left.status] ?? 0);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      return Date.parse(right.updated_at) - Date.parse(left.updated_at);
+    })[0] ?? null;
+
+const copyStoredAttachmentToPath = async (
+  attachment: FileAttachment,
+  destinationPath: string
+): Promise<string | null> => {
+  const stored = await findStoredAttachmentBinary(attachment);
+  if (!stored) {
+    return null;
+  }
+
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  await fs.copyFile(stored.file_path, destinationPath);
+  return destinationPath;
+};
+
+const writeTextFile = async (filePath: string, content: string): Promise<void> => {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content, 'utf8');
+};
+
+const writeJsonFile = async (filePath: string, payload: unknown): Promise<void> => {
+  await writeTextFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
+};
+
+const resolveMaterializedSplit = (split: DatasetItemRecord['split']): 'train' | 'val' | 'test' => {
+  if (split === 'val' || split === 'test') {
+    return split;
+  }
+  return 'train';
+};
+
+const normalizeTrainingBoxPayload = (
+  payload: Record<string, unknown>
+): Array<{ x: number; y: number; width: number; height: number; label: string }> => {
+  const entries = Array.isArray(payload.boxes)
+    ? payload.boxes
+    : Array.isArray(payload.regions)
+      ? payload.regions
+      : [];
+
+  return entries
+    .map((entry) => {
+      const record = entry as {
+        x?: unknown;
+        y?: unknown;
+        width?: unknown;
+        height?: unknown;
+        label?: unknown;
+      };
+      const x = toNumberOrNull(record.x);
+      const y = toNumberOrNull(record.y);
+      const width = toNumberOrNull(record.width);
+      const height = toNumberOrNull(record.height);
+      if (x === null || y === null || width === null || height === null || width <= 0 || height <= 0) {
+        return null;
+      }
+
+      return {
+        x,
+        y,
+        width,
+        height,
+        label: typeof record.label === 'string' && record.label.trim() ? record.label.trim() : 'object'
+      };
+    })
+    .filter(
+      (
+        value
+      ): value is { x: number; y: number; width: number; height: number; label: string } => value !== null
+    );
+};
+
+const toYoloNormalizedLine = (
+  box: { x: number; y: number; width: number; height: number; label: string },
+  image: ImageDimensions,
+  classIndex: number
+): string | null => {
+  if (image.width <= 0 || image.height <= 0 || classIndex < 0) {
+    return null;
+  }
+
+  const centerX = (box.x + box.width / 2) / image.width;
+  const centerY = (box.y + box.height / 2) / image.height;
+  const normWidth = box.width / image.width;
+  const normHeight = box.height / image.height;
+
+  const values = [centerX, centerY, normWidth, normHeight].map((value) =>
+    Math.min(1, Math.max(0, value))
+  );
+
+  if (values.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  return `${classIndex} ${values.map((value) => value.toFixed(6)).join(' ')}`;
+};
+
+const materializeYoloDetectionDataset = async (
+  dataset: DatasetRecord,
+  workspaceDir: string
+): Promise<Record<string, unknown>> => {
+  const rootDir = path.join(workspaceDir, 'materialized-dataset', 'yolo');
+  const manifestPath = path.join(rootDir, 'manifest.json');
+  const datasetYamlPath = path.join(rootDir, 'dataset.yaml');
+  const items = datasetItems.filter((item) => item.dataset_id === dataset.id && item.status === 'ready');
+
+  const classNames = uniqueStrings([
+    ...dataset.label_schema.classes,
+    ...items.flatMap((item) => {
+      const annotation = pickTrainingAnnotationForItem(item.id);
+      if (!annotation) {
+        return [];
+      }
+      return normalizeTrainingBoxPayload(annotation.payload as Record<string, unknown>).map((box) => box.label);
+    })
+  ]);
+  const effectiveClassNames = classNames.length > 0 ? classNames : ['object'];
+  const splitCounts = {
+    train: 0,
+    val: 0,
+    test: 0
+  };
+  const manifestItems: Array<Record<string, unknown>> = [];
+  let copiedImageCount = 0;
+  let labeledItemCount = 0;
+  let missingImageCount = 0;
+  let missingDimensionCount = 0;
+
+  for (const item of items) {
+    const attachment = attachments.find((entry) => entry.id === item.attachment_id);
+    if (!attachment) {
+      missingImageCount += 1;
+      continue;
+    }
+
+    const split = resolveMaterializedSplit(item.split);
+    splitCounts[split] += 1;
+
+    const safeFilename = `${item.id}__${sanitizeFilename(attachment.filename)}`;
+    const imagePath = path.join(rootDir, split, 'images', safeFilename);
+    const imageCopiedPath = await copyStoredAttachmentToPath(attachment, imagePath);
+    if (!imageCopiedPath) {
+      missingImageCount += 1;
+      manifestItems.push({
+        dataset_item_id: item.id,
+        attachment_id: attachment.id,
+        split,
+        filename: attachment.filename,
+        image_path: null,
+        label_path: null,
+        reason: 'missing_attachment_binary'
+      });
+      continue;
+    }
+
+    copiedImageCount += 1;
+    const imageDimensions = await readImageDimensions(imageCopiedPath);
+    if (!imageDimensions) {
+      missingDimensionCount += 1;
+    }
+
+    const stem = path.basename(safeFilename, path.extname(safeFilename));
+    const labelPath = path.join(rootDir, split, 'labels', `${stem}.txt`);
+    const annotation = pickTrainingAnnotationForItem(item.id);
+    const boxes = annotation
+      ? normalizeTrainingBoxPayload(annotation.payload as Record<string, unknown>)
+      : [];
+    const labelLines =
+      imageDimensions !== null
+        ? boxes
+            .map((box) =>
+              toYoloNormalizedLine(
+                box,
+                imageDimensions,
+                effectiveClassNames.findIndex((label) => label === box.label)
+              )
+            )
+            .filter((line): line is string => Boolean(line))
+        : [];
+
+    if (labelLines.length > 0) {
+      labeledItemCount += 1;
+    }
+
+    await writeTextFile(labelPath, labelLines.join('\n'));
+    manifestItems.push({
+      dataset_item_id: item.id,
+      attachment_id: attachment.id,
+      split,
+      filename: attachment.filename,
+      image_path: imageCopiedPath,
+      label_path: labelPath,
+      image_size: imageDimensions,
+      label_count: labelLines.length,
+      annotation_id: annotation?.id ?? null,
+      annotation_status: annotation?.status ?? null
+    });
+  }
+
+  const yamlLines = [
+    `path: ${JSON.stringify(rootDir)}`,
+    'train: train/images',
+    `val: ${splitCounts.val > 0 ? 'val/images' : 'train/images'}`,
+    ...(splitCounts.test > 0 ? ['test: test/images'] : []),
+    `names: ${JSON.stringify(effectiveClassNames)}`
+  ];
+  await writeTextFile(datasetYamlPath, `${yamlLines.join('\n')}\n`);
+  await writeJsonFile(manifestPath, {
+    format: 'yolo_detection',
+    root_dir: rootDir,
+    dataset_yaml: datasetYamlPath,
+    class_names: effectiveClassNames,
+    split_counts: splitCounts,
+    copied_image_count: copiedImageCount,
+    labeled_item_count: labeledItemCount,
+    missing_image_count: missingImageCount,
+    missing_dimension_count: missingDimensionCount,
+    items: manifestItems
+  });
+
+  return {
+    format: 'yolo_detection',
+    root_dir: rootDir,
+    manifest_path: manifestPath,
+    yolo_data_yaml: datasetYamlPath,
+    class_names: effectiveClassNames,
+    split_counts: splitCounts,
+    copied_image_count: copiedImageCount,
+    labeled_item_count: labeledItemCount,
+    missing_image_count: missingImageCount,
+    missing_dimension_count: missingDimensionCount
+  };
+};
+
+const materializeOcrDataset = async (
+  dataset: DatasetRecord,
+  workspaceDir: string
+): Promise<Record<string, unknown>> => {
+  const rootDir = path.join(workspaceDir, 'materialized-dataset', 'ocr');
+  const manifestPath = path.join(rootDir, 'manifest.json');
+  const items = datasetItems.filter((item) => item.dataset_id === dataset.id && item.status === 'ready');
+  const splitCounts = {
+    train: 0,
+    val: 0,
+    test: 0
+  };
+  const manifestItems: Array<Record<string, unknown>> = [];
+
+  for (const item of items) {
+    const attachment = attachments.find((entry) => entry.id === item.attachment_id);
+    if (!attachment) {
+      continue;
+    }
+
+    const split = resolveMaterializedSplit(item.split);
+    splitCounts[split] += 1;
+    const safeFilename = `${item.id}__${sanitizeFilename(attachment.filename)}`;
+    const imagePath = path.join(rootDir, split, 'images', safeFilename);
+    const copiedImagePath = await copyStoredAttachmentToPath(attachment, imagePath);
+    const annotation = pickTrainingAnnotationForItem(item.id);
+    const payload = (annotation?.payload ?? {}) as { lines?: unknown };
+    const lines = Array.isArray(payload.lines)
+      ? payload.lines
+          .map((entry) => {
+            const record = entry as { text?: unknown; confidence?: unknown; region_id?: unknown };
+            if (typeof record.text !== 'string' || !record.text.trim()) {
+              return null;
+            }
+
+            return {
+              text: record.text.trim(),
+              confidence: toNumberOrNull(record.confidence) ?? 0.9,
+              region_id: typeof record.region_id === 'string' ? record.region_id : null
+            };
+          })
+          .filter(
+            (entry): entry is { text: string; confidence: number; region_id: string | null } =>
+              entry !== null
+          )
+      : [];
+
+    manifestItems.push({
+      dataset_item_id: item.id,
+      attachment_id: attachment.id,
+      split,
+      filename: attachment.filename,
+      image_path: copiedImagePath,
+      annotation_id: annotation?.id ?? null,
+      annotation_status: annotation?.status ?? null,
+      line_count: lines.length,
+      lines
+    });
+  }
+
+  await writeJsonFile(manifestPath, {
+    format: 'ocr_manifest',
+    root_dir: rootDir,
+    split_counts: splitCounts,
+    items: manifestItems
+  });
+
+  return {
+    format: 'ocr_manifest',
+    root_dir: rootDir,
+    manifest_path: manifestPath,
+    split_counts: splitCounts,
+    item_count: manifestItems.length
+  };
+};
+
+const materializeTrainingDataset = async (
+  dataset: DatasetRecord,
+  workspaceDir: string
+): Promise<Record<string, unknown> | null> => {
+  if (dataset.task_type === 'detection') {
+    return materializeYoloDetectionDataset(dataset, workspaceDir);
+  }
+
+  if (dataset.task_type === 'ocr') {
+    return materializeOcrDataset(dataset, workspaceDir);
+  }
+
+  return null;
 };
 
 const trainingWorkspaceRoot = path.resolve(
@@ -1823,7 +3567,19 @@ const upsertTrainingArtifactAttachment = async (
   runtime: TrainingRuntimeState,
   metrics: Record<string, number>
 ): Promise<FileAttachment> => {
+  let existingArtifactPayload: Record<string, unknown> = {};
+  try {
+    const raw = await fs.readFile(runtime.artifact_path, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      existingArtifactPayload = parsed as Record<string, unknown>;
+    }
+  } catch {
+    existingArtifactPayload = {};
+  }
+
   const artifactPayload = {
+    ...existingArtifactPayload,
     job_id: job.id,
     framework: job.framework,
     task_type: job.task_type,
@@ -1919,6 +3675,10 @@ const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
     await appendTrainingLog(job, runtime, `Preparing local workspace for ${job.framework}.`);
 
     const summary = buildDatasetTrainingSummary(job.dataset_id);
+    const dataset = datasets.find((item) => item.id === job.dataset_id) ?? null;
+    const materializedDataset = dataset
+      ? await materializeTrainingDataset(dataset, runtime.workspace_dir)
+      : null;
     const configPayload = {
       job_id: job.id,
       framework: job.framework,
@@ -1927,17 +3687,27 @@ const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
       dataset_version_id: job.dataset_version_id,
       base_model: job.base_model,
       config: job.config,
+      materialized_dataset: materializedDataset,
       created_at: job.created_at
     };
-    await fs.writeFile(runtime.config_path, JSON.stringify(configPayload, null, 2), 'utf8');
-    await fs.writeFile(runtime.summary_path, JSON.stringify(summary, null, 2), 'utf8');
+    await writeJsonFile(runtime.config_path, configPayload);
+    await writeJsonFile(runtime.summary_path, summary);
     await appendTrainingLog(
       job,
       runtime,
       `Dataset summary: items=${summary.total_items}, ready=${summary.ready_items}, annotated=${summary.annotated_items}.`
     );
+    if (materializedDataset) {
+      await appendTrainingLog(
+        job,
+        runtime,
+        `Materialized dataset prepared (${String(materializedDataset.format)}): ${JSON.stringify(materializedDataset)}`
+      );
+    }
 
     const trainer = getTrainerByFramework(job.framework);
+    let resolvedExecutionMode: TrainingJobRecord['execution_mode'] = 'unknown';
+    let trainerLogsStreamed = false;
     const trainAccepted = await trainer.train({
       trainingJobId: job.id,
       datasetId: job.dataset_id,
@@ -1948,11 +3718,28 @@ const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
       configPath: runtime.config_path,
       summaryPath: runtime.summary_path,
       metricsPath: runtime.metrics_path,
-      artifactPath: runtime.artifact_path
+      artifactPath: runtime.artifact_path,
+      onExecutionMode: (mode) => {
+        resolvedExecutionMode = mode;
+        job.execution_mode = mode;
+        job.updated_at = now();
+        markAppStateDirty();
+
+        if (mode === 'local_command' && job.status !== 'running') {
+          job.status = 'running';
+          job.updated_at = now();
+          markAppStateDirty();
+          void appendTrainingLog(job, runtime, `Running ${job.framework} local command executor.`);
+        }
+      },
+      onLog: (line) => {
+        trainerLogsStreamed = true;
+        void appendTrainingLog(job, runtime, `trainer> ${line}`);
+      }
     });
-    job.execution_mode = trainAccepted.execution_mode ?? 'unknown';
+    job.execution_mode = trainAccepted.execution_mode ?? resolvedExecutionMode;
     await appendTrainingLog(job, runtime, `Trainer accepted: ${trainAccepted.logPreview}`);
-    if (Array.isArray(trainAccepted.logs) && trainAccepted.logs.length > 0) {
+    if (!trainerLogsStreamed && Array.isArray(trainAccepted.logs) && trainAccepted.logs.length > 0) {
       for (const line of trainAccepted.logs.slice(-36)) {
         await appendTrainingLog(job, runtime, `trainer> ${line}`);
       }
@@ -2020,9 +3807,6 @@ const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
 
     if (trainAccepted.execution_mode === 'local_command') {
       assertRuntimeActive(job.id, runId);
-      job.status = 'running';
-      job.updated_at = now();
-      await appendTrainingLog(job, runtime, `Running ${job.framework} local command executor.`);
       await waitWithCancelCheck(job.id, runId, 120);
 
       job.status = 'evaluating';
@@ -2266,6 +4050,108 @@ const buildPreAnnotationPayloadFromPrediction = (
   return { payload, hasSignal: prediction.labels.length > 0 };
 };
 
+const toOptionalTrimmedString = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value.trim() : null;
+
+const toOptionalBoolean = (value: unknown): boolean | null =>
+  typeof value === 'boolean' ? value : null;
+
+const toOptionalInteger = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.round(value);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? Math.round(parsed) : null;
+  }
+  return null;
+};
+
+const extractArtifactMetricsKeys = (payload: Record<string, unknown>): string[] => {
+  const keys = new Set<string>();
+  const metricsValue = payload.metrics;
+  if (metricsValue && typeof metricsValue === 'object' && !Array.isArray(metricsValue)) {
+    Object.entries(metricsValue).forEach(([metricName, metricValue]) => {
+      if (typeof metricName === 'string' && typeof metricValue === 'number' && Number.isFinite(metricValue)) {
+        keys.add(metricName);
+      }
+    });
+  }
+
+  if (keys.size > 0) {
+    return Array.from(keys).sort((left, right) => left.localeCompare(right));
+  }
+
+  const summaryValue = payload.summary;
+  if (summaryValue && typeof summaryValue === 'object' && !Array.isArray(summaryValue)) {
+    Object.entries(summaryValue).forEach(([metricName, metricValue]) => {
+      if (typeof metricName === 'string' && typeof metricValue === 'number' && Number.isFinite(metricValue)) {
+        keys.add(metricName);
+      }
+    });
+  }
+
+  const metricSeriesValue = payload.metric_series;
+  if (Array.isArray(metricSeriesValue)) {
+    metricSeriesValue.forEach((point) => {
+      if (!point || typeof point !== 'object' || Array.isArray(point)) {
+        return;
+      }
+      const pointMetrics = (point as { metrics?: unknown }).metrics;
+      if (!pointMetrics || typeof pointMetrics !== 'object' || Array.isArray(pointMetrics)) {
+        return;
+      }
+      Object.entries(pointMetrics).forEach(([metricName, metricValue]) => {
+        if (typeof metricName === 'string' && typeof metricValue === 'number' && Number.isFinite(metricValue)) {
+          keys.add(metricName);
+        }
+      });
+    });
+  }
+
+  return Array.from(keys).sort((left, right) => left.localeCompare(right));
+};
+
+const readTrainingArtifactSummary = async (
+  attachment: FileAttachment
+): Promise<TrainingArtifactSummary | null> => {
+  if (attachment.status !== 'ready') {
+    return null;
+  }
+
+  const stored = await findStoredAttachmentBinary(attachment);
+  if (!stored) {
+    return null;
+  }
+
+  try {
+    const raw = await fs.readFile(stored.file_path, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const payload = parsed as Record<string, unknown>;
+    const primaryModelPath =
+      toOptionalTrimmedString(payload.primary_model_path) ??
+      toOptionalTrimmedString(payload.model_path) ??
+      null;
+
+    return {
+      runner: toOptionalTrimmedString(payload.runner),
+      mode: toOptionalTrimmedString(payload.mode),
+      fallback_reason: toOptionalTrimmedString(payload.fallback_reason),
+      training_performed: toOptionalBoolean(payload.training_performed),
+      primary_model_path: primaryModelPath,
+      generated_at: toOptionalTrimmedString(payload.generated_at),
+      sampled_items: toOptionalInteger(payload.sampled_items),
+      metrics_keys: extractArtifactMetricsKeys(payload)
+    };
+  } catch {
+    return null;
+  }
+};
+
 const ensureTrainingArtifactAttachment = async (
   job: TrainingJobRecord,
   metrics: Record<string, number>
@@ -2293,6 +4179,68 @@ const ensureTrainingArtifactAttachment = async (
   return upsertTrainingArtifactAttachment(job, runtime, metrics);
 };
 
+const resolvePrimaryModelPathFromArtifactAttachment = async (
+  attachment: FileAttachment
+): Promise<string | null> => {
+  const stored = await findStoredAttachmentBinary(attachment);
+  if (!stored) {
+    return null;
+  }
+
+  const looksLikeManifest =
+    attachment.mime_type === 'application/json' || attachment.filename.toLowerCase().endsWith('.json');
+  if (!looksLikeManifest) {
+    return stored.file_path;
+  }
+
+  try {
+    const content = await fs.readFile(stored.file_path, 'utf8');
+    const parsed = JSON.parse(content) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const payload = parsed as Record<string, unknown>;
+    const rawPrimaryPath =
+      typeof payload.primary_model_path === 'string'
+        ? payload.primary_model_path
+        : typeof payload.model_path === 'string'
+          ? payload.model_path
+          : null;
+    if (!rawPrimaryPath?.trim()) {
+      return null;
+    }
+
+    const candidate = rawPrimaryPath.trim();
+    const resolved = path.isAbsolute(candidate)
+      ? candidate
+      : path.resolve(path.dirname(stored.file_path), candidate);
+    const stats = await fs.stat(resolved);
+    if (!stats.isFile()) {
+      return null;
+    }
+
+    return resolved;
+  } catch {
+    return null;
+  }
+};
+
+const resolveModelVersionArtifactModelPath = async (
+  version: ModelVersionRecord
+): Promise<string | null> => {
+  if (!version.artifact_attachment_id) {
+    return null;
+  }
+
+  const attachment = attachments.find((item) => item.id === version.artifact_attachment_id);
+  if (!attachment || attachment.status !== 'ready') {
+    return null;
+  }
+
+  return resolvePrimaryModelPathFromArtifactAttachment(attachment);
+};
+
 const getModelVersionsVisibleToUser = (user: User): ModelVersionRecord[] =>
   modelVersions.filter((version) => {
     const model = models.find((item) => item.id === version.model_id);
@@ -2308,44 +4256,10 @@ const getModelVersionsVisibleToUser = (user: User): ModelVersionRecord[] =>
     );
   });
 
-export async function register(input: RegisterInput): Promise<User> {
+export async function register(_input: RegisterInput): Promise<User> {
   await delay();
-
-  const username = input.username.trim();
-  const normalizedUsername = normalizeUsername(username);
-  const password = input.password.trim();
-
-  if (username.length < 3) {
-    throw new Error('Username must be at least 3 characters.');
-  }
-
-  if (password.length < 8) {
-    throw new Error('Password must be at least 8 characters.');
-  }
-
-  if (users.some((user) => normalizeUsername(user.username) === normalizedUsername)) {
-    throw new Error('Username already exists.');
-  }
-
-  const created: User = {
-    id: nextId('u'),
-    username,
-    role: 'user',
-    capabilities: [],
-    created_at: now(),
-    updated_at: now()
-  };
-
-  users.push(created);
-  userPasswordHashes[created.id] = hashPassword(password);
-  logAudit(
-    'user_registered',
-    'User',
-    created.id,
-    { username: created.username, role: created.role },
-    created.id
-  );
-  return created;
+  void _input;
+  throw new Error('Public registration is disabled.');
 }
 
 export async function login(input: LoginInput): Promise<User> {
@@ -2356,12 +4270,14 @@ export async function login(input: LoginInput): Promise<User> {
   if (!matched) {
     throw new Error('Invalid username or password.');
   }
+  assertUserAccountActive(matched);
 
   const expectedHash = userPasswordHashes[matched.id];
   if (!expectedHash || !verifyPassword(input.password.trim(), expectedHash)) {
     throw new Error('Invalid username or password.');
   }
 
+  matched.last_login_at = now();
   logAudit('user_logged_in', 'User', matched.id, { username: matched.username }, matched.id);
   return matched;
 }
@@ -2369,6 +4285,161 @@ export async function login(input: LoginInput): Promise<User> {
 export async function me(): Promise<User> {
   await delay(120);
   return findCurrentUser();
+}
+
+export async function listUsers(): Promise<User[]> {
+  await delay(120);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can list users.');
+  return [...users];
+}
+
+export async function createUserByAdmin(input: CreateUserInput): Promise<User> {
+  await delay();
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can provision accounts.');
+
+  const username = input.username.trim();
+  const normalizedUsername = normalizeUsername(username);
+  const password = input.password.trim();
+  const role = input.role;
+
+  if (username.length < 3) {
+    throw new Error('Username must be at least 3 characters.');
+  }
+
+  if (password.length < 8) {
+    throw new Error('Password must be at least 8 characters.');
+  }
+
+  if (role !== 'user' && role !== 'admin') {
+    throw new Error('Role must be user or admin.');
+  }
+
+  if (users.some((user) => normalizeUsername(user.username) === normalizedUsername)) {
+    throw new Error('Username already exists.');
+  }
+
+  const timestamp = now();
+  const created: User = {
+    id: nextId('u'),
+    username,
+    role,
+    status: 'active',
+    status_reason: null,
+    capabilities: defaultCapabilitiesByRole(role),
+    last_login_at: null,
+    created_at: timestamp,
+    updated_at: timestamp
+  };
+
+  users.push(created);
+  userPasswordHashes[created.id] = hashPassword(password);
+  logAudit('user_created_by_admin', 'User', created.id, {
+    username: created.username,
+    role: created.role,
+    created_by: currentUser.id
+  });
+  return created;
+}
+
+export async function changeMyPassword(input: ChangePasswordInput): Promise<{ updated: true }> {
+  await delay();
+  const currentUser = findCurrentUser();
+  const currentPassword = input.current_password.trim();
+  const newPassword = input.new_password.trim();
+  const storedHash = userPasswordHashes[currentUser.id];
+
+  if (!storedHash || !verifyPassword(currentPassword, storedHash)) {
+    throw new Error('Current password is incorrect.');
+  }
+
+  if (newPassword.length < 8) {
+    throw new Error('Password must be at least 8 characters.');
+  }
+
+  userPasswordHashes[currentUser.id] = hashPassword(newPassword);
+  currentUser.updated_at = now();
+  logAudit('user_password_changed', 'User', currentUser.id, {
+    username: currentUser.username
+  });
+  return { updated: true };
+}
+
+export async function resetUserPasswordByAdmin(
+  userId: string,
+  input: ResetUserPasswordInput
+): Promise<User> {
+  await delay();
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can reset user passwords.');
+
+  const targetUser = findUserById(userId);
+  const nextPassword = input.new_password.trim();
+  if (nextPassword.length < 8) {
+    throw new Error('Password must be at least 8 characters.');
+  }
+
+  userPasswordHashes[targetUser.id] = hashPassword(nextPassword);
+  targetUser.updated_at = now();
+  logAudit('user_password_reset_by_admin', 'User', targetUser.id, {
+    username: targetUser.username,
+    reset_by: currentUser.id
+  });
+  return targetUser;
+}
+
+export async function updateUserStatusByAdmin(
+  userId: string,
+  input: UpdateUserStatusInput
+): Promise<User> {
+  await delay();
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can update account status.');
+
+  const targetUser = findUserById(userId);
+  if (input.status !== 'active' && input.status !== 'disabled') {
+    throw new Error('Status must be active or disabled.');
+  }
+
+  if (input.status === 'disabled' && targetUser.id === currentUser.id) {
+    throw new Error('Cannot disable your own account.');
+  }
+
+  if (
+    input.status === 'disabled' &&
+    targetUser.role === 'admin' &&
+    targetUser.status === 'active' &&
+    countActiveAdminUsers() <= 1
+  ) {
+    throw new Error('Cannot disable the last active admin account.');
+  }
+
+  const previousStatus = targetUser.status;
+  const previousStatusReason = targetUser.status_reason;
+  const nextStatusReason =
+    input.status === 'disabled'
+      ? typeof input.reason === 'string' && input.reason.trim()
+        ? input.reason.trim()
+        : ''
+      : null;
+
+  if (input.status === 'disabled' && !nextStatusReason) {
+    throw new Error('Disable reason is required when disabling an account.');
+  }
+
+  targetUser.status = input.status;
+  targetUser.status_reason = nextStatusReason;
+  targetUser.updated_at = now();
+  logAudit('user_status_updated_by_admin', 'User', targetUser.id, {
+    username: targetUser.username,
+    previous_status: previousStatus,
+    next_status: targetUser.status,
+    updated_by: currentUser.id,
+    ...(previousStatusReason ? { previous_status_reason: previousStatusReason } : {}),
+    ...(nextStatusReason ? { status_reason: nextStatusReason } : {})
+  });
+  return targetUser;
 }
 
 export async function listModels(): Promise<ModelRecord[]> {
@@ -2475,6 +4546,70 @@ export async function uploadConversationAttachment(
   }
   startAttachmentLifecycle(created, normalized.filename.toLowerCase().includes('fail'));
   logAudit('conversation_attachment_uploaded', 'FileAttachment', created.id, {
+    filename: created.filename,
+    byte_size: String(normalized.byte_size),
+    mime_type: normalized.mime_type
+  });
+  return created;
+}
+
+export async function listInferenceInputAttachments(): Promise<FileAttachment[]> {
+  await delay(120);
+  const currentUser = findCurrentUser();
+  return attachments.filter(
+    (item) =>
+      item.owner_user_id === currentUser.id &&
+      item.attached_to_type === 'InferenceRun' &&
+      item.attached_to_id === null
+  );
+}
+
+export async function uploadInferenceInputAttachment(
+  input: AttachmentUploadInput
+): Promise<FileAttachment> {
+  await delay(100);
+  const currentUser = findCurrentUser();
+  const normalized = normalizeAttachmentUploadInput(input);
+
+  const created: FileAttachment = {
+    id: nextId('f'),
+    filename: normalized.filename,
+    status: 'uploading',
+    owner_user_id: currentUser.id,
+    attached_to_type: 'InferenceRun',
+    attached_to_id: null,
+    mime_type: normalized.mime_type,
+    byte_size: normalized.byte_size,
+    storage_backend: null,
+    storage_path: null,
+    upload_error: null,
+    created_at: now(),
+    updated_at: now()
+  };
+
+  attachments.unshift(created);
+  if (normalized.content) {
+    try {
+      const stored = await storeAttachmentBinary(
+        created,
+        normalized.filename,
+        normalized.content,
+        normalized.mime_type
+      );
+      created.mime_type = stored.mime_type;
+      created.byte_size = stored.byte_size;
+      created.storage_backend = 'local';
+      created.storage_path = stored.file_path;
+    } catch {
+      const index = attachments.findIndex((item) => item.id === created.id);
+      if (index >= 0) {
+        attachments.splice(index, 1);
+      }
+      throw new Error('Failed to persist uploaded file.');
+    }
+  }
+  startAttachmentLifecycle(created, normalized.filename.toLowerCase().includes('fail'));
+  logAudit('inference_input_uploaded', 'FileAttachment', created.id, {
     filename: created.filename,
     byte_size: String(normalized.byte_size),
     mime_type: normalized.mime_type
@@ -2652,9 +4787,10 @@ export async function removeAttachment(attachmentId: string): Promise<void> {
   if (index >= 0) {
     const [deleted] = attachments.splice(index, 1);
     if (deleted) {
-      const datasetItemIndex = datasetItems.findIndex((item) => item.attachment_id === deleted.id);
-      if (datasetItemIndex >= 0) {
-        datasetItems.splice(datasetItemIndex, 1);
+      for (let datasetItemIndex = datasetItems.length - 1; datasetItemIndex >= 0; datasetItemIndex -= 1) {
+        if (datasetItems[datasetItemIndex]?.attachment_id === deleted.id) {
+          datasetItems.splice(datasetItemIndex, 1);
+        }
       }
       for (const [jobId, artifactAttachmentId] of trainingArtifactAttachmentByJobId.entries()) {
         if (artifactAttachmentId === deleted.id) {
@@ -2696,6 +4832,7 @@ export async function startConversation(
     sender: 'user',
     content: input.initial_message,
     attachment_ids: input.attachment_ids,
+    metadata: {},
     created_at: now()
   };
 
@@ -2704,11 +4841,18 @@ export async function startConversation(
     .map((item) => item.filename);
 
   const effectiveLlmConfig = getEffectiveConversationLlmConfig(input.llm_config);
-  const assistantContent = await generateAssistantReply(
+  const actionResolution = await resolveConversationAction(
+    createdConversation.id,
     input.initial_message,
-    fileNames,
-    effectiveLlmConfig
+    currentUser
   );
+  const assistantContent =
+    actionResolution?.content ??
+    (await generateAssistantReply(
+      input.initial_message,
+      fileNames,
+      effectiveLlmConfig
+    ));
 
   const assistantMessage: MessageRecord = {
     id: nextId('msg'),
@@ -2716,6 +4860,7 @@ export async function startConversation(
     sender: 'assistant',
     content: assistantContent,
     attachment_ids: [],
+    metadata: actionResolution?.metadata ?? {},
     created_at: now()
   };
 
@@ -2751,6 +4896,7 @@ export async function sendConversationMessage(
     sender: 'user',
     content: input.content,
     attachment_ids: input.attachment_ids,
+    metadata: {},
     created_at: now()
   };
 
@@ -2759,11 +4905,18 @@ export async function sendConversationMessage(
     .map((item) => item.filename);
 
   const effectiveLlmConfig = getEffectiveConversationLlmConfig(input.llm_config);
-  const assistantContent = await generateAssistantReply(
+  const actionResolution = await resolveConversationAction(
+    conversation.id,
     input.content,
-    fileNames,
-    effectiveLlmConfig
+    currentUser
   );
+  const assistantContent =
+    actionResolution?.content ??
+    (await generateAssistantReply(
+      input.content,
+      fileNames,
+      effectiveLlmConfig
+    ));
 
   const assistantMessage: MessageRecord = {
     id: nextId('msg'),
@@ -2771,6 +4924,7 @@ export async function sendConversationMessage(
     sender: 'assistant',
     content: assistantContent,
     attachment_ids: [],
+    metadata: actionResolution?.metadata ?? {},
     created_at: now()
   };
 
@@ -2843,6 +4997,101 @@ export async function listDatasetItems(datasetId: string): Promise<DatasetItemRe
   const currentUser = findCurrentUser();
   assertDatasetAccess(datasetId, currentUser);
   return datasetItems.filter((item) => item.dataset_id === datasetId);
+}
+
+export async function createDatasetItem(
+  datasetId: string,
+  input: CreateDatasetItemInput
+): Promise<DatasetItemRecord> {
+  await delay(100);
+  const currentUser = findCurrentUser();
+  const dataset = assertDatasetAccess(datasetId, currentUser);
+  const requestedAttachmentId =
+    typeof input.attachment_id === 'string' && input.attachment_id.trim()
+      ? input.attachment_id.trim()
+      : '';
+  const requestedFilenameRaw =
+    typeof input.filename === 'string' && input.filename.trim()
+      ? input.filename.trim()
+      : '';
+  const requestedFilename = requestedFilenameRaw ? path.basename(requestedFilenameRaw) : '';
+
+  if (!requestedAttachmentId && !requestedFilename) {
+    throw new Error('attachment_id or filename is required to create dataset item.');
+  }
+
+  let attachment =
+    requestedAttachmentId
+      ? attachments.find(
+          (entry) =>
+            entry.id === requestedAttachmentId &&
+            entry.attached_to_type === 'Dataset' &&
+            entry.attached_to_id === dataset.id
+        ) ?? null
+      : null;
+  if (!attachment && requestedAttachmentId) {
+    throw new Error('Dataset attachment not found in this dataset.');
+  }
+
+  if (!attachment && requestedFilename) {
+    attachment =
+      findDatasetReadyAttachmentByFilename(dataset.id, requestedFilename) ??
+      createDatasetReferenceAttachment(dataset, currentUser, requestedFilename);
+  }
+
+  if (!attachment) {
+    throw new Error('Unable to resolve dataset item attachment.');
+  }
+
+  const result = upsertDatasetItemForAttachment(dataset, attachment, {
+    split: input.split,
+    status: input.status ?? attachment.status,
+    metadata: input.metadata
+  });
+
+  logAudit(result.created ? 'dataset_item_created' : 'dataset_item_upserted', 'Dataset', dataset.id, {
+    item_id: result.item.id,
+    attachment_id: attachment.id,
+    attachment_filename: attachment.filename
+  });
+
+  return result.item;
+}
+
+export async function updateDatasetItem(
+  datasetId: string,
+  itemId: string,
+  input: UpdateDatasetItemInput
+): Promise<DatasetItemRecord> {
+  await delay(100);
+  const currentUser = findCurrentUser();
+  const dataset = assertDatasetAccess(datasetId, currentUser);
+  const item = findDatasetItem(dataset.id, itemId);
+
+  const nextSplit = parseDatasetItemSplit(input.split, item.split);
+  const nextStatus = parseDatasetItemStatus(input.status, item.status);
+  const nextMetadata =
+    input.metadata === undefined ? item.metadata : normalizeDatasetItemMetadata(input.metadata);
+
+  const changed =
+    item.split !== nextSplit ||
+    item.status !== nextStatus ||
+    JSON.stringify(item.metadata) !== JSON.stringify(nextMetadata);
+
+  if (changed) {
+    item.split = nextSplit;
+    item.status = nextStatus;
+    item.metadata = nextMetadata;
+    item.updated_at = now();
+  }
+
+  logAudit('dataset_item_updated', 'Dataset', dataset.id, {
+    item_id: item.id,
+    split: item.split,
+    status: item.status
+  });
+
+  return item;
 }
 
 export async function listDatasetAttachments(datasetId: string): Promise<FileAttachment[]> {
@@ -3020,7 +5269,7 @@ export async function createDatasetVersion(input: {
 export async function importDatasetAnnotations(
   datasetId: string,
   input: { format: 'yolo' | 'coco' | 'labelme' | 'ocr'; attachment_id: string }
-): Promise<{ format: string; imported: number; updated: number; status: 'completed' }> {
+): Promise<{ format: string; imported: number; updated: number; created_items: number; status: 'completed' }> {
   await delay(120);
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(datasetId, currentUser);
@@ -3098,9 +5347,35 @@ export async function importDatasetAnnotations(
 
   let imported = 0;
   let updated = 0;
+  let createdItems = 0;
 
   for (const entry of prepared) {
-    const matchedItems = itemByFilename.get(entry.filename) ?? [];
+    let matchedItems = itemByFilename.get(entry.filename) ?? [];
+    if (matchedItems.length === 0) {
+      const resolvedFilename = entry.filename.trim();
+      if (resolvedFilename) {
+        const resolvedAttachment =
+          findDatasetReadyAttachmentByFilename(dataset.id, resolvedFilename) ??
+          createDatasetReferenceAttachment(dataset, currentUser, resolvedFilename);
+        const upsertedItem = upsertDatasetItemForAttachment(dataset, resolvedAttachment, {
+          split: 'unassigned',
+          status: 'ready',
+          metadata: {
+            import_reference: 'true',
+            import_source_attachment_id: sourceAttachment.id,
+            import_source_format: input.format
+          }
+        });
+        if (upsertedItem.created) {
+          createdItems += 1;
+        }
+        if (upsertedItem.item.status === 'ready') {
+          matchedItems = [upsertedItem.item];
+          itemByFilename.set(entry.filename, matchedItems);
+        }
+      }
+    }
+
     for (const item of matchedItems) {
       const existing = annotations.find((annotation) => annotation.dataset_item_id === item.id);
       if (!existing) {
@@ -3137,6 +5412,7 @@ export async function importDatasetAnnotations(
     format: input.format,
     imported: String(imported),
     updated: String(updated),
+    created_items: String(createdItems),
     source_attachment_id: sourceAttachment.id
   });
 
@@ -3144,6 +5420,7 @@ export async function importDatasetAnnotations(
     format: input.format,
     imported,
     updated,
+    created_items: createdItems,
     status: 'completed'
   };
 }
@@ -3162,19 +5439,60 @@ export async function exportDatasetAnnotations(
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(datasetId, currentUser);
 
-  const exported = listDatasetAnnotationsInternal(dataset.id).length;
+  if (!['yolo', 'coco', 'labelme', 'ocr'].includes(input.format)) {
+    throw new Error('Current implementation supports yolo/coco/labelme/ocr export formats.');
+  }
+  if (['yolo', 'coco', 'labelme'].includes(input.format) && ['ocr', 'classification'].includes(dataset.task_type)) {
+    throw new Error('Selected export format requires detection/obb/segmentation dataset task type.');
+  }
+  if (input.format === 'ocr' && dataset.task_type !== 'ocr') {
+    throw new Error('OCR export requires dataset task_type=ocr.');
+  }
+
+  const entries = listDatasetAnnotationExportEntries(dataset.id);
+  const exportedAt = now();
   const filename = `annotations-${dataset.id}-${input.format}-${Date.now()}.json`;
-  const exportPayload = {
-    dataset_id: dataset.id,
-    format: input.format,
-    exported_at: now(),
-    annotations: listDatasetAnnotationsInternal(dataset.id).map((annotation) => ({
-      dataset_item_id: annotation.dataset_item_id,
-      task_type: annotation.task_type,
-      status: annotation.status,
-      payload: annotation.payload
-    }))
-  };
+  let exportPayload: unknown;
+  let exported = 0;
+
+  if (input.format === 'yolo') {
+    const rows = buildYoloExportPayload(entries);
+    exportPayload = {
+      dataset_id: dataset.id,
+      format: input.format,
+      exported_at: exportedAt,
+      items: rows
+    };
+    exported = rows.length;
+  } else if (input.format === 'ocr') {
+    const rows = buildOcrExportPayload(entries);
+    exportPayload = {
+      dataset_id: dataset.id,
+      format: input.format,
+      exported_at: exportedAt,
+      items: rows
+    };
+    exported = rows.length;
+  } else if (input.format === 'coco') {
+    const cocoPayload = buildCocoExportPayload(entries);
+    exportPayload = {
+      dataset_id: dataset.id,
+      format: input.format,
+      exported_at: exportedAt,
+      ...cocoPayload
+    };
+    exported = cocoPayload.annotations.length;
+  } else {
+    const rows = buildLabelMeExportPayload(entries, dataset.task_type);
+    exportPayload = {
+      dataset_id: dataset.id,
+      format: input.format,
+      exported_at: exportedAt,
+      items: rows
+    };
+    exported = rows.length;
+  }
+
   const exportBuffer = Buffer.from(JSON.stringify(exportPayload, null, 2), 'utf8');
   const attachment: FileAttachment = {
     id: nextId('f'),
@@ -3626,6 +5944,22 @@ export async function draftTaskFromRequirement(input: {
     return {
       ...ruleDraft,
       ...llmDraft,
+      recommended_annotation_type:
+        llmDraft.recommended_annotation_type || ruleDraft.recommended_annotation_type,
+      annotation_type:
+        llmDraft.recommended_annotation_type ||
+        llmDraft.annotation_type ||
+        ruleDraft.recommended_annotation_type,
+      label_hints:
+        llmDraft.label_hints.length > 0 ? llmDraft.label_hints : ruleDraft.label_hints,
+      dataset_suggestions:
+        llmDraft.dataset_suggestions.length > 0
+          ? llmDraft.dataset_suggestions
+          : ruleDraft.dataset_suggestions,
+      evaluation_metric_suggestions:
+        llmDraft.evaluation_metric_suggestions.length > 0
+          ? llmDraft.evaluation_metric_suggestions
+          : ruleDraft.evaluation_metric_suggestions,
       source: 'llm'
     };
   } catch {
@@ -3687,6 +6021,7 @@ export async function getTrainingJobDetail(jobId: string): Promise<{
   metrics: TrainingMetricRecord[];
   logs: string[];
   artifact_attachment_id: string | null;
+  artifact_summary: TrainingArtifactSummary | null;
   workspace_dir: string | null;
 }> {
   await delay(100);
@@ -3702,12 +6037,19 @@ export async function getTrainingJobDetail(jobId: string): Promise<{
   const runtime = getTrainingRuntime(job.id);
   const logs = await resolveTrainingLogs(job);
   const artifactAttachmentId = findArtifactAttachmentIdByJob(job.id);
+  const artifactAttachment = artifactAttachmentId
+    ? attachments.find((item) => item.id === artifactAttachmentId) ?? null
+    : null;
+  const artifactSummary = artifactAttachment
+    ? await readTrainingArtifactSummary(artifactAttachment)
+    : null;
 
   return {
     job,
     metrics: trainingMetrics.filter((metric) => metric.training_job_id === job.id),
     logs,
     artifact_attachment_id: artifactAttachmentId,
+    artifact_summary: artifactSummary,
     workspace_dir: runtime?.workspace_dir ?? null
   };
 }
@@ -3944,6 +6286,15 @@ export async function listInferenceRuns(): Promise<InferenceRunRecord[]> {
       return false;
     }
 
+    if (isFixtureModelVersionRecord(version)) {
+      return false;
+    }
+
+    const inputAttachment = attachments.find((item) => item.id === run.input_attachment_id);
+    if (!inputAttachment || isFixtureAttachmentFilename(inputAttachment.filename)) {
+      return false;
+    }
+
     try {
       assertModelVersionAccess(version.id, currentUser);
       return true;
@@ -3978,6 +6329,7 @@ export async function runInference(input: RunInferenceInput): Promise<InferenceR
   }
 
   const trainer = getTrainerByFramework(version.framework);
+  const modelArtifactPath = await resolveModelVersionArtifactModelPath(version);
   const prediction = await trainer.predict({
     modelId: model.id,
     modelVersionId: version.id,
@@ -3986,7 +6338,8 @@ export async function runInference(input: RunInferenceInput): Promise<InferenceR
     taskType: input.task_type,
     inputMimeType: inputAttachment.mime_type,
     inputByteSize: inputAttachment.byte_size,
-    inputStoragePath: inputAttachment.storage_path
+    inputStoragePath: inputAttachment.storage_path,
+    modelArtifactPath
   });
 
   const created: InferenceRunRecord = {
@@ -4038,36 +6391,68 @@ export async function sendInferenceFeedback(input: InferenceFeedbackInput): Prom
 
   assertModelVersionAccess(run.model_version_id, currentUser);
   const dataset = assertDatasetAccess(input.dataset_id, currentUser);
+  const reason = input.reason.trim() || 'feedback';
 
   run.feedback_dataset_id = dataset.id;
   run.updated_at = now();
 
-  const attachment = attachments.find((item) => item.id === run.input_attachment_id);
-  if (attachment) {
-    const existing = datasetItems.find(
-      (item) => item.dataset_id === dataset.id && item.attachment_id === attachment.id
-    );
+  const existingFeedbackItem = datasetItems.find(
+    (item) =>
+      item.dataset_id === dataset.id &&
+      typeof item.metadata.inference_run_id === 'string' &&
+      item.metadata.inference_run_id === run.id
+  );
 
-    if (!existing) {
-      datasetItems.unshift({
-        id: nextId('di'),
-        dataset_id: dataset.id,
-        attachment_id: attachment.id,
-        split: 'unassigned',
-        status: attachment.status,
-        metadata: {
-          feedback_reason: input.reason,
-          inference_run_id: run.id
-        },
-        created_at: now(),
-        updated_at: now()
-      });
+  if (existingFeedbackItem) {
+    existingFeedbackItem.metadata = {
+      ...existingFeedbackItem.metadata,
+      feedback_reason: reason,
+      source_attachment_id: run.input_attachment_id
+    };
+    existingFeedbackItem.updated_at = now();
+
+    logAudit('inference_feedback_sent', 'InferenceRun', run.id, {
+      dataset_id: dataset.id,
+      reason,
+      dataset_item_id: existingFeedbackItem.id,
+      dataset_attachment_id: existingFeedbackItem.attachment_id,
+      item_created: 'false'
+    });
+
+    return run;
+  }
+
+  const sourceAttachment = attachments.find((item) => item.id === run.input_attachment_id);
+  if (!sourceAttachment) {
+    throw new Error('Inference input attachment not found.');
+  }
+
+  const datasetAttachment =
+    sourceAttachment.attached_to_type === 'Dataset' && sourceAttachment.attached_to_id === dataset.id
+      ? sourceAttachment
+      : await cloneAttachmentToDatasetScope(sourceAttachment, dataset, currentUser);
+
+  const upserted = upsertDatasetItemForAttachment(dataset, datasetAttachment, {
+    split: 'unassigned',
+    status: datasetAttachment.status,
+    metadata: {
+      feedback_reason: reason,
+      inference_run_id: run.id,
+      source_attachment_id: sourceAttachment.id
     }
+  });
+
+  if (upserted.item.status === 'ready' && dataset.status !== 'ready') {
+    dataset.status = 'ready';
+    dataset.updated_at = now();
   }
 
   logAudit('inference_feedback_sent', 'InferenceRun', run.id, {
     dataset_id: dataset.id,
-    reason: input.reason
+    reason,
+    dataset_item_id: upserted.item.id,
+    dataset_attachment_id: datasetAttachment.id,
+    item_created: upserted.created ? 'true' : 'false'
   });
 
   return run;
@@ -4308,15 +6693,33 @@ export async function clearLlmConfig(): Promise<LlmConfigView> {
   return getCurrentUserLlmConfigView();
 }
 
-export async function testLlmConnection(input: { llm_config: LlmConfig }): Promise<{ preview: string }> {
+export async function testLlmConnection(input: {
+  llm_config: LlmConfig;
+  use_stored_api_key?: boolean;
+}): Promise<{ preview: string }> {
   await delay(80);
+  const currentUser = findCurrentUser();
   const normalized = normalizeLlmConfig(input.llm_config);
+  const existing = getStoredLlmConfigByUser(currentUser.id);
+  const effective = {
+    ...normalized,
+    api_key:
+      input.use_stored_api_key && !normalized.api_key.trim()
+        ? existing.api_key
+        : normalized.api_key
+  };
+  if (!effective.api_key.trim()) {
+    throw new Error('Connection test requires API key input or a saved key.');
+  }
   const preview = await callConfiguredLlm(
     'Please reply with one short line that confirms the connection is working.',
     [],
-    normalized
+    effective
   );
-  logAudit('llm_connection_tested', 'User', findCurrentUser().id, { model: normalized.model });
+  logAudit('llm_connection_tested', 'User', currentUser.id, {
+    model: effective.model,
+    used_stored_api_key: input.use_stored_api_key && !normalized.api_key.trim() ? 'true' : 'false'
+  });
   return { preview };
 }
 

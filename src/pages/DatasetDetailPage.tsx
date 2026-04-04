@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type {
   DatasetItemRecord,
@@ -12,6 +12,46 @@ import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+
+const metadataToText = (metadata: Record<string, string>): string =>
+  Object.entries(metadata)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+
+const parseMetadataText = (source: string): Record<string, string> =>
+  Object.fromEntries(
+    source
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separatorIndex = line.indexOf('=');
+        if (separatorIndex <= 0) {
+          return [line.trim(), 'true'] as const;
+        }
+        const key = line.slice(0, separatorIndex).trim();
+        const value = line.slice(separatorIndex + 1).trim();
+        return [key, value || 'true'] as const;
+      })
+      .filter(([key]) => key.length > 0)
+  );
+
+const backgroundRefreshIntervalMs = 5000;
+
+type LoadMode = 'initial' | 'manual' | 'background';
+
+const buildDatasetDetailSignature = (detail: {
+  dataset: DatasetRecord;
+  attachments: FileAttachment[];
+  items: DatasetItemRecord[];
+  versions: DatasetVersionRecord[];
+}): string =>
+  JSON.stringify({
+    dataset: detail.dataset,
+    attachments: [...detail.attachments].sort((left, right) => left.id.localeCompare(right.id)),
+    items: [...detail.items].sort((left, right) => left.id.localeCompare(right.id)),
+    versions: [...detail.versions].sort((left, right) => left.id.localeCompare(right.id))
+  });
 
 export default function DatasetDetailPage() {
   const { t } = useI18n();
@@ -28,21 +68,54 @@ export default function DatasetDetailPage() {
   const [importFormat, setImportFormat] = useState<'yolo' | 'coco' | 'labelme' | 'ocr'>('yolo');
   const [exportFormat, setExportFormat] = useState<'yolo' | 'coco' | 'labelme' | 'ocr'>('yolo');
   const [importAttachmentId, setImportAttachmentId] = useState('');
+  const [referenceFilename, setReferenceFilename] = useState('');
+  const [referenceSplit, setReferenceSplit] = useState<'train' | 'val' | 'test' | 'unassigned'>('unassigned');
+  const [referenceStatus, setReferenceStatus] = useState<'uploading' | 'processing' | 'ready' | 'error'>('ready');
+  const [referenceMetadataText, setReferenceMetadataText] = useState('source=import_reference');
+  const [selectedItemId, setSelectedItemId] = useState('');
+  const [itemSplit, setItemSplit] = useState<'train' | 'val' | 'test' | 'unassigned'>('unassigned');
+  const [itemStatus, setItemStatus] = useState<'uploading' | 'processing' | 'ready' | 'error'>('ready');
+  const [itemMetadataText, setItemMetadataText] = useState('');
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const detailSignatureRef = useRef('');
 
-  const loadDetail = useCallback(async () => {
+  const loadDetail = useCallback(async (mode: LoadMode) => {
     if (!datasetId) {
       return;
     }
 
-    const detail = await api.getDatasetDetail(datasetId);
-    setDataset(detail.dataset);
-    setAttachments(detail.attachments);
-    setItems(detail.items);
-    setVersions(detail.versions);
+    if (mode === 'initial') {
+      setLoading(true);
+    }
+
+    if (mode === 'manual') {
+      setRefreshing(true);
+    }
+
+    try {
+      const detail = await api.getDatasetDetail(datasetId);
+      const nextSignature = buildDatasetDetailSignature(detail);
+
+      if (detailSignatureRef.current !== nextSignature) {
+        detailSignatureRef.current = nextSignature;
+        setDataset(detail.dataset);
+        setAttachments(detail.attachments);
+        setItems(detail.items);
+        setVersions(detail.versions);
+      }
+    } finally {
+      if (mode === 'initial') {
+        setLoading(false);
+      }
+
+      if (mode === 'manual') {
+        setRefreshing(false);
+      }
+    }
   }, [datasetId]);
 
   useEffect(() => {
@@ -51,11 +124,9 @@ export default function DatasetDetailPage() {
       return;
     }
 
-    setLoading(true);
-    loadDetail()
+    loadDetail('initial')
       .then(() => setFeedback(null))
-      .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
-      .finally(() => setLoading(false));
+      .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
   }, [datasetId, loadDetail]);
 
   useEffect(() => {
@@ -64,10 +135,10 @@ export default function DatasetDetailPage() {
     }
 
     const timer = window.setInterval(() => {
-      loadDetail().catch(() => {
+      loadDetail('background').catch(() => {
         // keep UI stable in polling loop
       });
-    }, 700);
+    }, backgroundRefreshIntervalMs);
 
     return () => window.clearInterval(timer);
   }, [datasetId, loadDetail]);
@@ -76,17 +147,50 @@ export default function DatasetDetailPage() {
     () => attachments.filter((attachment) => attachment.status === 'ready').length,
     [attachments]
   );
+  const attachmentById = useMemo(
+    () => new Map(attachments.map((attachment) => [attachment.id, attachment])),
+    [attachments]
+  );
+  const selectedItem = useMemo(
+    () => items.find((item) => item.id === selectedItemId) ?? null,
+    [items, selectedItemId]
+  );
 
   useEffect(() => {
-    if (importAttachmentId) {
+    const readyAttachments = attachments.filter((attachment) => attachment.status === 'ready');
+
+    if (readyAttachments.length === 0) {
+      if (importAttachmentId) {
+        setImportAttachmentId('');
+      }
       return;
     }
 
-    const ready = attachments.find((attachment) => attachment.status === 'ready');
-    if (ready) {
-      setImportAttachmentId(ready.id);
+    if (importAttachmentId && readyAttachments.some((attachment) => attachment.id === importAttachmentId)) {
+      return;
     }
+
+    setImportAttachmentId(readyAttachments[0]?.id ?? '');
   }, [attachments, importAttachmentId]);
+
+  useEffect(() => {
+    if (items.length === 0) {
+      if (selectedItemId) {
+        setSelectedItemId('');
+      }
+      return;
+    }
+    const existing = items.find((item) => item.id === selectedItemId);
+    if (existing) {
+      return;
+    }
+
+    const first = items[0];
+    setSelectedItemId(first.id);
+    setItemSplit(first.split);
+    setItemStatus(first.status);
+    setItemMetadataText(metadataToText(first.metadata));
+  }, [items, selectedItemId]);
 
   const uploadDatasetFile = async (filename: string) => {
     if (!datasetId) {
@@ -94,7 +198,7 @@ export default function DatasetDetailPage() {
     }
 
     await api.uploadDatasetAttachment(datasetId, filename);
-    await loadDetail();
+    await loadDetail('manual');
   };
 
   const uploadDatasetFiles = async (files: File[]) => {
@@ -105,12 +209,12 @@ export default function DatasetDetailPage() {
     for (const file of files) {
       await api.uploadDatasetFile(datasetId, file);
     }
-    await loadDetail();
+    await loadDetail('manual');
   };
 
   const deleteAttachment = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
-    await loadDetail();
+    await loadDetail('manual');
   };
 
   const runSplit = async () => {
@@ -139,7 +243,7 @@ export default function DatasetDetailPage() {
         seed: 42
       });
 
-      await loadDetail();
+      await loadDetail('manual');
       setStep(2);
       setFeedback({ variant: 'success', text: t('Dataset split updated successfully.') });
     } catch (error) {
@@ -159,7 +263,7 @@ export default function DatasetDetailPage() {
 
     try {
       const created = await api.createDatasetVersion(datasetId, versionName.trim() || undefined);
-      await loadDetail();
+      await loadDetail('manual');
       setFeedback({
         variant: 'success',
         text: t('Dataset version {versionName} created.', { versionName: created.version_name })
@@ -191,13 +295,14 @@ export default function DatasetDetailPage() {
         format: importFormat,
         attachment_id: importAttachmentId
       });
-      await loadDetail();
+      await loadDetail('manual');
       setFeedback({
         variant: 'success',
-        text: t('Import finished ({format}). imported {imported}, updated {updated}.', {
+        text: t('Import finished ({format}). imported {imported}, updated {updated}, created items {createdItems}.', {
           format: result.format,
           imported: result.imported,
-          updated: result.updated
+          updated: result.updated,
+          createdItems: result.created_items
         })
       });
     } catch (error) {
@@ -220,7 +325,7 @@ export default function DatasetDetailPage() {
         dataset_id: datasetId,
         format: exportFormat
       });
-      await loadDetail();
+      await loadDetail('manual');
       setFeedback({
         variant: 'success',
         text: t('Export ready ({format}). file {filename}, records {count}.', {
@@ -228,6 +333,74 @@ export default function DatasetDetailPage() {
           filename: result.filename,
           count: result.exported
         })
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createReferenceItem = async () => {
+    if (!datasetId) {
+      return;
+    }
+    const normalizedFilename = referenceFilename.trim();
+    if (!normalizedFilename) {
+      setFeedback({ variant: 'error', text: t('Reference filename is required.') });
+      return;
+    }
+
+    const metadata = parseMetadataText(referenceMetadataText);
+
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const created = await api.createDatasetItem(datasetId, {
+        filename: normalizedFilename,
+        split: referenceSplit,
+        status: referenceStatus,
+        metadata
+      });
+      await loadDetail('manual');
+      setFeedback({
+        variant: 'success',
+        text: t('Reference item {itemId} created.', { itemId: created.id })
+      });
+      setReferenceFilename('');
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectItemForEditing = (item: DatasetItemRecord) => {
+    setSelectedItemId(item.id);
+    setItemSplit(item.split);
+    setItemStatus(item.status);
+    setItemMetadataText(metadataToText(item.metadata));
+  };
+
+  const saveItemUpdates = async () => {
+    if (!datasetId || !selectedItemId) {
+      setFeedback({ variant: 'error', text: t('Select item first.') });
+      return;
+    }
+
+    const metadata = parseMetadataText(itemMetadataText);
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const updated = await api.updateDatasetItem(datasetId, selectedItemId, {
+        split: itemSplit,
+        status: itemStatus,
+        metadata
+      });
+      await loadDetail('manual');
+      setFeedback({
+        variant: 'success',
+        text: t('Item {itemId} updated.', { itemId: updated.id })
       });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -272,9 +445,23 @@ export default function DatasetDetailPage() {
             {dataset.name} · {t(dataset.task_type)} · {t(dataset.status)}
           </p>
         </div>
-        <Link className="quick-link" to={`/datasets/${dataset.id}/annotate`}>
-          {t('Open Annotation Workspace')}
-        </Link>
+        <div className="row gap align-center">
+          <button
+            type="button"
+            className="workspace-inline-button"
+            onClick={() => {
+              loadDetail('manual').catch((error) => {
+                setFeedback({ variant: 'error', text: (error as Error).message });
+              });
+            }}
+            disabled={busy || refreshing}
+          >
+            {refreshing ? t('Refreshing...') : t('Refresh')}
+          </button>
+          <Link className="quick-link" to={`/datasets/${dataset.id}/annotate`}>
+            {t('Open Annotation Workspace')}
+          </Link>
+        </div>
       </div>
 
       <StepIndicator steps={steps} current={step} />
@@ -337,7 +524,7 @@ export default function DatasetDetailPage() {
 
       <AdvancedSection
         title={t('Annotation Import / Export')}
-        description={t('Use this section to run minimal import/export stubs with format selection.')}
+        description={t('Use this section to import or export annotation files in selected format.')}
       >
         <section className="card stack">
           <h4>{t('Import Annotations')}</h4>
@@ -395,6 +582,63 @@ export default function DatasetDetailPage() {
             {t('Run Export')}
           </button>
         </section>
+
+        <section className="card stack">
+          <h4>{t('Reference Dataset Items')}</h4>
+          <small className="muted">
+            {t('Create metadata-only items when file binary is not uploaded yet.')}
+          </small>
+          <label>
+            {t('Reference Filename')}
+            <input
+              value={referenceFilename}
+              onChange={(event) => setReferenceFilename(event.target.value)}
+              placeholder={t('for example: camera-A/frame-001.jpg')}
+            />
+          </label>
+          <div className="three-col">
+            <label>
+              {t('Item Split')}
+              <select
+                value={referenceSplit}
+                onChange={(event) =>
+                  setReferenceSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
+                }
+              >
+                <option value="unassigned">{t('unassigned')}</option>
+                <option value="train">{t('train')}</option>
+                <option value="val">{t('val')}</option>
+                <option value="test">{t('test')}</option>
+              </select>
+            </label>
+            <label>
+              {t('Item Status')}
+              <select
+                value={referenceStatus}
+                onChange={(event) =>
+                  setReferenceStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
+                }
+              >
+                <option value="ready">{t('ready')}</option>
+                <option value="processing">{t('processing')}</option>
+                <option value="uploading">{t('uploading')}</option>
+                <option value="error">{t('error')}</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            {t('Metadata (key=value per line, optional)')}
+            <textarea
+              value={referenceMetadataText}
+              onChange={(event) => setReferenceMetadataText(event.target.value)}
+              placeholder={t('for example: source=import_reference')}
+              rows={3}
+            />
+          </label>
+          <button onClick={createReferenceItem} disabled={busy}>
+            {t('Create Reference Item')}
+          </button>
+        </section>
       </AdvancedSection>
 
       <section className="card stack">
@@ -403,18 +647,106 @@ export default function DatasetDetailPage() {
         {items.length === 0 ? (
           <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files to generate items.')} />
         ) : (
-          <ul className="list">
-            {items.map((item) => (
-              <li key={item.id} className="list-item">
-                <div className="row between gap">
-                  <span>{item.id}</span>
-                  <span className="chip">
-                    {t(item.split)} · {t(item.status)}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="stack">
+            <section className="card stack tight">
+              <h4>{t('Item Editor')}</h4>
+              <label>
+                {t('Selected Item')}
+                <select
+                  value={selectedItemId}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    const next = items.find((item) => item.id === nextId);
+                    if (!next) {
+                      return;
+                    }
+                    selectItemForEditing(next);
+                  }}
+                >
+                  {items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.id} · {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="three-col">
+                <label>
+                  {t('Item Split')}
+                  <select
+                    value={itemSplit}
+                    onChange={(event) =>
+                      setItemSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
+                    }
+                  >
+                    <option value="unassigned">{t('unassigned')}</option>
+                    <option value="train">{t('train')}</option>
+                    <option value="val">{t('val')}</option>
+                    <option value="test">{t('test')}</option>
+                  </select>
+                </label>
+                <label>
+                  {t('Item Status')}
+                  <select
+                    value={itemStatus}
+                    onChange={(event) =>
+                      setItemStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
+                    }
+                  >
+                    <option value="ready">{t('ready')}</option>
+                    <option value="processing">{t('processing')}</option>
+                    <option value="uploading">{t('uploading')}</option>
+                    <option value="error">{t('error')}</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                {t('Metadata (key=value per line, optional)')}
+                <textarea
+                  value={itemMetadataText}
+                  onChange={(event) => setItemMetadataText(event.target.value)}
+                  placeholder={t('for example: source=import_reference')}
+                  rows={3}
+                />
+              </label>
+              <button onClick={saveItemUpdates} disabled={busy || !selectedItemId}>
+                {t('Save Item Updates')}
+              </button>
+              <small className="muted">
+                {selectedItem && Object.keys(selectedItem.metadata).length > 0
+                  ? t('Current metadata: {metadata}', { metadata: metadataToText(selectedItem.metadata) })
+                  : t('No metadata')}
+              </small>
+            </section>
+
+            <ul className="list">
+              {items.map((item) => (
+                <li key={item.id} className="list-item">
+                  <div className="stack tight">
+                    <div className="row between gap">
+                      <span>{item.id}</span>
+                      <span className="chip">
+                        {t(item.split)} · {t(item.status)}
+                      </span>
+                    </div>
+                    <small className="muted">
+                      {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
+                    </small>
+                    <div className="row between gap">
+                      <small className="muted">
+                        {Object.keys(item.metadata).length > 0
+                          ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
+                          : t('No metadata')}
+                      </small>
+                      <button onClick={() => selectItemForEditing(item)} disabled={busy}>
+                        {t('Edit Item')}
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </section>
 

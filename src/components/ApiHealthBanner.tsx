@@ -17,6 +17,24 @@ const parseHealthErrorDetail = (error: unknown): string => {
   return message;
 };
 
+const normalizeHealthDetailForUi = (
+  detail: string,
+  t: (source: string) => string
+): string => {
+  const lowered = detail.toLowerCase();
+  if (lowered.includes('empty response body')) {
+    return t(
+      'API returned empty response body. This usually means API restart or proxy upstream interruption.'
+    );
+  }
+
+  if (lowered.includes('failed to fetch')) {
+    return t('Network request failed. Check API process, Docker status, or proxy reachability.');
+  }
+
+  return detail;
+};
+
 export default function ApiHealthBanner() {
   const { t } = useI18n();
   const [state, setState] = useState<ApiHealthState>('checking');
@@ -73,9 +91,11 @@ export default function ApiHealthBanner() {
   }, [checkHealth, t]);
 
   const visible = state === 'degraded';
+  const showEmptyBodyHint = detail.toLowerCase().includes('empty response body');
+  const localizedDetail = useMemo(() => normalizeHealthDetailForUi(detail, t), [detail, t]);
   const statusDetail = useMemo(
-    () => (detail ? `${t('Current status')}: ${detail}` : ''),
-    [detail, t]
+    () => (localizedDetail ? `${t('Current status')}: ${localizedDetail}` : ''),
+    [localizedDetail, t]
   );
 
   if (!visible) {
@@ -87,7 +107,19 @@ export default function ApiHealthBanner() {
       <div className="api-health-banner-inner">
         <div className="stack tight">
           <strong>{t('Backend service unreachable. Some actions may fail until API recovers.')}</strong>
-          <small>{t('Check API process (`npm run dev:api`) or Docker service status.')}</small>
+          <small>{t('Dev mode: ensure `npm run dev:api` is running and open http://127.0.0.1:5173.')}</small>
+          <small>
+            {t(
+              'Docker mode: access API via http://127.0.0.1:8080/api/* (host port 8787 may be intentionally closed).'
+            )}
+          </small>
+          {showEmptyBodyHint ? (
+            <small>
+              {t(
+                'Empty response body usually means upstream API restarted or proxy upstream temporarily failed. Retry in a few seconds.'
+              )}
+            </small>
+          ) : null}
           {statusDetail ? <small className="muted">{statusDetail}</small> : null}
         </div>
         <button

@@ -205,8 +205,21 @@ if [[ "$doctr_job_status" != "completed" ]]; then
   exit 1
 fi
 
+doctr_model_request='{"name":"doctr-phase2-smoke-model","description":"docTR phase2 smoke model","model_type":"ocr","visibility":"workspace"}'
+doctr_model_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$doctr_model_request" \
+  "${BASE_URL}/api/models/draft")"
+doctr_model_id="$(echo "$doctr_model_result" | jq -r '.data.id // empty')"
+if [[ -z "$doctr_model_id" ]]; then
+  echo "[smoke-phase2] docTR model draft creation failed"
+  echo "$doctr_model_result"
+  exit 1
+fi
+
 doctr_register_request="$(cat <<JSON
-{"model_id":"m-3","training_job_id":"${doctr_training_job_id}","version_name":"doctr-smoke-v1"}
+{"model_id":"${doctr_model_id}","training_job_id":"${doctr_training_job_id}","version_name":"doctr-smoke-v1"}
 JSON
 )"
 doctr_register_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \

@@ -16,7 +16,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
 - Edge inference capabilities
 - Multi-step processes with progress indicators
 - Advanced parameter controls (collapsed by default)
-- Persistent file upload states (visible, deletable, status-indicated)
+- Conversation attachments follow chat-style draft chips plus an on-demand tray, while keeping delete/status visibility
 - Built-in UI language switch (Chinese default, English optional)
 
 ## Architecture
@@ -71,28 +71,41 @@ License file is not yet added in this baseline; add one before production distri
 3. Open `http://127.0.0.1:5173`
 
 ### Auth (username/password)
-- Public registration and login are username/password based.
+- Login is username/password based.
+- Public self-registration is disabled.
 - Default seeded accounts in mock store:
   - `alice / mock-pass` (user)
   - `admin / mock-pass-admin` (admin)
-- Public registration always creates role `user`; it never creates `admin`.
+- New accounts are provisioned by `admin` users from the authenticated settings surface.
+- Every authenticated user can change their own password from account settings.
+- Administrators can reset another user's password, disable/reactivate accounts, and inspect `last_login_at` from the same account directory.
 
 ### Validation Commands
 - `npm run typecheck`
 - `npm run lint`
 - `npm run build`
+- `npm run smoke:auth-session`
+  - verifies public registration is disabled, admin-only account provisioning works, account disable/reactivate + admin password reset rules hold, and per-user password change takes effect
 - `npm run smoke:phase2`
   - verifies segmentation annotation persistence plus YOLO/PaddleOCR/docTR runtime fallback behavior in the mock loop
 - `npm run smoke:attachments`
   - verifies multipart upload/read/delete loops for conversation/model/dataset attachments
 - `npm run smoke:conversation-context`
   - verifies conversation message attachment order follows the selected context order
+- `npm run smoke:conversation-actions`
+  - verifies conversation can request missing fields and then create real dataset/model-draft/training-job entities via backend APIs
+- `npm run smoke:llm-settings`
+  - verifies LLM settings save/edit/clear flow, including keeping the saved key while editing and loading encrypted config after API restart
 - `npm run smoke:runtime-success`
   - verifies YOLO/PaddleOCR/docTR runtime success path with a local runtime mock server
 - `npm run smoke:admin:verification-reports`
   - verifies `/api/admin/verification-reports` permission boundary (`user` denied, `admin` allowed)
 - `npm run smoke:demo:train-data`
-  - imports images from `demo_data/train` into a new detection dataset, waits for upload lifecycle completion, then creates split + dataset version
+  - imports local files via real multipart upload into a new detection dataset, waits for upload lifecycle completion, then creates split + dataset version
+- `npm run smoke:ocr-closure`
+  - validates a dedicated OCR closure on real uploaded data: OCR import -> PaddleOCR/docTR local-command training -> metrics/artifact summary -> model-version register -> inference upload/run
+- `npm run smoke:real-closure`
+  - validates a more complete real closure: requirement draft -> dataset upload/import/export -> YOLO training -> model version register -> YOLO/PaddleOCR/docTR inference -> feedback loop
 - `npm run smoke:restart-resume`
   - verifies app-state persistence and automatic training-job resume after API restart
 - `npm run smoke:local-command`
@@ -111,6 +124,8 @@ License file is not yet added in this baseline; add one before production distri
   - verifies `/api/training/jobs/{id}/metrics-export` payload for metric timeline download
 - `npm run smoke:training-metrics-export-csv`
   - verifies `/api/training/jobs/{id}/metrics-export?format=csv` download headers and csv rows
+- `npm run smoke:dataset-export-roundtrip`
+  - verifies YOLO/COCO/LabelMe/OCR export file content and cross-dataset export->import roundtrip (including segmentation polygon labelme loop)
 - `npm run smoke:admin:verification-retention`
   - verifies `/api/admin/verification-reports` exposes `runtime_metrics_retention` from verify report JSON
 - `npm run smoke:verify-report-retention-e2e`
@@ -144,11 +159,11 @@ License file is not yet added in this baseline; add one before production distri
 - Conversation workflow with attachment upload/status/delete and assistant responses
   - conversation workspace now uses an immersive chat-style shell (left chat sidebar + centered timeline + floating composer)
   - attachment controls include local file picker, open/preview support, and in-context include/exclude actions
-  - current-message attachment context now has explicit selection chips, quick include-all-ready, and clear-context actions
+  - conversation attachments now behave like a chat-style draft flow: selected chips stay with the current draft, and the full attachment tray opens only on demand
 - Bring-your-own LLM settings page (`/settings/llm`) for OpenAI-compatible providers (for example ChatAnywhere)
 - Runtime settings page (`/settings/runtime`) for in-app runtime connectivity diagnostics and integration templates
 - Model pages: explore / my-models / create (stepper + advanced collapsed)
-- Auth mock: login/register/logout with browser session cookie (`register` cannot create `admin`)
+- Auth mock: login/logout with browser session cookie, admin-only account provisioning, and per-user password change
 - Admin approval queue page (`/admin/models/pending`) with approve/reject actions
 - Admin audit page (`/admin/audit`) for governance event visibility
 - Admin verification reports page (`/admin/verification-reports`) for deployment acceptance evidence
@@ -181,6 +196,7 @@ License file is not yet added in this baseline; add one before production distri
 - Offline import + up helper: `npm run docker:images:load-up`
 - Deployment self-check: `npm run docker:healthcheck`
 - Full deployment E2E verify: `npm run docker:verify:full`
+  - covers auth/permissions, real multipart attachment lifecycle, conversation + approval + inference feedback, dataset export/import roundtrip (detection/ocr/segmentation), and real closure smoke with YOLO/PaddleOCR/docTR
 - Release bundle generator: `npm run docker:release:bundle`
 - Release bundle with fresh verification: `VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified`
 - Pin report for bundle: `VERIFY_REPORT_PATH=.data/verify-reports/<report>.json npm run docker:release:bundle`

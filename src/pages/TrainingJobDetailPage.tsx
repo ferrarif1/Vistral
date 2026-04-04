@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { TrainingJobRecord, TrainingMetricRecord } from '../../shared/domain';
+import type { TrainingArtifactSummary, TrainingJobRecord, TrainingMetricRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { useI18n } from '../i18n/I18nProvider';
@@ -19,6 +19,9 @@ const METRIC_CHART_WIDTH = 300;
 const METRIC_CHART_HEIGHT = 120;
 const METRIC_CHART_PADDING = 12;
 const METRIC_CHART_COLORS = ['#2f6f5b', '#1f7f9a', '#916a2f', '#7a5bb7', '#9b3a61', '#2f5aa8'];
+const backgroundRefreshIntervalMs = 5000;
+
+type LoadMode = 'initial' | 'manual' | 'background';
 
 export default function TrainingJobDetailPage() {
   const { t } = useI18n();
@@ -27,24 +30,58 @@ export default function TrainingJobDetailPage() {
   const [metrics, setMetrics] = useState<TrainingMetricRecord[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [artifactAttachmentId, setArtifactAttachmentId] = useState<string | null>(null);
+  const [artifactSummary, setArtifactSummary] = useState<TrainingArtifactSummary | null>(null);
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [exportingMetrics, setExportingMetrics] = useState(false);
   const [exportingMetricsCsv, setExportingMetricsCsv] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const detailSignatureRef = useRef('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (mode: LoadMode) => {
     if (!jobId) {
       return;
     }
 
-    const detail = await api.getTrainingJobDetail(jobId);
-    setJob(detail.job);
-    setMetrics(detail.metrics);
-    setLogs(detail.logs);
-    setArtifactAttachmentId(detail.artifact_attachment_id);
-    setWorkspaceDir(detail.workspace_dir);
+    if (mode === 'initial') {
+      setLoading(true);
+    }
+
+    if (mode === 'manual') {
+      setRefreshing(true);
+    }
+
+    try {
+      const detail = await api.getTrainingJobDetail(jobId);
+      const nextSignature = JSON.stringify({
+        job: detail.job,
+        metrics: detail.metrics,
+        logs: detail.logs,
+        artifact_attachment_id: detail.artifact_attachment_id,
+        artifact_summary: detail.artifact_summary,
+        workspace_dir: detail.workspace_dir
+      });
+
+      if (detailSignatureRef.current !== nextSignature) {
+        detailSignatureRef.current = nextSignature;
+        setJob(detail.job);
+        setMetrics(detail.metrics);
+        setLogs(detail.logs);
+        setArtifactAttachmentId(detail.artifact_attachment_id);
+        setArtifactSummary(detail.artifact_summary);
+        setWorkspaceDir(detail.workspace_dir);
+      }
+    } finally {
+      if (mode === 'initial') {
+        setLoading(false);
+      }
+
+      if (mode === 'manual') {
+        setRefreshing(false);
+      }
+    }
   }, [jobId]);
 
   useEffect(() => {
@@ -53,8 +90,7 @@ export default function TrainingJobDetailPage() {
       return;
     }
 
-    setLoading(true);
-    load()
+    load('initial')
       .then(() => setFeedback(null))
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
       .finally(() => setLoading(false));
@@ -66,10 +102,10 @@ export default function TrainingJobDetailPage() {
     }
 
     const timer = window.setInterval(() => {
-      load().catch(() => {
+      load('background').catch(() => {
         // no-op
       });
-    }, 900);
+    }, backgroundRefreshIntervalMs);
 
     return () => window.clearInterval(timer);
   }, [jobId, load]);
@@ -169,7 +205,7 @@ export default function TrainingJobDetailPage() {
 
     try {
       await api.cancelTrainingJob(jobId);
-      await load();
+      await load('manual');
       setFeedback({ variant: 'success', text: t('Training job cancelled.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -188,7 +224,7 @@ export default function TrainingJobDetailPage() {
 
     try {
       await api.retryTrainingJob(jobId);
-      await load();
+      await load('manual');
       setFeedback({ variant: 'success', text: t('Training job retried.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -306,13 +342,68 @@ export default function TrainingJobDetailPage() {
       ) : null}
 
       <section className="card stack">
-        <h3>{t('Runtime Status')}</h3>
+        <div className="row between align-center wrap">
+          <h3>{t('Runtime Status')}</h3>
+          <button
+            type="button"
+            className="workspace-inline-button"
+            onClick={() => {
+              load('manual')
+                .then(() => setFeedback(null))
+                .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
+            }}
+            disabled={loading || refreshing || busy}
+          >
+            {refreshing ? t('Refreshing...') : t('Refresh')}
+          </button>
+        </div>
         <small className="muted">{job.log_excerpt}</small>
         <small className="muted">{t('Dataset')}: {job.dataset_id}</small>
         <small className="muted">{t('Base model')}: {job.base_model}</small>
+        <small className="muted">{t('Execution mode')}: {t(job.execution_mode)}</small>
         <small className="muted">
           {t('Artifact attachment')}: {artifactAttachmentId || t('pending')}
         </small>
+        {artifactSummary ? (
+          <>
+            <small className="muted">
+              {t('Runner mode')}: {artifactSummary.mode || t('pending')}
+            </small>
+            <small className="muted">
+              {t('Runner')}: {artifactSummary.runner || t('pending')}
+            </small>
+            {artifactSummary.training_performed !== null ? (
+              <small className="muted">
+                {t('Training performed')}: {artifactSummary.training_performed ? t('yes') : t('no')}
+              </small>
+            ) : null}
+            {artifactSummary.sampled_items !== null ? (
+              <small className="muted">
+                {t('Sampled items')}: {artifactSummary.sampled_items}
+              </small>
+            ) : null}
+            {artifactSummary.primary_model_path ? (
+              <small className="muted">
+                {t('Primary model path')}: {artifactSummary.primary_model_path}
+              </small>
+            ) : null}
+            {artifactSummary.metrics_keys.length > 0 ? (
+              <small className="muted">
+                {t('Artifact metrics')}: {artifactSummary.metrics_keys.join(', ')}
+              </small>
+            ) : null}
+            {artifactSummary.generated_at ? (
+              <small className="muted">
+                {t('Artifact generated at')}: {artifactSummary.generated_at}
+              </small>
+            ) : null}
+            {artifactSummary.fallback_reason ? (
+              <small className="muted">
+                {t('Fallback reason')}: {artifactSummary.fallback_reason}
+              </small>
+            ) : null}
+          </>
+        ) : null}
         <small className="muted">
           {t('Workspace')}: {workspaceDir || t('pending')}
         </small>

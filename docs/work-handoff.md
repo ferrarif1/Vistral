@@ -685,3 +685,195 @@ Rules:
   - `npm run lint`
   - `npm run build`
   - `npm run smoke:conversation-context`
+
+## 2026-04-04 16:38 (Asia/Shanghai)
+- context: Historical unfinished-task audit for the recent UI cleanup / refresh-stability workstream; user asked to record remaining items and continue finishing them.
+- done:
+  - Reviewed current historical handoff notes plus the latest UI conversation thread.
+  - Identified the highest-priority unfinished items from the recent UI-focused work:
+    - refresh stability still needs a shared pass across remaining polling pages
+    - `RuntimeSettingsPage` / `InferenceValidationPage` still need one visual consistency pass against the newer chat/console rhythm
+    - conversation attachment pill/list still has minor wrap-density follow-up on narrow widths
+  - Completed stable refresh behavior for `TrainingJobsPage` and `TrainingJobDetailPage`:
+    - blocking loading only on first entry
+    - later refreshes run quietly in background
+    - visible state updates only when fetched data really changes
+- next:
+  1. Continue the same non-jumping refresh strategy on other polling-heavy pages (`DatasetDetailPage`, `AnnotationWorkspacePage`, then `InferenceValidationPage` if needed).
+  2. Run one focused visual pass on `RuntimeSettingsPage` and `InferenceValidationPage` so spacing/typography match the cleaned chat + console shell.
+  3. Finish the remaining attachment pill/list micro-polish for narrow layouts and long filenames in `ConversationPage`.
+- risks:
+  - Some pages already poll without full-screen loading flashes, so the remaining work is more about preventing useless rerenders and UI drift than fixing one obvious crash.
+  - There is a large dirty worktree with many earlier feature changes; current UI stabilization work must avoid colliding with unrelated backend/runtime edits.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-04 16:50 (Asia/Shanghai)
+- context: Continued the recorded UI stabilization queue after the historical unfinished-task audit; focused on remaining polling-heavy pages that still risked unnecessary rerenders or visual jumping.
+- done:
+  - Updated IA contracts in `docs/ia.md` and `docs/ia.zh-CN.md` so dataset detail, annotation workspace, and inference validation explicitly follow the same quiet-refresh rule:
+    - blocking loading only on first entry
+    - background refresh updates visible state only when fetched data really changes
+    - manual refresh remains available
+  - Completed the quiet-refresh sweep for:
+    - `src/pages/DatasetDetailPage.tsx`
+    - `src/pages/AnnotationWorkspacePage.tsx`
+    - `src/pages/InferenceValidationPage.tsx`
+  - The three pages now:
+    - poll every `5000ms` instead of sub-second loops
+    - compare fetched payload signatures before calling `setState`
+    - keep manual refresh buttons for explicit operator control
+  - `InferenceValidationPage` now uses a clean initial blocking loading state instead of rendering partial empty sections during first fetch.
+- next:
+  1. Run one visual consistency pass on `RuntimeSettingsPage` and `InferenceValidationPage` so spacing/typography match the refreshed chat + console shell.
+  2. Finish the remaining conversation attachment pill/list micro-polish for narrow layouts and long filenames.
+  3. Review secondary polling pages (`CreateModelPage`, then `ConversationPage` attachment polling) if users still report any refresh jumping.
+- risks:
+  - Signature-based refresh avoids most no-op rerenders, but annotation editing could still need a future dirty-draft guard if multi-user/server-side updates become frequent.
+  - The worktree remains heavily modified from earlier rounds, so later UI passes still need to avoid unrelated runtime/backend files.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-04 16:55 (Asia/Shanghai)
+- context: Continued directly into the next UI backlog item after the refresh-stability sweep; focused on aligning inference validation with the cleaned console overview layout.
+- done:
+  - Refined `src/pages/InferenceValidationPage.tsx` into the shared overview rhythm:
+    - hero + signal cards
+    - main operation lane for uploads/run/output
+    - side lane for runtime diagnostics + dataset feedback
+  - Kept the newly added quiet-refresh/manual-refresh behavior while improving visual hierarchy.
+  - Added clearer empty-state prompts for missing model versions, ready inputs, and target datasets so the page tells the user what is missing instead of just showing empty controls.
+- next:
+  1. Finish the lighter parity pass on `RuntimeSettingsPage` so its section rhythm matches the refreshed inference page and the rest of the settings surface.
+  2. Finish the remaining conversation attachment pill/list micro-polish for narrow layouts and long filenames.
+  3. Review secondary polling pages (`CreateModelPage`, then `ConversationPage` attachment polling) if users still report any refresh jumping.
+- risks:
+  - `InferenceValidationPage` is now structurally closer to the shared overview shell, but final spacing/typography parity still depends on a last side-by-side pass against `RuntimeSettingsPage`.
+  - The repository still has many unrelated modified files, so later UI passes must keep avoiding unrelated runtime/backend edits.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-04 17:01 (Asia/Shanghai)
+- context: Continued the remaining UI backlog after the inference-page layout pass; focused on finishing Runtime settings parity and closing the small attachment-density tail item.
+- done:
+  - Refined `src/pages/RuntimeSettingsPage.tsx` to match the newer overview rhythm more closely:
+    - hero now includes explicit refresh actions
+    - initial loading now shows hero + blocking state instead of partially empty content
+    - single-framework filter view now uses a calmer full-width diagnostics layout
+    - execution summary blocks now use the shared compact record-card structure
+  - Added a low-risk narrow-width polish in `src/styles/theme.css` for the chat attachment tray:
+    - attachment rows now use a more stable grid layout
+    - long filenames no longer squeeze action buttons as aggressively
+    - small screens place the filename on its own row for cleaner wrapping
+- next:
+  1. Review secondary polling pages (`CreateModelPage`, then `ConversationPage` attachment polling) if users still report refresh jumping after the main sweep.
+  2. If needed, run one screenshot-driven micro-polish pass on chat/composer icon sizing and spacing.
+  3. Continue the lower-priority framework realification backlog.
+- risks:
+  - Attachment micro-polish was CSS-only and intentionally conservative; a true screenshot pass may still reveal tiny spacing issues across browsers.
+  - Secondary polling pages have not yet been swept with the same signature-based refresh guard used on the main data/training/inference surfaces.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-04 17:05 (Asia/Shanghai)
+- context: Continued the remaining refresh-stability queue after the Runtime/attachment polish pass; focused on the last secondary polling surfaces that could still cause unnecessary rerenders.
+- done:
+  - Updated IA contracts in `docs/ia.md` and `docs/ia.zh-CN.md` so:
+    - conversation attachment tray refresh is explicitly quiet/background-only when data actually changes
+    - model-create file upload step follows the same quiet background refresh rule
+  - Hardened `src/pages/CreateModelPage.tsx`:
+    - model-file polling slowed from `500ms` to `5000ms`
+    - file list now updates only when attachment payload signature actually changes
+  - Hardened `src/pages/ConversationPage.tsx`:
+    - conversation attachment polling slowed from `500ms` to `5000ms`
+    - attachment list now updates only when attachment payload signature actually changes
+  - Result: the main refresh-stability sweep now covers training, dataset detail, annotation workspace, inference validation, model-create file polling, and conversation attachment polling.
+- next:
+  1. If needed, run one screenshot-driven micro-polish pass on chat/composer icon sizing and spacing.
+  2. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
+  3. Continue the lower-priority framework realification backlog.
+- risks:
+  - Attachment/model-file polling is now much calmer, but if operators expect sub-second status flips during upload processing, they may still want one explicit manual refresh affordance in the future.
+  - This round focused on polling stability rather than deeper chat/history synchronization redesign.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-04 17:07 (Asia/Shanghai)
+- context: Continued with the last low-risk frontend polish item after the refresh-stability sweep; focused on tightening the chat composer controls without changing behavior.
+- done:
+  - Refined `src/pages/ConversationPage.tsx` composer button markup so the plus/send controls use dedicated icon spans for more stable styling.
+  - Polished `src/styles/theme.css` around the chat composer:
+    - slightly stronger panel spacing and shadow
+    - tighter plus/send button sizing and focus states
+    - cleaner input padding/rhythm
+    - calmer notice spacing below the composer
+  - Result: the composer now reads as one more coherent control surface, while keeping the existing chat/attachment behavior unchanged.
+- next:
+  1. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
+  2. If needed later, run a screenshot-driven pass on the remaining iconography/spacing details.
+  3. Continue the lower-priority framework realification backlog.
+- risks:
+  - This pass was intentionally small and CSS-focused; only a screenshot-based review can confirm whether every icon/spacing detail is exactly where you want it.
+  - No deeper chat interaction changes were made in this round.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-04 17:10 (Asia/Shanghai)
+- context: Continued from the historical unfinished-task audit after the main UI stabilization queue; closed the pending runtime-settings summary item without expanding backend/API contracts.
+- done:
+  - Updated `docs/ia.md` and `docs/ia.zh-CN.md` so the Runtime settings tab contract explicitly includes framework-specific metric-key visibility from recent completed training jobs.
+  - Extended `src/pages/RuntimeSettingsPage.tsx` execution watch:
+    - keeps existing inference-source / execution-mode / retention summaries
+    - additionally samples up to two recent completed jobs per framework
+    - fetches training detail in parallel and tolerates per-job failures with partial results
+    - surfaces latest artifact metric keys per framework inline, so operators do not need to jump into each training detail page
+  - Added the matching Chinese UI copy in `src/i18n/I18nProvider.tsx`.
+- next:
+  1. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
+  2. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.
+  3. Continue the lower-priority framework realification backlog.
+- risks:
+  - The new metric-key summary intentionally samples only a small recent window per framework to avoid turning the settings page into a heavy bulk-detail loader.
+  - If operators later need a broader historical metric taxonomy, that will likely deserve a dedicated backend summary endpoint instead of more frontend fan-out requests.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-04 17:32 (Asia/Shanghai)
+- context: Continued the lower-priority framework realification backlog after closing the runtime-settings summary item; picked the oldest still-open OCR closure verification gap from the handoff queue.
+- done:
+  - Added a dedicated smoke script `scripts/smoke-ocr-closure.sh`.
+  - New smoke covers one OCR-only closure on real uploaded files without adding routes:
+    - create OCR dataset
+    - upload OCR source file
+    - import OCR annotations
+    - create dataset version
+    - create model drafts
+    - run PaddleOCR/docTR local-command training
+    - assert metrics + artifact summary presence
+    - register model versions
+    - upload inference input and run OCR inference for both frameworks
+  - Registered the command as `npm run smoke:ocr-closure` in `package.json`.
+  - Updated command docs in `README.md`, `README.zh-CN.md`, `docs/setup.md`, and `docs/setup.zh-CN.md`.
+- next:
+  1. Continue replacing residual fallback metrics in framework adapters/runners with more framework-native fields while preserving the normalized output contract.
+  2. Evaluate whether the training metrics CSV export path should move to streaming for very large timelines while keeping the same endpoint family.
+  3. If environment prerequisites are available later, run and archive positive real-branch evidence (`npm run smoke:runner-real-positive`).
+- risks:
+  - The new OCR closure smoke validates the local-command OCR business loop, but it still relies on deterministic framework-shaped runners unless optional real dependencies are enabled.
+  - `START_API=false` mode expects the external API to already be configured with compatible local command/runtime settings; otherwise closure assertions may differ from the default self-started path.
+- verification:
+  - `npm run smoke:ocr-closure`

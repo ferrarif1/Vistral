@@ -5,6 +5,7 @@ export interface NormalizedApiError {
 }
 
 const authMessages = new Set<string>([
+  'Authentication required.',
   'Current user not found in mock store.',
   'Invalid username or password.'
 ]);
@@ -55,6 +56,11 @@ const isValidationMessage = (message: string): boolean => {
     'llm api key is missing',
     'returned empty content',
     'already exists',
+    'current password is incorrect',
+    'status must be active or disabled',
+    'disable reason is required when disabling an account',
+    'cannot disable your own account',
+    'cannot disable the last active admin account',
     'invalid json body',
     'invalid framework query'
   ]);
@@ -71,10 +77,34 @@ export const normalizeApiError = (error: unknown): NormalizedApiError => {
 
   const message = error.message || 'Unexpected server error.';
 
+  if (message === 'Account is disabled. Ask an administrator to reactivate it.') {
+    return {
+      status: 403,
+      code: 'ACCOUNT_DISABLED',
+      message
+    };
+  }
+
+  if (message === 'Public registration is disabled.') {
+    return {
+      status: 403,
+      code: 'PUBLIC_REGISTRATION_DISABLED',
+      message
+    };
+  }
+
   if (message === 'CSRF token mismatch.') {
     return {
       status: 403,
       code: 'CSRF_VALIDATION_FAILED',
+      message
+    };
+  }
+
+  if (normalizeMessage(message).startsWith('upload payload exceeds ')) {
+    return {
+      status: 413,
+      code: 'PAYLOAD_TOO_LARGE',
       message
     };
   }

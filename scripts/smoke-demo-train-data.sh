@@ -7,6 +7,8 @@ cd "$ROOT_DIR"
 API_PORT="${API_PORT:-8799}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:${API_PORT}}"
 START_API="${START_API:-true}"
+AUTH_USERNAME="${AUTH_USERNAME:-}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 DEMO_DIR="${DEMO_DIR:-${ROOT_DIR}/demo_data/train}"
 MAX_FILES="${MAX_FILES:-0}"
 WAIT_TIMEOUT_SEC="${WAIT_TIMEOUT_SEC:-90}"
@@ -80,6 +82,32 @@ if [[ -z "$csrf_token" ]]; then
   exit 1
 fi
 
+if [[ -n "$AUTH_USERNAME" ]]; then
+  if [[ -z "$AUTH_PASSWORD" ]]; then
+    echo "[smoke-demo-train-data] AUTH_PASSWORD is required when AUTH_USERNAME is set"
+    exit 1
+  fi
+
+  login_response="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -X POST "${BASE_URL}/api/auth/login" \
+    -d "{\"username\":\"${AUTH_USERNAME}\",\"password\":\"${AUTH_PASSWORD}\"}")"
+  login_success="$(echo "$login_response" | jq -r '.success // false')"
+  if [[ "$login_success" != "true" ]]; then
+    echo "[smoke-demo-train-data] login failed for AUTH_USERNAME=${AUTH_USERNAME}"
+    echo "$login_response"
+    exit 1
+  fi
+
+  csrf_payload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/auth/csrf")"
+  csrf_token="$(echo "$csrf_payload" | jq -r '.data.csrf_token // empty')"
+  if [[ -z "$csrf_token" ]]; then
+    echo "[smoke-demo-train-data] Failed to refresh CSRF token after login"
+    echo "$csrf_payload"
+    exit 1
+  fi
+fi
+
 mapfile -t image_paths < <(find "$DEMO_DIR" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | sort)
 
 if [[ "${#image_paths[@]}" -eq 0 ]]; then
@@ -126,11 +154,9 @@ upload_fail_count=0
 
 for image_path in "${image_paths[@]}"; do
   filename="$(basename "$image_path")"
-  upload_payload="$(jq -nc --arg filename "$filename" '{ filename: $filename }')"
   upload_response="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
-    -H 'Content-Type: application/json' \
     -H "x-csrf-token: $csrf_token" \
-    -d "$upload_payload" \
+    -F "file=@${image_path};filename=${filename}" \
     "${BASE_URL}/api/files/dataset/${dataset_id}/upload")"
 
   attachment_id="$(echo "$upload_response" | jq -r '.data.id // empty')"

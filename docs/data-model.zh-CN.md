@@ -3,6 +3,13 @@
 ## 概述
 平台采用两类系统角色（`user` / `admin`）+ 所有权关系 + 能力字段来实现最小可落地权限模型。
 
+## 访问与所有权语义
+- 系统角色仅包含 `user` 与 `admin`。
+- `owner` 是资源关系字段（例如 `owner_user_id`），不是角色枚举值。
+- 公开自助注册已关闭。
+- 新账号只能由管理员在已认证的设置/管理界面中开通。
+- 敏感操作同时受角色、所有权和能力字段约束。
+
 ## Owner 语义
 - `owner` 是资源关系，不是 `User.role` 枚举值。
 - 使用 `models.owner_user_id` 表示模型所有者。
@@ -15,8 +22,25 @@
 - `username`
 - `password_hash`（scrypt+salt，仅服务端存储，不返回前端）
 - `role`：`user` / `admin`
+- `status`：`active` / `disabled`
+- `status_reason`：可空字符串；当 `status=disabled` 时必须填写，恢复账号时清空
 - `capabilities`：JSON 数组
+- `last_login_at`（可为空的时间戳）
 - `created_at` / `updated_at`
+
+凭据规则：
+- 所有已登录用户都可通过 `current_password + new_password` 修改自己的密码
+- 管理员可创建新账号，并指定角色为 `user` 或 `admin`
+- 管理员可在已登录的账号目录中重置其他用户密码
+- 管理员可停用或恢复账号
+- 停用账号时必须提供非空管理员原因，并持久化到 `status_reason`
+- 被停用账号在恢复前不得登录，也不得继续访问受保护接口
+- 停用账号会立即使该账号现有认证会话失效；恢复账号不会自动恢复这些会话
+- 恢复账号时会清空 `status_reason`
+- 系统会阻止停用当前管理员会话，以及停用最后一个仍为激活状态的管理员账号
+- 默认能力由角色决定：
+  - `user` => `manage_models`
+  - `admin` => `manage_models`、`global_governance`
 
 ### Model
 - `id`
@@ -34,6 +58,11 @@
 ### Conversation / Message / FileAttachment
 - 会话与消息维持对话上下文
 - 附件状态：`uploading | processing | ready | error`
+- `Message.metadata` 可选，用于承载结构化对话动作信息
+- 助手消息可携带 `metadata.conversation_action`
+  - `action`：`create_dataset | create_model_draft | create_training_job`
+  - `status`：`requires_input | completed | failed | cancelled`
+  - 记录 `missing_fields`、`collected_fields`、可选 `suggestions` 与已创建实体引用，供聊天时间线渲染紧凑执行卡片
 
 ### TrainingJob / InferenceRun（补充）
 - `training_jobs.execution_mode`：

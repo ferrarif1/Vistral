@@ -6,7 +6,8 @@ This document defines platform-level entities for Vistral's AI-native conversati
 ## 2. Access and Ownership Semantics
 - System roles are only `user` and `admin`.
 - `owner` is a resource relationship (`owner_user_id`), not a role enum.
-- Public registration creates only `user`.
+- Public self-registration is disabled.
+- Administrators provision accounts from authenticated settings/admin surfaces.
 - Privileged actions combine role checks with ownership/capability checks.
 
 ## 3. Shared Enums
@@ -55,13 +56,30 @@ Attributes:
 - `username` (unique)
 - `password_hash` (scrypt+salt, server-side only, never returned to client)
 - `role` (`user` | `admin`)
+- `status` (`active` | `disabled`)
+- `status_reason` (nullable string, required when `status=disabled`, cleared on reactivation)
 - `capabilities` (JSON array)
+- `last_login_at` (nullable timestamp)
 - `created_at`, `updated_at`
 
 Relationships:
 - owns many `Model`
 - owns many `Dataset`
 - creates many `TrainingJob`
+
+Credential rules:
+- users can change their own password by providing `current_password` plus `new_password`
+- administrators can create new accounts and assign role `user` or `admin`
+- administrators can reset another user's password from the authenticated account directory
+- administrators can disable or reactivate accounts
+- disabling requires a non-empty administrator reason, persisted on `status_reason`
+- disabled accounts cannot authenticate or continue protected actions until reactivated
+- disabling an account immediately invalidates its existing authenticated sessions; reactivation does not restore those sessions
+- reactivating an account clears `status_reason`
+- the system blocks disabling the current admin session and the last active admin account
+- default capability profile is role-based:
+  - `user` => `manage_models`
+  - `admin` => `manage_models`, `global_governance`
 
 ### 4.2 Model
 Attributes:
@@ -99,7 +117,14 @@ Attributes:
 - `sender` (`user` | `assistant` | `system`)
 - `content`
 - `attachment_ids` (JSON array)
+- `metadata` (JSON, optional)
 - `created_at`
+
+Conversation action metadata rules:
+- assistant messages may include `metadata.conversation_action`
+- supported action types: `create_dataset`, `create_model_draft`, `create_training_job`
+- supported action statuses: `requires_input`, `completed`, `failed`, `cancelled`
+- action metadata stores `missing_fields`, `collected_fields`, optional `suggestions`, and optional created-entity reference so UI can render a compact execution card in the chat timeline
 
 ### 4.5 FileAttachment
 Attributes:
@@ -117,8 +142,10 @@ Attributes:
 - `created_at`, `updated_at`
 
 Rule:
-- upload lists must stay visible in UI and support delete actions.
+- conversation attachments must stay recoverable in UI via current-draft chips, message history, or on-demand tray, and support delete actions.
 - multipart uploaded binaries are persisted under configurable local storage root (`UPLOAD_STORAGE_ROOT`).
+- inference input uploads use `attached_to_type=InferenceRun` with `attached_to_id=null` before an inference run consumes the attachment id.
+- when inference feedback sends a sample back to a dataset, input attachment is cloned (or reused when already dataset-scoped) into dataset attachment scope so dataset item/file visibility remains complete in dataset context.
 
 ### 4.6 ApprovalRequest
 Attributes:
@@ -156,6 +183,11 @@ Attributes:
 - `status` (`uploading` | `processing` | `ready` | `error`)
 - `metadata` (JSON)
 - `created_at`, `updated_at`
+
+Current runtime semantics:
+- standard uploaded dataset files produce `DatasetItem` from dataset upload lifecycle.
+- import-reference workflow may create metadata-only `DatasetItem` records through `POST /datasets/{id}/items`; these records still point to a `FileAttachment` but the attachment may not have local stored binary (`storage_path=null`) yet.
+- item-level maintenance workflow can update `split`, `status`, and full `metadata` through `PATCH /datasets/{id}/items/{item_id}`.
 
 Relationships:
 - has many `Annotation`
@@ -215,11 +247,18 @@ Relationships:
 Runtime notes (current implementation):
 - each job gets a local workspace under `TRAINING_WORKDIR_ROOT/{job_id}`
 - runtime writes `job-config.json`, `dataset-summary.json`, `train.log`, `metrics.json`, and artifact file
+- runtime also materializes framework-ready training inputs under the job workspace before local command execution:
+  - YOLO detection: `materialized-dataset/yolo/` with split image/label dirs and `dataset.yaml`
+  - OCR baseline: `materialized-dataset/ocr/` with manifest entries pointing to ready image/text pairs
 - `train.log` lines are exposed via training detail API
 - app state snapshots are persisted to `APP_STATE_STORE_PATH` (default `.data/app-state.json`)
 - after API restart, non-terminal jobs (`queued`, `preparing`, `running`, `evaluating`) are re-queued and resumed automatically
-- optional local framework command execution is enabled via `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` and can emit metrics to `metrics.json`
+- local training defaults to bundled runner templates (`scripts/local-runners/*_train_runner.py`) and runs as `execution_mode=local_command` when runner invocation succeeds
+- `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` can override bundled runner command templates
+- if bundled runner command invocation fails (for example missing python dependency), lifecycle falls back to `execution_mode=simulated` with explicit log reason
+- when `VISTRAL_RUNNER_ENABLE_REAL=1`, bundled OCR local train runners may run dependency-backed OCR probe execution on materialized manifest samples (`mode=real_probe`) and otherwise stay in template mode with explicit `fallback_reason`
 - `execution_mode` is explicitly persisted per training job (no longer inferred only from logs)
+- training detail API also exposes parsed artifact runtime summary (mode/fallback/model path hints) for UI observability
 
 ### 4.13 TrainingMetric
 Attributes:
@@ -246,6 +285,7 @@ Attributes:
 
 Runtime rule (current implementation):
 - when a completed training job is registered, `artifact_attachment_id` is bound to the generated training artifact attachment (local file-backed).
+- training artifact attachment is a manifest-style file by default; when a real framework export exists, the manifest records `primary_model_path` so inference can resolve the actual weight file for that version.
 
 ### 4.15 InferenceRun
 Attributes:
@@ -261,6 +301,10 @@ Attributes:
 - `feedback_dataset_id` (FK Dataset, nullable)
 - `created_by` (FK User)
 - `created_at`, `updated_at`
+
+Runtime rule (current implementation):
+- `POST /inference/runs/{id}/feedback` binds `feedback_dataset_id` and guarantees a dataset item trace for the run in target dataset.
+- feedback item metadata stores `inference_run_id`, `feedback_reason`, and `source_attachment_id` for loop traceability.
 
 ## 5. State Transition Rules
 
@@ -291,6 +335,9 @@ Attributes:
 - `<framework>_local_command` (local predict command result via `<FRAMEWORK>_LOCAL_PREDICT_COMMAND`)
 - `<framework>_local` (local deterministic inferencer result)
 - `mock_fallback` (runtime endpoint configured but failed, fallback applied)
+
+Inference rule (current implementation):
+- when a model version has an artifact attachment with resolvable `primary_model_path`, local inference prefers that version-bound artifact path over global fallback env vars.
 
 ## 7. Indexes and Constraints (minimum)
 - unique: `users.username`

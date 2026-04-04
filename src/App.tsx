@@ -10,8 +10,8 @@ import LlmSettingsPage from './pages/LlmSettingsPage';
 import AdminApprovalsPage from './pages/AdminApprovalsPage';
 import AdminAuditPage from './pages/AdminAuditPage';
 import AdminVerificationReportsPage from './pages/AdminVerificationReportsPage';
-import AuthRegisterPage from './pages/AuthRegisterPage';
 import AuthLoginPage from './pages/AuthLoginPage';
+import AccountSettingsPage from './pages/AccountSettingsPage';
 import DatasetsPage from './pages/DatasetsPage';
 import DatasetDetailPage from './pages/DatasetDetailPage';
 import AnnotationWorkspacePage from './pages/AnnotationWorkspacePage';
@@ -32,6 +32,8 @@ export default function App() {
           <Route path="/" element={<DualEntryPage />} />
           <Route path="/workspace/chat" element={<ConversationPage />} />
           <Route path="/workspace/console" element={<ProfessionalConsolePage />} />
+          <Route path="/settings" element={<Navigate to="/settings/account" replace />} />
+          <Route path="/settings/account" element={<AccountSettingsPage />} />
           <Route path="/settings/llm" element={<LlmSettingsPage />} />
           <Route path="/settings/runtime" element={<RuntimeSettingsPage />} />
           <Route path="/conversation" element={<Navigate to="/workspace/chat" replace />} />
@@ -49,7 +51,7 @@ export default function App() {
           <Route path="/admin/models/pending" element={<AdminApprovalsPage />} />
           <Route path="/admin/audit" element={<AdminAuditPage />} />
           <Route path="/admin/verification-reports" element={<AdminVerificationReportsPage />} />
-          <Route path="/auth/register" element={<AuthRegisterPage />} />
+          <Route path="/auth/register" element={<Navigate to="/auth/login" replace />} />
           <Route path="/auth/login" element={<AuthLoginPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

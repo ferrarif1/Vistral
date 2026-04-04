@@ -2,6 +2,13 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { hashPassword } from './auth';
+import {
+  isFixtureAttachmentFilename,
+  isFixtureDatasetRecord,
+  isFixtureModelRecord,
+  isFixtureModelVersionRecord,
+  isFixtureTrainingJobRecord
+} from '../../shared/catalogFixtures';
 import type {
   AnnotationRecord,
   AnnotationReviewRecord,
@@ -97,7 +104,10 @@ export const users: User[] = [
     id: 'u-1',
     username: 'alice',
     role: 'user',
+    status: 'active',
+    status_reason: null,
     capabilities: ['manage_models'],
+    last_login_at: null,
     created_at: now(),
     updated_at: now()
   },
@@ -105,7 +115,10 @@ export const users: User[] = [
     id: 'u-2',
     username: 'admin',
     role: 'admin',
+    status: 'active',
+    status_reason: null,
     capabilities: ['manage_models', 'global_governance'],
+    last_login_at: null,
     created_at: now(),
     updated_at: now()
   }
@@ -131,18 +144,6 @@ export const models: ModelRecord[] = [
   },
   {
     id: 'm-2',
-    name: 'Factory PPE Checker',
-    description: 'Checks PPE compliance in factory floor images.',
-    model_type: 'classification',
-    owner_user_id: 'u-2',
-    visibility: 'private',
-    status: 'draft',
-    metadata: { framework: 'yolo' },
-    created_at: now(),
-    updated_at: now()
-  },
-  {
-    id: 'm-3',
     name: 'Invoice OCR Assistant',
     description: 'Extracts invoice text and fields.',
     model_type: 'ocr',
@@ -422,7 +423,7 @@ export const trainingMetrics: TrainingMetricRecord[] = [
 export const modelVersions: ModelVersionRecord[] = [
   {
     id: 'mv-1',
-    model_id: 'm-3',
+    model_id: 'm-2',
     training_job_id: 'tj-ocr-1',
     version_name: 'ocr-v1',
     task_type: 'ocr',
@@ -470,6 +471,31 @@ const replaceArray = <T>(target: T[], incoming: T[]): void => {
   target.splice(0, target.length, ...incoming);
 };
 
+const normalizeUser = (entry: User): User => {
+  const status = entry.status === 'disabled' ? 'disabled' : 'active';
+
+  return {
+    ...entry,
+    status,
+    status_reason:
+      status === 'disabled' &&
+      typeof entry.status_reason === 'string' &&
+      entry.status_reason.trim()
+        ? entry.status_reason.trim()
+        : null,
+    capabilities: Array.isArray(entry.capabilities)
+      ? entry.capabilities.filter(
+          (capability): capability is User['capabilities'][number] =>
+            capability === 'manage_models' || capability === 'global_governance'
+        )
+      : [],
+    last_login_at:
+      typeof entry.last_login_at === 'string' && entry.last_login_at.trim()
+        ? entry.last_login_at
+        : null
+  };
+};
+
 const normalizeAttachment = (entry: FileAttachment): FileAttachment => ({
   ...entry,
   mime_type: entry.mime_type ?? null,
@@ -503,8 +529,222 @@ const normalizeInferenceRun = (entry: InferenceRunRecord): InferenceRunRecord =>
         : 'unknown'
 });
 
+const sanitizeAppStatePayload = (
+  payload: Partial<AppStatePayload>
+): { payload: Partial<AppStatePayload>; changed: boolean } => {
+  const sourceUsers = Array.isArray(payload.users) ? payload.users : [];
+  const sourceModels = Array.isArray(payload.models) ? payload.models : [];
+  const sourceDatasets = Array.isArray(payload.datasets) ? payload.datasets : [];
+  const sourceDatasetVersions = Array.isArray(payload.datasetVersions) ? payload.datasetVersions : [];
+  const sourceTrainingJobs = Array.isArray(payload.trainingJobs) ? payload.trainingJobs : [];
+  const sourceModelVersions = Array.isArray(payload.modelVersions) ? payload.modelVersions : [];
+  const sourceConversations = Array.isArray(payload.conversations) ? payload.conversations : [];
+  const sourceInferenceRuns = Array.isArray(payload.inferenceRuns) ? payload.inferenceRuns : [];
+  const sourceAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+  const sourceDatasetItems = Array.isArray(payload.datasetItems) ? payload.datasetItems : [];
+  const sourceAnnotations = Array.isArray(payload.annotations) ? payload.annotations : [];
+  const sourceAnnotationReviews = Array.isArray(payload.annotationReviews)
+    ? payload.annotationReviews
+    : [];
+  const sourceMessages = Array.isArray(payload.messages) ? payload.messages : [];
+  const sourceApprovalRequests = Array.isArray(payload.approvalRequests)
+    ? payload.approvalRequests
+    : [];
+  const sourceTrainingMetrics = Array.isArray(payload.trainingMetrics) ? payload.trainingMetrics : [];
+  const sourceAuditLogs = Array.isArray(payload.auditLogs) ? payload.auditLogs : [];
+  const normalizedUsers = sourceUsers.map(normalizeUser);
+
+  const keptModels = sourceModels.filter((model) => !isFixtureModelRecord(model));
+  const keptModelIds = new Set(keptModels.map((model) => model.id));
+
+  const keptDatasets = sourceDatasets.filter((dataset) => !isFixtureDatasetRecord(dataset));
+  const keptDatasetIds = new Set(keptDatasets.map((dataset) => dataset.id));
+
+  const keptDatasetVersions = sourceDatasetVersions.filter((version) =>
+    keptDatasetIds.has(version.dataset_id)
+  );
+  const keptDatasetVersionIds = new Set(keptDatasetVersions.map((version) => version.id));
+
+  const keptTrainingJobs = sourceTrainingJobs.filter(
+    (job) =>
+      !isFixtureTrainingJobRecord(job) &&
+      keptDatasetIds.has(job.dataset_id) &&
+      (!job.dataset_version_id || keptDatasetVersionIds.has(job.dataset_version_id))
+  );
+  const keptTrainingJobIds = new Set(keptTrainingJobs.map((job) => job.id));
+
+  const keptModelVersions = sourceModelVersions.filter(
+    (version) =>
+      !isFixtureModelVersionRecord(version) &&
+      keptModelIds.has(version.model_id) &&
+      (!version.training_job_id || keptTrainingJobIds.has(version.training_job_id))
+  );
+  const keptModelVersionIds = new Set(keptModelVersions.map((version) => version.id));
+  const referencedArtifactAttachmentIds = new Set(
+    keptModelVersions
+      .map((version) => version.artifact_attachment_id)
+      .filter((attachmentId): attachmentId is string => Boolean(attachmentId))
+  );
+
+  const keptConversations = sourceConversations.filter((conversation) =>
+    keptModelIds.has(conversation.model_id)
+  );
+  const keptConversationIds = new Set(keptConversations.map((conversation) => conversation.id));
+
+  const baseAttachments = sourceAttachments.filter((attachment) => {
+    if (referencedArtifactAttachmentIds.has(attachment.id)) {
+      return true;
+    }
+
+    if (isFixtureAttachmentFilename(attachment.filename)) {
+      return false;
+    }
+
+    if (attachment.attached_to_type === 'Model') {
+      return !attachment.attached_to_id || keptModelIds.has(attachment.attached_to_id);
+    }
+
+    if (attachment.attached_to_type === 'Dataset') {
+      return !attachment.attached_to_id || keptDatasetIds.has(attachment.attached_to_id);
+    }
+
+    if (attachment.attached_to_type === 'Conversation') {
+      return !attachment.attached_to_id || keptConversationIds.has(attachment.attached_to_id);
+    }
+
+    return true;
+  });
+  const baseAttachmentIds = new Set(baseAttachments.map((attachment) => attachment.id));
+
+  const keptInferenceRuns = sourceInferenceRuns.filter(
+    (run) =>
+      keptModelVersionIds.has(run.model_version_id) && baseAttachmentIds.has(run.input_attachment_id)
+  );
+  const keptInferenceRunIds = new Set(keptInferenceRuns.map((run) => run.id));
+
+  const keptAttachments = baseAttachments.filter((attachment) => {
+    if (attachment.attached_to_type === 'InferenceRun') {
+      return !attachment.attached_to_id || keptInferenceRunIds.has(attachment.attached_to_id);
+    }
+
+    return true;
+  });
+  const keptAttachmentIds = new Set(keptAttachments.map((attachment) => attachment.id));
+  const normalizedModelVersions = keptModelVersions.map((version) => ({
+    ...version,
+    artifact_attachment_id:
+      version.artifact_attachment_id && keptAttachmentIds.has(version.artifact_attachment_id)
+        ? version.artifact_attachment_id
+        : null
+  }));
+
+  const keptDatasetItems = sourceDatasetItems.filter(
+    (item) => keptDatasetIds.has(item.dataset_id) && keptAttachmentIds.has(item.attachment_id)
+  );
+  const keptDatasetItemIds = new Set(keptDatasetItems.map((item) => item.id));
+
+  const keptAnnotations = sourceAnnotations.filter((annotation) =>
+    keptDatasetItemIds.has(annotation.dataset_item_id)
+  );
+  const keptAnnotationIds = new Set(keptAnnotations.map((annotation) => annotation.id));
+
+  const keptAnnotationReviews = sourceAnnotationReviews.filter((review) =>
+    keptAnnotationIds.has(review.annotation_id)
+  );
+
+  const keptMessages = sourceMessages
+    .filter((message) => keptConversationIds.has(message.conversation_id))
+    .map((message) => ({
+      ...message,
+      attachment_ids: message.attachment_ids.filter((attachmentId) => keptAttachmentIds.has(attachmentId))
+    }));
+
+  const keptApprovalRequests = sourceApprovalRequests.filter((request) =>
+    keptModelIds.has(request.model_id)
+  );
+
+  const keptTrainingMetrics = sourceTrainingMetrics.filter((metric) =>
+    keptTrainingJobIds.has(metric.training_job_id)
+  );
+
+  const keptEntityIds = new Set<string>([
+    ...keptModelIds,
+    ...keptDatasetIds,
+    ...keptDatasetVersionIds,
+    ...keptTrainingJobIds,
+    ...keptModelVersionIds,
+    ...keptConversationIds,
+    ...keptInferenceRunIds,
+    ...keptAttachmentIds,
+    ...keptDatasetItemIds,
+    ...keptAnnotationIds,
+    ...keptApprovalRequests.map((request) => request.id)
+  ]);
+
+  const keptAuditLogs = sourceAuditLogs.filter(
+    (log) => !log.entity_id || keptEntityIds.has(log.entity_id)
+  );
+
+  const sanitizedPayload: Partial<AppStatePayload> = {
+    ...payload,
+    users: normalizedUsers,
+    models: keptModels,
+    datasets: keptDatasets,
+    datasetVersions: keptDatasetVersions,
+    trainingJobs: keptTrainingJobs,
+    modelVersions: normalizedModelVersions,
+    conversations: keptConversations,
+    inferenceRuns: keptInferenceRuns,
+    attachments: keptAttachments,
+    datasetItems: keptDatasetItems,
+    annotations: keptAnnotations,
+    annotationReviews: keptAnnotationReviews,
+    messages: keptMessages,
+    approvalRequests: keptApprovalRequests,
+    trainingMetrics: keptTrainingMetrics,
+    auditLogs: keptAuditLogs
+  };
+
+  const changed =
+    normalizedUsers.some((user, index) => {
+      const sourceUser = sourceUsers[index];
+      return (
+        !sourceUser ||
+        sourceUser.status !== user.status ||
+        sourceUser.status_reason !== user.status_reason ||
+        sourceUser.last_login_at !== user.last_login_at ||
+        sourceUser.capabilities.length !== user.capabilities.length
+      );
+    }) ||
+    keptModels.length !== sourceModels.length ||
+    keptDatasets.length !== sourceDatasets.length ||
+    keptDatasetVersions.length !== sourceDatasetVersions.length ||
+    keptTrainingJobs.length !== sourceTrainingJobs.length ||
+    keptModelVersions.length !== sourceModelVersions.length ||
+    keptConversations.length !== sourceConversations.length ||
+    keptInferenceRuns.length !== sourceInferenceRuns.length ||
+    keptAttachments.length !== sourceAttachments.length ||
+    keptDatasetItems.length !== sourceDatasetItems.length ||
+    keptAnnotations.length !== sourceAnnotations.length ||
+    keptAnnotationReviews.length !== sourceAnnotationReviews.length ||
+    keptMessages.length !== sourceMessages.length ||
+    keptApprovalRequests.length !== sourceApprovalRequests.length ||
+    keptTrainingMetrics.length !== sourceTrainingMetrics.length ||
+    keptAuditLogs.length !== sourceAuditLogs.length ||
+    normalizedModelVersions.some((version, index) => {
+      const sourceVersion = keptModelVersions[index];
+      return sourceVersion ? sourceVersion.artifact_attachment_id !== version.artifact_attachment_id : false;
+    }) ||
+    keptMessages.some((message, index) => {
+      const sourceMessage = sourceMessages[index];
+      return sourceMessage ? sourceMessage.attachment_ids.length !== message.attachment_ids.length : false;
+    });
+
+  return { payload: sanitizedPayload, changed };
+};
+
 const buildAppStatePayload = (): AppStatePayload => ({
-  users: [...users],
+  users: users.map(normalizeUser),
   userPasswordHashes: { ...userPasswordHashes },
   models: [...models],
   conversations: [...conversations],
@@ -528,63 +768,67 @@ export const markAppStateDirty = (): void => {
 };
 
 export const loadPersistedAppState = async (): Promise<void> => {
+  let loadedDirty = false;
   try {
     const raw = await fs.readFile(appStateDataFile, 'utf8');
     const parsed = JSON.parse(raw) as Partial<AppStatePayload>;
+    const sanitized = sanitizeAppStatePayload(parsed);
+    const state = sanitized.payload;
+    loadedDirty = sanitized.changed;
 
-    if (Array.isArray(parsed.users)) {
-      replaceArray(users, parsed.users);
+    if (Array.isArray(state.users)) {
+      replaceArray(users, state.users.map(normalizeUser));
     }
-    if (parsed.userPasswordHashes && typeof parsed.userPasswordHashes === 'object') {
+    if (state.userPasswordHashes && typeof state.userPasswordHashes === 'object') {
       Object.keys(userPasswordHashes).forEach((key) => {
         delete userPasswordHashes[key];
       });
-      Object.assign(userPasswordHashes, parsed.userPasswordHashes);
+      Object.assign(userPasswordHashes, state.userPasswordHashes);
     }
-    if (Array.isArray(parsed.models)) {
-      replaceArray(models, parsed.models);
+    if (Array.isArray(state.models)) {
+      replaceArray(models, state.models);
     }
-    if (Array.isArray(parsed.conversations)) {
-      replaceArray(conversations, parsed.conversations);
+    if (Array.isArray(state.conversations)) {
+      replaceArray(conversations, state.conversations);
     }
-    if (Array.isArray(parsed.messages)) {
-      replaceArray(messages, parsed.messages);
+    if (Array.isArray(state.messages)) {
+      replaceArray(messages, state.messages);
     }
-    if (Array.isArray(parsed.attachments)) {
-      replaceArray(attachments, parsed.attachments.map(normalizeAttachment));
+    if (Array.isArray(state.attachments)) {
+      replaceArray(attachments, state.attachments.map(normalizeAttachment));
     }
-    if (Array.isArray(parsed.datasets)) {
-      replaceArray(datasets, parsed.datasets);
+    if (Array.isArray(state.datasets)) {
+      replaceArray(datasets, state.datasets);
     }
-    if (Array.isArray(parsed.datasetItems)) {
-      replaceArray(datasetItems, parsed.datasetItems);
+    if (Array.isArray(state.datasetItems)) {
+      replaceArray(datasetItems, state.datasetItems);
     }
-    if (Array.isArray(parsed.annotations)) {
-      replaceArray(annotations, parsed.annotations);
+    if (Array.isArray(state.annotations)) {
+      replaceArray(annotations, state.annotations);
     }
-    if (Array.isArray(parsed.annotationReviews)) {
-      replaceArray(annotationReviews, parsed.annotationReviews);
+    if (Array.isArray(state.annotationReviews)) {
+      replaceArray(annotationReviews, state.annotationReviews);
     }
-    if (Array.isArray(parsed.datasetVersions)) {
-      replaceArray(datasetVersions, parsed.datasetVersions);
+    if (Array.isArray(state.datasetVersions)) {
+      replaceArray(datasetVersions, state.datasetVersions);
     }
-    if (Array.isArray(parsed.trainingJobs)) {
-      replaceArray(trainingJobs, parsed.trainingJobs.map(normalizeTrainingJob));
+    if (Array.isArray(state.trainingJobs)) {
+      replaceArray(trainingJobs, state.trainingJobs.map(normalizeTrainingJob));
     }
-    if (Array.isArray(parsed.trainingMetrics)) {
-      replaceArray(trainingMetrics, parsed.trainingMetrics);
+    if (Array.isArray(state.trainingMetrics)) {
+      replaceArray(trainingMetrics, state.trainingMetrics);
     }
-    if (Array.isArray(parsed.modelVersions)) {
-      replaceArray(modelVersions, parsed.modelVersions);
+    if (Array.isArray(state.modelVersions)) {
+      replaceArray(modelVersions, state.modelVersions);
     }
-    if (Array.isArray(parsed.inferenceRuns)) {
-      replaceArray(inferenceRuns, parsed.inferenceRuns.map(normalizeInferenceRun));
+    if (Array.isArray(state.inferenceRuns)) {
+      replaceArray(inferenceRuns, state.inferenceRuns.map(normalizeInferenceRun));
     }
-    if (Array.isArray(parsed.approvalRequests)) {
-      replaceArray(approvalRequests, parsed.approvalRequests);
+    if (Array.isArray(state.approvalRequests)) {
+      replaceArray(approvalRequests, state.approvalRequests);
     }
-    if (Array.isArray(parsed.auditLogs)) {
-      replaceArray(auditLogs, parsed.auditLogs);
+    if (Array.isArray(state.auditLogs)) {
+      replaceArray(auditLogs, state.auditLogs);
     }
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -593,7 +837,7 @@ export const loadPersistedAppState = async (): Promise<void> => {
     }
     console.warn('[vistral-api] Failed to load app state store:', (error as Error).message);
   } finally {
-    appStateDirty = false;
+    appStateDirty = loadedDirty;
   }
 };
 

@@ -73,7 +73,7 @@ fi
 upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -F "file=@${UPLOAD_FILE};filename=train-sample.txt;type=text/plain" \
-  "${BASE_URL}/api/files/conversation/upload")"
+  "${BASE_URL}/api/files/inference/upload")"
 attachment_id="$(echo "${upload_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${attachment_id}" ]]; then
   echo "[smoke-runner-real-upload] upload failed."
@@ -83,7 +83,7 @@ fi
 
 attachment_status=""
 for _ in {1..120}; do
-  list_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/conversation")"
+  list_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/inference")"
   attachment_status="$(echo "${list_resp}" | jq -r --arg id "${attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
   if [[ "${attachment_status}" == "ready" ]]; then
     break

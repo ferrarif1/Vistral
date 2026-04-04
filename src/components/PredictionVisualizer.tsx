@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { UnifiedInferenceOutput } from '../../shared/domain';
 import { useI18n } from '../i18n/I18nProvider';
 import StateBlock from './StateBlock';
@@ -5,6 +6,7 @@ import StateBlock from './StateBlock';
 interface PredictionVisualizerProps {
   output: UnifiedInferenceOutput | null;
   title?: string;
+  imageUrl?: string | null;
 }
 
 const STAGE_WIDTH = 700;
@@ -20,9 +22,18 @@ const scalePoint = (
   y: (y / Math.max(imageHeight, 1)) * STAGE_HEIGHT
 });
 
-export default function PredictionVisualizer({ output, title = 'Prediction Visualization' }: PredictionVisualizerProps) {
+export default function PredictionVisualizer({
+  output,
+  title = 'Prediction Visualization',
+  imageUrl = null
+}: PredictionVisualizerProps) {
   const { t } = useI18n();
   const finalTitle = t(title);
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setImageLoadFailed(false);
+  }, [imageUrl]);
 
   if (!output) {
     return (
@@ -39,6 +50,7 @@ export default function PredictionVisualizer({ output, title = 'Prediction Visua
 
   const imageWidth = output.image.width || 1;
   const imageHeight = output.image.height || 1;
+  const showImage = Boolean(imageUrl) && !imageLoadFailed;
 
   return (
     <section className="card stack">
@@ -48,7 +60,16 @@ export default function PredictionVisualizer({ output, title = 'Prediction Visua
       </small>
 
       <div className="prediction-stage" style={{ width: STAGE_WIDTH, height: STAGE_HEIGHT }}>
-        <div className="prediction-stage-bg">
+        {showImage ? (
+          <img
+            src={imageUrl ?? undefined}
+            alt={output.image.filename}
+            className="prediction-stage-image"
+            onError={() => setImageLoadFailed(true)}
+          />
+        ) : null}
+
+        <div className={`prediction-stage-bg${showImage ? ' hidden' : ''}`}>
           <strong>{output.image.filename}</strong>
         </div>
 

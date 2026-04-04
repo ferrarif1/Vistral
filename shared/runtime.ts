@@ -25,6 +25,8 @@ export interface TrainInput {
   summaryPath?: string;
   metricsPath?: string;
   artifactPath?: string;
+  onLog?: (line: string) => void | Promise<void>;
+  onExecutionMode?: (mode: 'simulated' | 'local_command') => void;
 }
 
 export interface TrainResult {
@@ -56,6 +58,7 @@ export interface PredictInput {
   inputMimeType?: string | null;
   inputByteSize?: number | null;
   inputStoragePath?: string | null;
+  modelArtifactPath?: string | null;
 }
 
 export interface ExportInput {

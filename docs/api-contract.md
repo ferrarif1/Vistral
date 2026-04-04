@@ -8,6 +8,7 @@ This document defines the executable API contract for Vistral's prototype and th
 - Prototype auth: `HttpOnly` cookie session (`vistral_session`)
 - Production target: bearer token
 - Mutation methods (`POST`, `PUT`, `PATCH`, `DELETE`) require `X-CSRF-Token` in prototype mode except login/register/csrf
+- after explicit logout, protected endpoints return `401` until the user logs in again
 
 ## 3. Common Response Envelope
 
@@ -69,12 +70,11 @@ This document defines the executable API contract for Vistral's prototype and th
 ## 5. Authentication Endpoints
 
 ### POST /auth/register
-Create user account.
+Compatibility endpoint only. Public self-registration is disabled.
 
 Important constraints:
-- request payload does not accept `role`
-- server always creates `role=user`
-- admin assignment is only bootstrap/admin-only backend operation
+- endpoint remains available only to return an explicit disabled error for stale clients
+- response must be an error explaining that account provisioning is admin-only
 
 Request:
 ```json
@@ -95,8 +95,15 @@ Request:
 }
 ```
 
+Rules:
+- disabled accounts return an explicit account-disabled error instead of opening a new authenticated session
+
 ### POST /auth/logout
 Logout current session.
+
+Notes:
+- clears the current authenticated session
+- backend keeps an anonymous post-logout session so `/api/users/me` and other protected endpoints remain unavailable until the user logs in again
 
 ### GET /auth/csrf
 Fetch CSRF token for current session.
@@ -105,6 +112,89 @@ Fetch CSRF token for current session.
 
 ### GET /users/me
 Get current session user.
+
+Notes:
+- returns `401` when the current browser session has been explicitly logged out and is no longer bound to an authenticated user
+
+### POST /users/me/password
+Change password for current session user.
+
+Request:
+```json
+{
+  "current_password": "***",
+  "new_password": "***"
+}
+```
+
+Rules:
+- all authenticated users can access this endpoint
+- `current_password` must match the existing password
+- `new_password` must satisfy the same minimum password policy used by account creation
+
+## 6.1 Admin User Management
+
+### GET /admin/users
+List users visible to admin.
+
+Rules:
+- admin only
+- response omits password hashes and any secret material
+- each user record includes at minimum `role`, `status`, `status_reason`, `created_at`, `updated_at`, and `last_login_at`
+
+### POST /admin/users
+Create a new user account from an admin surface.
+
+Request:
+```json
+{
+  "username": "new-user",
+  "password": "***",
+  "role": "user"
+}
+```
+
+Rules:
+- admin only
+- `role` must be `user` or `admin`
+- server assigns default capabilities based on role
+- duplicate usernames are rejected
+
+### POST /admin/users/{id}/password-reset
+Reset another user's password from an admin surface.
+
+Request:
+```json
+{
+  "new_password": "***"
+}
+```
+
+Rules:
+- admin only
+- target user must exist
+- `new_password` must satisfy the minimum password policy
+
+### POST /admin/users/{id}/status
+Disable or reactivate an account.
+
+Request:
+```json
+{
+  "status": "disabled",
+  "reason": "Pending security review for unusual credential sharing."
+}
+```
+
+Rules:
+- admin only
+- `status` must be `active` or `disabled`
+- `reason` is required after trim when `status=disabled`
+- `reason` is ignored/cleared when `status=active`
+- system must reject disabling the current admin session
+- system must reject disabling the last active admin account
+- disabled users cannot create new authenticated sessions and should be blocked from further protected actions until reactivated
+- disabling a user immediately terminates that user's existing authenticated sessions; those sessions should subsequently behave as logged-out (`401`) rather than staying half-authenticated
 
 ## 7. Conversation Endpoints
 
@@ -125,15 +215,41 @@ Request:
 
 Notes:
 - `attachment_ids` order is preserved as the message attachment context order.
+- returned message records may include optional `metadata.conversation_action` for assistant-side operational execution state
 
 ### POST /conversations/message
 Send message to an existing conversation.
 
 Notes:
 - `attachment_ids` order is preserved as provided by client selection context.
+- assistant may resolve operational intents in-thread:
+  - `create_dataset`
+  - `create_model_draft`
+  - `create_training_job`
+- when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
+- when backend execution succeeds, assistant returns `metadata.conversation_action.status=completed`
+- when execution fails or user cancels, assistant returns `failed` / `cancelled`
 
 ### GET /conversations/{id}
 Get conversation with messages.
+
+Message shape notes:
+- `Message.metadata` is optional
+- `Message.metadata.conversation_action` example:
+```json
+{
+  "action": "create_training_job",
+  "status": "requires_input",
+  "summary": "Need dataset selection before creating the training job.",
+  "missing_fields": ["dataset_id"],
+  "collected_fields": {
+    "task_type": "ocr",
+    "framework": "paddleocr",
+    "name": "car-number-ocr"
+  },
+  "suggestions": ["TrainCarOCR (d-12)", "SerialNumberBatchA (d-18)"]
+}
+```
 
 ### PATCH /conversations/{id}
 Rename a conversation title (owner/admin only).
@@ -148,6 +264,61 @@ Request:
 Rules:
 - title is required after trim
 - title length must be 1-120 characters
+
+## 7.1 LLM Settings Endpoints
+
+### GET /settings/llm
+Get the current user's saved LLM configuration view.
+
+Notes:
+- response masks the stored API key and exposes `has_api_key` + `api_key_masked`
+
+### POST /settings/llm
+Save or update the current user's LLM configuration.
+
+Request:
+```json
+{
+  "llm_config": {
+    "enabled": true,
+    "provider": "chatanywhere",
+    "base_url": "https://api.chatanywhere.tech/v1",
+    "api_key": "sk-xxxx",
+    "model": "gpt-4o-mini",
+    "temperature": 0.2
+  },
+  "keep_existing_api_key": false
+}
+```
+
+Notes:
+- when `keep_existing_api_key=true` and `llm_config.api_key` is blank, server keeps the encrypted saved key
+- response remains the masked config view
+
+### DELETE /settings/llm
+Clear the current user's saved LLM configuration.
+
+### POST /settings/llm/test
+Test the current user's LLM connectivity with either a newly typed key or the saved encrypted key.
+
+Request:
+```json
+{
+  "llm_config": {
+    "enabled": true,
+    "provider": "chatanywhere",
+    "base_url": "https://api.chatanywhere.tech/v1",
+    "api_key": "",
+    "model": "gpt-4o-mini",
+    "temperature": 0.2
+  },
+  "use_stored_api_key": true
+}
+```
+
+Notes:
+- when `use_stored_api_key=true` and `llm_config.api_key` is blank, server reuses the current user's saved encrypted key for this test
+- response returns a short preview string from the provider
 
 ## 8. File Attachment Endpoints
 
@@ -178,6 +349,8 @@ Notes:
 - binary content retrieval is available for attachments uploaded via multipart mode
 - `FileAttachment` includes `mime_type`, `byte_size`, `storage_backend`, `storage_path`
 - current storage backend is local filesystem (`storage_backend=local`)
+- prototype upload endpoints accept generic binary payloads, including BMP images and common document/image formats
+- client should preflight large files and keep each upload under about `120 MB` for a smoother chat-style UX; larger payloads may be rejected with `413`
 
 ### GET /files/model/{modelId}
 List model-scoped attachments.
@@ -189,6 +362,9 @@ Supported request formats:
 - JSON filename mode (prototype compatibility)
 - `multipart/form-data` mode with `file` field (preferred)
 
+Notes:
+- keep each file under about `120 MB` to avoid proxy/body-size rejection (`413`)
+
 ### GET /files/dataset/{datasetId}
 List dataset-scoped attachments.
 
@@ -198,6 +374,24 @@ Upload dataset source file attachment.
 Supported request formats:
 - JSON filename mode (prototype compatibility)
 - `multipart/form-data` mode with `file` field (preferred)
+
+Notes:
+- keep each file under about `120 MB` to avoid proxy/body-size rejection (`413`)
+
+### GET /files/inference
+List inference-input attachments for current user.
+
+### POST /files/inference/upload
+Upload inference input attachment.
+
+Supported request formats:
+- JSON filename mode (prototype compatibility)
+- `multipart/form-data` mode with `file` field (preferred)
+
+Notes:
+- uploaded attachment target is `attached_to_type=InferenceRun` and `attached_to_id=null` before run execution.
+- `InferenceValidationPage` should use this endpoint instead of conversation attachment endpoints.
+- keep each file under about `120 MB` to avoid proxy/body-size rejection (`413`)
 
 ### GET /files/{id}/content
 Fetch binary content for a ready attachment in ownership scope.
@@ -320,6 +514,44 @@ List dataset items.
 ### POST /datasets/{id}/items
 Add dataset item metadata record (for imported references).
 
+Request:
+```json
+{
+  "attachment_id": "f-120",
+  "filename": "train_001.jpg",
+  "split": "unassigned",
+  "status": "ready",
+  "metadata": {
+    "source": "import_reference"
+  }
+}
+```
+
+Behavior:
+- `attachment_id` is optional.
+- when `attachment_id` is absent, server resolves existing dataset attachment by `filename`; if none exists, server creates a dataset-scoped reference attachment and then creates item metadata.
+- when an item already exists for the chosen attachment, server returns the existing item (idempotent for same attachment).
+
+### PATCH /datasets/{id}/items/{item_id}
+Update an existing dataset item.
+
+Request:
+```json
+{
+  "split": "train",
+  "status": "ready",
+  "metadata": {
+    "source": "import_reference",
+    "note": "manual review pending"
+  }
+}
+```
+
+Behavior:
+- any field is optional; omitted fields keep previous value.
+- when `metadata` is provided, it replaces current metadata object.
+- item must belong to the target dataset.
+
 ### POST /datasets/{id}/split
 Save split strategy and assign `train/val/test`.
 
@@ -347,7 +579,8 @@ Current behavior:
 - currently supports `format=yolo|coco|labelme|ocr`
 - parses import file and writes actual annotation payloads into `annotations` with `source=import`
 - updates existing non-approved annotations; approved annotations stay immutable
-- returns import summary (`imported`, `updated`)
+- when import record filename has no matched ready item, server creates a metadata item record first (using existing attachment by filename when available, otherwise creating a reference attachment)
+- returns import summary (`imported`, `updated`, `created_items`)
 
 Minimum import file specifications:
 - `yolo`:
@@ -374,9 +607,18 @@ Request:
 ### POST /datasets/{id}/export
 Export annotations from dataset.
 
-Prototype behavior:
+Current behavior:
 - returns export summary and generated dataset-scoped export attachment metadata
-- does not yet stream binary export files in this round
+- writes real exported file content into the attachment storage (status `ready`)
+- export files are downloadable via `GET /files/{attachment_id}/content`
+- format/task_type constraints align with import:
+  - `yolo|coco|labelme` require detection/obb/segmentation dataset task type
+  - `ocr` requires `dataset.task_type=ocr`
+- output structure follows selected `format`:
+  - `yolo`: JSON object with `dataset_id`, `format`, `exported_at`, `items[]` (`filename`, `boxes[]`)
+  - `ocr`: JSON object with `dataset_id`, `format`, `exported_at`, `items[]` (`filename`, `lines[]`)
+  - `coco`: JSON object with `dataset_id`, `format`, `exported_at`, `images[]`, `annotations[]`, `categories[]`
+  - `labelme`: JSON object with `dataset_id`, `format`, `exported_at`, `items[]` (`imagePath`, `shapes[]`)
 
 Request:
 ```json
@@ -453,9 +695,11 @@ Response:
 {
   "task_type": "ocr",
   "recommended_framework": "paddleocr",
+  "recommended_annotation_type": "ocr_text",
   "annotation_type": "ocr_text",
   "label_hints": ["text_line", "serial_number"],
   "dataset_suggestions": ["采集多光照车号样本"],
+  "evaluation_metric_suggestions": ["accuracy", "cer", "wer"],
   "rationale": "需求以文字识别为主",
   "source": "rule"
 }
@@ -464,6 +708,7 @@ Response:
 Notes:
 - first implementation is rule-based by default
 - if user has enabled LLM config with valid key, server attempts LLM-enhanced draft and falls back to rule result on failure
+- `annotation_type` is kept as backward-compatible alias of `recommended_annotation_type`
 
 ## 13. Training Job Endpoints
 
@@ -501,15 +746,21 @@ Server behavior (current):
 - executor writes:
   - `job-config.json`
   - `dataset-summary.json`
+  - framework-ready materialized dataset assets under `materialized-dataset/`
   - `train.log`
   - `metrics.json`
-  - artifact file (for model version registration)
+  - artifact manifest file (for model version registration; may reference real exported weights through `primary_model_path`)
 - job status path remains:
   `queued -> preparing -> running -> evaluating -> completed` (or `failed` / `cancelled`)
 - metrics are derived from real dataset/annotation summary for this job (not fixed mock constants)
 - business state snapshot is persisted in `APP_STATE_STORE_PATH` (default `.data/app-state.json`)
 - on API restart, unfinished jobs in `queued/preparing/running/evaluating` are automatically re-queued
-- if `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` is configured (for example `YOLO_LOCAL_TRAIN_COMMAND`), executor runs the real local command in job workspace and prefers command-generated metrics from `{{metrics_path}}`
+- executor now defaults to bundled local runner templates (`scripts/local-runners/*_train_runner.py`) and prefers runner-generated metrics from `{{metrics_path}}` when available
+- if `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` is configured (for example `YOLO_LOCAL_TRAIN_COMMAND`), it overrides bundled runner template
+- when `VISTRAL_RUNNER_ENABLE_REAL=1`, bundled local runner templates attempt dependency-backed real framework execution; otherwise they stay in template mode
+- if bundled runner command invocation fails (for example dependency missing), training falls back to simulated lifecycle and logs fallback reason
+- for OCR frameworks, bundled `paddleocr/doctr` train runners can perform dependency-backed OCR probe execution (sampled manifest inference for metric bootstrap) when dependencies are available; when unavailable, artifact manifest keeps `mode=template` and `fallback_reason`
+- OCR local runners may also emit additional OCR-shaped metric keys in `metrics.json` / artifact summary (for example `norm_edit_distance`, `word_accuracy`) alongside the canonical visible metrics, without changing the job detail response envelope
 - `job.execution_mode` is returned explicitly (`simulated` | `local_command` | `unknown`)
 
 ### GET /training/jobs/{id}
@@ -519,6 +770,15 @@ Get training job detail including:
 - `logs` (runtime log lines)
 - `artifact_attachment_id` (if generated)
 - `workspace_dir` (local executor workspace)
+- `artifact_summary` (parsed runtime artifact manifest preview when available), fields include:
+  - `runner`
+  - `mode` (for example `real`, `real_probe`, `template`)
+  - `fallback_reason` (present when local runner falls back)
+  - `training_performed`
+  - `primary_model_path` (if real exported weights are referenced)
+  - `generated_at`
+  - `sampled_items`
+  - `metrics_keys` (summary of metric keys persisted in artifact)
 
 ### GET /training/jobs/{id}/metrics-export
 Export normalized metric series JSON for troubleshooting.
@@ -581,6 +841,7 @@ Request:
 Current rule:
 - only completed jobs can register
 - registration binds `artifact_attachment_id` to the generated training artifact attachment (not null for completed executor jobs)
+- when the artifact attachment is a manifest JSON with `primary_model_path`, downstream inference resolves that version-bound model path first
 
 ### GET /model-versions/{id}
 Get model version detail.
@@ -602,8 +863,18 @@ Request:
 }
 ```
 
+Rule:
+- `input_attachment_id` should reference a ready attachment uploaded via `/files/inference/upload`.
+- conversation attachment ids are still accepted for backward compatibility with existing scripts.
+
 Response includes both raw and normalized outputs.
 Response also includes explicit `execution_source` (mirrors normalized source marker).
+
+Current execution preference:
+1. framework runtime endpoint, if configured and reachable
+2. version-bound local artifact path, if available to the selected model version
+3. explicit local predict command / bundled local runner (bundled templates are used by default when explicit command is not configured)
+4. deterministic local fallback or `mock_fallback`
 
 `normalized_output.source` semantics:
 - `<framework>_runtime`: runtime endpoint call succeeded
@@ -624,6 +895,16 @@ Request:
   "reason": "missed_detection"
 }
 ```
+
+Behavior:
+- server sets `inference_runs.feedback_dataset_id` to target dataset id.
+- if run input attachment is already dataset-scoped on the target dataset, server reuses it.
+- otherwise server clones input attachment into a new dataset-scoped attachment (`attached_to_type=Dataset`, `attached_to_id=<dataset_id>`), preserving mime/size/local binary when available.
+- server upserts one dataset item for this feedback run and records metadata:
+  - `inference_run_id`
+  - `feedback_reason`
+  - `source_attachment_id`
+- repeated feedback submission for the same run+dataset is idempotent at dataset-item level (updates metadata instead of creating duplicate item rows).
 
 ## 16. Runtime Connectivity Endpoint
 
@@ -747,6 +1028,7 @@ Implemented status mapping (prototype):
 - `INSUFFICIENT_PERMISSIONS` -> `403`
 - `CSRF_VALIDATION_FAILED` -> `403`
 - `RESOURCE_NOT_FOUND` -> `404`
+- `PAYLOAD_TOO_LARGE` -> `413`
 - `VALIDATION_ERROR` -> `400`
 - `INVALID_STATE_TRANSITION` -> `409`
 - `INTERNAL_ERROR` -> `500`

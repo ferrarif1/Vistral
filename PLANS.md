@@ -88,6 +88,8 @@ Early progress:
 - Inference validation page now supports in-app runtime connectivity checks (`/api/runtime/connectivity`) for all three frameworks.
 - Added dedicated runtime settings entry (`/settings/runtime`) for engineering diagnostics and refresh checks.
 - Runtime settings now includes integration templates (env vars, health curl, request/response payload examples).
+- Runtime settings execution watch now also surfaces latest framework-specific metric keys sampled from recent completed training jobs.
+- Added dedicated OCR closure smoke to validate OCR import -> PaddleOCR/docTR local-command training -> metrics/artifact summary -> model-version register -> inference on real uploaded files.
 
 ### Phase 4: Two Closed Business Loops
 
@@ -127,8 +129,9 @@ When work is interrupted by a new conversation task, append handoff details in `
 
 Current priority queue:
 
-1. Enable dependency-aware real framework execution inside local runners (ultralytics / paddleocr / doctr) with deterministic fallback retained
-2. Add richer epoch-level metrics persistence + API payload for training detail visualization
-3. Expose explicit execution mode/source fields in APIs (training + inference) to reduce frontend inference from logs
-4. Expand framework-specific smoke coverage for dependency-present path without creating duplicate routes/pages
-
+1. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
+2. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.
+3. Continue the lower-priority framework realification backlog:
+   - dependency-aware real framework execution inside local runners
+   - richer epoch-level metrics retention/export hardening
+   - dependency-present smoke expansion without duplicate routes/pages

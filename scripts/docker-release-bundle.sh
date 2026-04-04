@@ -102,6 +102,8 @@ cp docs/deployment.docker.md "${RELEASE_DIR}/docs/deployment.docker.md"
 cp scripts/docker-load-and-up.sh "${RELEASE_DIR}/scripts/docker-load-and-up.sh"
 cp scripts/docker-healthcheck.sh "${RELEASE_DIR}/scripts/docker-healthcheck.sh"
 cp scripts/docker-verify-full.sh "${RELEASE_DIR}/scripts/docker-verify-full.sh"
+cp scripts/smoke-dataset-export-roundtrip.sh "${RELEASE_DIR}/scripts/smoke-dataset-export-roundtrip.sh"
+cp scripts/smoke-real-closure.sh "${RELEASE_DIR}/scripts/smoke-real-closure.sh"
 chmod +x "${RELEASE_DIR}/scripts/"*.sh
 
 VERIFY_JSON_DEST=''
@@ -250,6 +252,8 @@ cat > "${RELEASE_DIR}/RELEASE_NOTES.md" <<MD
 - scripts/docker-load-and-up.sh
 - scripts/docker-healthcheck.sh
 - scripts/docker-verify-full.sh
+- scripts/smoke-dataset-export-roundtrip.sh
+- scripts/smoke-real-closure.sh
 - RELEASE_NOTES.md
 - manifest.json
 - SHA256SUMS.txt
@@ -296,6 +300,8 @@ cat > "${RELEASE_DIR}/manifest.json" <<JSON
     "scripts/docker-load-and-up.sh",
     "scripts/docker-healthcheck.sh",
     "scripts/docker-verify-full.sh",
+    "scripts/smoke-dataset-export-roundtrip.sh",
+    "scripts/smoke-real-closure.sh",
     "RELEASE_NOTES.md",
     "manifest.json",
     "SHA256SUMS.txt"
@@ -313,6 +319,8 @@ checksum_files=(
   scripts/docker-load-and-up.sh
   scripts/docker-healthcheck.sh
   scripts/docker-verify-full.sh
+  scripts/smoke-dataset-export-roundtrip.sh
+  scripts/smoke-real-closure.sh
   RELEASE_NOTES.md
   manifest.json
 )

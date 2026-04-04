@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type {
   AnnotationWithReview,
@@ -32,6 +32,25 @@ const toNumber = (value: unknown, fallback: number): number => {
   return fallback;
 };
 
+const backgroundRefreshIntervalMs = 5000;
+
+type LoadMode = 'initial' | 'manual' | 'background';
+
+const buildAnnotationWorkspaceSignature = (payload: {
+  dataset: DatasetRecord;
+  items: DatasetItemRecord[];
+  attachments: FileAttachment[];
+  modelVersions: ModelVersionRecord[];
+  annotations: AnnotationWithReview[];
+}): string =>
+  JSON.stringify({
+    dataset: payload.dataset,
+    items: [...payload.items].sort((left, right) => left.id.localeCompare(right.id)),
+    attachments: [...payload.attachments].sort((left, right) => left.id.localeCompare(right.id)),
+    modelVersions: [...payload.modelVersions].sort((left, right) => left.id.localeCompare(right.id)),
+    annotations: [...payload.annotations].sort((left, right) => left.id.localeCompare(right.id))
+  });
+
 export default function AnnotationWorkspacePage() {
   const { t } = useI18n();
   const steps = useMemo(() => [t('Select Item'), t('Annotate'), t('Review')], [t]);
@@ -52,28 +71,63 @@ export default function AnnotationWorkspacePage() {
   const [reviewQuality, setReviewQuality] = useState('0.9');
   const [reviewComment, setReviewComment] = useState('Looks good');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const workspaceSignatureRef = useRef('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (mode: LoadMode) => {
     if (!datasetId) {
       return;
     }
 
-    const [detail, annotationList, versions] = await Promise.all([
-      api.getDatasetDetail(datasetId),
-      api.listDatasetAnnotations(datasetId),
-      api.listModelVersions()
-    ]);
+    if (mode === 'initial') {
+      setLoading(true);
+    }
 
-    setDataset(detail.dataset);
-    setItems(detail.items);
-    setAttachments(detail.attachments);
-    setAnnotations(annotationList);
-    const matchedVersions = versions.filter((version) => version.task_type === detail.dataset.task_type);
-    setModelVersions(matchedVersions);
-    setSelectedModelVersionId((prev) => prev || matchedVersions[0]?.id || '');
-    setSelectedItemId((prev) => prev || detail.items[0]?.id || '');
+    if (mode === 'manual') {
+      setRefreshing(true);
+    }
+
+    try {
+      const [detail, annotationList, versions] = await Promise.all([
+        api.getDatasetDetail(datasetId),
+        api.listDatasetAnnotations(datasetId),
+        api.listModelVersions()
+      ]);
+
+      const matchedVersions = versions.filter((version) => version.task_type === detail.dataset.task_type);
+      const nextSignature = buildAnnotationWorkspaceSignature({
+        dataset: detail.dataset,
+        items: detail.items,
+        attachments: detail.attachments,
+        modelVersions: matchedVersions,
+        annotations: annotationList
+      });
+
+      if (workspaceSignatureRef.current !== nextSignature) {
+        workspaceSignatureRef.current = nextSignature;
+        setDataset(detail.dataset);
+        setItems(detail.items);
+        setAttachments(detail.attachments);
+        setAnnotations(annotationList);
+        setModelVersions(matchedVersions);
+        setSelectedModelVersionId((prev) =>
+          prev && matchedVersions.some((version) => version.id === prev) ? prev : matchedVersions[0]?.id || ''
+        );
+        setSelectedItemId((prev) =>
+          prev && detail.items.some((item) => item.id === prev) ? prev : detail.items[0]?.id || ''
+        );
+      }
+    } finally {
+      if (mode === 'initial') {
+        setLoading(false);
+      }
+
+      if (mode === 'manual') {
+        setRefreshing(false);
+      }
+    }
   }, [datasetId]);
 
   useEffect(() => {
@@ -82,11 +136,9 @@ export default function AnnotationWorkspacePage() {
       return;
     }
 
-    setLoading(true);
-    load()
+    load('initial')
       .then(() => setFeedback(null))
-      .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
-      .finally(() => setLoading(false));
+      .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
   }, [datasetId, load]);
 
   useEffect(() => {
@@ -95,10 +147,10 @@ export default function AnnotationWorkspacePage() {
     }
 
     const timer = window.setInterval(() => {
-      load().catch(() => {
+      load('background').catch(() => {
         // no-op
       });
-    }, 900);
+    }, backgroundRefreshIntervalMs);
 
     return () => window.clearInterval(timer);
   }, [datasetId, load]);
@@ -336,7 +388,7 @@ export default function AnnotationWorkspacePage() {
         })
       });
 
-      await load();
+      await load('manual');
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -355,7 +407,7 @@ export default function AnnotationWorkspacePage() {
     try {
       await api.submitAnnotationForReview(datasetId, selectedAnnotation.id);
       setFeedback({ variant: 'success', text: t('Annotation submitted for review.') });
-      await load();
+      await load('manual');
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -382,7 +434,7 @@ export default function AnnotationWorkspacePage() {
         variant: 'success',
         text: t('Annotation {status}.', { status: t(status) })
       });
-      await load();
+      await load('manual');
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -410,7 +462,7 @@ export default function AnnotationWorkspacePage() {
           updated: result.updated
         })
       });
-      await load();
+      await load('manual');
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -449,7 +501,7 @@ export default function AnnotationWorkspacePage() {
         payload
       });
       setFeedback({ variant: 'success', text: t('Rejected annotation moved back to in_progress.') });
-      await load();
+      await load('manual');
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -493,9 +545,23 @@ export default function AnnotationWorkspacePage() {
             {dataset.name} · {t('task')} {t(dataset.task_type)}
           </small>
         </div>
-        <Link to={`/datasets/${dataset.id}`} className="quick-link">
-          {t('Back to Dataset Detail')}
-        </Link>
+        <div className="row gap align-center">
+          <button
+            type="button"
+            className="workspace-inline-button"
+            onClick={() => {
+              load('manual').catch((error) => {
+                setFeedback({ variant: 'error', text: (error as Error).message });
+              });
+            }}
+            disabled={busy || refreshing}
+          >
+            {refreshing ? t('Refreshing...') : t('Refresh')}
+          </button>
+          <Link to={`/datasets/${dataset.id}`} className="quick-link">
+            {t('Back to Dataset Detail')}
+          </Link>
+        </div>
       </div>
 
       <StepIndicator steps={steps} current={currentStep} />

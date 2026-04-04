@@ -1,5 +1,6 @@
 export type SystemRole = 'user' | 'admin';
 export type Capability = 'manage_models' | 'global_governance';
+export type UserAccountStatus = 'active' | 'disabled';
 
 export type TaskType = 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
 export type ModelFramework = 'paddleocr' | 'doctr' | 'yolo';
@@ -15,6 +16,8 @@ export type ModelStatus =
 
 export type ConversationStatus = 'active' | 'completed' | 'archived';
 export type MessageSender = 'user' | 'assistant' | 'system';
+export type ConversationActionType = 'create_dataset' | 'create_model_draft' | 'create_training_job';
+export type ConversationActionStatus = 'requires_input' | 'completed' | 'failed' | 'cancelled';
 
 export type FileAttachmentStatus = 'uploading' | 'processing' | 'ready' | 'error';
 export type AttachmentTargetType = 'Conversation' | 'Model' | 'Dataset' | 'InferenceRun';
@@ -60,7 +63,10 @@ export interface User {
   id: string;
   username: string;
   role: SystemRole;
+  status: UserAccountStatus;
+  status_reason: string | null;
   capabilities: Capability[];
+  last_login_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -88,12 +94,29 @@ export interface ConversationRecord {
   updated_at: string;
 }
 
+export interface ConversationActionMetadata {
+  action: ConversationActionType;
+  status: ConversationActionStatus;
+  summary: string;
+  missing_fields: string[];
+  collected_fields: Record<string, string>;
+  suggestions?: string[];
+  created_entity_type?: 'Dataset' | 'TrainingJob' | 'Model' | null;
+  created_entity_id?: string | null;
+  created_entity_label?: string | null;
+}
+
+export interface MessageMetadata {
+  conversation_action?: ConversationActionMetadata | null;
+}
+
 export interface MessageRecord {
   id: string;
   conversation_id: string;
   sender: MessageSender;
   content: string;
   attachment_ids: string[];
+  metadata?: MessageMetadata;
   created_at: string;
 }
 
@@ -253,6 +276,17 @@ export interface TrainingMetricRecord {
   recorded_at: string;
 }
 
+export interface TrainingArtifactSummary {
+  runner: string | null;
+  mode: string | null;
+  fallback_reason: string | null;
+  training_performed: boolean | null;
+  primary_model_path: string | null;
+  generated_at: string | null;
+  sampled_items: number | null;
+  metrics_keys: string[];
+}
+
 export interface TrainingMetricsExport {
   job_id: string;
   exported_at: string;
@@ -404,6 +438,26 @@ export interface LoginInput {
   password: string;
 }
 
+export interface CreateUserInput {
+  username: string;
+  password: string;
+  role: SystemRole;
+}
+
+export interface ChangePasswordInput {
+  current_password: string;
+  new_password: string;
+}
+
+export interface ResetUserPasswordInput {
+  new_password: string;
+}
+
+export interface UpdateUserStatusInput {
+  status: UserAccountStatus;
+  reason?: string | null;
+}
+
 export interface CreateModelDraftInput {
   name: string;
   description: string;
@@ -505,12 +559,21 @@ export interface SubmitApprovalInput {
   parameter_snapshot: Record<string, string>;
 }
 
+export type RequirementAnnotationType =
+  | 'ocr_text'
+  | 'bbox'
+  | 'rotated_bbox'
+  | 'polygon'
+  | 'classification';
+
 export interface RequirementTaskDraft {
   task_type: TaskType;
   recommended_framework: ModelFramework;
-  annotation_type: 'ocr_text' | 'bbox' | 'rotated_bbox' | 'polygon' | 'classification';
+  recommended_annotation_type: RequirementAnnotationType;
+  annotation_type?: RequirementAnnotationType;
   label_hints: string[];
   dataset_suggestions: string[];
+  evaluation_metric_suggestions: string[];
   rationale: string;
   source: 'rule' | 'llm';
 }

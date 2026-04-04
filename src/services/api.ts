@@ -2,7 +2,9 @@ import type {
   AnnotationWithReview,
   ApprovalRequest,
   AuditLogRecord,
+  ChangePasswordInput,
   ConversationRecord,
+  CreateUserInput,
   DatasetItemRecord,
   DatasetRecord,
   DatasetVersionRecord,
@@ -14,19 +16,33 @@ import type {
   MessageRecord,
   ModelRecord,
   ModelVersionRecord,
-  RegisterInput,
   RequirementTaskDraft,
+  ResetUserPasswordInput,
   ReviewAnnotationInput,
   RuntimeConnectivityRecord,
   RuntimeMetricsRetentionSummary,
   SubmitApprovalInput,
+  TrainingArtifactSummary,
   TrainingJobRecord,
   TrainingMetricRecord,
   TrainingMetricsExport,
   UpsertAnnotationInput,
+  UpdateUserStatusInput,
   VerificationReportRecord,
   User
 } from '../../shared/domain';
+import {
+  filterVisibleAttachments,
+  filterVisibleDatasets,
+  filterVisibleModels,
+  filterVisibleModelVersions,
+  filterVisibleTrainingJobs
+} from '../../shared/catalogFixtures';
+import {
+  UPLOAD_SOFT_LIMIT_BYTES,
+  UPLOAD_SOFT_LIMIT_LABEL,
+  formatByteSize
+} from '../../shared/uploadLimits';
 
 type ApiEnvelope<T> =
   | {
@@ -46,12 +62,14 @@ let csrfToken: string | null = null;
 const csrfExemptPaths = new Set(['/api/auth/login', '/api/auth/register', '/api/auth/csrf']);
 const responsePreviewMaxLength = 180;
 
+export { UPLOAD_SOFT_LIMIT_LABEL } from '../../shared/uploadLimits';
+
 const isMutationMethod = (method: string) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
 const normalizeResponsePreview = (rawText: string): string => {
   const trimmed = rawText.trim();
   if (!trimmed) {
-    return 'empty response body (API service may be unavailable or proxy failed)';
+    return 'empty response body (API unavailable/restarting or proxy upstream failed; Docker mode should use http://127.0.0.1:8080/api/*)';
   }
 
   const lowered = trimmed.toLowerCase();
@@ -62,8 +80,13 @@ const normalizeResponsePreview = (rawText: string): string => {
   return trimmed.replace(/\s+/g, ' ').slice(0, responsePreviewMaxLength);
 };
 
-const buildRequestErrorMessage = (status: number, rawText: string): string =>
-  `Request failed (${status}): ${normalizeResponsePreview(rawText)}`;
+const buildRequestErrorMessage = (status: number, rawText: string): string => {
+  if (status === 413) {
+    return `Request failed (413): upload rejected before reaching API or hit the API upload guard. Keep each file under ${UPLOAD_SOFT_LIMIT_LABEL}. If you use Docker, restart the stack after nginx config changes and retry.`;
+  }
+
+  return `Request failed (${status}): ${normalizeResponsePreview(rawText)}`;
+};
 
 const readApiEnvelope = async <T>(
   response: Response
@@ -175,6 +198,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return envelope.data;
 }
 
+const assertFileUploadWithinLimit = (file: Pick<File, 'name' | 'size'>): void => {
+  if (!Number.isFinite(file.size) || file.size <= UPLOAD_SOFT_LIMIT_BYTES) {
+    return;
+  }
+
+  const filename = file.name?.trim() || 'upload';
+  throw new Error(
+    `File ${filename} is ${formatByteSize(file.size)}. Keep each upload under ${UPLOAD_SOFT_LIMIT_LABEL} to avoid proxy rejection (413).`
+  );
+};
+
 const parseDownloadFilename = (contentDisposition: string | null): string | null => {
   if (!contentDisposition) {
     return null;
@@ -196,15 +230,6 @@ const parseDownloadFilename = (contentDisposition: string | null): string | null
 export const api = {
   health: () => request<{ status: string }>('/api/health'),
 
-  register: async (input: RegisterInput) => {
-    const user = await request<User>('/api/auth/register', {
-      method: 'POST',
-      body: JSON.stringify(input)
-    });
-    invalidateCsrfToken();
-    return user;
-  },
-
   login: async (input: LoginInput) => {
     const user = await request<User>('/api/auth/login', {
       method: 'POST',
@@ -223,9 +248,30 @@ export const api = {
   },
 
   me: () => request<User>('/api/users/me'),
+  changeMyPassword: (input: ChangePasswordInput) =>
+    request<{ updated: true }>('/api/users/me/password', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+  listUsers: () => request<User[]>('/api/admin/users'),
+  createUserAccount: (input: CreateUserInput) =>
+    request<User>('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+  resetUserPassword: (userId: string, input: ResetUserPasswordInput) =>
+    request<User>(`/api/admin/users/${encodeURIComponent(userId)}/password-reset`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+  updateUserStatus: (userId: string, input: UpdateUserStatusInput) =>
+    request<User>(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
 
-  listModels: () => request<ModelRecord[]>('/api/models'),
-  listMyModels: () => request<ModelRecord[]>('/api/models/my'),
+  listModels: async () => filterVisibleModels(await request<ModelRecord[]>('/api/models')),
+  listMyModels: async () => filterVisibleModels(await request<ModelRecord[]>('/api/models/my')),
 
   createModelDraft: (input: {
     name: string;
@@ -238,7 +284,8 @@ export const api = {
       body: JSON.stringify(input)
     }),
 
-  listConversationAttachments: () => request<FileAttachment[]>('/api/files/conversation'),
+  listConversationAttachments: async () =>
+    filterVisibleAttachments(await request<FileAttachment[]>('/api/files/conversation')),
 
   uploadConversationAttachment: (filename: string) =>
     request<FileAttachment>('/api/files/conversation/upload', {
@@ -247,6 +294,7 @@ export const api = {
     }),
 
   uploadConversationFile: (file: File) => {
+    assertFileUploadWithinLimit(file);
     const formData = new FormData();
     formData.append('file', file);
     return request<FileAttachment>('/api/files/conversation/upload', {
@@ -255,8 +303,29 @@ export const api = {
     });
   },
 
-  listModelAttachments: (modelId: string) =>
-    request<FileAttachment[]>(`/api/files/model/${encodeURIComponent(modelId)}`),
+  listInferenceAttachments: async () =>
+    filterVisibleAttachments(await request<FileAttachment[]>('/api/files/inference')),
+
+  uploadInferenceAttachment: (filename: string) =>
+    request<FileAttachment>('/api/files/inference/upload', {
+      method: 'POST',
+      body: JSON.stringify({ filename })
+    }),
+
+  uploadInferenceFile: (file: File) => {
+    assertFileUploadWithinLimit(file);
+    const formData = new FormData();
+    formData.append('file', file);
+    return request<FileAttachment>('/api/files/inference/upload', {
+      method: 'POST',
+      body: formData
+    });
+  },
+
+  listModelAttachments: async (modelId: string) =>
+    filterVisibleAttachments(
+      await request<FileAttachment[]>(`/api/files/model/${encodeURIComponent(modelId)}`)
+    ),
 
   uploadModelAttachment: (modelId: string, filename: string) =>
     request<FileAttachment>(`/api/files/model/${encodeURIComponent(modelId)}/upload`, {
@@ -265,6 +334,7 @@ export const api = {
     }),
 
   uploadModelFile: (modelId: string, file: File) => {
+    assertFileUploadWithinLimit(file);
     const formData = new FormData();
     formData.append('file', file);
     return request<FileAttachment>(`/api/files/model/${encodeURIComponent(modelId)}/upload`, {
@@ -273,8 +343,10 @@ export const api = {
     });
   },
 
-  listDatasetAttachments: (datasetId: string) =>
-    request<FileAttachment[]>(`/api/files/dataset/${encodeURIComponent(datasetId)}`),
+  listDatasetAttachments: async (datasetId: string) =>
+    filterVisibleAttachments(
+      await request<FileAttachment[]>(`/api/files/dataset/${encodeURIComponent(datasetId)}`)
+    ),
 
   uploadDatasetAttachment: (datasetId: string, filename: string) =>
     request<FileAttachment>(`/api/files/dataset/${encodeURIComponent(datasetId)}/upload`, {
@@ -283,6 +355,7 @@ export const api = {
     }),
 
   uploadDatasetFile: (datasetId: string, file: File) => {
+    assertFileUploadWithinLimit(file);
     const formData = new FormData();
     formData.append('file', file);
     return request<FileAttachment>(`/api/files/dataset/${encodeURIComponent(datasetId)}/upload`, {
@@ -335,7 +408,7 @@ export const api = {
       body: JSON.stringify(input)
     }),
 
-  listDatasets: () => request<DatasetRecord[]>('/api/datasets'),
+  listDatasets: async () => filterVisibleDatasets(await request<DatasetRecord[]>('/api/datasets')),
 
   createDataset: (input: {
     name: string;
@@ -350,16 +423,54 @@ export const api = {
       body: JSON.stringify(input)
     }),
 
-  getDatasetDetail: (datasetId: string) =>
-    request<{
+  getDatasetDetail: async (datasetId: string) => {
+    const detail = await request<{
       dataset: DatasetRecord;
       attachments: FileAttachment[];
       items: DatasetItemRecord[];
       versions: DatasetVersionRecord[];
-    }>(`/api/datasets/${encodeURIComponent(datasetId)}`),
+    }>(`/api/datasets/${encodeURIComponent(datasetId)}`);
+
+    return {
+      ...detail,
+      attachments: filterVisibleAttachments(detail.attachments)
+    };
+  },
 
   listDatasetItems: (datasetId: string) =>
     request<DatasetItemRecord[]>(`/api/datasets/${encodeURIComponent(datasetId)}/items`),
+
+  createDatasetItem: (
+    datasetId: string,
+    input: {
+      attachment_id?: string;
+      filename?: string;
+      split?: 'train' | 'val' | 'test' | 'unassigned';
+      status?: 'uploading' | 'processing' | 'ready' | 'error';
+      metadata?: Record<string, string>;
+    }
+  ) =>
+    request<DatasetItemRecord>(`/api/datasets/${encodeURIComponent(datasetId)}/items`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  updateDatasetItem: (
+    datasetId: string,
+    itemId: string,
+    input: {
+      split?: 'train' | 'val' | 'test' | 'unassigned';
+      status?: 'uploading' | 'processing' | 'ready' | 'error';
+      metadata?: Record<string, string>;
+    }
+  ) =>
+    request<DatasetItemRecord>(
+      `/api/datasets/${encodeURIComponent(datasetId)}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(input)
+      }
+    ),
 
   splitDataset: (input: {
     dataset_id: string;
@@ -395,7 +506,7 @@ export const api = {
     format: 'yolo' | 'coco' | 'labelme' | 'ocr';
     attachment_id: string;
   }) =>
-    request<{ format: string; imported: number; updated: number; status: 'completed' }>(
+    request<{ format: string; imported: number; updated: number; created_items: number; status: 'completed' }>(
       `/api/datasets/${encodeURIComponent(input.dataset_id)}/import`,
       {
         method: 'POST',
@@ -464,7 +575,8 @@ export const api = {
       body: JSON.stringify({ description })
     }),
 
-  listTrainingJobs: () => request<TrainingJobRecord[]>('/api/training/jobs'),
+  listTrainingJobs: async () =>
+    filterVisibleTrainingJobs(await request<TrainingJobRecord[]>('/api/training/jobs')),
 
   createTrainingJob: (input: {
     name: string;
@@ -486,6 +598,7 @@ export const api = {
       metrics: TrainingMetricRecord[];
       logs: string[];
       artifact_attachment_id: string | null;
+      artifact_summary: TrainingArtifactSummary | null;
       workspace_dir: string | null;
     }>(
       `/api/training/jobs/${encodeURIComponent(jobId)}`
@@ -527,7 +640,8 @@ export const api = {
       method: 'POST'
     }),
 
-  listModelVersions: () => request<ModelVersionRecord[]>('/api/model-versions'),
+  listModelVersions: async () =>
+    filterVisibleModelVersions(await request<ModelVersionRecord[]>('/api/model-versions')),
 
   getModelVersion: (versionId: string) =>
     request<ModelVersionRecord>(`/api/model-versions/${encodeURIComponent(versionId)}`),
@@ -617,9 +731,12 @@ export const api = {
       method: 'DELETE'
     }),
 
-  testLlmConnection: (llmConfig: LlmConfig) =>
+  testLlmConnection: (llmConfig: LlmConfig, useStoredApiKey = false) =>
     request<{ preview: string }>('/api/settings/llm/test', {
       method: 'POST',
-      body: JSON.stringify({ llm_config: llmConfig })
+      body: JSON.stringify({
+        llm_config: llmConfig,
+        use_stored_api_key: useStoredApiKey
+      })
     })
 };

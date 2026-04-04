@@ -18,11 +18,11 @@ export default function DualEntryPage() {
           <h3>{t('AI-Native Conversation Workspace')}</h3>
           <p>
             {t(
-              'Start with natural language and attachments. Keep context visible while iterating with mock model responses.'
+              'Start with natural language and draft attachments. Open the attachment tray only when you need files or recent context.'
             )}
           </p>
           <ul className="list plain">
-            <li>{t('Persistent attachment panel')}</li>
+            <li>{t('On-demand attachment tray')}</li>
             <li>{t('Context-aware chat timeline')}</li>
             <li>{t('Fast trial and follow-up loop')}</li>
           </ul>
@@ -56,7 +56,7 @@ export default function DualEntryPage() {
             'To use your own provider credentials, open LLM Settings and configure base URL, API key, and model.'
           )}
         </p>
-        <Link to="/settings/llm" className="quick-link">
+        <Link to="/settings" className="quick-link">
           {t('Open LLM Settings')}
         </Link>
       </section>

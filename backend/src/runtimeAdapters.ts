@@ -54,6 +54,33 @@ const runtimeConfigs: Record<ModelFramework, FrameworkRuntimeConfig> = {
   }
 };
 
+const bundledLocalRunnerCommands: Record<
+  ModelFramework,
+  {
+    train: string;
+    predict: string;
+  }
+> = {
+  paddleocr: {
+    train:
+      'python3 {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
+    predict:
+      'python3 {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
+  },
+  doctr: {
+    train:
+      'python3 {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
+    predict:
+      'python3 {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
+  },
+  yolo: {
+    train:
+      'python3 {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
+    predict:
+      'python3 {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
+  }
+};
+
 const localRunnerTimeoutMs = (() => {
   const parsed = Number.parseInt(process.env.LOCAL_RUNNER_TIMEOUT_MS ?? '1800000', 10);
   if (!Number.isFinite(parsed) || parsed < 5000) {
@@ -242,6 +269,7 @@ const runLocalCommand = async (
   options: {
     workingDir: string;
     values: Record<string, string>;
+    onLog?: (line: string) => void | Promise<void>;
   }
 ): Promise<{ logs: string[]; output: string }> => {
   const command = interpolateTemplate(commandTemplate, options.values);
@@ -250,7 +278,7 @@ const runLocalCommand = async (
   await fs.mkdir(options.workingDir, { recursive: true });
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('bash', ['-lc', command], {
+    const child = spawn('bash', ['-c', command], {
       cwd: options.workingDir,
       env: process.env
     });
@@ -267,6 +295,9 @@ const runLocalCommand = async (
         .filter(Boolean)
         .map((line) => `[${stream}] ${line}`);
       logs.push(...lines);
+      lines.forEach((line) => {
+        void options.onLog?.(line);
+      });
     };
 
     child.stdout.on('data', (chunk) => collect(chunk, 'stdout'));
@@ -787,6 +818,7 @@ const callRuntimePredict = async (
         framework,
         model_id: input.modelId,
         model_version_id: input.modelVersionId,
+        model_artifact_path: input.modelArtifactPath ?? null,
         input_attachment_id: input.inputAttachmentId,
         filename: input.filename,
         task_type: input.taskType
@@ -819,7 +851,10 @@ const callLocalPredictCommand = async (
   config: FrameworkRuntimeConfig,
   input: PredictInput
 ): Promise<UnifiedInferenceOutput> => {
-  if (!config.localPredictCommand) {
+  const commandTemplate =
+    config.localPredictCommand || bundledLocalRunnerCommands[framework].predict;
+
+  if (!commandTemplate) {
     return buildLocalOutput(framework, input);
   }
 
@@ -839,10 +874,11 @@ const callLocalPredictCommand = async (
     input_path: input.inputStoragePath ?? '',
     filename: input.filename,
     mime_type: input.inputMimeType ?? '',
+    model_path: input.modelArtifactPath ?? '',
     output_path: fallbackOutputPath
   };
 
-  const execution = await runLocalCommand(config.localPredictCommand, {
+  const execution = await runLocalCommand(commandTemplate, {
     workingDir,
     values
   });
@@ -1031,8 +1067,13 @@ const createTrainer = (
 
   async train(input: TrainInput): Promise<TrainResult> {
     const runtime = runtimeConfigs[framework];
-    if (!runtime.localTrainCommand) {
+    const usingBundledTemplate = !runtime.localTrainCommand;
+    const commandTemplate =
+      runtime.localTrainCommand || bundledLocalRunnerCommands[framework].train;
+
+    if (!commandTemplate) {
       await delay(150);
+      input.onExecutionMode?.('simulated');
       return {
         accepted: true,
         logPreview: `${framework} accepted job ${input.trainingJobId} with base model ${input.baseModel}.`,
@@ -1060,11 +1101,26 @@ const createTrainer = (
       artifact_path: input.artifactPath ?? '',
       ...configValues
     };
-    const execution = await runLocalCommand(runtime.localTrainCommand, {
-      workingDir:
-        input.workspaceDir ?? path.resolve(process.cwd(), '.data', 'training-jobs', input.trainingJobId),
-      values
-    });
+    input.onExecutionMode?.('local_command');
+    let execution;
+    try {
+      execution = await runLocalCommand(commandTemplate, {
+        workingDir:
+          input.workspaceDir ?? path.resolve(process.cwd(), '.data', 'training-jobs', input.trainingJobId),
+        values,
+        onLog: input.onLog
+      });
+    } catch (error) {
+      if (usingBundledTemplate) {
+        input.onExecutionMode?.('simulated');
+        return {
+          accepted: true,
+          logPreview: `${framework} bundled local runner unavailable, falling back to simulated executor: ${(error as Error).message}`,
+          execution_mode: 'simulated'
+        };
+      }
+      throw error;
+    }
     const metricsBundle = await readMetricsFile(input.metricsPath);
 
     return {

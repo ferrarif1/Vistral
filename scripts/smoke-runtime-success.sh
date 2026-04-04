@@ -136,10 +136,23 @@ if [[ "$doctr_job_status" != "completed" ]]; then
   exit 1
 fi
 
+doctr_model_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"name":"doctr-runtime-success-model","description":"docTR runtime smoke model","model_type":"ocr","visibility":"workspace"}' \
+  "${BASE_URL}/api/models/draft")"
+
+doctr_model_id="$(echo "$doctr_model_result" | jq -r '.data.id // empty')"
+if [[ -z "$doctr_model_id" ]]; then
+  echo "[smoke-runtime-success] docTR model draft creation failed"
+  echo "$doctr_model_result"
+  exit 1
+fi
+
 doctr_register_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d "{\"model_id\":\"m-3\",\"training_job_id\":\"${doctr_training_job_id}\",\"version_name\":\"doctr-runtime-v1\"}" \
+  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_training_job_id}\",\"version_name\":\"doctr-runtime-v1\"}" \
   "${BASE_URL}/api/model-versions/register")"
 
 doctr_model_version_id="$(echo "$doctr_register_result" | jq -r '.data.id // empty')"

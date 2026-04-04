@@ -13,6 +13,13 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
+If Docker Hub is slow or blocked on the build host, update `.env` before build:
+```bash
+NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-alpine
+NGINX_BASE_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
+docker compose up --build -d
+```
+
 Open:
 - Web: `http://127.0.0.1:8080`
 - API health (via nginx): `http://127.0.0.1:8080/api/health`
@@ -92,7 +99,7 @@ Output includes:
 - `vistral-images.tar`
 - compose files and env examples
 - deployment doc copy
-- ops scripts (`docker-load-and-up.sh`, `docker-healthcheck.sh`, `docker-verify-full.sh`)
+- ops scripts (`docker-load-and-up.sh`, `docker-healthcheck.sh`, `docker-verify-full.sh`, `smoke-dataset-export-roundtrip.sh`, `smoke-real-closure.sh`)
 - versioned `RELEASE_NOTES.md`
 - `manifest.json`
 - `SHA256SUMS.txt`
@@ -131,7 +138,9 @@ Release/verify script options (shell env at run time):
 - `scripts/docker-save-images.sh`: export images to tar for offline transfer
 - `scripts/docker-load-and-up.sh`: optional `docker load` then compose up
 - `scripts/docker-healthcheck.sh`: verify `/healthz`, `/api/health`, username/password auth, and wrong-password rejection
-- `scripts/docker-verify-full.sh`: end-to-end verification (auth + negative auth check + attachments + conversation + model approval + runtime + inference + feedback)
+- `scripts/docker-verify-full.sh`: end-to-end verification (auth + negative auth check + real multipart attachments + conversation + model approval + runtime + inference + feedback + dataset export/import roundtrip + real closure smoke with YOLO/PaddleOCR/docTR)
+- `scripts/smoke-dataset-export-roundtrip.sh`: dataset export/import roundtrip check (detection yolo/coco/labelme + ocr + segmentation labelme polygon)
+- `scripts/smoke-real-closure.sh`: full-loop smoke check (task draft + upload/import/export + YOLO train/register/infer/feedback + PaddleOCR infer + docTR train/register/infer)
 - `scripts/docker-release-bundle.sh`: produce release bundle with checksums and manifest
 - `scripts/smoke-admin-verification-reports.sh`: verify admin-only permission boundary for `/api/admin/verification-reports`
 
@@ -160,3 +169,4 @@ BUSINESS_PASSWORD=<your-password> npm run docker:verify:full
 - Backend session cookie is issued by same origin (`127.0.0.1:8080`) through nginx reverse proxy.
 - Frontend only calls relative `/api/*`, so intranet domain replacement is straightforward.
 - User authentication is username/password based; public registration always creates `user` only.
+- Docker nginx proxy allows request bodies up to `128m` for multipart attachment upload flows.

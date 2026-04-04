@@ -128,9 +128,9 @@ def try_real_predict(args):
     if not args.input_path or not os.path.exists(args.input_path):
         return None, 'real_predict_skipped:missing_input_path'
 
-    model_path = os.getenv('VISTRAL_YOLO_MODEL_PATH', '').strip()
+    model_path = (args.model_path or '').strip() or os.getenv('VISTRAL_YOLO_MODEL_PATH', '').strip()
     if not model_path:
-        return None, 'real_predict_skipped:missing_env_VISTRAL_YOLO_MODEL_PATH'
+        return None, 'real_predict_skipped:missing_model_path'
     if not os.path.exists(model_path):
         return None, 'real_predict_skipped:model_path_not_found'
 
@@ -140,8 +140,26 @@ def try_real_predict(args):
         return None, f'real_predict_skipped:import_ultralytics_failed:{exc}'
 
     try:
+        conf_threshold = float(os.getenv('VISTRAL_YOLO_PREDICT_CONF', '0.01'))
+    except Exception:
+        conf_threshold = 0.01
+
+    try:
+        max_detections = int(os.getenv('VISTRAL_YOLO_PREDICT_MAX_DET', '20'))
+    except Exception:
+        max_detections = 20
+
+    conf_threshold = clamp(conf_threshold, 0.0001, 1.0)
+    max_detections = max(1, min(max_detections, 200))
+
+    try:
         model = YOLO(model_path)
-        result_list = model.predict(source=args.input_path, verbose=False)
+        result_list = model.predict(
+            source=args.input_path,
+            verbose=False,
+            conf=conf_threshold,
+            max_det=max_detections,
+        )
         if not result_list:
             return None, 'real_predict_failed:empty_results'
 
@@ -162,6 +180,8 @@ def try_real_predict(args):
                 'task_type': args.task_type,
                 'mode': 'real',
                 'model_path': model_path,
+                'predict_conf': round(conf_threshold, 6),
+                'max_det': max_detections,
                 'generated_at': datetime.now(timezone.utc).isoformat(),
             },
         }
@@ -204,6 +224,7 @@ def main() -> int:
     parser.add_argument('--task-type', required=True)
     parser.add_argument('--input-path', default='')
     parser.add_argument('--filename', default='sample.jpg')
+    parser.add_argument('--model-path', default='')
     parser.add_argument('--output-path', required=True)
     args = parser.parse_args()
 

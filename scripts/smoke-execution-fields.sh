@@ -105,45 +105,45 @@ if [[ "${local_mode}" != "local_command" ]]; then
   exit 1
 fi
 
-# 2) PaddleOCR without local train command should persist execution_mode=simulated
-sim_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+# 2) PaddleOCR should persist execution_mode=local_command via bundled runner template.
+paddle_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
   -d '{"name":"exec-mode-simulated","task_type":"ocr","framework":"paddleocr","dataset_id":"d-1","dataset_version_id":"dv-1","base_model":"paddleocr-PP-OCRv4","config":{"epochs":"4","batch_size":"2","learning_rate":"0.001"}}')"
-sim_job_id="$(echo "${sim_job_resp}" | jq -r '.data.id // empty')"
-if [[ -z "${sim_job_id}" ]]; then
-  echo "[smoke-execution-fields] failed to create simulated training job."
-  echo "${sim_job_resp}"
+paddle_job_id="$(echo "${paddle_job_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${paddle_job_id}" ]]; then
+  echo "[smoke-execution-fields] failed to create PaddleOCR training job."
+  echo "${paddle_job_resp}"
   exit 1
 fi
 
-sim_job_status=""
-sim_job_detail=""
+paddle_job_status=""
+paddle_job_detail=""
 for _ in {1..140}; do
-  sim_job_detail="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/training/jobs/${sim_job_id}")"
-  sim_job_status="$(echo "${sim_job_detail}" | jq -r '.data.job.status // empty')"
-  if [[ "${sim_job_status}" == "completed" ]]; then
+  paddle_job_detail="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/training/jobs/${paddle_job_id}")"
+  paddle_job_status="$(echo "${paddle_job_detail}" | jq -r '.data.job.status // empty')"
+  if [[ "${paddle_job_status}" == "completed" ]]; then
     break
   fi
-  if [[ "${sim_job_status}" == "failed" || "${sim_job_status}" == "cancelled" ]]; then
-    echo "[smoke-execution-fields] simulated job ended with ${sim_job_status}."
-    echo "${sim_job_detail}"
+  if [[ "${paddle_job_status}" == "failed" || "${paddle_job_status}" == "cancelled" ]]; then
+    echo "[smoke-execution-fields] PaddleOCR job ended with ${paddle_job_status}."
+    echo "${paddle_job_detail}"
     exit 1
   fi
   sleep 0.25
 done
 
-if [[ "${sim_job_status}" != "completed" ]]; then
-  echo "[smoke-execution-fields] simulated job timeout."
-  echo "${sim_job_detail}"
+if [[ "${paddle_job_status}" != "completed" ]]; then
+  echo "[smoke-execution-fields] PaddleOCR job timeout."
+  echo "${paddle_job_detail}"
   exit 1
 fi
 
-sim_mode="$(echo "${sim_job_detail}" | jq -r '.data.job.execution_mode // empty')"
-if [[ "${sim_mode}" != "simulated" ]]; then
-  echo "[smoke-execution-fields] expected simulated job execution_mode=simulated, got ${sim_mode}."
-  echo "${sim_job_detail}"
+paddle_mode="$(echo "${paddle_job_detail}" | jq -r '.data.job.execution_mode // empty')"
+if [[ "${paddle_mode}" != "local_command" ]]; then
+  echo "[smoke-execution-fields] expected PaddleOCR job execution_mode=local_command, got ${paddle_mode}."
+  echo "${paddle_job_detail}"
   exit 1
 fi
 
@@ -171,6 +171,6 @@ fi
 echo "[smoke-execution-fields] PASS"
 echo "local_job_id=${local_job_id}"
 echo "local_mode=${local_mode}"
-echo "sim_job_id=${sim_job_id}"
-echo "sim_mode=${sim_mode}"
+echo "paddle_job_id=${paddle_job_id}"
+echo "paddle_mode=${paddle_mode}"
 echo "execution_source=${execution_source}"

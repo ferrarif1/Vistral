@@ -34,9 +34,11 @@ DETECTION_RUN_ID=''
 OCR_RUN_ID=''
 ATTACHMENT_ID=''
 RUNTIME_METRICS_RETENTION_JSON='null'
+CONVERSATION_UPLOAD_FILE="$(mktemp)"
+MODEL_UPLOAD_FILE="$(mktemp)"
 
 cleanup() {
-  rm -f "${PROBE_COOKIE}" "${BUSINESS_COOKIE}"
+  rm -f "${PROBE_COOKIE}" "${BUSINESS_COOKIE}" "${CONVERSATION_UPLOAD_FILE}" "${MODEL_UPLOAD_FILE}"
 }
 trap cleanup EXIT
 
@@ -167,7 +169,7 @@ get_csrf_token() {
 }
 
 CURRENT_STEP='infrastructure health checks'
-echo "[docker-verify-full] 1/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 1/11 ${CURRENT_STEP}"
 if [[ "${VERIFY_SKIP_HEALTHZ}" != "1" ]]; then
   curl -fsS "${BASE_URL}/healthz" >/dev/null
 fi
@@ -179,7 +181,7 @@ else
 fi
 
 CURRENT_STEP='probe register + login'
-echo "[docker-verify-full] 2/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 2/11 ${CURRENT_STEP}"
 curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/register" \
   -H 'Content-Type: application/json' \
@@ -204,7 +206,7 @@ curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
 append_check "${CURRENT_STEP}" "passed" "probe user register/login/me succeeded and wrong-password was rejected"
 
 CURRENT_STEP='business account login'
-echo "[docker-verify-full] 3/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 3/11 ${CURRENT_STEP}"
 curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -219,12 +221,12 @@ fi
 append_check "${CURRENT_STEP}" "passed" "business user login and csrf succeeded"
 
 CURRENT_STEP='conversation attachment upload lifecycle'
-echo "[docker-verify-full] 4/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 4/11 ${CURRENT_STEP}"
+printf 'docker verify conversation upload payload (%s)\n' "${RUN_TAG}" >"${CONVERSATION_UPLOAD_FILE}"
 ATTACHMENT_UPLOAD_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/files/conversation/upload" \
-  -H 'Content-Type: application/json' \
   -H "x-csrf-token: ${BUSINESS_CSRF}" \
-  -d "{\"filename\":\"verify-${RUN_TAG}.jpg\"}")"
+  -F "file=@${CONVERSATION_UPLOAD_FILE};filename=verify-${RUN_TAG}.jpg;type=image/jpeg")"
 ATTACHMENT_ID="$(echo "${ATTACHMENT_UPLOAD_RESPONSE}" | jq -r '.data.id')"
 if [[ -z "${ATTACHMENT_ID}" || "${ATTACHMENT_ID}" == 'null' ]]; then
   echo "[docker-verify-full] failed to create conversation attachment"
@@ -251,7 +253,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "attachment ${ATTACHMENT_ID} reached ready state"
 
 CURRENT_STEP='start conversation with attachment'
-echo "[docker-verify-full] 5/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 5/11 ${CURRENT_STEP}"
 CONVERSATION_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/conversations/start" \
   -H 'Content-Type: application/json' \
@@ -269,7 +271,7 @@ echo "${CONVERSATION_RESPONSE}" | jq -e '.success == true and (.data.messages | 
 append_check "${CURRENT_STEP}" "passed" "conversation ${CONVERSATION_ID} created with assistant reply"
 
 CURRENT_STEP='model draft -> model file -> approval submit'
-echo "[docker-verify-full] 6/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 6/11 ${CURRENT_STEP}"
 MODEL_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/models/draft" \
   -H 'Content-Type: application/json' \
@@ -282,11 +284,11 @@ if [[ -z "${MODEL_ID}" || "${MODEL_ID}" == 'null' ]]; then
   exit 1
 fi
 
+printf 'docker verify model artifact payload (%s)\n' "${RUN_TAG}" >"${MODEL_UPLOAD_FILE}"
 MODEL_FILE_UPLOAD_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/files/model/${MODEL_ID}/upload" \
-  -H 'Content-Type: application/json' \
   -H "x-csrf-token: ${BUSINESS_CSRF}" \
-  -d "{\"filename\":\"artifact-${RUN_TAG}.onnx\"}")"
+  -F "file=@${MODEL_UPLOAD_FILE};filename=artifact-${RUN_TAG}.onnx;type=application/octet-stream")"
 MODEL_ATTACHMENT_ID="$(echo "${MODEL_FILE_UPLOAD_RESPONSE}" | jq -r '.data.id')"
 
 if [[ -z "${MODEL_ATTACHMENT_ID}" || "${MODEL_ATTACHMENT_ID}" == 'null' ]]; then
@@ -322,7 +324,7 @@ APPROVAL_ID="$(echo "${APPROVAL_RESPONSE}" | jq -r '.data.id')"
 append_check "${CURRENT_STEP}" "passed" "model ${MODEL_ID} submitted as approval ${APPROVAL_ID}"
 
 CURRENT_STEP='runtime connectivity contract'
-echo "[docker-verify-full] 7/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 7/11 ${CURRENT_STEP}"
 RUNTIME_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/runtime/connectivity")"
 echo "${RUNTIME_RESPONSE}" | jq -e '.success == true and (.data | length) >= 3 and ([.data[].error_kind] | all(. != null))' >/dev/null
@@ -333,7 +335,7 @@ RUNTIME_METRICS_RETENTION_JSON="$(echo "${RUNTIME_METRICS_RETENTION_RESPONSE}" |
 append_check "${CURRENT_STEP}" "passed" "runtime connectivity + metrics retention summary available"
 
 CURRENT_STEP='detection + ocr inference'
-echo "[docker-verify-full] 8/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 8/11 ${CURRENT_STEP}"
 DETECTION_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/inference/runs" \
   -H 'Content-Type: application/json' \
@@ -362,7 +364,7 @@ echo "${OCR_RESPONSE}" | jq -e '.success == true and (.data.normalized_output.oc
 append_check "${CURRENT_STEP}" "passed" "detection run ${DETECTION_RUN_ID} and ocr run ${OCR_RUN_ID} succeeded"
 
 CURRENT_STEP='inference feedback to dataset'
-echo "[docker-verify-full] 9/9 ${CURRENT_STEP}"
+echo "[docker-verify-full] 9/11 ${CURRENT_STEP}"
 FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/inference/runs/${DETECTION_RUN_ID}/feedback" \
   -H 'Content-Type: application/json' \
@@ -370,6 +372,34 @@ FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -d '{"dataset_id":"d-2","reason":"deployment_verify"}')"
 echo "${FEEDBACK_RESPONSE}" | jq -e '.success == true and .data.feedback_dataset_id == "d-2"' >/dev/null
 append_check "${CURRENT_STEP}" "passed" "inference feedback linked to dataset d-2"
+
+CURRENT_STEP='dataset export/import roundtrip'
+echo "[docker-verify-full] 10/11 ${CURRENT_STEP}"
+DATASET_ROUNDTRIP_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-dataset-export-roundtrip.sh)"
+echo "${DATASET_ROUNDTRIP_OUTPUT}"
+
+ROUNDTRIP_DET_TARGET="$(echo "${DATASET_ROUNDTRIP_OUTPUT}" | awk -F= '/^det_target=/{print $2; exit}')"
+ROUNDTRIP_OCR_TARGET="$(echo "${DATASET_ROUNDTRIP_OUTPUT}" | awk -F= '/^ocr_target=/{print $2; exit}')"
+ROUNDTRIP_SEG_TARGET="$(echo "${DATASET_ROUNDTRIP_OUTPUT}" | awk -F= '/^seg_target=/{print $2; exit}')"
+if [[ -z "${ROUNDTRIP_DET_TARGET}" || -z "${ROUNDTRIP_OCR_TARGET}" || -z "${ROUNDTRIP_SEG_TARGET}" ]]; then
+  echo "[docker-verify-full] dataset roundtrip smoke output missing target ids"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "roundtrip targets: det=${ROUNDTRIP_DET_TARGET}, ocr=${ROUNDTRIP_OCR_TARGET}, seg=${ROUNDTRIP_SEG_TARGET}"
+
+CURRENT_STEP='real closure smoke (yolo + paddleocr + doctr)'
+echo "[docker-verify-full] 11/11 ${CURRENT_STEP}"
+REAL_CLOSURE_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-real-closure.sh)"
+echo "${REAL_CLOSURE_OUTPUT}"
+
+REAL_CLOSURE_YOLO_SOURCE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^yolo_source=/{print $2; exit}')"
+REAL_CLOSURE_OCR_SOURCE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^ocr_source=/{print $2; exit}')"
+REAL_CLOSURE_DOCTR_SOURCE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^doctr_source=/{print $2; exit}')"
+if [[ -z "${REAL_CLOSURE_YOLO_SOURCE}" || -z "${REAL_CLOSURE_OCR_SOURCE}" || -z "${REAL_CLOSURE_DOCTR_SOURCE}" ]]; then
+  echo "[docker-verify-full] real closure output missing inference sources"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "sources: yolo=${REAL_CLOSURE_YOLO_SOURCE}, paddleocr=${REAL_CLOSURE_OCR_SOURCE}, doctr=${REAL_CLOSURE_DOCTR_SOURCE}"
 
 finalize_report "passed" "full deployment verification succeeded"
 

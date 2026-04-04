@@ -56,6 +56,7 @@ npm run docker:release:bundle
 VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified
 npm run smoke:admin:verification-reports
 npm run smoke:demo:train-data
+npm run smoke:ocr-closure
 npm run smoke:restart-resume
 npm run smoke:local-command
 npm run smoke:execution-fields

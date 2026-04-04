@@ -44,12 +44,15 @@ Vistral must provide one closed-loop platform where engineers can:
 5. fine-tuning training job management
 6. evaluation and model version registration
 7. inference validation and error feedback loop
+8. conversation-driven backend actions for dataset/model/training setup
 
 ## 6. Access Model Clarification
 - System roles: `user`, `admin`
 - `owner` is a resource relation (`owner_user_id`), not a role
-- register endpoint cannot create admin accounts
-- admin assignment only via bootstrap/admin-only backend path
+- public self-registration is disabled in the current product phase
+- account provisioning is an administrator-only privileged action
+- administrators can provision `user` or `admin` accounts from the authenticated product surface
+- every authenticated user can change their own password from settings
 
 ## 7. Functional Requirements
 
@@ -57,9 +60,13 @@ Vistral must provide one closed-loop platform where engineers can:
 - natural language interaction
 - persistent context per conversation
 - attachment-driven message flow
+- for operational requests (for example dataset creation, model draft creation, training job creation), the conversation layer can call backend APIs and return real execution results
+- when required fields are missing, assistant must explicitly ask for the missing inputs instead of silently guessing critical parameters
+- assistant execution results should stay readable in the timeline as compact action cards with status, missing inputs, and created-entity summary
 
 ### FR-002 File Attachment Baseline
-- uploads remain visible in context
+- conversation draft attachments appear as current-message chips while composing
+- after send, attachment chips collapse from composer and remain traceable via message history or on-demand attachment tray
 - each upload is deletable
 - status at minimum: `uploading`, `processing`, `ready`, `error`
 
@@ -100,6 +107,8 @@ Vistral must provide one closed-loop platform where engineers can:
 ### FR-009 Training Jobs
 - create training job
 - choose task type/framework/base model
+- base model choices exposed in normal workspace flows must come from a curated foundation catalog suitable for future fine-tuning
+- internal smoke/verification/demo fixtures must not remain visible in the default workspace catalog; when sample records are needed, keep at most 1-2 curated examples
 - configure parameters and submit
 - support start/cancel/retry lifecycle
 - status flow: `draft -> queued -> preparing -> running -> evaluating -> completed/failed/cancelled`
@@ -125,6 +134,20 @@ Framework integrations must follow unified trainer interface:
 - `predict()`
 - `export()`
 - `load_model()`
+
+### FR-013 Account and Credential Management
+- public registration entry is not exposed to end users
+- administrators can create accounts from an authenticated management surface
+- administrators can browse an account directory, reset another user's password, and disable or reactivate accounts
+- disabling an account requires an explicit administrator reason so governance actions stay explainable
+- account records expose operational fields needed by the management surface, at minimum `status`, `status_reason`, and `last_login_at`
+- disabled accounts cannot start new authenticated sessions and should be blocked from further protected actions until reactivated
+- disabling an account immediately terminates that account's existing authenticated sessions
+- reactivating an account clears the stored disable reason and still requires the user to sign in again
+- the product must prevent dangerous account operations such as disabling the current admin session or disabling the last active admin account
+- administrators can choose the created account role (`user` or `admin`)
+- every authenticated user can change their own password by providing the current password plus a new password
+- privileged account creation, password change, and account status actions must produce audit logs
 
 ## 8. Non-Functional Requirements
 

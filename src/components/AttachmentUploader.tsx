@@ -1,5 +1,10 @@
 import { useRef, useState, type ChangeEvent as ReactChangeEvent } from 'react';
 import type { FileAttachment } from '../../shared/domain';
+import {
+  UPLOAD_SOFT_LIMIT_LABEL,
+  findOversizedUpload,
+  formatByteSize
+} from '../../shared/uploadLimits';
 import { useI18n } from '../i18n/I18nProvider';
 import AdvancedSection from './AdvancedSection';
 import StateBlock from './StateBlock';
@@ -107,6 +112,18 @@ export default function AttachmentUploader({
       return;
     }
 
+    const oversized = findOversizedUpload(selectedFiles);
+    if (oversized) {
+      setError(
+        t('File {filename} is {size}. Keep each file under {limit} to avoid proxy rejection (413).', {
+          filename: oversized.name,
+          size: formatByteSize(oversized.size),
+          limit: UPLOAD_SOFT_LIMIT_LABEL
+        })
+      );
+      return;
+    }
+
     setPending(true);
     setError('');
 
@@ -141,6 +158,11 @@ export default function AttachmentUploader({
           disabled={isDisabled || !onUploadFiles}
         />
       </div>
+      <small className="muted">
+        {t('BMP and common image/document files are supported. Keep each file under {limit}.', {
+          limit: UPLOAD_SOFT_LIMIT_LABEL
+        })}
+      </small>
 
       <AdvancedSection
         title={t('Manual filename upload')}

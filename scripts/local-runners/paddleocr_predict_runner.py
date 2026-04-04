@@ -146,6 +146,7 @@ def main() -> int:
     parser.add_argument('--task-type', required=True)
     parser.add_argument('--input-path', default='')
     parser.add_argument('--filename', default='sample.jpg')
+    parser.add_argument('--model-path', default='')
     parser.add_argument('--output-path', required=True)
     args = parser.parse_args()
 

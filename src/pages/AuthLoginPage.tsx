@@ -41,6 +41,9 @@ export default function AuthLoginPage() {
           />
         </label>
         <button onClick={submit}>{t('Login')}</button>
+        <small className="muted">
+          {t('Need access for the first time? Ask an administrator to provision your account.')}
+        </small>
       </section>
       {message ? <StateBlock variant={variant} title={t('Login Result')} description={message} /> : null}
     </div>

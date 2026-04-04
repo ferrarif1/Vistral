@@ -57,6 +57,8 @@ npm run docker:release:bundle
 VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified
 npm run smoke:admin:verification-reports
 npm run smoke:demo:train-data
+npm run smoke:ocr-closure
+npm run smoke:real-closure
 npm run smoke:restart-resume
 npm run smoke:local-command
 npm run smoke:execution-fields
@@ -66,9 +68,15 @@ npm run smoke:runner-real-positive
 npm run smoke:runtime-metrics-retention
 npm run smoke:training-metrics-export
 npm run smoke:training-metrics-export-csv
+npm run smoke:dataset-export-roundtrip
 npm run smoke:admin:verification-retention
 npm run smoke:verify-report-retention-e2e
 ```
+
+`smoke:dataset-export-roundtrip` currently covers:
+- detection: yolo/coco/labelme export->import roundtrip
+- ocr: ocr export->import roundtrip
+- segmentation: labelme polygon export->import roundtrip
 
 Optional positive real-runner validation:
 - `REAL_YOLO_MODEL_PATH=/abs/path/to/yolo.pt npm run smoke:runner-real-positive`
@@ -85,7 +93,8 @@ Persistence-related env vars (prototype):
 - `YOLO_LOCAL_TRAIN_COMMAND` / `PADDLEOCR_LOCAL_TRAIN_COMMAND` / `DOCTR_LOCAL_TRAIN_COMMAND`
 - `YOLO_LOCAL_PREDICT_COMMAND` / `PADDLEOCR_LOCAL_PREDICT_COMMAND` / `DOCTR_LOCAL_PREDICT_COMMAND`
 - `LOCAL_RUNNER_TIMEOUT_MS` (default `1800000`)
-- `VISTRAL_RUNNER_ENABLE_REAL` (set `1` to attempt real framework branch in local runners)
+- bundled runner templates under `scripts/local-runners/` are used by default when explicit local command env vars are not set
+- `VISTRAL_RUNNER_ENABLE_REAL` (set `1` to attempt dependency-backed real framework branch in local runners; default keeps template mode)
 - `VISTRAL_YOLO_MODEL_PATH`
 - `VISTRAL_PADDLEOCR_LANG` / `VISTRAL_PADDLEOCR_USE_GPU`
 - `VISTRAL_DOCTR_DET_ARCH` / `VISTRAL_DOCTR_RECO_ARCH`
@@ -93,6 +102,7 @@ Persistence-related env vars (prototype):
 - placeholder examples: `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 
 `docker:verify:full` writes audit-style reports to `.data/verify-reports/`.
+It now also validates dataset export/import roundtrip (detection/ocr/segmentation) and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
 `docker:release:bundle` accepts optional gates:
 - `VERIFY_REPORT_PATH=<report.json|report.md>` include specific report files
 - `VERIFY_REPORT_MAX_AGE_SECONDS=<seconds>` fail if selected report is too old
@@ -113,7 +123,7 @@ npm run build
 ```
 
 ## 7) Demo Dataset Import (train images)
-Use local images under `demo_data/train` to quickly build a detection dataset in mock mode:
+Use local images under `demo_data/train` to quickly build a detection dataset with real file upload:
 ```bash
 npm run smoke:demo:train-data
 ```
@@ -121,3 +131,17 @@ npm run smoke:demo:train-data
 Optional controls:
 - `MAX_FILES=120 npm run smoke:demo:train-data` limit uploaded files (0 means all files)
 - `START_API=false BASE_URL=http://127.0.0.1:8080 npm run smoke:demo:train-data` reuse an already running API
+- `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass npm run smoke:demo:train-data` reuse deployed API with authenticated session
+
+## 8) Real Closure Smoke (upload -> import -> train -> version -> inference -> feedback)
+Run a stronger end-to-end smoke check:
+```bash
+npm run smoke:real-closure
+```
+This check now includes:
+- YOLO detection training + registration + inference + feedback loop
+- PaddleOCR OCR inference
+- docTR OCR training + registration + inference
+
+Optional controls:
+- `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass npm run smoke:real-closure`

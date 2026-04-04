@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { URL } from 'node:url';
+import { UPLOAD_SOFT_LIMIT_BYTES, UPLOAD_SOFT_LIMIT_LABEL } from '../../shared/uploadLimits';
 import { normalizeApiError } from './apiError';
 import * as handlers from './handlers';
 import { loadPersistedAppState, loadPersistedLlmConfigs, persistAppState } from './store';
@@ -33,6 +34,8 @@ const sendJson = <T>(res: ServerResponse, status: number, payload: ApiResponse<T
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(payload));
 };
+
+const uploadTooLargeMessage = `Upload payload exceeds ${UPLOAD_SOFT_LIMIT_LABEL}. Keep each file under ${UPLOAD_SOFT_LIMIT_LABEL} and retry.`;
 
 const readBody = async (req: IncomingMessage): Promise<unknown> => {
   const chunks: Buffer[] = [];
@@ -92,12 +95,37 @@ const readMultipartFileUpload = async (
       ? fileMeta.type.trim()
       : 'application/octet-stream';
 
+  if (content.byteLength > UPLOAD_SOFT_LIMIT_BYTES) {
+    throw new Error(uploadTooLargeMessage);
+  }
+
   return {
     filename,
     byte_size: content.byteLength || byteSize,
     mime_type: mimeType,
     content
   };
+};
+
+const readContentLength = (req: IncomingMessage): number | null => {
+  const contentLengthHeader = req.headers['content-length'];
+  const rawValue = Array.isArray(contentLengthHeader)
+    ? contentLengthHeader[0] ?? ''
+    : contentLengthHeader ?? '';
+
+  if (!rawValue) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const assertUploadPayloadWithinLimit = (req: IncomingMessage): void => {
+  const contentLength = readContentLength(req);
+  if (contentLength !== null && contentLength > UPLOAD_SOFT_LIMIT_BYTES) {
+    throw new Error(uploadTooLargeMessage);
+  }
 };
 
 const toSafeAttachmentFilename = (filename: string): string =>
@@ -131,6 +159,22 @@ const methodNotAllowed = (res: ServerResponse) => {
   sendJson(res, 405, errorJson('Method not allowed.', 'METHOD_NOT_ALLOWED'));
 };
 
+const stringifyProcessError = (value: unknown): string => {
+  if (value instanceof Error) {
+    return value.stack ?? value.message;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
 const sendError = (res: ServerResponse, error: unknown): void => {
   const normalized = normalizeApiError(error);
   sendJson(res, normalized.status, errorJson(normalized.message, normalized.code));
@@ -150,7 +194,7 @@ const sessionTtlSeconds = 7 * 24 * 60 * 60;
 const defaultUserId = process.env.DEFAULT_USER_ID ?? 'u-1';
 
 interface SessionState {
-  userId: string;
+  userId: string | null;
   expiresAt: number;
   csrfToken: string;
 }
@@ -186,7 +230,7 @@ const writeSessionCookie = (res: ServerResponse, sessionId: string): void => {
   );
 };
 
-const setSessionCookie = (res: ServerResponse, userId: string): string => {
+const setSessionCookie = (res: ServerResponse, userId: string | null): string => {
   const sessionId = randomBytes(32).toString('hex');
   const expiresAt = Date.now() + sessionTtlSeconds * 1000;
   const csrfToken = randomBytes(24).toString('hex');
@@ -196,19 +240,26 @@ const setSessionCookie = (res: ServerResponse, userId: string): string => {
   return sessionId;
 };
 
-const clearSessionCookie = (res: ServerResponse): void => {
-  res.setHeader(
-    'Set-Cookie',
-    `${sessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
-  );
-};
-
 const cleanupExpiredSessions = (): void => {
   const now = Date.now();
   for (const [sessionId, session] of sessions.entries()) {
     if (session.expiresAt <= now) {
       sessions.delete(sessionId);
     }
+  }
+};
+
+const invalidateSessionsForUser = (userId: string): void => {
+  for (const [sessionId, session] of sessions.entries()) {
+    if (session.userId !== userId) {
+      continue;
+    }
+
+    sessions.set(sessionId, {
+      userId: null,
+      expiresAt: Date.now() + sessionTtlSeconds * 1000,
+      csrfToken: randomBytes(24).toString('hex')
+    });
   }
 };
 
@@ -244,7 +295,11 @@ const withUser = async (
   fn: (userId: string) => Promise<unknown>
 ): Promise<void> => {
   const session = resolveSession(req, res);
-  await withHandler(res, () => handlers.runAsUser(session.state.userId, () => fn(session.state.userId)));
+  const userId = session.state.userId;
+  if (!userId) {
+    return sendError(res, new Error('Authentication required.'));
+  }
+  await withHandler(res, () => handlers.runAsUser(userId, () => fn(userId)));
 };
 
 const requireCsrf = (req: IncomingMessage, expectedToken: string): void => {
@@ -261,6 +316,10 @@ const withUserMutation = async (
   fn: (userId: string) => Promise<unknown>
 ): Promise<void> => {
   const session = resolveSession(req, res);
+  const userId = session.state.userId;
+  if (!userId) {
+    return sendError(res, new Error('Authentication required.'));
+  }
   try {
     requireCsrf(req, session.state.csrfToken);
   } catch (error) {
@@ -268,7 +327,7 @@ const withUserMutation = async (
   }
 
   await withHandler(res, () =>
-    handlers.runAsUser(session.state.userId, () => fn(session.state.userId))
+    handlers.runAsUser(userId, () => fn(userId))
   );
 };
 
@@ -278,8 +337,12 @@ const withUserDirect = async (
   fn: (userId: string) => Promise<void>
 ): Promise<void> => {
   const session = resolveSession(req, res);
+  const userId = session.state.userId;
+  if (!userId) {
+    return sendError(res, new Error('Authentication required.'));
+  }
   try {
-    await handlers.runAsUser(session.state.userId, () => fn(session.state.userId));
+    await handlers.runAsUser(userId, () => fn(userId));
   } catch (error) {
     sendError(res, error);
   }
@@ -352,7 +415,7 @@ const server = createServer(async (req, res) => {
       }
 
       sessions.delete(session.sessionId);
-      clearSessionCookie(res);
+      setSessionCookie(res, null);
       return sendJson(res, 200, json({ logged_out: true }));
     }
 
@@ -372,11 +435,90 @@ const server = createServer(async (req, res) => {
     }
 
     if (path === '/api/users/me') {
-      if (req.method !== 'GET') {
+      if (req.method === 'GET') {
+        return withUser(req, res, () => handlers.me());
+      }
+
+      return methodNotAllowed(res);
+    }
+
+    if (path === '/api/users/me/password') {
+      if (req.method !== 'POST') {
         return methodNotAllowed(res);
       }
 
-      return withUser(req, res, () => handlers.me());
+      const body = (await readBody(req)) as {
+        current_password: string;
+        new_password: string;
+      };
+
+      return withUserMutation(req, res, () => handlers.changeMyPassword(body));
+    }
+
+    if (path === '/api/admin/users') {
+      if (req.method === 'GET') {
+        return withUser(req, res, () => handlers.listUsers());
+      }
+
+      if (req.method === 'POST') {
+        const body = (await readBody(req)) as {
+          username: string;
+          password: string;
+          role: 'user' | 'admin';
+        };
+
+        return withUserMutation(req, res, () => handlers.createUserByAdmin(body));
+      }
+
+      return methodNotAllowed(res);
+    }
+
+    const adminUserPasswordResetMatch = path.match(/^\/api\/admin\/users\/([^/]+)\/password-reset$/);
+    if (adminUserPasswordResetMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+
+      const userId = decodeURIComponent(adminUserPasswordResetMatch[1] ?? '');
+      const body = (await readBody(req)) as {
+        new_password: string;
+      };
+
+      return withUserMutation(req, res, () => handlers.resetUserPasswordByAdmin(userId, body));
+    }
+
+    const adminUserStatusMatch = path.match(/^\/api\/admin\/users\/([^/]+)\/status$/);
+    if (adminUserStatusMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+
+      const userId = decodeURIComponent(adminUserStatusMatch[1] ?? '');
+      const body = (await readBody(req)) as {
+        status: 'active' | 'disabled';
+      };
+      const session = resolveSession(req, res);
+      const actorUserId = session.state.userId;
+      if (!actorUserId) {
+        return sendError(res, new Error('Authentication required.'));
+      }
+      try {
+        requireCsrf(req, session.state.csrfToken);
+      } catch (error) {
+        return sendError(res, error);
+      }
+
+      try {
+        const updated = await handlers.runAsUser(actorUserId, () =>
+          handlers.updateUserStatusByAdmin(userId, body)
+        );
+        if (updated.status === 'disabled') {
+          invalidateSessionsForUser(updated.id);
+        }
+        return sendJson(res, 200, json(updated));
+      } catch (error) {
+        return sendError(res, error);
+      }
     }
 
     if (path === '/api/models' && req.method === 'GET') {
@@ -430,11 +572,38 @@ const server = createServer(async (req, res) => {
     const datasetItemsMatch = path.match(/^\/api\/datasets\/([^/]+)\/items$/);
     if (datasetItemsMatch) {
       const datasetId = decodeURIComponent(datasetItemsMatch[1]);
-      if (req.method !== 'GET') {
+      if (req.method === 'GET') {
+        return withUser(req, res, () => handlers.listDatasetItems(datasetId));
+      }
+
+      if (req.method === 'POST') {
+        const body = (await readBody(req)) as {
+          attachment_id?: string;
+          filename?: string;
+          split?: 'train' | 'val' | 'test' | 'unassigned';
+          status?: 'uploading' | 'processing' | 'ready' | 'error';
+          metadata?: Record<string, string>;
+        };
+        return withUserMutation(req, res, () => handlers.createDatasetItem(datasetId, body));
+      }
+
+      return methodNotAllowed(res);
+    }
+
+    const datasetItemDetailMatch = path.match(/^\/api\/datasets\/([^/]+)\/items\/([^/]+)$/);
+    if (datasetItemDetailMatch) {
+      const datasetId = decodeURIComponent(datasetItemDetailMatch[1]);
+      const itemId = decodeURIComponent(datasetItemDetailMatch[2]);
+      if (req.method !== 'PATCH') {
         return methodNotAllowed(res);
       }
 
-      return withUser(req, res, () => handlers.listDatasetItems(datasetId));
+      const body = (await readBody(req)) as {
+        split?: 'train' | 'val' | 'test' | 'unassigned';
+        status?: 'uploading' | 'processing' | 'ready' | 'error';
+        metadata?: Record<string, string>;
+      };
+      return withUserMutation(req, res, () => handlers.updateDatasetItem(datasetId, itemId, body));
     }
 
     const datasetSplitMatch = path.match(/^\/api\/datasets\/([^/]+)\/split$/);
@@ -598,6 +767,7 @@ const server = createServer(async (req, res) => {
 
       if (contentType.toLowerCase().includes('multipart/form-data')) {
         return withUserMutation(req, res, async () => {
+          assertUploadPayloadWithinLimit(req);
           const fileUpload = await readMultipartFileUpload(req);
           return handlers.uploadConversationAttachment(fileUpload);
         });
@@ -605,6 +775,28 @@ const server = createServer(async (req, res) => {
 
       const body = (await readBody(req)) as { filename: string };
       return withUserMutation(req, res, () => handlers.uploadConversationAttachment(body.filename));
+    }
+
+    if (path === '/api/files/inference' && req.method === 'GET') {
+      return withUser(req, res, () => handlers.listInferenceInputAttachments());
+    }
+
+    if (path === '/api/files/inference/upload') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+
+      const contentType = readContentType(req);
+      if (contentType.toLowerCase().includes('multipart/form-data')) {
+        return withUserMutation(req, res, async () => {
+          assertUploadPayloadWithinLimit(req);
+          const fileUpload = await readMultipartFileUpload(req);
+          return handlers.uploadInferenceInputAttachment(fileUpload);
+        });
+      }
+
+      const body = (await readBody(req)) as { filename: string };
+      return withUserMutation(req, res, () => handlers.uploadInferenceInputAttachment(body.filename));
     }
 
     if (path === '/api/conversations' && req.method === 'GET') {
@@ -631,6 +823,7 @@ const server = createServer(async (req, res) => {
       const contentType = readContentType(req);
       if (contentType.toLowerCase().includes('multipart/form-data')) {
         return withUserMutation(req, res, async () => {
+          assertUploadPayloadWithinLimit(req);
           const fileUpload = await readMultipartFileUpload(req);
           return handlers.uploadModelAttachment(modelId, fileUpload);
         });
@@ -681,6 +874,7 @@ const server = createServer(async (req, res) => {
       const contentType = readContentType(req);
       if (contentType.toLowerCase().includes('multipart/form-data')) {
         return withUserMutation(req, res, async () => {
+          assertUploadPayloadWithinLimit(req);
           const fileUpload = await readMultipartFileUpload(req);
           return handlers.uploadDatasetAttachment(datasetId, fileUpload);
         });
@@ -1023,6 +1217,7 @@ const server = createServer(async (req, res) => {
           model: string;
           temperature: number;
         };
+        use_stored_api_key?: boolean;
       };
 
       return withUserMutation(req, res, () => handlers.testLlmConnection(body));
@@ -1045,6 +1240,17 @@ const appStatePersistIntervalMs = (() => {
 })();
 
 (async () => {
+  process.on('unhandledRejection', (reason) => {
+    console.error(
+      `[vistral-api] unhandledRejection: ${stringifyProcessError(reason)}`
+    );
+  });
+  process.on('uncaughtException', (error) => {
+    console.error(
+      `[vistral-api] uncaughtException: ${stringifyProcessError(error)}`
+    );
+  });
+
   await loadPersistedAppState();
   await loadPersistedLlmConfigs();
   handlers.syncRuntimeIdSeed();

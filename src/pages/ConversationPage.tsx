@@ -10,8 +10,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   type TouchEvent as ReactTouchEvent
 } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type {
+  ConversationActionMetadata,
   ConversationRecord,
   FileAttachment,
   LlmConfigView,
@@ -19,10 +20,17 @@ import type {
   ModelRecord,
   User
 } from '../../shared/domain';
+import {
+  UPLOAD_SOFT_LIMIT_LABEL,
+  findOversizedUpload,
+  formatByteSize
+} from '../../shared/uploadLimits';
+import SessionMenu from '../components/SessionMenu';
 import { useI18n } from '../i18n/I18nProvider';
 import StateBlock from '../components/StateBlock';
 import StatusBadge from '../components/StatusBadge';
 import { api } from '../services/api';
+import { AUTH_UPDATED_EVENT, emitAuthUpdated } from '../services/authSession';
 import { LLM_CONFIG_UPDATED_EVENT } from '../services/llmConfig';
 
 interface LocalChatHistoryItem {
@@ -33,6 +41,7 @@ interface LocalChatHistoryItem {
 }
 
 type HistoryGroupKey = 'pinned' | 'today' | 'yesterday' | 'previous_7_days' | 'older';
+type SidebarSectionKey = 'controls' | 'history' | 'quick' | 'preferences';
 
 interface HistoryGroup {
   key: HistoryGroupKey;
@@ -52,6 +61,8 @@ const historyStorageKey = 'vistral-conversation-history';
 const hiddenHistoryStorageKey = 'vistral-hidden-conversations';
 const collapsedHistoryGroupStorageKey = 'vistral-collapsed-history-groups';
 const pinnedOrderStorageKey = 'vistral-pinned-history-order';
+const sidebarCollapsedStorageKey = 'vistral-chat-sidebar-collapsed';
+const collapsedSidebarSectionsStorageKey = 'vistral-chat-collapsed-sidebar-sections';
 const historyGroupKeys: HistoryGroupKey[] = [
   'pinned',
   'today',
@@ -59,6 +70,10 @@ const historyGroupKeys: HistoryGroupKey[] = [
   'previous_7_days',
   'older'
 ];
+const sidebarSectionKeys: SidebarSectionKey[] = ['controls', 'history', 'quick', 'preferences'];
+const defaultCollapsedSidebarSections: SidebarSectionKey[] = ['quick', 'preferences'];
+const compactViewportMaxWidth = 960;
+const backgroundRefreshIntervalMs = 5000;
 
 const readHistoryFromStorage = (): LocalChatHistoryItem[] => {
   try {
@@ -153,6 +168,36 @@ const writeCollapsedHistoryGroupsToStorage = (groupKeys: HistoryGroupKey[]) => {
   }
 };
 
+const readCollapsedSidebarSectionsFromStorage = (): SidebarSectionKey[] => {
+  try {
+    const raw = localStorage.getItem(collapsedSidebarSectionsStorageKey);
+    if (!raw) {
+      return defaultCollapsedSidebarSections;
+    }
+
+    const parsed = JSON.parse(raw) as string[];
+    if (!Array.isArray(parsed)) {
+      return defaultCollapsedSidebarSections;
+    }
+
+    const parsedSet = new Set(parsed);
+    return sidebarSectionKeys.filter((key) => parsedSet.has(key));
+  } catch {
+    return defaultCollapsedSidebarSections;
+  }
+};
+
+const writeCollapsedSidebarSectionsToStorage = (sectionKeys: SidebarSectionKey[]) => {
+  try {
+    const unique = Array.from(new Set(sectionKeys)).filter((key): key is SidebarSectionKey =>
+      sidebarSectionKeys.includes(key as SidebarSectionKey)
+    );
+    localStorage.setItem(collapsedSidebarSectionsStorageKey, JSON.stringify(unique));
+  } catch {
+    // Ignore storage errors in prototype mode.
+  }
+};
+
 const readPinnedHistoryOrderFromStorage = (): string[] => {
   try {
     const raw = localStorage.getItem(pinnedOrderStorageKey);
@@ -184,8 +229,42 @@ const writePinnedHistoryOrderToStorage = (ids: string[]) => {
   }
 };
 
+const readSidebarCollapsedFromStorage = (): boolean => {
+  try {
+    return localStorage.getItem(sidebarCollapsedStorageKey) === 'true';
+  } catch {
+    return false;
+  }
+};
+
+const writeSidebarCollapsedToStorage = (collapsed: boolean) => {
+  try {
+    localStorage.setItem(sidebarCollapsedStorageKey, String(collapsed));
+  } catch {
+    // Ignore storage errors in prototype mode.
+  }
+};
+
+const detectCompactViewport = (): boolean =>
+  typeof window !== 'undefined' ? window.innerWidth <= compactViewportMaxWidth : false;
+
 const arraysEqual = (a: string[], b: string[]): boolean =>
   a.length === b.length && a.every((value, index) => value === b[index]);
+
+const buildConversationAttachmentsSignature = (items: FileAttachment[]): string =>
+  JSON.stringify(
+    [...items]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((item) => ({
+        id: item.id,
+        filename: item.filename,
+        status: item.status,
+        updated_at: item.updated_at,
+        upload_error: item.upload_error,
+        attached_to_type: item.attached_to_type,
+        attached_to_id: item.attached_to_id
+      }))
+  );
 
 const getPinnedOrderIndex = (id: string, pinnedOrder: string[]): number => {
   const index = pinnedOrder.indexOf(id);
@@ -204,6 +283,31 @@ const reconcilePinnedHistoryOrder = (
 };
 
 const reorderPinnedHistoryOrder = (
+  currentOrder: string[],
+  draggedId: string,
+  targetId: string
+): string[] => {
+  if (draggedId === targetId) {
+    return currentOrder;
+  }
+
+  const sourceIndex = currentOrder.indexOf(draggedId);
+  const targetIndex = currentOrder.indexOf(targetId);
+  if (sourceIndex === -1 || targetIndex === -1) {
+    return currentOrder;
+  }
+
+  const next = [...currentOrder];
+  const [dragged] = next.splice(sourceIndex, 1);
+  if (!dragged) {
+    return currentOrder;
+  }
+
+  next.splice(targetIndex, 0, dragged);
+  return next;
+};
+
+const reorderSelectedAttachmentOrder = (
   currentOrder: string[],
   draggedId: string,
   targetId: string
@@ -410,8 +514,26 @@ const copyToClipboard = async (content: string): Promise<boolean> => {
   }
 };
 
+const formatMessageParagraphs = (content: string): string[] =>
+  content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+const hasChineseText = (value: string): boolean => /[\u4e00-\u9fff]/.test(value);
+
+const actionRouteByEntityType: Record<'Dataset' | 'TrainingJob' | 'Model', string> = {
+  Dataset: '/datasets',
+  TrainingJob: '/training/jobs',
+  Model: '/models/my-models'
+};
+
+const datasetIdPattern = /\((d-\d+)\)$/i;
+const isAuthenticationRequiredMessage = (message: string): boolean => message === 'Authentication required.';
+
 export default function ConversationPage() {
-  const { language, setLanguage, t, roleLabel } = useI18n();
+  const navigate = useNavigate();
+  const { language, setLanguage, t } = useI18n();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [selectedModelId, setSelectedModelId] = useState('');
@@ -422,8 +544,16 @@ export default function ConversationPage() {
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<string[]>(() =>
     readHiddenConversationIdsFromStorage()
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
+    readSidebarCollapsedFromStorage()
+  );
+  const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() => detectCompactViewport());
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [collapsedHistoryGroups, setCollapsedHistoryGroups] = useState<HistoryGroupKey[]>(() =>
     readCollapsedHistoryGroupsFromStorage()
+  );
+  const [collapsedSidebarSections, setCollapsedSidebarSections] = useState<SidebarSectionKey[]>(() =>
+    readCollapsedSidebarSectionsFromStorage()
   );
   const [pinnedHistoryOrder, setPinnedHistoryOrder] = useState<string[]>(() =>
     readPinnedHistoryOrderFromStorage()
@@ -443,12 +573,17 @@ export default function ConversationPage() {
   const [draggingPinnedConversationId, setDraggingPinnedConversationId] = useState<string | null>(null);
   const [dragOverPinnedConversationId, setDragOverPinnedConversationId] = useState<string | null>(null);
   const [attachmentListExpanded, setAttachmentListExpanded] = useState(false);
+  const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<string[]>([]);
+  const [draggingSelectedAttachmentId, setDraggingSelectedAttachmentId] = useState<string | null>(null);
+  const [dragOverSelectedAttachmentId, setDragOverSelectedAttachmentId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  const [authRequired, setAuthRequired] = useState(false);
   const [llmView, setLlmView] = useState<LlmConfigView | null>(null);
   const [notice, setNotice] = useState('');
   const hiddenHistoryIdsRef = useRef<string[]>(hiddenHistoryIds);
   const pinnedHistoryOrderRef = useRef<string[]>(pinnedHistoryOrder);
+  const attachmentsSignatureRef = useRef(buildConversationAttachmentsSignature([]));
   const historyMenuButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const uploadFileInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -462,7 +597,11 @@ export default function ConversationPage() {
 
   const refreshAttachments = useCallback(async () => {
     const result = await api.listConversationAttachments();
-    setAttachments(result);
+    const nextSignature = buildConversationAttachmentsSignature(result);
+    if (attachmentsSignatureRef.current !== nextSignature) {
+      attachmentsSignatureRef.current = nextSignature;
+      setAttachments(result);
+    }
   }, []);
 
   const refreshConversations = useCallback(async () => {
@@ -482,45 +621,96 @@ export default function ConversationPage() {
     }
   }, []);
 
-  useEffect(() => {
+  const clearWorkspaceForAnonymousSession = useCallback(() => {
+    attachmentsSignatureRef.current = buildConversationAttachmentsSignature([]);
+    setCurrentUser(null);
+    setModels([]);
+    setSelectedModelId('');
+    setConversation(null);
+    setMessages([]);
+    setAttachments([]);
+    setSelectedAttachmentIds([]);
+    setAttachmentListExpanded(false);
+    setSending(false);
+    setUploading(false);
+  }, []);
+
+  const loadWorkspace = useCallback(async () => {
     setLoading(true);
 
-    Promise.all([api.me(), api.listModels(), refreshAttachments(), refreshLlmConfig(), refreshConversations()])
-      .then(([user, modelResults]) => {
-        setCurrentUser(user);
-        setModels(modelResults);
-        if (modelResults.length > 0) {
-          setSelectedModelId((current) => current || modelResults[0].id);
+    try {
+      const user = await api.me();
+      setCurrentUser(user);
+      setAuthRequired(false);
+
+      const [modelResults] = await Promise.all([
+        api.listModels(),
+        refreshAttachments(),
+        refreshLlmConfig(),
+        refreshConversations()
+      ]);
+
+      setModels(modelResults);
+      setSelectedModelId((current) => {
+        if (modelResults.length === 0) {
+          return '';
         }
+
+        return current && modelResults.some((model) => model.id === current)
+          ? current
+          : modelResults[0].id;
+      });
+      setError('');
+    } catch (loadError) {
+      const message = (loadError as Error).message;
+      if (isAuthenticationRequiredMessage(message)) {
+        clearWorkspaceForAnonymousSession();
+        setAuthRequired(true);
         setError('');
-      })
-      .catch((loadError) => setError((loadError as Error).message))
-      .finally(() => setLoading(false));
-  }, [refreshAttachments, refreshConversations, refreshLlmConfig]);
+        return;
+      }
+
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [clearWorkspaceForAnonymousSession, refreshAttachments, refreshConversations, refreshLlmConfig]);
 
   useEffect(() => {
-    const handleConfigChange = () => {
-      refreshLlmConfig().catch(() => {
+    loadWorkspace().catch(() => {
+      // handled by local state
+    });
+  }, [loadWorkspace]);
+
+  useEffect(() => {
+    const handleWorkspaceUpdate = () => {
+      loadWorkspace().catch(() => {
         // Keep current state on transient errors.
       });
     };
 
-    window.addEventListener(LLM_CONFIG_UPDATED_EVENT, handleConfigChange as EventListener);
+    window.addEventListener(LLM_CONFIG_UPDATED_EVENT, handleWorkspaceUpdate as EventListener);
+    window.addEventListener(AUTH_UPDATED_EVENT, handleWorkspaceUpdate as EventListener);
 
     return () => {
-      window.removeEventListener(LLM_CONFIG_UPDATED_EVENT, handleConfigChange as EventListener);
+      window.removeEventListener(LLM_CONFIG_UPDATED_EVENT, handleWorkspaceUpdate as EventListener);
+      window.removeEventListener(AUTH_UPDATED_EVENT, handleWorkspaceUpdate as EventListener);
     };
-  }, [refreshLlmConfig]);
+  }, [loadWorkspace]);
 
   useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
     const timer = window.setInterval(() => {
       refreshAttachments().catch(() => {
         // Keep UI stable in polling loop; explicit errors are reported by direct actions.
       });
-    }, 500);
+    }, backgroundRefreshIntervalMs);
 
     return () => window.clearInterval(timer);
-  }, [refreshAttachments]);
+  }, [currentUser, refreshAttachments]);
 
   useEffect(() => {
     writeHistoryToStorage(history);
@@ -532,13 +722,51 @@ export default function ConversationPage() {
   }, [hiddenHistoryIds]);
 
   useEffect(() => {
+    writeSidebarCollapsedToStorage(sidebarCollapsed);
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
     writeCollapsedHistoryGroupsToStorage(collapsedHistoryGroups);
   }, [collapsedHistoryGroups]);
+
+  useEffect(() => {
+    writeCollapsedSidebarSectionsToStorage(collapsedSidebarSections);
+  }, [collapsedSidebarSections]);
 
   useEffect(() => {
     pinnedHistoryOrderRef.current = pinnedHistoryOrder;
     writePinnedHistoryOrderToStorage(pinnedHistoryOrder);
   }, [pinnedHistoryOrder]);
+
+  useEffect(() => {
+    const syncViewport = () => {
+      setIsCompactViewport(detectCompactViewport());
+    };
+
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    return () => {
+      window.removeEventListener('resize', syncViewport);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isCompactViewport) {
+      setMobileSidebarOpen(false);
+    }
+  }, [isCompactViewport]);
+
+  useEffect(() => {
+    if (!isCompactViewport || !mobileSidebarOpen) {
+      document.body.style.removeProperty('overflow');
+      return;
+    }
+
+    document.body.style.setProperty('overflow', 'hidden');
+    return () => {
+      document.body.style.removeProperty('overflow');
+    };
+  }, [isCompactViewport, mobileSidebarOpen]);
 
   useEffect(() => {
     setPinnedHistoryOrder((previous) => {
@@ -570,12 +798,6 @@ export default function ConversationPage() {
   }, [notice]);
 
   useEffect(() => {
-    if (attachments.length === 0 && attachmentListExpanded) {
-      setAttachmentListExpanded(false);
-    }
-  }, [attachments.length, attachmentListExpanded]);
-
-  useEffect(() => {
     const textarea = composerTextareaRef.current;
     if (!textarea) {
       return;
@@ -586,9 +808,32 @@ export default function ConversationPage() {
     textarea.style.height = `${nextHeight}px`;
   }, [input]);
 
+  const attachmentById = useMemo(
+    () => new Map(attachments.map((item) => [item.id, item])),
+    [attachments]
+  );
+  const selectedAttachments = useMemo(
+    () =>
+      selectedAttachmentIds
+        .map((itemId) => attachmentById.get(itemId))
+        .filter((item): item is FileAttachment => Boolean(item)),
+    [attachmentById, selectedAttachmentIds]
+  );
   const readyAttachmentIds = useMemo(
     () => attachments.filter((item) => item.status === 'ready').map((item) => item.id),
     [attachments]
+  );
+  const selectedReadyAttachmentIds = useMemo(
+    () => selectedAttachments.filter((item) => item.status === 'ready').map((item) => item.id),
+    [selectedAttachments]
+  );
+  const selectedAttachmentIdSet = useMemo(
+    () => new Set(selectedAttachmentIds),
+    [selectedAttachmentIds]
+  );
+  const hasPendingSelectedAttachments = useMemo(
+    () => selectedAttachments.some((item) => item.status !== 'ready'),
+    [selectedAttachments]
   );
 
   const attachmentStatusSummary = useMemo(() => {
@@ -606,6 +851,14 @@ export default function ConversationPage() {
     return summary;
   }, [attachments]);
 
+  useEffect(() => {
+    setSelectedAttachmentIds((previous) => {
+      const availableIdSet = new Set(attachments.map((item) => item.id));
+      const next = previous.filter((itemId) => availableIdSet.has(itemId));
+      return arraysEqual(previous, next) ? previous : next;
+    });
+  }, [attachments]);
+
   const llmModeText = useMemo(() => {
     if (!llmView || !llmView.enabled || !llmView.has_api_key) {
       return t('Mock mode');
@@ -613,6 +866,115 @@ export default function ConversationPage() {
 
     return `${llmView.provider} · ${llmView.model} · ${llmView.api_key_masked}`;
   }, [llmView, t]);
+
+  const formatConversationActionLabel = useCallback(
+    (action: ConversationActionMetadata['action']) => {
+      if (action === 'create_dataset') {
+        return t('Create Dataset');
+      }
+      if (action === 'create_training_job') {
+        return t('Create Training Job');
+      }
+      return t('Create Model');
+    },
+    [t]
+  );
+
+  const formatConversationActionStatusLabel = useCallback(
+    (status: ConversationActionMetadata['status']) => {
+      if (status === 'requires_input') {
+        return t('Needs More Info');
+      }
+      if (status === 'completed') {
+        return t('Completed');
+      }
+      if (status === 'cancelled') {
+        return t('Cancelled');
+      }
+      return t('Failed');
+    },
+    [t]
+  );
+
+  const formatConversationActionFieldLabel = useCallback(
+    (field: string) => {
+      if (field === 'dataset_id') {
+        return t('Dataset');
+      }
+      if (field === 'dataset_name') {
+        return t('Dataset');
+      }
+      if (field === 'dataset_reference') {
+        return t('Dataset');
+      }
+      if (field === 'task_type') {
+        return t('Task Type');
+      }
+      if (field === 'model_type') {
+        return t('Model Type');
+      }
+      if (field === 'framework') {
+        return t('Framework');
+      }
+      if (field === 'base_model') {
+        return t('Base model');
+      }
+      if (field === 'label_classes') {
+        return t('Label Classes');
+      }
+      if (field === 'name') {
+        return t('Name');
+      }
+      if (field === 'description') {
+        return t('Description');
+      }
+      if (field === 'visibility') {
+        return t('Visibility');
+      }
+      if (field === 'dataset_version_id') {
+        return t('Dataset Version');
+      }
+      if (field === 'epochs') {
+        return t('Epochs');
+      }
+      if (field === 'batch_size') {
+        return t('Batch Size');
+      }
+      if (field === 'learning_rate') {
+        return t('Learning Rate');
+      }
+      if (field === 'warmup_ratio') {
+        return t('Warmup Ratio');
+      }
+      if (field === 'weight_decay') {
+        return t('Weight Decay');
+      }
+      return field;
+    },
+    [t]
+  );
+
+  const resolveMessageAttachmentNames = useCallback(
+    (message: MessageRecord) =>
+      message.attachment_ids.map((attachmentId) => attachmentById.get(attachmentId)?.filename ?? attachmentId),
+    [attachmentById]
+  );
+
+  const resolveConversationActionHref = useCallback((action: ConversationActionMetadata) => {
+    if (!action.created_entity_type || !action.created_entity_id) {
+      return null;
+    }
+
+    if (action.created_entity_type === 'Dataset') {
+      return `${actionRouteByEntityType.Dataset}/${action.created_entity_id}`;
+    }
+
+    if (action.created_entity_type === 'TrainingJob') {
+      return `${actionRouteByEntityType.TrainingJob}/${action.created_entity_id}`;
+    }
+
+    return actionRouteByEntityType.Model;
+  }, []);
 
   const upsertHistoryItem = useCallback((id: string, seedText: string) => {
     setHistory((previous) => {
@@ -635,14 +997,33 @@ export default function ConversationPage() {
       return;
     }
 
+    const oversized = findOversizedUpload(targets);
+    if (oversized) {
+      setAttachmentListExpanded(true);
+      setError(
+        t('File {filename} is {size}. Keep each file under {limit} to avoid proxy rejection (413).', {
+          filename: oversized.name,
+          size: formatByteSize(oversized.size),
+          limit: UPLOAD_SOFT_LIMIT_LABEL
+        })
+      );
+      return;
+    }
+
     setUploading(true);
     setError('');
 
     try {
+      const uploadedAttachmentIds: string[] = [];
       for (const file of targets) {
-        await api.uploadConversationFile(file);
+        const uploaded = await api.uploadConversationFile(file);
+        uploadedAttachmentIds.push(uploaded.id);
       }
       await refreshAttachments();
+      setSelectedAttachmentIds((previous) =>
+        Array.from(new Set([...previous, ...uploadedAttachmentIds]))
+      );
+      setAttachmentListExpanded(false);
       setNotice(t('{count} file(s) queued for upload.', { count: targets.length }));
     } catch (uploadError) {
       setError((uploadError as Error).message);
@@ -653,6 +1034,10 @@ export default function ConversationPage() {
 
   const openUploadFileDialog = () => {
     uploadFileInputRef.current?.click();
+  };
+
+  const toggleAttachmentTray = () => {
+    setAttachmentListExpanded((previous) => !previous);
   };
 
   const onUploadFileInputChange = async (event: ReactChangeEvent<HTMLInputElement>) => {
@@ -671,6 +1056,7 @@ export default function ConversationPage() {
 
     try {
       await api.removeAttachment(attachmentId);
+      setSelectedAttachmentIds((previous) => previous.filter((itemId) => itemId !== attachmentId));
       await refreshAttachments();
     } catch (removeError) {
       setError((removeError as Error).message);
@@ -682,6 +1068,53 @@ export default function ConversationPage() {
   const openAttachment = (attachmentId: string) => {
     window.open(api.attachmentContentUrl(attachmentId), '_blank', 'noopener,noreferrer');
   };
+
+  const includeAttachmentInCurrentMessage = (attachment: FileAttachment) => {
+    if (attachment.status !== 'ready') {
+      return;
+    }
+
+    if (selectedAttachmentIdSet.has(attachment.id)) {
+      setNotice(t('Attachment {filename} already in context.', { filename: attachment.filename }));
+      return;
+    }
+
+    setSelectedAttachmentIds((previous) => [...previous, attachment.id]);
+    setNotice(t('Attachment {filename} included in current message.', { filename: attachment.filename }));
+  };
+
+  const excludeAttachmentFromCurrentMessage = (attachment: FileAttachment) => {
+    if (!selectedAttachmentIdSet.has(attachment.id)) {
+      return;
+    }
+
+    setSelectedAttachmentIds((previous) => previous.filter((itemId) => itemId !== attachment.id));
+    setNotice(t('Attachment {filename} removed from current message.', { filename: attachment.filename }));
+  };
+
+  const includeAllReadyAttachments = () => {
+    setSelectedAttachmentIds(readyAttachmentIds);
+    setAttachmentListExpanded(false);
+    setNotice(t('All ready files are now included in current message.'));
+  };
+
+  const clearCurrentAttachmentContext = () => {
+    setSelectedAttachmentIds([]);
+    setNotice(t('Current attachment context has been cleared.'));
+  };
+
+  const closeMobileSidebar = useCallback(() => {
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    if (isCompactViewport) {
+      setMobileSidebarOpen((previous) => !previous);
+      return;
+    }
+
+    setSidebarCollapsed((previous) => !previous);
+  }, [isCompactViewport]);
 
   const sendWithContent = async (content: string) => {
     setSending(true);
@@ -697,7 +1130,7 @@ export default function ConversationPage() {
         const started = await api.startConversation({
           model_id: modelId,
           initial_message: content,
-          attachment_ids: readyAttachmentIds
+          attachment_ids: selectedReadyAttachmentIds
         });
 
         setConversation(started.conversation);
@@ -707,13 +1140,15 @@ export default function ConversationPage() {
         const response = await api.sendConversationMessage({
           conversation_id: conversation.id,
           content,
-          attachment_ids: readyAttachmentIds
+          attachment_ids: selectedReadyAttachmentIds
         });
 
         setMessages(response.messages);
         upsertHistoryItem(conversation.id, content);
       }
 
+      setSelectedAttachmentIds([]);
+      setAttachmentListExpanded(false);
       refreshConversations().catch(() => {
         // Keep active chat responsive even if sidebar sync fails transiently.
       });
@@ -740,8 +1175,11 @@ export default function ConversationPage() {
     setMessages([]);
     cancelRenameConversation();
     setInput('');
+    setSelectedAttachmentIds([]);
+    setAttachmentListExpanded(false);
     setError('');
     setNotice(t('Started a fresh conversation.'));
+    closeMobileSidebar();
   };
 
   const toggleHistoryPin = (id: string) => {
@@ -769,6 +1207,14 @@ export default function ConversationPage() {
       previous.includes(groupKey)
         ? previous.filter((item) => item !== groupKey)
         : [...previous, groupKey]
+    );
+  };
+
+  const toggleSidebarSection = (sectionKey: SidebarSectionKey) => {
+    setCollapsedSidebarSections((previous) =>
+      previous.includes(sectionKey)
+        ? previous.filter((item) => item !== sectionKey)
+        : [...previous, sectionKey]
     );
   };
 
@@ -852,6 +1298,8 @@ export default function ConversationPage() {
       const detail = await api.getConversationDetail(conversationId);
       setConversation(detail.conversation);
       setMessages(detail.messages);
+      setSelectedAttachmentIds([]);
+      setAttachmentListExpanded(false);
       setSelectedModelId(detail.conversation.model_id);
       setHistory((previous) => {
         const existing = previous.find((item) => item.id === detail.conversation.id);
@@ -868,6 +1316,7 @@ export default function ConversationPage() {
         ], pinnedHistoryOrderRef.current).slice(0, 40);
       });
       setNotice(t('Conversation restored.'));
+      closeMobileSidebar();
     } catch (restoreError) {
       setError((restoreError as Error).message);
     } finally {
@@ -885,6 +1334,8 @@ export default function ConversationPage() {
       setConversation(null);
       setMessages([]);
       setInput('');
+      setSelectedAttachmentIds([]);
+      setAttachmentListExpanded(false);
     }
     setNotice(t('Removed from sidebar (local).'));
   };
@@ -897,6 +1348,8 @@ export default function ConversationPage() {
       setConversation(null);
       setMessages([]);
       setInput('');
+      setSelectedAttachmentIds([]);
+      setAttachmentListExpanded(false);
     }
     setNotice(t('Cleared local chat sidebar.'));
   };
@@ -1126,6 +1579,16 @@ export default function ConversationPage() {
     openHistoryContextMenuByPoint(itemId, event.clientX, event.clientY);
   };
 
+  const openHistoryContextMenuFromButton = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    itemId: string
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    openHistoryContextMenuByPoint(itemId, rect.right - 4, rect.bottom + 6);
+  };
+
   const onHistoryItemKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,
     itemId: string
@@ -1215,10 +1678,55 @@ export default function ConversationPage() {
     setDragOverPinnedConversationId(null);
   };
 
+  const reorderSelectedAttachmentsByDrag = (draggedId: string, targetId: string) => {
+    setSelectedAttachmentIds((previous) => {
+      const next = reorderSelectedAttachmentOrder(previous, draggedId, targetId);
+      return arraysEqual(previous, next) ? previous : next;
+    });
+    setNotice(t('Attachment order updated for current message.'));
+  };
+
+  const onSelectedAttachmentDragStart = (
+    event: ReactDragEvent<HTMLLIElement>,
+    attachmentId: string
+  ) => {
+    setDraggingSelectedAttachmentId(attachmentId);
+    setDragOverSelectedAttachmentId(attachmentId);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', attachmentId);
+  };
+
+  const onSelectedAttachmentDragOver = (
+    event: ReactDragEvent<HTMLLIElement>,
+    attachmentId: string
+  ) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setDragOverSelectedAttachmentId(attachmentId);
+  };
+
+  const onSelectedAttachmentDrop = (
+    event: ReactDragEvent<HTMLLIElement>,
+    attachmentId: string
+  ) => {
+    event.preventDefault();
+    const draggedId = event.dataTransfer.getData('text/plain') || draggingSelectedAttachmentId;
+    if (draggedId) {
+      reorderSelectedAttachmentsByDrag(draggedId, attachmentId);
+    }
+    setDraggingSelectedAttachmentId(null);
+    setDragOverSelectedAttachmentId(null);
+  };
+
+  const onSelectedAttachmentDragEnd = () => {
+    setDraggingSelectedAttachmentId(null);
+    setDragOverSelectedAttachmentId(null);
+  };
+
   const onTextareaKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      if (!sending) {
+      if (canSend) {
         send().catch(() => {
           // handled by local state
         });
@@ -1240,9 +1748,50 @@ export default function ConversationPage() {
     setNotice(t('Quoted message into composer.'));
   };
 
+  const applyConversationSuggestion = useCallback(
+    (action: ConversationActionMetadata, suggestion: string) => {
+      const trimmed = suggestion.trim();
+      const primaryMissingField = action.missing_fields[0] ?? '';
+      let nextInput = trimmed;
+
+      if (primaryMissingField === 'dataset_id' || primaryMissingField === 'dataset_reference') {
+        const datasetId = trimmed.match(datasetIdPattern)?.[1] ?? trimmed;
+        nextInput = hasChineseText(trimmed) || hasChineseText(action.summary)
+          ? `用数据集 ${datasetId}`
+          : `Use dataset ${datasetId}`;
+      } else if (primaryMissingField === 'framework') {
+        nextInput = hasChineseText(trimmed) || hasChineseText(action.summary)
+          ? `框架用 ${trimmed}`
+          : `Use framework ${trimmed}`;
+      } else if (primaryMissingField === 'task_type') {
+        nextInput = hasChineseText(trimmed) || hasChineseText(action.summary)
+          ? `任务类型用 ${trimmed}`
+          : `Use task type ${trimmed}`;
+      } else if (primaryMissingField === 'visibility') {
+        nextInput = hasChineseText(trimmed) || hasChineseText(action.summary)
+          ? `可见性设为 ${trimmed}`
+          : `Set visibility to ${trimmed}`;
+      }
+
+      setInput(nextInput);
+      window.requestAnimationFrame(() => {
+        composerTextareaRef.current?.focus();
+      });
+      setNotice(t('Suggestion inserted into composer.'));
+    },
+    [t]
+  );
+
   const messageCount = messages.length;
   const hasActiveConversation = Boolean(conversation);
-  const canSend = !sending && !loading && models.length > 0 && Boolean(input.trim());
+  const canSend =
+    !sending &&
+    !loading &&
+    !uploading &&
+    !authRequired &&
+    !hasPendingSelectedAttachments &&
+    models.length > 0 &&
+    Boolean(input.trim());
   const historyGroupLabels: Record<HistoryGroupKey, string> = useMemo(
     () => ({
       pinned: t('Pinned'),
@@ -1260,261 +1809,516 @@ export default function ConversationPage() {
   const conversationInfo = conversation
     ? renderConversationTitle(conversation.title)
     : t('not started');
-  const attachmentSummaryTitle = `${t('Attachments:')} ${attachments.length} · ${t('ready')}: ${attachmentStatusSummary.ready}${
-    attachmentStatusSummary.uploading > 0 ? ` · ${t('uploading')}: ${attachmentStatusSummary.uploading}` : ''
-  }${attachmentStatusSummary.processing > 0 ? ` · ${t('processing')}: ${attachmentStatusSummary.processing}` : ''}${
-    attachmentStatusSummary.error > 0 ? ` · ${t('error')}: ${attachmentStatusSummary.error}` : ''
-  }`;
+  const hasHistorySearch = historySearch.trim().length > 0;
+  const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
+  const pageClassName = [
+    'chat-workspace-page',
+    isDesktopSidebarCollapsed ? 'sidebar-collapsed' : '',
+    isCompactViewport ? 'sidebar-compact' : '',
+    mobileSidebarOpen ? 'mobile-sidebar-open' : ''
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const sidebarToggleLabel = isCompactViewport
+    ? mobileSidebarOpen
+      ? t('Close sidebar')
+      : t('Open sidebar')
+    : isDesktopSidebarCollapsed
+      ? t('Expand sidebar')
+      : t('Collapse sidebar');
+  const sidebarToggleToken = isCompactViewport ? (mobileSidebarOpen ? 'X' : '=') : isDesktopSidebarCollapsed ? '>' : '<';
+  const historyEmptyLabel = historyLoading
+    ? t('Syncing conversation history...')
+    : filteredHistory.length === 0
+      ? hasHistorySearch
+        ? t('No chats match this search.')
+        : t('No visible chats yet.')
+      : '';
+  const controlsSectionCollapsed = collapsedSidebarSections.includes('controls');
+  const historySectionCollapsed = collapsedSidebarSections.includes('history');
+  const quickSectionCollapsed = collapsedSidebarSections.includes('quick');
+  const preferencesSectionCollapsed = collapsedSidebarSections.includes('preferences');
+
+  const logout = useCallback(async () => {
+    try {
+      await api.logout();
+      clearWorkspaceForAnonymousSession();
+      setAuthRequired(true);
+      emitAuthUpdated();
+      closeMobileSidebar();
+      navigate('/', { replace: true });
+    } catch (logoutError) {
+      setError((logoutError as Error).message);
+    }
+  }, [clearWorkspaceForAnonymousSession, closeMobileSidebar, navigate]);
+  const sessionMenuItems = useMemo(
+    () => [
+      { to: '/settings', label: t('Settings') },
+      { to: '/workspace/console', label: t('Professional Console') },
+      { label: t('Logout'), onSelect: logout, tone: 'danger' as const }
+    ],
+    [logout, t]
+  );
 
   return (
-    <section className="chat-workspace-page">
-      <aside className="chat-workspace-sidebar">
-        <div className="chat-sidebar-top stack">
-          <div className="row between align-center">
-            <strong>{t('Vistral Chat')}</strong>
-            <Link to="/workspace/console" className="chat-sidebar-link">
-              {t('Console')}
-            </Link>
-          </div>
-          <label className="language-switch-inline chat-language-switch">
-            <span>{t('Language')}</span>
-            <select
-              value={language}
-              onChange={(event) => setLanguage(event.target.value as 'zh-CN' | 'en-US')}
-            >
-              <option value="zh-CN">{t('Chinese')}</option>
-              <option value="en-US">{t('English')}</option>
-            </select>
-          </label>
-          <button className="chat-new-btn" onClick={startNewConversation} disabled={sending}>
-            {t('+ New chat')}
-          </button>
-          <input
-            className="chat-search-input"
-            value={historySearch}
-            onChange={(event) => setHistorySearch(event.target.value)}
-            placeholder={t('Search chats')}
-          />
-          <div className="chat-shortcuts stack tight">
-            <small className="muted">{t('Quick access')}</small>
-            <Link to="/models/explore" className="chat-sidebar-link">
-              {t('Models')}
-            </Link>
-            <Link to="/datasets" className="chat-sidebar-link">
-              {t('Datasets')}
-            </Link>
-            <Link to="/training/jobs" className="chat-sidebar-link">
-              {t('Training')}
-            </Link>
-            <Link to="/settings/llm" className="chat-sidebar-link">
-              {t('LLM settings')}
-            </Link>
-          </div>
-        </div>
+    <section className={pageClassName}>
+      {isCompactViewport ? (
+        <button
+          type="button"
+          className={`chat-sidebar-scrim${mobileSidebarOpen ? ' visible' : ''}`}
+          onClick={closeMobileSidebar}
+          aria-label={t('Close sidebar')}
+        />
+      ) : null}
 
-        <div className="chat-history-wrap">
-          <div className="row between align-center">
-            <small className="muted">{t('Recent chats')}</small>
-            <div className="row gap">
-              <button
-                className="small-btn chat-history-refresh"
-                onClick={() => {
-                  refreshConversations().catch((refreshError) => {
-                    setError((refreshError as Error).message);
-                  });
-                }}
-                disabled={historyLoading}
-              >
-                {historyLoading ? t('Syncing...') : t('Sync')}
-              </button>
-              {history.length > 0 ? (
-                <button className="small-btn chat-history-clear" onClick={clearHistory}>
-                  {t('Clear')}
-                </button>
-              ) : null}
-              {hiddenHistoryIds.length > 0 ? (
-                <button className="small-btn chat-history-clear" onClick={showHiddenHistory}>
-                  {t('Show hidden')}
-                </button>
-              ) : null}
-            </div>
-          </div>
-          <ul className="chat-history-list">
-            {historyLoading ? (
-              <li className="chat-history-empty">{t('Syncing conversation history...')}</li>
-            ) : filteredHistory.length === 0 ? (
-              <li className="chat-history-empty">{t('No visible chats yet.')}</li>
-            ) : (
-              groupedHistory.map((group) => (
-                <li key={group.key} className="chat-history-group">
-                  <button
-                    className="chat-history-group-title"
-                    onClick={() => toggleHistoryGroup(group.key)}
-                  >
-                    <span>{collapsedHistoryGroups.includes(group.key) ? '▸' : '▾'}</span>
-                    <span>{historyGroupLabels[group.key]}</span>
-                  </button>
-                  {collapsedHistoryGroups.includes(group.key) ? null : (
-                    <ul className="chat-history-sublist">
-                      {group.items.map((item) => {
-                        const isPinnedItem = group.key === 'pinned';
-                        const isDragging = draggingPinnedConversationId === item.id;
-                        const isDragOver =
-                          dragOverPinnedConversationId === item.id &&
-                          draggingPinnedConversationId !== item.id;
-                        const isLongPressing = longPressingConversationId === item.id;
-
-                        const itemClasses = [
-                          item.id === conversation?.id ? 'chat-history-item active' : 'chat-history-item',
-                          isPinnedItem ? 'chat-history-item-draggable' : '',
-                          isDragging ? 'dragging' : '',
-                          isDragOver ? 'drag-over' : '',
-                          isLongPressing ? 'long-pressing' : ''
-                        ]
-                          .filter(Boolean)
-                          .join(' ');
-
-                        return (
-                          <li
-                            key={item.id}
-                            className={itemClasses}
-                            draggable={isPinnedItem && editingConversationId !== item.id}
-                            onDragStart={(event) => onPinnedDragStart(event, item.id)}
-                            onDragOver={(event) => {
-                              if (isPinnedItem) {
-                                onPinnedDragOver(event, item.id);
-                              }
-                            }}
-                            onDrop={(event) => {
-                              if (isPinnedItem) {
-                                onPinnedDrop(event, item.id);
-                              }
-                            }}
-                            onDragEnd={onPinnedDragEnd}
-                            onContextMenu={(event) => openHistoryContextMenu(event, item.id)}
-                            onTouchStart={(event) => onHistoryItemTouchStart(event, item.id)}
-                            onTouchMove={onHistoryItemTouchMove}
-                            onTouchEnd={onHistoryItemTouchEnd}
-                            onTouchCancel={onHistoryItemTouchCancel}
-                          >
-                            {editingConversationId === item.id ? (
-                              <div className="chat-history-edit stack tight">
-                                <input
-                                  value={editingConversationTitle}
-                                  onChange={(event) => setEditingConversationTitle(event.target.value)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === 'Enter') {
-                                      event.preventDefault();
-                                      saveConversationTitle(item.id).catch(() => {
-                                        // handled by local error state
-                                      });
-                                    }
-
-                                    if (event.key === 'Escape') {
-                                      event.preventDefault();
-                                      cancelRenameConversation();
-                                    }
-                                  }}
-                                  placeholder={t('Conversation title')}
-                                  autoFocus
-                                  disabled={renamingConversationId === item.id}
-                                />
-                                <div className="row gap">
-                                  <button
-                                    className="small-btn chat-history-action"
-                                    onClick={() => {
-                                      saveConversationTitle(item.id).catch(() => {
-                                        // handled by local error state
-                                      });
-                                    }}
-                                    disabled={renamingConversationId === item.id}
-                                  >
-                                    {renamingConversationId === item.id ? t('Saving...') : t('Save')}
-                                  </button>
-                                  <button
-                                    className="small-btn chat-history-action"
-                                    onClick={cancelRenameConversation}
-                                    disabled={renamingConversationId === item.id}
-                                  >
-                                    {t('Cancel')}
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="row between gap align-center">
-                                <button
-                                  className="chat-history-open"
-                                  onClick={() => {
-                                    if (historyLongPressTriggeredRef.current) {
-                                      historyLongPressTriggeredRef.current = false;
-                                      return;
-                                    }
-                                    restoreConversation(item.id).catch(() => {
-                                      // handled by local error state
-                                    });
-                                  }}
-                                  onKeyDown={(event) => onHistoryItemKeyDown(event, item.id)}
-                                  disabled={restoringConversationId === item.id}
-                                >
-                                  <span>{renderConversationTitle(item.title)}</span>
-                                  <small>{formatHistoryTimestamp(item.updated_at)}</small>
-                                </button>
-                                <div className="row gap">
-                                  <button className="small-btn chat-history-action" onClick={() => beginRenameConversation(item)}>
-                                    {t('Rename')}
-                                  </button>
-                                  <button className="small-btn chat-history-action" onClick={() => toggleHistoryPin(item.id)}>
-                                    {item.pinned ? t('Unpin') : t('Pin')}
-                                  </button>
-                                  <button className="small-btn chat-history-action" onClick={() => deleteHistoryItem(item.id)}>
-                                    {t('Del')}
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </li>
-              ))
-            )}
-          </ul>
-          {historyContextMenu && contextMenuItem ? (
-            <div
-              className="chat-history-menu"
-              style={{ left: historyContextMenu.x, top: historyContextMenu.y }}
-              onClick={(event) => event.stopPropagation()}
-              role="menu"
-              aria-label={t('Conversation actions')}
-            >
-              {historyContextMenuActions.map((action, index) => (
+      <aside className="chat-workspace-sidebar" aria-hidden={isCompactViewport && !mobileSidebarOpen}>
+        <div className="chat-sidebar-content">
+          <div className="chat-sidebar-top stack">
+            <div className="chat-sidebar-brand-row">
+              <div className="chat-sidebar-brand-pill">
+                <span className="chat-sidebar-brand-mark" aria-hidden="true">
+                  V
+                </span>
+                <div className="stack tight">
+                  <strong>{t('Vistral Chat')}</strong>
+                  <small className="muted">{t('Conversation Workspace')}</small>
+                </div>
+              </div>
+              <div className="chat-sidebar-brand-actions">
+                <Link to="/workspace/console" className="chat-sidebar-console-chip">
+                  {t('Console')}
+                </Link>
                 <button
-                  key={action}
-                  className={`chat-history-menu-item${action === 'delete' ? ' danger' : ''}${historyContextMenuActiveIndex === index ? ' active' : ''}`}
-                  onMouseEnter={() => setHistoryContextMenuActiveIndex(index)}
-                  onClick={() => executeHistoryContextAction(action)}
-                  ref={(element) => {
-                    historyMenuButtonRefs.current[index] = element;
-                  }}
-                  tabIndex={historyContextMenuActiveIndex === index ? 0 : -1}
-                  aria-selected={historyContextMenuActiveIndex === index}
-                  role="menuitem"
+                  type="button"
+                  className="chat-sidebar-toggle-inline"
+                  onClick={toggleSidebar}
+                  aria-label={sidebarToggleLabel}
+                  title={sidebarToggleLabel}
                 >
-                  {getHistoryContextMenuActionLabel(action)}
+                  {sidebarToggleToken}
                 </button>
-              ))}
-              <small className="chat-history-menu-hint">{t('Keys: ↑/↓ · Enter · Esc · O/R/P/D')}</small>
+              </div>
             </div>
-          ) : null}
+          </div>
+
+          <div className="chat-sidebar-scroll">
+            <section className="chat-sidebar-section">
+              <button
+                type="button"
+                className="chat-sidebar-section-toggle"
+                onClick={() => toggleSidebarSection('controls')}
+                aria-label={controlsSectionCollapsed ? t('Expand section') : t('Collapse section')}
+              >
+                <span className="chat-sidebar-section-heading">
+                  <strong>{t('Chat controls')}</strong>
+                </span>
+                <span className="chat-sidebar-section-chevron" aria-hidden="true">
+                  {controlsSectionCollapsed ? '▸' : '▾'}
+                </span>
+              </button>
+
+              {controlsSectionCollapsed ? null : (
+                <div className="chat-sidebar-section-body stack">
+                  <button
+                    className="chat-new-btn"
+                    onClick={startNewConversation}
+                    disabled={sending || authRequired}
+                    type="button"
+                  >
+                    {t('+ New chat')}
+                  </button>
+                  <label className="chat-search-shell" aria-label={t('Search chats')}>
+                    <span className="chat-search-prefix" aria-hidden="true">
+                      /
+                    </span>
+                    <input
+                      className="chat-search-input"
+                      value={historySearch}
+                      onChange={(event) => setHistorySearch(event.target.value)}
+                      placeholder={t('Search chats')}
+                      disabled={authRequired}
+                    />
+                  </label>
+                </div>
+              )}
+            </section>
+
+            <section className="chat-sidebar-section">
+              <button
+                type="button"
+                className="chat-sidebar-section-toggle"
+                onClick={() => toggleSidebarSection('history')}
+                aria-label={historySectionCollapsed ? t('Expand section') : t('Collapse section')}
+              >
+                <span className="chat-sidebar-section-heading">
+                  <strong>{t('Recent chats')}</strong>
+                  <small>{filteredHistory.length}</small>
+                </span>
+                <span className="chat-sidebar-section-chevron" aria-hidden="true">
+                  {historySectionCollapsed ? '▸' : '▾'}
+                </span>
+              </button>
+
+              {historySectionCollapsed ? null : (
+                <div className="chat-history-wrap">
+                  <div className="chat-history-toolbar">
+                    <div className="chat-history-toolbar-copy">
+                      <small className="muted">{t('Recent chats')}</small>
+                      <span className="chat-history-count">{filteredHistory.length}</span>
+                    </div>
+                    <div className="row gap wrap">
+                      <button
+                        className="small-btn chat-history-refresh"
+                        type="button"
+                        onClick={() => {
+                          refreshConversations().catch((refreshError) => {
+                            setError((refreshError as Error).message);
+                          });
+                        }}
+                        disabled={historyLoading}
+                      >
+                        {historyLoading ? t('Syncing...') : t('Sync')}
+                      </button>
+                      {history.length > 0 ? (
+                        <button className="small-btn chat-history-clear" onClick={clearHistory} type="button">
+                          {t('Clear')}
+                        </button>
+                      ) : null}
+                      {hiddenHistoryIds.length > 0 ? (
+                        <button className="small-btn chat-history-clear" onClick={showHiddenHistory} type="button">
+                          {t('Show hidden')}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <ul className="chat-history-list">
+                    {historyLoading || filteredHistory.length === 0 ? (
+                      <li className="chat-history-empty">{historyEmptyLabel}</li>
+                    ) : (
+                      groupedHistory.map((group) => (
+                        <li key={group.key} className="chat-history-group">
+                          <button
+                            className="chat-history-group-title"
+                            type="button"
+                            onClick={() => toggleHistoryGroup(group.key)}
+                          >
+                            <span className="chat-history-group-heading">
+                              <span>{historyGroupLabels[group.key]}</span>
+                              <small>{group.items.length}</small>
+                            </span>
+                            <span className="chat-history-group-chevron" aria-hidden="true">
+                              {collapsedHistoryGroups.includes(group.key) ? '▸' : '▾'}
+                            </span>
+                          </button>
+                          {collapsedHistoryGroups.includes(group.key) ? null : (
+                            <ul className="chat-history-sublist">
+                              {group.items.map((item) => {
+                                const isPinnedItem = group.key === 'pinned';
+                                const isDragging = draggingPinnedConversationId === item.id;
+                                const isDragOver =
+                                  dragOverPinnedConversationId === item.id &&
+                                  draggingPinnedConversationId !== item.id;
+                                const isLongPressing = longPressingConversationId === item.id;
+
+                                const itemClasses = [
+                                  item.id === conversation?.id ? 'chat-history-item active' : 'chat-history-item',
+                                  isPinnedItem ? 'chat-history-item-draggable' : '',
+                                  isDragging ? 'dragging' : '',
+                                  isDragOver ? 'drag-over' : '',
+                                  isLongPressing ? 'long-pressing' : ''
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ');
+
+                                return (
+                                  <li
+                                    key={item.id}
+                                    className={itemClasses}
+                                    draggable={isPinnedItem && editingConversationId !== item.id}
+                                    onDragStart={(event) => onPinnedDragStart(event, item.id)}
+                                    onDragOver={(event) => {
+                                      if (isPinnedItem) {
+                                        onPinnedDragOver(event, item.id);
+                                      }
+                                    }}
+                                    onDrop={(event) => {
+                                      if (isPinnedItem) {
+                                        onPinnedDrop(event, item.id);
+                                      }
+                                    }}
+                                    onDragEnd={onPinnedDragEnd}
+                                    onContextMenu={(event) => openHistoryContextMenu(event, item.id)}
+                                    onTouchStart={(event) => onHistoryItemTouchStart(event, item.id)}
+                                    onTouchMove={onHistoryItemTouchMove}
+                                    onTouchEnd={onHistoryItemTouchEnd}
+                                    onTouchCancel={onHistoryItemTouchCancel}
+                                  >
+                                    {editingConversationId === item.id ? (
+                                      <div className="chat-history-edit stack tight">
+                                        <input
+                                          value={editingConversationTitle}
+                                          onChange={(event) => setEditingConversationTitle(event.target.value)}
+                                          onKeyDown={(event) => {
+                                            if (event.key === 'Enter') {
+                                              event.preventDefault();
+                                              saveConversationTitle(item.id).catch(() => {
+                                                // handled by local error state
+                                              });
+                                            }
+
+                                            if (event.key === 'Escape') {
+                                              event.preventDefault();
+                                              cancelRenameConversation();
+                                            }
+                                          }}
+                                          placeholder={t('Conversation title')}
+                                          autoFocus
+                                          disabled={renamingConversationId === item.id}
+                                        />
+                                        <div className="row gap">
+                                          <button
+                                            className="small-btn chat-history-action"
+                                            onClick={() => {
+                                              saveConversationTitle(item.id).catch(() => {
+                                                // handled by local error state
+                                              });
+                                            }}
+                                            disabled={renamingConversationId === item.id}
+                                          >
+                                            {renamingConversationId === item.id ? t('Saving...') : t('Save')}
+                                          </button>
+                                          <button
+                                            className="small-btn chat-history-action"
+                                            onClick={cancelRenameConversation}
+                                            disabled={renamingConversationId === item.id}
+                                          >
+                                            {t('Cancel')}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="chat-history-item-shell">
+                                        <button
+                                          className="chat-history-open"
+                                          onClick={() => {
+                                            if (historyLongPressTriggeredRef.current) {
+                                              historyLongPressTriggeredRef.current = false;
+                                              return;
+                                            }
+                                            restoreConversation(item.id).catch(() => {
+                                              // handled by local error state
+                                            });
+                                          }}
+                                          onKeyDown={(event) => onHistoryItemKeyDown(event, item.id)}
+                                          disabled={restoringConversationId === item.id}
+                                          type="button"
+                                        >
+                                          <span className="chat-history-title-row">
+                                            {isPinnedItem ? (
+                                              <span className="chat-history-drag-handle" aria-hidden="true">
+                                                ::
+                                              </span>
+                                            ) : null}
+                                            <span className="chat-history-title-text">
+                                              {renderConversationTitle(item.title)}
+                                            </span>
+                                          </span>
+                                          <small>{formatHistoryTimestamp(item.updated_at)}</small>
+                                        </button>
+                                        <button
+                                          className="chat-history-more"
+                                          type="button"
+                                          onClick={(event) => openHistoryContextMenuFromButton(event, item.id)}
+                                          title={t('Conversation actions')}
+                                          aria-label={t('Conversation actions')}
+                                        >
+                                          ...
+                                        </button>
+                                      </div>
+                                    )}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                  {historyContextMenu && contextMenuItem ? (
+                    <div
+                      className="chat-history-menu"
+                      style={{ left: historyContextMenu.x, top: historyContextMenu.y }}
+                      onClick={(event) => event.stopPropagation()}
+                      role="menu"
+                      aria-label={t('Conversation actions')}
+                    >
+                      {historyContextMenuActions.map((action, index) => (
+                        <button
+                          key={action}
+                          className={`chat-history-menu-item${action === 'delete' ? ' danger' : ''}${historyContextMenuActiveIndex === index ? ' active' : ''}`}
+                          onMouseEnter={() => setHistoryContextMenuActiveIndex(index)}
+                          onClick={() => executeHistoryContextAction(action)}
+                          ref={(element) => {
+                            historyMenuButtonRefs.current[index] = element;
+                          }}
+                          tabIndex={historyContextMenuActiveIndex === index ? 0 : -1}
+                          aria-selected={historyContextMenuActiveIndex === index}
+                          role="menuitem"
+                        >
+                          {getHistoryContextMenuActionLabel(action)}
+                        </button>
+                      ))}
+                      <small className="chat-history-menu-hint">{t('Keys: ↑/↓ · Enter · Esc · O/R/P/D')}</small>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </section>
+
+            <section className="chat-sidebar-section">
+              <button
+                type="button"
+                className="chat-sidebar-section-toggle"
+                onClick={() => toggleSidebarSection('quick')}
+                aria-label={quickSectionCollapsed ? t('Expand section') : t('Collapse section')}
+              >
+                <span className="chat-sidebar-section-heading">
+                  <strong>{t('Quick access')}</strong>
+                  <small>3</small>
+                </span>
+                <span className="chat-sidebar-section-chevron" aria-hidden="true">
+                  {quickSectionCollapsed ? '▸' : '▾'}
+                </span>
+              </button>
+
+              {quickSectionCollapsed ? null : (
+                <div className="chat-sidebar-section-body chat-sidebar-quick stack tight">
+                  <div className="chat-sidebar-quick-links">
+                    <Link to="/models/explore" className="chat-sidebar-quick-link">
+                      {t('Models')}
+                    </Link>
+                    <Link to="/datasets" className="chat-sidebar-quick-link">
+                      {t('Datasets')}
+                    </Link>
+                    <Link to="/training/jobs" className="chat-sidebar-quick-link">
+                      {t('Training')}
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="chat-sidebar-section">
+              <button
+                type="button"
+                className="chat-sidebar-section-toggle"
+                onClick={() => toggleSidebarSection('preferences')}
+                aria-label={preferencesSectionCollapsed ? t('Expand section') : t('Collapse section')}
+              >
+                <span className="chat-sidebar-section-heading">
+                  <strong>{t('Workspace settings')}</strong>
+                  <small>{currentUser ? '2' : '3'}</small>
+                </span>
+                <span className="chat-sidebar-section-chevron" aria-hidden="true">
+                  {preferencesSectionCollapsed ? '▸' : '▾'}
+                </span>
+              </button>
+
+              {preferencesSectionCollapsed ? null : (
+                <div className="chat-sidebar-section-body chat-sidebar-footer stack">
+                  <label className="language-switch-inline chat-language-switch chat-language-switch-sidebar">
+                    <span>{t('Language')}</span>
+                    <select
+                      value={language}
+                      onChange={(event) => setLanguage(event.target.value as 'zh-CN' | 'en-US')}
+                    >
+                      <option value="zh-CN">{t('Chinese')}</option>
+                      <option value="en-US">{t('English')}</option>
+                    </select>
+                  </label>
+                  {currentUser ? (
+                    <SessionMenu
+                      currentUser={currentUser}
+                      items={sessionMenuItems}
+                      align="start"
+                      direction="up"
+                      variant="sidebar"
+                    />
+                  ) : (
+                    <div className="chat-user-card guest">
+                      <div className="chat-user-summary">
+                        <div className="chat-user-avatar">{getInitials()}</div>
+                        <div className="stack tight">
+                          <strong>{t('guest')}</strong>
+                          <small className="muted">{t('Login')}</small>
+                        </div>
+                      </div>
+                      <div className="chat-user-actions">
+                        <Link to="/auth/login">{t('Login')}</Link>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          </div>
         </div>
 
-        <div className="chat-user-card">
-          <div className="chat-user-avatar">{getInitials(currentUser?.username)}</div>
-          <div className="stack tight">
-            <strong>{currentUser?.username || t('guest')}</strong>
-            <small className="muted">{roleLabel(currentUser?.role)}</small>
+        <div className="chat-sidebar-collapsed-rail">
+          <button
+            type="button"
+            className="chat-sidebar-rail-btn chat-sidebar-rail-control"
+            onClick={toggleSidebar}
+            aria-label={t('Expand sidebar')}
+            title={t('Expand sidebar')}
+          >
+            &gt;
+          </button>
+          <button
+            type="button"
+            className="chat-sidebar-rail-btn"
+            onClick={startNewConversation}
+            disabled={authRequired}
+            aria-label={t('+ New chat')}
+            title={t('+ New chat')}
+          >
+            +
+          </button>
+          <Link className="chat-sidebar-rail-link" to="/workspace/console" aria-label={t('Console')} title={t('Console')}>
+            C
+          </Link>
+          <Link className="chat-sidebar-rail-link" to="/models/explore" aria-label={t('Models')} title={t('Models')}>
+            M
+          </Link>
+          <Link className="chat-sidebar-rail-link" to="/datasets" aria-label={t('Datasets')} title={t('Datasets')}>
+            D
+          </Link>
+          <Link className="chat-sidebar-rail-link" to="/training/jobs" aria-label={t('Training')} title={t('Training')}>
+            T
+          </Link>
+          <Link
+            className="chat-sidebar-rail-link"
+            to="/settings"
+            aria-label={t('Settings')}
+            title={t('Settings')}
+          >
+            S
+          </Link>
+          <div className="chat-sidebar-rail-footer">
+            {currentUser ? (
+              <SessionMenu
+                currentUser={currentUser}
+                items={sessionMenuItems}
+                align="start"
+                direction="up"
+                variant="rail"
+              />
+            ) : (
+              <div className="chat-sidebar-rail-avatar" title={t('guest')}>
+                {getInitials()}
+              </div>
+            )}
           </div>
         </div>
       </aside>
@@ -1522,20 +2326,31 @@ export default function ConversationPage() {
       <div className="chat-main-area">
         <header className="chat-main-header">
           <div className="chat-main-header-row">
-            <label className="chat-model-select">
-              <span>{t('Model')}</span>
-              <select
-                value={selectedModelId}
-                onChange={(event) => setSelectedModelId(event.target.value)}
-                disabled={sending || hasActiveConversation}
+            <div className="chat-main-header-leading">
+              <button
+                type="button"
+                className="chat-sidebar-toggle"
+                onClick={toggleSidebar}
+                aria-label={sidebarToggleLabel}
+                title={sidebarToggleLabel}
               >
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name} ({model.status})
-                  </option>
-                ))}
-              </select>
-            </label>
+                {sidebarToggleToken}
+              </button>
+              <label className="chat-model-select">
+                <span>{t('Model')}</span>
+                <select
+                  value={selectedModelId}
+                  onChange={(event) => setSelectedModelId(event.target.value)}
+                  disabled={sending || hasActiveConversation}
+                >
+                  {models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name} ({model.status})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="chat-main-header-meta">
               <div className="chat-mode-chip">{t('Mode:')} {llmModeText}</div>
               <small className="chat-main-header-summary muted">
@@ -1544,6 +2359,24 @@ export default function ConversationPage() {
                   messageCount
                 })}
               </small>
+              <label className="language-switch-inline chat-language-switch">
+                <span>{t('Language')}</span>
+                <select
+                  value={language}
+                  onChange={(event) => setLanguage(event.target.value as 'zh-CN' | 'en-US')}
+                >
+                  <option value="zh-CN">{t('Chinese')}</option>
+                  <option value="en-US">{t('English')}</option>
+                </select>
+              </label>
+              {currentUser && isCompactViewport ? (
+                <SessionMenu currentUser={currentUser} items={sessionMenuItems} />
+              ) : null}
+              {currentUser ? null : (
+                <div className="chat-header-auth-links">
+                  <Link to="/auth/login">{t('Login')}</Link>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -1559,7 +2392,22 @@ export default function ConversationPage() {
 
           {error ? <StateBlock variant="error" title={t('Conversation Error')} description={error} /> : null}
 
-          {!loading && !error && models.length === 0 ? (
+          {!loading && !error && authRequired ? (
+            <StateBlock
+              variant="empty"
+              title={t('Login to use conversation workspace')}
+              description={t('Sign in to access chat history, settings, attachments, and real conversation actions.')}
+              extra={
+                <div className="chat-auth-state-actions">
+                  <Link to="/auth/login" className="entry-cta">
+                    {t('Login')}
+                  </Link>
+                </div>
+              }
+            />
+          ) : null}
+
+          {!loading && !error && !authRequired && models.length === 0 ? (
             <StateBlock
               variant="empty"
               title={t('No Available Models')}
@@ -1567,7 +2415,7 @@ export default function ConversationPage() {
             />
           ) : null}
 
-          {!loading && !error && models.length > 0 ? (
+          {!loading && !error && !authRequired && models.length > 0 ? (
             <div className="chat-message-scroll">
               {messages.length === 0 ? (
                 <div className="chat-empty-center">
@@ -1578,46 +2426,119 @@ export default function ConversationPage() {
                 </div>
               ) : (
                 <ul className="chat-message-list">
-                  {messages.map((message) => (
-                    <li
-                      key={message.id}
-                      className={message.sender === 'user' ? 'chat-message-row user' : 'chat-message-row assistant'}
-                    >
-                      <div className="chat-message-meta">
-                        <span>{message.sender === 'user' ? currentUser?.username || t('you') : t('Vistral')}</span>
-                        <small>{new Date(message.created_at).toLocaleTimeString()}</small>
-                      </div>
-                      <div className="chat-message-bubble">
-                        <p>{message.content}</p>
-                        {message.attachment_ids.length > 0 ? (
-                          <small className="muted">{t('Attachments:')} {message.attachment_ids.join(', ')}</small>
-                        ) : null}
-                        <div className="chat-message-actions row gap wrap">
-                          <button
-                            className="small-btn chat-action-btn"
-                            onClick={() => {
-                              copyMessage(message.content).catch(() => {
-                                // notice handled by helper
-                              });
-                            }}
-                          >
-                            {t('Copy')}
-                          </button>
-                          <button className="small-btn chat-action-btn" onClick={() => quoteMessage(message.content)}>
-                            {t('Reuse')}
-                          </button>
-                          {message.sender === 'assistant' ? (
+                  {messages.map((message) => {
+                    const actionMetadata = message.metadata?.conversation_action ?? null;
+                    const actionHref = actionMetadata ? resolveConversationActionHref(actionMetadata) : null;
+                    const attachmentNames = resolveMessageAttachmentNames(message);
+                    const contentParagraphs = formatMessageParagraphs(message.content);
+
+                    return (
+                      <li
+                        key={message.id}
+                        className={message.sender === 'user' ? 'chat-message-row user' : 'chat-message-row assistant'}
+                      >
+                        <div className="chat-message-meta">
+                          <span>{message.sender === 'user' ? currentUser?.username || t('you') : t('Vistral')}</span>
+                          <small>{new Date(message.created_at).toLocaleTimeString()}</small>
+                        </div>
+                        <div className="chat-message-bubble">
+                          <div className="chat-message-content">
+                            {(contentParagraphs.length > 0 ? contentParagraphs : [message.content]).map((paragraph, index) => (
+                              <p key={`${message.id}-p-${index}`} className="chat-message-paragraph">
+                                {paragraph}
+                              </p>
+                            ))}
+                          </div>
+                          {attachmentNames.length > 0 ? (
+                            <small className="muted chat-message-attachment-summary">
+                              {t('Attachments:')} {attachmentNames.join(', ')}
+                            </small>
+                          ) : null}
+                          {actionMetadata ? (
+                            <div className={`chat-message-action-card ${actionMetadata.status}`}>
+                              <div className="chat-message-action-card-header">
+                                <strong>{formatConversationActionLabel(actionMetadata.action)}</strong>
+                                <span className={`chat-message-action-status ${actionMetadata.status}`}>
+                                  {formatConversationActionStatusLabel(actionMetadata.status)}
+                                </span>
+                              </div>
+                              {actionMetadata.missing_fields.length > 0 ? (
+                                <div className="stack tight">
+                                  <small className="muted">{t('Missing Information')}</small>
+                                  <div className="chat-message-action-tags">
+                                    {actionMetadata.missing_fields.map((field) => (
+                                      <span key={`${message.id}-missing-${field}`} className="chat-message-action-tag">
+                                        {formatConversationActionFieldLabel(field)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                              {Object.keys(actionMetadata.collected_fields).length > 0 ? (
+                                <div className="stack tight">
+                                  <small className="muted">{t('Collected Information')}</small>
+                                  <ul className="chat-message-action-details">
+                                    {Object.entries(actionMetadata.collected_fields).map(([field, value]) => (
+                                      <li key={`${message.id}-collected-${field}`}>
+                                        <strong>{formatConversationActionFieldLabel(field)}:</strong> {value}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+                              {actionMetadata.suggestions && actionMetadata.suggestions.length > 0 ? (
+                                <div className="stack tight">
+                                  <small className="muted">{t('Suggestions')}</small>
+                                  <div className="chat-message-action-tags">
+                                    {actionMetadata.suggestions.map((suggestion) => (
+                                      <button
+                                        key={`${message.id}-suggestion-${suggestion}`}
+                                        type="button"
+                                        className="chat-message-action-tag chat-message-action-tag-button muted"
+                                        onClick={() => applyConversationSuggestion(actionMetadata, suggestion)}
+                                      >
+                                        {suggestion}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                              {actionHref ? (
+                                <div className="row gap wrap">
+                                  <Link className="small-btn chat-action-btn" to={actionHref}>
+                                    {t('Open Result')}
+                                  </Link>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <div className="chat-message-actions row gap wrap">
                             <button
                               className="small-btn chat-action-btn"
-                              onClick={() => quoteMessage(`Analyze further: ${message.content}`)}
+                              onClick={() => {
+                                copyMessage(message.content).catch(() => {
+                                  // notice handled by helper
+                                });
+                              }}
                             >
-                              {t('Quote')}
+                              {t('Copy')}
                             </button>
-                          ) : null}
+                            <button className="small-btn chat-action-btn" onClick={() => quoteMessage(message.content)}>
+                              {t('Reuse')}
+                            </button>
+                            {message.sender === 'assistant' ? (
+                              <button
+                                className="small-btn chat-action-btn"
+                                onClick={() => quoteMessage(`Analyze further: ${message.content}`)}
+                              >
+                                {t('Quote')}
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -1625,16 +2546,198 @@ export default function ConversationPage() {
         </section>
 
         <footer className="chat-composer-wrap">
+          {authRequired ? (
+            <section className="chat-composer-panel chat-guest-panel">
+              <strong>{t('Conversation actions are unavailable after logout.')}</strong>
+              <small className="muted">
+                {t('Use Login to reopen your chat workspace. Ask an administrator to provision another account if needed.')}
+              </small>
+            </section>
+          ) : (
           <section className="chat-composer-panel chat-simple-composer-panel">
+            {selectedAttachments.length > 0 ? (
+              <div className="chat-simple-selected-inline">
+                <ul className="chat-simple-selected-list">
+                  {selectedAttachments.map((attachment) => {
+                    const isDragging = draggingSelectedAttachmentId === attachment.id;
+                    const isDragOver =
+                      dragOverSelectedAttachmentId === attachment.id &&
+                      draggingSelectedAttachmentId !== attachment.id;
+                    const chipClasses = [
+                      'chat-simple-selected-chip',
+                      isDragging ? 'dragging' : '',
+                      isDragOver ? 'drag-over' : ''
+                    ]
+                      .filter(Boolean)
+                      .join(' ');
+
+                    return (
+                      <li
+                        key={attachment.id}
+                        className={chipClasses}
+                        draggable={!sending && selectedAttachments.length > 1}
+                        onDragStart={(event) => onSelectedAttachmentDragStart(event, attachment.id)}
+                        onDragOver={(event) => onSelectedAttachmentDragOver(event, attachment.id)}
+                        onDrop={(event) => onSelectedAttachmentDrop(event, attachment.id)}
+                        onDragEnd={onSelectedAttachmentDragEnd}
+                      >
+                        {attachment.status === 'ready' ? (
+                          <button
+                            type="button"
+                            className="chat-simple-selected-chip-main"
+                            onClick={() => openAttachment(attachment.id)}
+                            disabled={sending}
+                            title={attachment.filename}
+                          >
+                            <span className="chat-simple-selected-chip-handle" aria-hidden="true">
+                              ≡
+                            </span>
+                            <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
+                          </button>
+                        ) : (
+                          <span className="chat-simple-selected-chip-main" title={attachment.filename}>
+                            <span className="chat-simple-selected-chip-handle" aria-hidden="true">
+                              ≡
+                            </span>
+                            <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
+                          </span>
+                        )}
+                        <StatusBadge status={attachment.status} />
+                        <button
+                          type="button"
+                          className="chat-simple-selected-chip-remove"
+                          onClick={() => excludeAttachmentFromCurrentMessage(attachment)}
+                          disabled={sending}
+                          title={t('Exclude')}
+                          aria-label={t('Exclude')}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="chat-simple-selected-inline-meta">
+                  <small className="muted">{t('Draft attachments are shown only while composing this message.')}</small>
+                  {hasPendingSelectedAttachments ? (
+                    <small className="muted">{t('Wait for selected files to finish processing before sending.')}</small>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            {attachmentListExpanded ? (
+              <div className="chat-simple-attachment-tray">
+                <div className="chat-simple-attachment-toolbar">
+                  <div className="chat-simple-attachment-toolbar-actions">
+                    <button
+                      type="button"
+                      className="small-btn chat-simple-attachment-action-btn"
+                      onClick={openUploadFileDialog}
+                      disabled={uploading || sending}
+                    >
+                      {uploading ? t('Working...') : t('Upload photos and files')}
+                    </button>
+                    <button
+                      type="button"
+                      className="small-btn chat-simple-attachment-action-btn"
+                      onClick={includeAllReadyAttachments}
+                      disabled={uploading || sending || readyAttachmentIds.length === 0}
+                    >
+                      {t('Use all ready files')}
+                    </button>
+                    <button
+                      type="button"
+                      className="small-btn chat-simple-attachment-action-btn"
+                      onClick={clearCurrentAttachmentContext}
+                      disabled={uploading || sending || selectedAttachmentIds.length === 0}
+                    >
+                      {t('Clear current context')}
+                    </button>
+                  </div>
+                  <small className="muted chat-simple-attachment-toolbar-summary">
+                    {t('Attachments:')} {attachments.length} · {t('{count} selected', { count: selectedAttachmentIds.length })} ·{' '}
+                    {t('Ready: {count}', { count: attachmentStatusSummary.ready })}
+                  </small>
+                </div>
+                <small className="muted chat-simple-attachment-toolbar-summary">
+                  {t('BMP and common image/document files are supported. Keep each file under {limit}.', {
+                    limit: UPLOAD_SOFT_LIMIT_LABEL
+                  })}
+                </small>
+                {attachments.length > 0 ? (
+                  <ul className="chat-simple-attachment-list">
+                    {attachments.map((item) => {
+                      const isSelected = selectedAttachmentIdSet.has(item.id);
+
+                      return (
+                        <li
+                          key={item.id}
+                          className={`chat-simple-attachment-item${isSelected ? ' selected' : ''}`}
+                        >
+                          {item.status === 'ready' ? (
+                            <button
+                              className="chat-simple-attachment-open"
+                              onClick={() => openAttachment(item.id)}
+                              disabled={uploading || sending}
+                              title={item.filename}
+                            >
+                              {item.filename}
+                            </button>
+                          ) : (
+                            <span className="chat-simple-attachment-name" title={item.filename}>
+                              {item.filename}
+                            </span>
+                          )}
+                          <StatusBadge status={item.status} />
+                          {isSelected || item.status === 'ready' ? (
+                            <button
+                              type="button"
+                              className={`small-btn chat-simple-attachment-item-action${isSelected ? ' active' : ''}`}
+                              onClick={() =>
+                                isSelected
+                                  ? excludeAttachmentFromCurrentMessage(item)
+                                  : includeAttachmentInCurrentMessage(item)
+                              }
+                              disabled={uploading || sending || (!isSelected && item.status !== 'ready')}
+                            >
+                              {isSelected ? t('Exclude') : t('Include')}
+                            </button>
+                          ) : null}
+                          <button
+                            className="chat-simple-attachment-delete"
+                            onClick={() => removeAttachment(item.id)}
+                            disabled={uploading || sending}
+                            title={t('Delete')}
+                            aria-label={t('Delete')}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <small className="muted chat-simple-selected-empty">
+                    {t('No files yet. Use + to upload files for this draft or reopen recent conversation files.')}
+                  </small>
+                )}
+              </div>
+            ) : null}
             <div className="chat-simple-composer-row">
               <button
                 type="button"
-                className="chat-attachment-plus-btn chat-simple-plus-btn"
-                onClick={openUploadFileDialog}
-                disabled={uploading || sending}
-                aria-label={t('Upload')}
+                className={`chat-attachment-plus-btn chat-simple-plus-btn${
+                  attachmentListExpanded || selectedAttachments.length > 0 ? ' active' : ''
+                }`}
+                onClick={toggleAttachmentTray}
+                disabled={sending || loading || authRequired}
+                aria-label={attachmentListExpanded ? t('Hide') : t('Attachment options')}
+                title={attachmentListExpanded ? t('Hide') : t('Attachment options')}
+                aria-expanded={attachmentListExpanded}
               >
-                +
+                <span className="chat-simple-plus-icon" aria-hidden="true">
+                  +
+                </span>
               </button>
               <textarea
                 className="chat-simple-input"
@@ -1644,7 +2747,7 @@ export default function ConversationPage() {
                 onKeyDown={onTextareaKeyDown}
                 rows={1}
                 placeholder={t('Message Vistral...')}
-                disabled={sending || loading || models.length === 0}
+                disabled={sending || loading || authRequired || models.length === 0}
               />
               <button
                 className={`chat-simple-send-btn${canSend ? ' active' : ''}`}
@@ -1653,7 +2756,9 @@ export default function ConversationPage() {
                 aria-label={hasActiveConversation ? t('Send') : t('Start')}
                 title={hasActiveConversation ? t('Send') : t('Start')}
               >
-                ↑
+                <span className="chat-simple-send-icon" aria-hidden="true">
+                  ↑
+                </span>
               </button>
               <input
                 ref={uploadFileInputRef}
@@ -1661,7 +2766,7 @@ export default function ConversationPage() {
                 multiple
                 className="chat-hidden-file-input"
                 onChange={onUploadFileInputChange}
-                disabled={uploading || sending}
+                disabled={uploading || sending || authRequired}
               />
             </div>
             {notice ? (
@@ -1669,73 +2774,8 @@ export default function ConversationPage() {
                 <small className="muted">{notice}</small>
               </div>
             ) : null}
-            {attachments.length > 0 ? (
-              <div className="chat-simple-attachment-section">
-                <button
-                  type="button"
-                  className="chat-simple-attachment-pill"
-                  onClick={() => setAttachmentListExpanded((previous) => !previous)}
-                  disabled={uploading || sending}
-                  aria-expanded={attachmentListExpanded}
-                  title={`${attachmentSummaryTitle} · ${attachmentListExpanded ? t('Hide') : t('Show')}`}
-                  aria-label={`${attachmentSummaryTitle} · ${attachmentListExpanded ? t('Hide') : t('Show')}`}
-                >
-                  <span className="chat-simple-attachment-pill-main">
-                    {t('Attachments:')} {attachments.length}
-                  </span>
-                  <span className="chat-simple-attachment-indicators" aria-hidden="true">
-                    {attachmentStatusSummary.ready > 0 ? (
-                      <span className="chat-simple-attachment-dot ready" />
-                    ) : null}
-                    {attachmentStatusSummary.uploading > 0 ? (
-                      <span className="chat-simple-attachment-dot uploading" />
-                    ) : null}
-                    {attachmentStatusSummary.processing > 0 ? (
-                      <span className="chat-simple-attachment-dot processing" />
-                    ) : null}
-                    {attachmentStatusSummary.error > 0 ? (
-                      <span className="chat-simple-attachment-dot error" />
-                    ) : null}
-                  </span>
-                  <span className="chat-simple-attachment-pill-action" aria-hidden="true">
-                    {attachmentListExpanded ? '▾' : '▸'}
-                  </span>
-                </button>
-                {attachmentListExpanded ? (
-                  <ul className="chat-simple-attachment-list">
-                    {attachments.map((item) => (
-                      <li key={item.id} className="chat-simple-attachment-item">
-                        {item.status === 'ready' ? (
-                          <button
-                            className="chat-simple-attachment-open"
-                            onClick={() => openAttachment(item.id)}
-                            disabled={uploading || sending}
-                            title={item.filename}
-                          >
-                            {item.filename}
-                          </button>
-                        ) : (
-                          <span className="chat-simple-attachment-name" title={item.filename}>
-                            {item.filename}
-                          </span>
-                        )}
-                        <StatusBadge status={item.status} />
-                        <button
-                          className="chat-simple-attachment-delete"
-                          onClick={() => removeAttachment(item.id)}
-                          disabled={uploading || sending}
-                          title={t('Delete')}
-                          aria-label={t('Delete')}
-                        >
-                          ×
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
           </section>
+          )}
         </footer>
       </div>
     </section>
