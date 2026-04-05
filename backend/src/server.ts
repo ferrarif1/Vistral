@@ -729,6 +729,14 @@ const server = createServer(async (req, res) => {
 
       const body = (await readBody(req)) as {
         status: 'approved' | 'rejected';
+        review_reason_code?:
+          | 'box_mismatch'
+          | 'label_error'
+          | 'text_error'
+          | 'missing_object'
+          | 'polygon_issue'
+          | 'other'
+          | null;
         quality_score?: number | null;
         review_comment?: string | null;
       };
@@ -963,7 +971,7 @@ const server = createServer(async (req, res) => {
         task_type: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
         framework: 'paddleocr' | 'doctr' | 'yolo';
         dataset_id: string;
-        dataset_version_id?: string | null;
+        dataset_version_id: string;
         base_model: string;
         config: Record<string, string>;
       };

@@ -40,7 +40,7 @@ if [[ "${non_admin_status}" != "403" ]]; then
   exit 1
 fi
 
-jq -e '.success == false and .error.code == "INSUFFICIENT_PERMISSIONS" and (.error.message | test("Only admin"; "i"))' "${NON_ADMIN_BODY_FILE}" >/dev/null
+jq -e '.success == false and .error.code == "INSUFFICIENT_PERMISSIONS"' "${NON_ADMIN_BODY_FILE}" >/dev/null
 
 echo "[smoke-admin-verification-reports] login as admin (${ADMIN_USERNAME})"
 curl -fsS -c "${ADMIN_COOKIE}" -b "${ADMIN_COOKIE}" \

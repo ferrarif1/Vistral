@@ -65,12 +65,43 @@
   - 记录 `missing_fields`、`collected_fields`、可选 `suggestions` 与已创建实体引用，供聊天时间线渲染紧凑执行卡片
 
 ### TrainingJob / InferenceRun（补充）
+- `training_jobs.dataset_version_id`
+  - 训练任务绑定的数据集版本快照
+  - 仅为兼容旧数据允许为空；新建训练任务必须保存明确的 `dataset_version_id`
+- 训练启动准备约束：
+  - 所选数据集必须为 `ready`
+  - 所选数据集版本 `split_summary.train > 0`
+  - 所选数据集版本 `annotation_coverage > 0`
 - `training_jobs.execution_mode`：
   - `simulated`
   - `local_command`
   - `unknown`
 - `inference_runs.execution_source`：
   - 保存当前推理来源标记（例如 `yolo_runtime`、`yolo_local_command`、`mock_fallback`）
+- 推理反馈规则：
+  - `POST /inference/runs/{id}/feedback` 的目标数据集 `task_type` 必须与推理任务 `task_type` 一致
+  - 不允许跨任务类型（例如 detection 结果回流到 ocr 数据集）
+
+### Dataset / Annotation（补充）
+- `DatasetItem`
+  - `split`：`train | val | test | unassigned`
+  - `status`：`uploading | processing | ready | error`
+- `Annotation`
+  - `source`：`manual | import | pre_annotation`
+  - `status`：`unannotated | in_progress | annotated | in_review | approved | rejected`
+- `AnnotationReview`
+  - `status`：`approved | rejected`
+  - `review_reason_code`：`box_mismatch | label_error | text_error | missing_object | polygon_issue | other | null`
+  - `quality_score`：可空
+  - `review_comment`：可空
+
+规则：
+- 当 `AnnotationReview.status=rejected` 时，`review_reason_code` 必填
+- 当 `status=approved` 时，`review_reason_code=null`
+- 标注列表/详情返回的 `latest_review` 需要持续携带最近一次审核上下文，供返工界面显示
+- 只有当前仍处于可编辑状态（`unannotated`、`in_progress`、`annotated`）时，才允许通过 upsert 路径直接保存标注
+- 条目一旦进入 `in_review`，后续只能通过专用审核接口进入 `approved` 或 `rejected`
+- `approved` 在 upsert 路径下保持只读
 
 ### ApprovalRequest
 - 审批请求主体（提交人、审核人、状态、时间戳）

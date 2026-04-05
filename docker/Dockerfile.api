@@ -1,5 +1,5 @@
-ARG NODE_BASE_IMAGE=node:20-alpine
-FROM ${NODE_BASE_IMAGE}
+ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-alpine
+FROM ${NODE_BASE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -9,10 +9,19 @@ RUN npm ci
 COPY backend ./backend
 COPY shared ./shared
 COPY tsconfig*.json ./
+COPY tsconfig.api.json ./
+
+RUN npm run build:api
+
+FROM ${NODE_BASE_IMAGE} AS runtime
+
+WORKDIR /app
+
+COPY --from=builder /app/build/api ./build/api
 
 ENV API_PORT=8787
 ENV API_HOST=0.0.0.0
 
 EXPOSE 8787
 
-CMD ["./node_modules/.bin/tsx", "backend/src/server.ts"]
+CMD ["node", "build/api/backend/src/server.js"]

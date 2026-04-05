@@ -31,6 +31,7 @@ import { hashPassword, verifyPassword } from './auth';
 import { checkRuntimeConnectivity, getTrainerByFramework } from './runtimeAdapters';
 import type {
   AnnotationRecord,
+  AnnotationReviewReasonCode,
   AnnotationReviewRecord,
   AnnotationWithReview,
   AnnotationStatus,
@@ -1099,6 +1100,41 @@ const normalizeSearchToken = (value: string): string =>
 const formatDatasetSuggestion = (dataset: DatasetRecord): string =>
   `${dataset.name} (${dataset.id})`;
 
+const hasTrainingReadyTrainSplit = (version: DatasetVersionRecord): boolean =>
+  version.split_summary.train > 0;
+
+const hasTrainingReadyAnnotationCoverage = (version: DatasetVersionRecord): boolean =>
+  version.annotation_coverage > 0;
+
+const isDatasetVersionTrainingReady = (version: DatasetVersionRecord): boolean =>
+  hasTrainingReadyTrainSplit(version) && hasTrainingReadyAnnotationCoverage(version);
+
+const listDatasetVersionsForTraining = (datasetId: string): DatasetVersionRecord[] =>
+  [...datasetVersions]
+    .filter((version) => version.dataset_id === datasetId)
+    .filter((version) => isDatasetVersionTrainingReady(version))
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+
+const formatDatasetVersionSuggestion = (version: DatasetVersionRecord): string =>
+  `${version.version_name} (${version.id})`;
+
+const findDatasetVersionForTraining = (
+  datasetId: string,
+  reference: string
+): DatasetVersionRecord | null => {
+  const normalizedReference = normalizeSearchToken(reference);
+  if (!normalizedReference) {
+    return null;
+  }
+
+  const candidates = listDatasetVersionsForTraining(datasetId);
+  return (
+    candidates.find((version) => version.id.toLowerCase() === normalizedReference) ??
+    candidates.find((version) => normalizeSearchToken(version.version_name) === normalizedReference) ??
+    null
+  );
+};
+
 const findDatasetByReference = (
   reference: string,
   currentUser: User
@@ -1257,6 +1293,8 @@ const resolveCreateTrainingJobAction = async (
   currentUser: User,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution> => {
+  const inferredDatasetVersionId = inferDatasetVersionIdFromText(content);
+  const inferredDatasetReference = inferDatasetReferenceFromText(content);
   const numericFields = {
     ...(pendingAction?.collected_fields ?? {}),
     ...inferNumericConfigFromText(content)
@@ -1267,9 +1305,11 @@ const resolveCreateTrainingJobAction = async (
     framework: inferFrameworkFromText(content) ?? pendingAction?.collected_fields.framework ?? '',
     name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
     dataset_reference:
-      inferDatasetReferenceFromText(content) || pendingAction?.collected_fields.dataset_reference || '',
+      (inferredDatasetVersionId && inferredDatasetReference === inferredDatasetVersionId
+        ? ''
+        : inferredDatasetReference) || pendingAction?.collected_fields.dataset_reference || '',
     dataset_version_id:
-      inferDatasetVersionIdFromText(content) || pendingAction?.collected_fields.dataset_version_id || '',
+      inferredDatasetVersionId || pendingAction?.collected_fields.dataset_version_id || '',
     base_model: inferBaseModelFromText(content) || pendingAction?.collected_fields.base_model || '',
     epochs: numericFields.epochs ?? '',
     batch_size: numericFields.batch_size ?? '',
@@ -1390,6 +1430,64 @@ const resolveCreateTrainingJobAction = async (
     };
   }
 
+  const datasetVersionSuggestions = listDatasetVersionsForTraining(dataset.id)
+    .slice(0, 5)
+    .map(formatDatasetVersionSuggestion);
+
+  if (datasetVersionSuggestions.length === 0) {
+    const summary = buildActionSummary(
+      'create_training_job',
+      'requires_input',
+      content,
+      hasChineseText(content)
+        ? '当前数据集没有满足训练条件的版本，请先创建版本并确保 train 切分与标注覆盖率都大于 0。'
+        : 'selected dataset has no training-ready version yet. Please create a dataset version with train split and positive annotation coverage.'
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields: ['dataset_version_id']
+      })
+    };
+  }
+
+  if (!collectedFields.dataset_version_id) {
+    const summary = buildActionSummary(
+      'create_training_job',
+      'requires_input',
+      content,
+      hasChineseText(content)
+        ? '请指定要训练的数据集版本。'
+        : 'please specify the dataset version snapshot to train on.'
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields: ['dataset_version_id'],
+        suggestions: datasetVersionSuggestions
+      })
+    };
+  }
+
+  const datasetVersion = findDatasetVersionForTraining(dataset.id, collectedFields.dataset_version_id);
+  if (!datasetVersion) {
+    const summary = buildActionSummary(
+      'create_training_job',
+      'requires_input',
+      content,
+      hasChineseText(content)
+        ? '指定的数据集版本不可用，请从建议列表中选择一个版本。'
+        : 'dataset version is unavailable. Please choose one version from the suggestions.'
+    );
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields: ['dataset_version_id'],
+        suggestions: datasetVersionSuggestions
+      })
+    };
+  }
+
   const finalFramework =
     frameworkCandidate ?? (taskTypeCandidate === 'ocr' ? 'paddleocr' : 'yolo');
   const finalName =
@@ -1409,7 +1507,7 @@ const resolveCreateTrainingJobAction = async (
       task_type: taskTypeCandidate,
       framework: finalFramework,
       dataset_id: dataset.id,
-      dataset_version_id: collectedFields.dataset_version_id || null,
+      dataset_version_id: datasetVersion.id,
       base_model: finalBaseModel,
       config: finalConfig
     });
@@ -1417,6 +1515,7 @@ const resolveCreateTrainingJobAction = async (
       ...collectedFields,
       dataset_id: dataset.id,
       dataset_name: dataset.name,
+      dataset_version_id: datasetVersion.id,
       task_type: taskTypeCandidate,
       framework: finalFramework,
       name: created.name,
@@ -1736,6 +1835,33 @@ const canTransitionAnnotationStatus = (from: AnnotationStatus, to: AnnotationSta
 
   return annotationTransitionMap[from].includes(to);
 };
+
+const annotationEditableStatuses = new Set<AnnotationStatus>(['unannotated', 'in_progress', 'annotated']);
+
+const canUpsertAnnotationStatus = (from: AnnotationStatus, to: AnnotationStatus): boolean => {
+  if (from === 'rejected') {
+    return to === 'in_progress';
+  }
+
+  if (!annotationEditableStatuses.has(from) || !annotationEditableStatuses.has(to)) {
+    return false;
+  }
+
+  if (from === to) {
+    return true;
+  }
+
+  return annotationTransitionMap[from].includes(to);
+};
+
+const annotationReviewReasonCodes = new Set<AnnotationReviewReasonCode>([
+  'box_mismatch',
+  'label_error',
+  'text_error',
+  'missing_object',
+  'polygon_issue',
+  'other'
+]);
 
 const findDatasetItem = (datasetId: string, itemId: string): DatasetItemRecord => {
   const found = datasetItems.find((item) => item.id === itemId && item.dataset_id === datasetId);
@@ -5590,7 +5716,7 @@ export async function upsertDatasetAnnotation(
     };
   }
 
-  if (!canTransitionAnnotationStatus(existing.status, input.status)) {
+  if (!canUpsertAnnotationStatus(existing.status, input.status)) {
     throw new Error(`Invalid annotation transition: ${existing.status} -> ${input.status}.`);
   }
 
@@ -5675,6 +5801,23 @@ export async function reviewDatasetAnnotation(
     throw new Error(`Invalid annotation transition: ${annotation.status} -> ${nextStatus}.`);
   }
 
+  const normalizedReviewReasonCode =
+    typeof input.review_reason_code === 'string' && input.review_reason_code.trim()
+      ? input.review_reason_code.trim()
+      : null;
+
+  if (normalizedReviewReasonCode && !annotationReviewReasonCodes.has(normalizedReviewReasonCode as AnnotationReviewReasonCode)) {
+    throw new Error('Invalid review_reason_code.');
+  }
+
+  if (nextStatus === 'rejected' && !normalizedReviewReasonCode) {
+    throw new Error('Rejected review must include review_reason_code.');
+  }
+
+  if (nextStatus === 'approved' && normalizedReviewReasonCode) {
+    throw new Error('Approved review cannot include review_reason_code.');
+  }
+
   annotation.status = nextStatus;
   annotation.updated_at = now();
 
@@ -5683,15 +5826,17 @@ export async function reviewDatasetAnnotation(
     annotation_id: annotation.id,
     reviewer_user_id: currentUser.id,
     status: input.status,
+    review_reason_code: nextStatus === 'rejected' ? (normalizedReviewReasonCode as AnnotationReviewReasonCode) : null,
     quality_score: input.quality_score ?? null,
-    review_comment: input.review_comment ?? null,
+    review_comment: input.review_comment?.trim() || null,
     created_at: now()
   };
   annotationReviews.unshift(review);
 
   logAudit('annotation_reviewed', 'AnnotationReview', review.id, {
     annotation_id: annotation.id,
-    status: review.status
+    status: review.status,
+    review_reason_code: review.review_reason_code ?? ''
   });
 
   return {
@@ -5971,9 +6116,33 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
   await delay(120);
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(input.dataset_id, currentUser);
+  const datasetVersionId = input.dataset_version_id?.trim() ?? '';
 
   if (dataset.task_type !== input.task_type) {
     throw new Error('Dataset task_type does not match training task_type.');
+  }
+
+  if (!datasetVersionId) {
+    throw new Error('Dataset version is required for new training jobs.');
+  }
+
+  if (dataset.status !== 'ready') {
+    throw new Error('Selected dataset must be ready before creating a training job.');
+  }
+
+  const datasetVersion = datasetVersions.find(
+    (version) => version.id === datasetVersionId && version.dataset_id === dataset.id
+  );
+  if (!datasetVersion) {
+    throw new Error('Dataset version not found for selected dataset.');
+  }
+
+  if (datasetVersion.split_summary.train <= 0) {
+    throw new Error('Selected dataset version must include at least one train split item.');
+  }
+
+  if (datasetVersion.annotation_coverage <= 0) {
+    throw new Error('Selected dataset version must include annotation coverage before launch.');
   }
 
   const trainer = getTrainerByFramework(input.framework);
@@ -5993,7 +6162,7 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     framework: input.framework,
     status: 'draft',
     dataset_id: dataset.id,
-    dataset_version_id: input.dataset_version_id ?? null,
+    dataset_version_id: datasetVersion.id,
     base_model: input.base_model.trim(),
     config: input.config,
     execution_mode: 'unknown',
@@ -6009,7 +6178,8 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
   trainingJobs.unshift(created);
   logAudit('training_job_created', 'TrainingJob', created.id, {
     framework: created.framework,
-    task_type: created.task_type
+    task_type: created.task_type,
+    dataset_version_id: created.dataset_version_id ?? ''
   });
 
   scheduleTrainingLifecycle(created.id);
@@ -6391,6 +6561,9 @@ export async function sendInferenceFeedback(input: InferenceFeedbackInput): Prom
 
   assertModelVersionAccess(run.model_version_id, currentUser);
   const dataset = assertDatasetAccess(input.dataset_id, currentUser);
+  if (dataset.task_type !== run.task_type) {
+    throw new Error('Feedback dataset task_type must match inference run task_type.');
+  }
   const reason = input.reason.trim() || 'feedback';
 
   run.feedback_dataset_id = dataset.id;

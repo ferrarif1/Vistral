@@ -62,11 +62,30 @@ if [[ -z "${csrf_token}" ]]; then
   exit 1
 fi
 
+datasets_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets")"
+detection_dataset_id="$(echo "${datasets_resp}" | jq -r '.data[] | select(.task_type=="detection" and .status=="ready") | .id' | head -n 1)"
+if [[ -z "${detection_dataset_id}" ]]; then
+  detection_dataset_id="$(echo "${datasets_resp}" | jq -r '.data[] | select(.task_type=="detection") | .id' | head -n 1)"
+fi
+if [[ -z "${detection_dataset_id}" ]]; then
+  echo "[smoke-training-metrics-export] no detection dataset found."
+  echo "${datasets_resp}"
+  exit 1
+fi
+
+detection_versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${detection_dataset_id}/versions")"
+detection_dataset_version_id="$(echo "${detection_versions_resp}" | jq -r '.data[] | select((.split_summary.train // 0) > 0 and (.annotation_coverage // 0) > 0) | .id' | head -n 1)"
+if [[ -z "${detection_dataset_version_id}" ]]; then
+  echo "[smoke-training-metrics-export] no trainable detection dataset version found."
+  echo "${detection_versions_resp}"
+  exit 1
+fi
+
 train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d '{"name":"metrics-export-test","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"9","batch_size":"2","learning_rate":"0.0007"}}')"
+  -d "{\"name\":\"metrics-export-test\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${detection_dataset_id}\",\"dataset_version_id\":\"${detection_dataset_version_id}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"9\",\"batch_size\":\"2\",\"learning_rate\":\"0.0007\"}}")"
 job_id="$(echo "${train_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${job_id}" ]]; then
   echo "[smoke-training-metrics-export] training job create failed."

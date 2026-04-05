@@ -30,6 +30,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+wait_inference_attachment_ready() {
+  local attachment_id="$1"
+  local list_resp=""
+  local attachment_status=""
+
+  for _ in {1..120}; do
+    list_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/inference")"
+    attachment_status="$(echo "${list_resp}" | jq -r --arg id "${attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
+    if [[ "${attachment_status}" == "ready" ]]; then
+      return 0
+    fi
+    if [[ "${attachment_status}" == "error" ]]; then
+      echo "[smoke-runner-real-fallback] attachment entered error state."
+      echo "${list_resp}"
+      exit 1
+    fi
+    sleep 0.25
+  done
+
+  echo "[smoke-runner-real-fallback] attachment not ready in time."
+  echo "${list_resp}"
+  exit 1
+}
+
 cd "${ROOT_DIR}"
 
 APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
@@ -64,11 +88,49 @@ if [[ -z "${csrf_token}" ]]; then
   exit 1
 fi
 
+model_versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/model-versions")"
+detection_model_version_id="$(echo "${model_versions_resp}" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
+ocr_model_version_id="$(echo "${model_versions_resp}" | jq -r '.data[] | select(.task_type=="ocr" and .framework=="paddleocr" and .status=="registered") | .id' | head -n 1)"
+if [[ -z "${ocr_model_version_id}" ]]; then
+  ocr_model_version_id="$(echo "${model_versions_resp}" | jq -r '.data[] | select(.task_type=="ocr" and .status=="registered") | .id' | head -n 1)"
+fi
+if [[ -z "${detection_model_version_id}" || -z "${ocr_model_version_id}" ]]; then
+  echo "[smoke-runner-real-fallback] required detection/ocr model versions not found."
+  echo "${model_versions_resp}"
+  exit 1
+fi
+
+detection_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/files/inference/upload" \
+  -d "{\"filename\":\"runner-fallback-detection-$(date +%s).jpg\"}")"
+detection_attachment_id="$(echo "${detection_upload_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${detection_attachment_id}" ]]; then
+  echo "[smoke-runner-real-fallback] failed to upload detection attachment."
+  echo "${detection_upload_resp}"
+  exit 1
+fi
+wait_inference_attachment_ready "${detection_attachment_id}"
+
+ocr_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/files/inference/upload" \
+  -d "{\"filename\":\"runner-fallback-ocr-$(date +%s).jpg\"}")"
+ocr_attachment_id="$(echo "${ocr_upload_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${ocr_attachment_id}" ]]; then
+  echo "[smoke-runner-real-fallback] failed to upload OCR attachment."
+  echo "${ocr_upload_resp}"
+  exit 1
+fi
+wait_inference_attachment_ready "${ocr_attachment_id}"
+
 yolo_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/inference/runs" \
-  -d '{"model_version_id":"mv-2","input_attachment_id":"f-1","task_type":"detection"}')"
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${detection_attachment_id}\",\"task_type\":\"detection\"}")"
 yolo_source="$(echo "${yolo_resp}" | jq -r '.data.execution_source // empty')"
 yolo_mode="$(echo "${yolo_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 yolo_reason="$(echo "${yolo_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
@@ -92,7 +154,7 @@ paddle_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/inference/runs" \
-  -d '{"model_version_id":"mv-1","input_attachment_id":"f-3","task_type":"ocr"}')"
+  -d "{\"model_version_id\":\"${ocr_model_version_id}\",\"input_attachment_id\":\"${ocr_attachment_id}\",\"task_type\":\"ocr\"}")"
 paddle_source="$(echo "${paddle_resp}" | jq -r '.data.execution_source // empty')"
 paddle_mode="$(echo "${paddle_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 paddle_reason="$(echo "${paddle_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"

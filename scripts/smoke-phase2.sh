@@ -4,8 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8797}"
-BASE_URL="http://127.0.0.1:${API_PORT}"
+BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
+START_API="${START_API:-true}"
+AUTH_USERNAME="${AUTH_USERNAME:-}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-}"
+EXPECT_RUNTIME_FALLBACK="${EXPECT_RUNTIME_FALLBACK:-true}"
 PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 YOLO_RUNTIME_ENDPOINT_FOR_SMOKE="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
@@ -24,23 +29,62 @@ cleanup() {
 
 trap cleanup EXIT
 
-API_PORT="${API_PORT}" \
-PADDLEOCR_RUNTIME_ENDPOINT="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
-DOCTR_RUNTIME_ENDPOINT="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
-YOLO_RUNTIME_ENDPOINT="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE}" \
-npm run dev:api >"$LOG_FILE" 2>&1 &
-API_PID=$!
+wait_attachment_ready() {
+  local list_url="$1"
+  local attachment_id="$2"
+  local label="$3"
+  local list_resp=""
+  local attachment_status=""
 
-for _ in $(seq 1 30); do
-  if curl -sS "${BASE_URL}/api/health" >/dev/null 2>&1; then
-    break
+  for _ in $(seq 1 120); do
+    list_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${list_url}")"
+    attachment_status="$(echo "${list_resp}" | jq -r --arg id "${attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
+
+    if [[ "${attachment_status}" == "ready" ]]; then
+      return 0
+    fi
+
+    if [[ "${attachment_status}" == "error" ]]; then
+      echo "[smoke-phase2] ${label} attachment entered error state"
+      echo "${list_resp}"
+      exit 1
+    fi
+
+    sleep 0.25
+  done
+
+  echo "[smoke-phase2] ${label} attachment not ready in time"
+  echo "${list_resp}"
+  exit 1
+}
+
+wait_for_health() {
+  for _ in $(seq 1 60); do
+    if curl -sS "${BASE_URL}/api/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+if [[ "${START_API}" == "true" ]]; then
+  API_HOST="${API_HOST}" \
+  API_PORT="${API_PORT}" \
+  PADDLEOCR_RUNTIME_ENDPOINT="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
+  DOCTR_RUNTIME_ENDPOINT="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
+  YOLO_RUNTIME_ENDPOINT="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE}" \
+  npm run dev:api >"$LOG_FILE" 2>&1 &
+  API_PID=$!
+fi
+
+if ! wait_for_health; then
+  if [[ "${START_API}" == "true" ]]; then
+    echo "[smoke-phase2] API failed to start"
+    cat "$LOG_FILE"
+  else
+    echo "[smoke-phase2] API is unreachable at ${BASE_URL}"
   fi
-  sleep 0.2
-done
-
-if ! curl -sS "${BASE_URL}/api/health" >/dev/null 2>&1; then
-  echo "[smoke-phase2] API failed to start"
-  cat "$LOG_FILE"
   exit 1
 fi
 
@@ -50,6 +94,32 @@ if [[ -z "$csrf_token" ]]; then
   echo "[smoke-phase2] Failed to obtain CSRF token"
   echo "$csrf_payload"
   exit 1
+fi
+
+if [[ -n "${AUTH_USERNAME}" ]]; then
+  if [[ -z "${AUTH_PASSWORD}" ]]; then
+    echo "[smoke-phase2] AUTH_PASSWORD is required when AUTH_USERNAME is set"
+    exit 1
+  fi
+
+  login_response="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -X POST "${BASE_URL}/api/auth/login" \
+    -d "{\"username\":\"${AUTH_USERNAME}\",\"password\":\"${AUTH_PASSWORD}\"}")"
+  login_success="$(echo "$login_response" | jq -r '.success // false')"
+  if [[ "${login_success}" != "true" ]]; then
+    echo "[smoke-phase2] login failed for AUTH_USERNAME=${AUTH_USERNAME}"
+    echo "$login_response"
+    exit 1
+  fi
+
+  csrf_payload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/auth/csrf")"
+  csrf_token="$(echo "$csrf_payload" | jq -r '.data.csrf_token // empty')"
+  if [[ -z "$csrf_token" ]]; then
+    echo "[smoke-phase2] Failed to refresh CSRF token after login"
+    echo "$csrf_payload"
+    exit 1
+  fi
 fi
 
 create_dataset_payload='{"name":"Segmentation Smoke","description":"seg workflow smoke","task_type":"segmentation","label_schema":{"classes":["region"]}}'
@@ -115,8 +185,15 @@ upsert_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
 
 saved_status="$(echo "$upsert_result" | jq -r '.data.status // empty')"
+annotation_id="$(echo "$upsert_result" | jq -r '.data.id // empty')"
 if [[ "$saved_status" != "annotated" ]]; then
   echo "[smoke-phase2] Annotation upsert did not reach expected status"
+  echo "$upsert_result"
+  exit 1
+fi
+
+if [[ -z "$annotation_id" ]]; then
+  echo "[smoke-phase2] Annotation id missing after upsert"
   echo "$upsert_result"
   exit 1
 fi
@@ -129,7 +206,470 @@ if [[ "$polygon_count" -lt 1 ]]; then
   exit 1
 fi
 
-inference_request='{"model_version_id":"mv-2","input_attachment_id":"f-1","task_type":"detection"}'
+invalid_direct_review_transition_payload="$(cat <<JSON
+{
+  "dataset_item_id": "$dataset_item_id",
+  "task_type": "segmentation",
+  "source": "manual",
+  "status": "in_review",
+  "payload": {
+    "boxes": [
+      {"id":"box-1","x":40,"y":55,"width":120,"height":95,"label":"region-1"}
+    ],
+    "polygons": [
+      {"id":"poly-1","label":"tampered-direct-submit","points":[{"x":50,"y":60},{"x":180,"y":65},{"x":170,"y":145},{"x":60,"y":150}]}
+    ]
+  }
+}
+JSON
+)"
+
+invalid_direct_review_transition_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$invalid_direct_review_transition_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+invalid_direct_review_transition_success="$(echo "$invalid_direct_review_transition_result" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+invalid_direct_review_transition_error_code="$(echo "$invalid_direct_review_transition_result" | jq -r '.error.code // empty')"
+if [[ "$invalid_direct_review_transition_success" != "false" || "$invalid_direct_review_transition_error_code" != "INVALID_STATE_TRANSITION" ]]; then
+  echo "[smoke-phase2] Annotated annotation was incorrectly allowed to enter in_review via upsert"
+  echo "$invalid_direct_review_transition_result"
+  exit 1
+fi
+
+annotation_list_after_invalid_direct_review_transition="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+status_after_invalid_direct_review_transition="$(echo "$annotation_list_after_invalid_direct_review_transition" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .status // empty')"
+polygon_label_after_invalid_direct_review_transition="$(echo "$annotation_list_after_invalid_direct_review_transition" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .payload.polygons[0].label // empty')"
+if [[ "$status_after_invalid_direct_review_transition" != "annotated" || "$polygon_label_after_invalid_direct_review_transition" != "region-1" ]]; then
+  echo "[smoke-phase2] Failed upsert mutated annotated payload or status before submit-review"
+  echo "$annotation_list_after_invalid_direct_review_transition"
+  exit 1
+fi
+
+submit_review_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H "x-csrf-token: $csrf_token" \
+  -X POST \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations/${annotation_id}/submit-review")"
+submitted_status="$(echo "$submit_review_result" | jq -r '.data.status // empty')"
+if [[ "$submitted_status" != "in_review" ]]; then
+  echo "[smoke-phase2] Annotation did not reach in_review after submit-review"
+  echo "$submit_review_result"
+  exit 1
+fi
+
+invalid_in_review_upsert_payload="$(cat <<JSON
+{
+  "dataset_item_id": "$dataset_item_id",
+  "task_type": "segmentation",
+  "source": "manual",
+  "status": "in_review",
+  "payload": {
+    "boxes": [
+      {"id":"box-1","x":40,"y":55,"width":120,"height":95,"label":"region-1"}
+    ],
+    "polygons": [
+      {"id":"poly-1","label":"tampered-in-review","points":[{"x":50,"y":60},{"x":180,"y":65},{"x":170,"y":145},{"x":60,"y":150}]}
+    ]
+  }
+}
+JSON
+)"
+
+invalid_in_review_upsert_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$invalid_in_review_upsert_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+invalid_in_review_upsert_success="$(echo "$invalid_in_review_upsert_result" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+invalid_in_review_upsert_error_code="$(echo "$invalid_in_review_upsert_result" | jq -r '.error.code // empty')"
+if [[ "$invalid_in_review_upsert_success" != "false" || "$invalid_in_review_upsert_error_code" != "INVALID_STATE_TRANSITION" ]]; then
+  echo "[smoke-phase2] In-review annotation was incorrectly editable through upsert"
+  echo "$invalid_in_review_upsert_result"
+  exit 1
+fi
+
+annotation_list_after_invalid_in_review_upsert="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+status_after_invalid_in_review_upsert="$(echo "$annotation_list_after_invalid_in_review_upsert" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .status // empty')"
+polygon_label_after_invalid_in_review_upsert="$(echo "$annotation_list_after_invalid_in_review_upsert" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .payload.polygons[0].label // empty')"
+if [[ "$status_after_invalid_in_review_upsert" != "in_review" || "$polygon_label_after_invalid_in_review_upsert" != "region-1" ]]; then
+  echo "[smoke-phase2] Failed upsert mutated in_review payload or status"
+  echo "$annotation_list_after_invalid_in_review_upsert"
+  exit 1
+fi
+
+invalid_reject_review_payload='{"status":"rejected","quality_score":0.5,"review_comment":"missing reason should fail"}'
+invalid_reject_review_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$invalid_reject_review_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations/${annotation_id}/review")"
+invalid_reject_review_success="$(echo "$invalid_reject_review_result" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+invalid_reject_review_error_code="$(echo "$invalid_reject_review_result" | jq -r '.error.code // empty')"
+invalid_reject_review_error_message="$(echo "$invalid_reject_review_result" | jq -r '.error.message // empty')"
+if [[ "$invalid_reject_review_success" != "false" || "$invalid_reject_review_error_code" != "VALIDATION_ERROR" || "$invalid_reject_review_error_message" != *"review_reason_code"* ]]; then
+  echo "[smoke-phase2] Rejected review without reason was not blocked as expected"
+  echo "$invalid_reject_review_result"
+  exit 1
+fi
+
+annotation_list_after_invalid_reject="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+status_after_invalid_reject="$(echo "$annotation_list_after_invalid_reject" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .status // empty')"
+if [[ "$status_after_invalid_reject" != "in_review" ]]; then
+  echo "[smoke-phase2] Annotation status changed unexpectedly after invalid rejected review"
+  echo "$annotation_list_after_invalid_reject"
+  exit 1
+fi
+
+review_payload='{"status":"rejected","review_reason_code":"polygon_issue","quality_score":0.51,"review_comment":"Polygon needs cleaner boundary."}'
+review_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$review_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations/${annotation_id}/review")"
+review_status="$(echo "$review_result" | jq -r '.data.status // empty')"
+review_reason_code="$(echo "$review_result" | jq -r '.data.latest_review.review_reason_code // empty')"
+if [[ "$review_status" != "rejected" || "$review_reason_code" != "polygon_issue" ]]; then
+  echo "[smoke-phase2] Rejected review reason was not persisted"
+  echo "$review_result"
+  exit 1
+fi
+
+invalid_rejected_upsert_payload="$(cat <<JSON
+{
+  "dataset_item_id": "$dataset_item_id",
+  "task_type": "segmentation",
+  "source": "manual",
+  "status": "rejected",
+  "payload": {
+    "boxes": [
+      {"id":"box-1","x":40,"y":55,"width":120,"height":95,"label":"region-1"}
+    ],
+    "polygons": [
+      {"id":"poly-1","label":"tampered-rejected","points":[{"x":50,"y":60},{"x":180,"y":65},{"x":170,"y":145},{"x":60,"y":150}]}
+    ]
+  }
+}
+JSON
+)"
+
+invalid_rejected_upsert_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$invalid_rejected_upsert_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+invalid_rejected_upsert_success="$(echo "$invalid_rejected_upsert_result" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+invalid_rejected_upsert_error_code="$(echo "$invalid_rejected_upsert_result" | jq -r '.error.code // empty')"
+if [[ "$invalid_rejected_upsert_success" != "false" || "$invalid_rejected_upsert_error_code" != "INVALID_STATE_TRANSITION" ]]; then
+  echo "[smoke-phase2] Rejected annotation was incorrectly editable without reopening to in_progress"
+  echo "$invalid_rejected_upsert_result"
+  exit 1
+fi
+
+annotation_list_after_invalid_rejected_upsert="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+status_after_invalid_rejected_upsert="$(echo "$annotation_list_after_invalid_rejected_upsert" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .status // empty')"
+polygon_label_after_invalid_rejected_upsert="$(echo "$annotation_list_after_invalid_rejected_upsert" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .payload.polygons[0].label // empty')"
+if [[ "$status_after_invalid_rejected_upsert" != "rejected" || "$polygon_label_after_invalid_rejected_upsert" != "region-1" ]]; then
+  echo "[smoke-phase2] Failed upsert mutated rejected payload or status"
+  echo "$annotation_list_after_invalid_rejected_upsert"
+  exit 1
+fi
+
+rework_payload="$(cat <<JSON
+{
+  "dataset_item_id": "$dataset_item_id",
+  "task_type": "segmentation",
+  "source": "manual",
+  "status": "in_progress",
+  "payload": {
+    "boxes": [
+      {"id":"box-1","x":40,"y":55,"width":120,"height":95,"label":"region-1"}
+    ],
+    "polygons": [
+      {"id":"poly-1","label":"region-1","points":[{"x":50,"y":60},{"x":180,"y":65},{"x":170,"y":145},{"x":60,"y":150}]}
+    ]
+  }
+}
+JSON
+)"
+
+rework_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$rework_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+rework_status="$(echo "$rework_result" | jq -r '.data.status // empty')"
+rework_review_reason_code="$(echo "$rework_result" | jq -r '.data.latest_review.review_reason_code // empty')"
+rework_review_comment="$(echo "$rework_result" | jq -r '.data.latest_review.review_comment // empty')"
+if [[ "$rework_status" != "in_progress" || "$rework_review_reason_code" != "polygon_issue" || "$rework_review_comment" != "Polygon needs cleaner boundary." ]]; then
+  echo "[smoke-phase2] Rework transition did not preserve latest review context"
+  echo "$rework_result"
+  exit 1
+fi
+
+reannotate_payload="$(cat <<JSON
+{
+  "dataset_item_id": "$dataset_item_id",
+  "task_type": "segmentation",
+  "source": "manual",
+  "status": "annotated",
+  "payload": {
+    "boxes": [
+      {"id":"box-1","x":40,"y":55,"width":120,"height":95,"label":"region-1"}
+    ],
+    "polygons": [
+      {"id":"poly-1","label":"region-1","points":[{"x":50,"y":60},{"x":180,"y":65},{"x":170,"y":145},{"x":60,"y":150}]}
+    ]
+  }
+}
+JSON
+)"
+
+reannotate_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$reannotate_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+reannotate_status="$(echo "$reannotate_result" | jq -r '.data.status // empty')"
+if [[ "$reannotate_status" != "annotated" ]]; then
+  echo "[smoke-phase2] Re-annotation did not return to annotated before second review cycle"
+  echo "$reannotate_result"
+  exit 1
+fi
+
+resubmit_review_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H "x-csrf-token: $csrf_token" \
+  -X POST \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations/${annotation_id}/submit-review")"
+resubmitted_status="$(echo "$resubmit_review_result" | jq -r '.data.status // empty')"
+if [[ "$resubmitted_status" != "in_review" ]]; then
+  echo "[smoke-phase2] Annotation did not return to in_review during second review cycle"
+  echo "$resubmit_review_result"
+  exit 1
+fi
+
+invalid_approved_review_payload='{"status":"approved","review_reason_code":"polygon_issue","quality_score":0.95,"review_comment":"approved cannot include reason code"}'
+invalid_approved_review_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$invalid_approved_review_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations/${annotation_id}/review")"
+invalid_approved_review_success="$(echo "$invalid_approved_review_result" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+invalid_approved_review_error_code="$(echo "$invalid_approved_review_result" | jq -r '.error.code // empty')"
+invalid_approved_review_error_message="$(echo "$invalid_approved_review_result" | jq -r '.error.message // empty')"
+if [[ "$invalid_approved_review_success" != "false" || "$invalid_approved_review_error_code" != "VALIDATION_ERROR" || "$invalid_approved_review_error_message" != *"cannot include"* || "$invalid_approved_review_error_message" != *"review_reason_code"* ]]; then
+  echo "[smoke-phase2] Approved review with reason code was not blocked as expected"
+  echo "$invalid_approved_review_result"
+  exit 1
+fi
+
+approved_review_payload='{"status":"approved","quality_score":0.95,"review_comment":"Boundary is now acceptable."}'
+approved_review_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$approved_review_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations/${annotation_id}/review")"
+approved_status="$(echo "$approved_review_result" | jq -r '.data.status // empty')"
+approved_latest_review_status="$(echo "$approved_review_result" | jq -r '.data.latest_review.status // empty')"
+approved_latest_review_reason_code="$(echo "$approved_review_result" | jq -r '.data.latest_review.review_reason_code')"
+if [[ "$approved_status" != "approved" || "$approved_latest_review_status" != "approved" || "$approved_latest_review_reason_code" != "null" ]]; then
+  echo "[smoke-phase2] Approved review result did not satisfy expected contract"
+  echo "$approved_review_result"
+  exit 1
+fi
+
+invalid_approved_upsert_payload="$(cat <<JSON
+{
+  "dataset_item_id": "$dataset_item_id",
+  "task_type": "segmentation",
+  "source": "manual",
+  "status": "approved",
+  "payload": {
+    "boxes": [
+      {"id":"box-1","x":40,"y":55,"width":120,"height":95,"label":"region-1"}
+    ],
+    "polygons": [
+      {"id":"poly-1","label":"tampered-approved","points":[{"x":50,"y":60},{"x":180,"y":65},{"x":170,"y":145},{"x":60,"y":150}]}
+    ]
+  }
+}
+JSON
+)"
+
+invalid_approved_upsert_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$invalid_approved_upsert_payload" \
+  "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+invalid_approved_upsert_success="$(echo "$invalid_approved_upsert_result" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+invalid_approved_upsert_error_code="$(echo "$invalid_approved_upsert_result" | jq -r '.error.code // empty')"
+if [[ "$invalid_approved_upsert_success" != "false" || "$invalid_approved_upsert_error_code" != "INVALID_STATE_TRANSITION" ]]; then
+  echo "[smoke-phase2] Approved annotation was incorrectly editable through upsert"
+  echo "$invalid_approved_upsert_result"
+  exit 1
+fi
+
+annotation_list_after_invalid_approved_upsert="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+status_after_invalid_approved_upsert="$(echo "$annotation_list_after_invalid_approved_upsert" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .status // empty')"
+polygon_label_after_invalid_approved_upsert="$(echo "$annotation_list_after_invalid_approved_upsert" | jq -r --arg annotation_id "$annotation_id" '.data[] | select(.id == $annotation_id) | .payload.polygons[0].label // empty')"
+if [[ "$status_after_invalid_approved_upsert" != "approved" || "$polygon_label_after_invalid_approved_upsert" != "region-1" ]]; then
+  echo "[smoke-phase2] Failed upsert mutated approved payload or status"
+  echo "$annotation_list_after_invalid_approved_upsert"
+  exit 1
+fi
+
+model_versions_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/model-versions")"
+detection_model_version_id="$(echo "$model_versions_result" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
+ocr_model_version_id="$(echo "$model_versions_result" | jq -r '.data[] | select(.task_type=="ocr" and .framework=="paddleocr" and .status=="registered") | .id' | head -n 1)"
+if [[ -z "$ocr_model_version_id" ]]; then
+  ocr_model_version_id="$(echo "$model_versions_result" | jq -r '.data[] | select(.task_type=="ocr" and .status=="registered") | .id' | head -n 1)"
+fi
+if [[ -z "$detection_model_version_id" || -z "$ocr_model_version_id" ]]; then
+  echo "[smoke-phase2] required registered model versions were not found"
+  echo "$model_versions_result"
+  exit 1
+fi
+
+detect_inference_upload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"filename":"phase2-detect-input.jpg"}' \
+  "${BASE_URL}/api/files/inference/upload")"
+detect_inference_attachment_id="$(echo "$detect_inference_upload" | jq -r '.data.id // empty')"
+if [[ -z "$detect_inference_attachment_id" ]]; then
+  echo "[smoke-phase2] failed to upload detection inference attachment"
+  echo "$detect_inference_upload"
+  exit 1
+fi
+wait_attachment_ready "${BASE_URL}/api/files/inference" "${detect_inference_attachment_id}" "detection inference"
+
+ocr_inference_upload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"filename":"phase2-ocr-input.jpg"}' \
+  "${BASE_URL}/api/files/inference/upload")"
+ocr_inference_attachment_id="$(echo "$ocr_inference_upload" | jq -r '.data.id // empty')"
+if [[ -z "$ocr_inference_attachment_id" ]]; then
+  echo "[smoke-phase2] failed to upload OCR inference attachment"
+  echo "$ocr_inference_upload"
+  exit 1
+fi
+wait_attachment_ready "${BASE_URL}/api/files/inference" "${ocr_inference_attachment_id}" "ocr inference"
+
+no_train_split_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"train_ratio":0,"val_ratio":1,"test_ratio":0,"seed":9}' \
+  "${BASE_URL}/api/datasets/${dataset_id}/split")"
+no_train_split_count="$(echo "$no_train_split_result" | jq -r '.data.split_summary.train // -1')"
+if [[ "$no_train_split_count" != "0" ]]; then
+  echo "[smoke-phase2] expected train split count to be 0 for no-train gate scenario"
+  echo "$no_train_split_result"
+  exit 1
+fi
+
+no_train_version_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"version_name":"seg-no-train-gate-v1"}' \
+  "${BASE_URL}/api/datasets/${dataset_id}/versions")"
+no_train_version_id="$(echo "$no_train_version_result" | jq -r '.data.id // empty')"
+if [[ -z "$no_train_version_id" ]]; then
+  echo "[smoke-phase2] no-train gate dataset version creation failed"
+  echo "$no_train_version_result"
+  exit 1
+fi
+
+no_train_training_request="$(cat <<JSON
+{"name":"seg-no-train-gate-job","task_type":"segmentation","framework":"yolo","dataset_id":"${dataset_id}","dataset_version_id":"${no_train_version_id}","base_model":"yolo11n-seg","config":{"epochs":"1","batch_size":"1","learning_rate":"0.001"}}
+JSON
+)"
+no_train_training_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$no_train_training_request" \
+  "${BASE_URL}/api/training/jobs")"
+no_train_training_success="$(echo "$no_train_training_result" | jq -r '.success // false')"
+no_train_training_error_code="$(echo "$no_train_training_result" | jq -r '.error.code // empty')"
+no_train_training_error_message="$(echo "$no_train_training_result" | jq -r '.error.message // empty')"
+if [[ "$no_train_training_success" != "false" || "$no_train_training_error_code" != "VALIDATION_ERROR" || "$no_train_training_error_message" != *"train split"* ]]; then
+  echo "[smoke-phase2] No-train split gate validation did not reject training launch as expected"
+  echo "$no_train_training_result"
+  exit 1
+fi
+
+version_mismatch_dataset_payload='{"name":"Version Mismatch Smoke","description":"cross dataset version gate","task_type":"segmentation","label_schema":{"classes":["region"]}}'
+version_mismatch_dataset_created="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$version_mismatch_dataset_payload" \
+  "${BASE_URL}/api/datasets")"
+version_mismatch_dataset_id="$(echo "$version_mismatch_dataset_created" | jq -r '.data.id // empty')"
+if [[ -z "$version_mismatch_dataset_id" ]]; then
+  echo "[smoke-phase2] version-mismatch gate dataset creation failed"
+  echo "$version_mismatch_dataset_created"
+  exit 1
+fi
+
+version_mismatch_upload_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"filename":"version-mismatch-gate-image.png"}' \
+  "${BASE_URL}/api/files/dataset/${version_mismatch_dataset_id}/upload")"
+version_mismatch_attachment_id="$(echo "$version_mismatch_upload_result" | jq -r '.data.id // empty')"
+if [[ -z "$version_mismatch_attachment_id" ]]; then
+  echo "[smoke-phase2] version-mismatch gate dataset upload failed"
+  echo "$version_mismatch_upload_result"
+  exit 1
+fi
+
+sleep 1.6
+
+version_mismatch_split_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"train_ratio":1,"val_ratio":0,"test_ratio":0,"seed":13}' \
+  "${BASE_URL}/api/datasets/${version_mismatch_dataset_id}/split")"
+version_mismatch_train_count="$(echo "$version_mismatch_split_result" | jq -r '.data.split_summary.train // 0')"
+if [[ "$version_mismatch_train_count" -lt 1 ]]; then
+  echo "[smoke-phase2] version-mismatch gate split did not produce train items"
+  echo "$version_mismatch_split_result"
+  exit 1
+fi
+
+version_mismatch_version_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"version_name":"seg-version-mismatch-gate-v1"}' \
+  "${BASE_URL}/api/datasets/${version_mismatch_dataset_id}/versions")"
+version_mismatch_version_id="$(echo "$version_mismatch_version_result" | jq -r '.data.id // empty')"
+if [[ -z "$version_mismatch_version_id" ]]; then
+  echo "[smoke-phase2] version-mismatch gate dataset version creation failed"
+  echo "$version_mismatch_version_result"
+  exit 1
+fi
+
+version_mismatch_training_request="$(cat <<JSON
+{"name":"seg-version-mismatch-gate-job","task_type":"segmentation","framework":"yolo","dataset_id":"${dataset_id}","dataset_version_id":"${version_mismatch_version_id}","base_model":"yolo11n-seg","config":{"epochs":"1","batch_size":"1","learning_rate":"0.001"}}
+JSON
+)"
+version_mismatch_training_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$version_mismatch_training_request" \
+  "${BASE_URL}/api/training/jobs")"
+version_mismatch_training_success="$(echo "$version_mismatch_training_result" | jq -r '.success // false')"
+version_mismatch_training_error_code="$(echo "$version_mismatch_training_result" | jq -r '.error.code // empty')"
+version_mismatch_training_error_message="$(echo "$version_mismatch_training_result" | jq -r '.error.message // empty')"
+if [[ "$version_mismatch_training_success" != "false" || "$version_mismatch_training_error_code" != "RESOURCE_NOT_FOUND" || "$version_mismatch_training_error_message" != *"Dataset version"* || "$version_mismatch_training_error_message" != *"selected dataset"* ]]; then
+  echo "[smoke-phase2] Dataset-version mismatch gate did not reject cross-dataset version launch as expected"
+  echo "$version_mismatch_training_result"
+  exit 1
+fi
+
+inference_request="$(cat <<JSON
+{"model_version_id":"${detection_model_version_id}","input_attachment_id":"${detect_inference_attachment_id}","task_type":"detection"}
+JSON
+)"
 inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
@@ -146,13 +686,24 @@ if [[ -z "$inference_run_id" ]]; then
   exit 1
 fi
 
-if [[ "$fallback_source" != "mock_fallback" || -z "$fallback_reason" ]]; then
-  echo "[smoke-phase2] YOLO runtime fallback assertion failed"
-  echo "$inference_result"
-  exit 1
+if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
+  if [[ "$fallback_source" != "mock_fallback" || -z "$fallback_reason" ]]; then
+    echo "[smoke-phase2] YOLO runtime fallback assertion failed"
+    echo "$inference_result"
+    exit 1
+  fi
+else
+  if [[ -z "$fallback_source" ]]; then
+    echo "[smoke-phase2] YOLO inference source should not be empty"
+    echo "$inference_result"
+    exit 1
+  fi
 fi
 
-ocr_inference_request='{"model_version_id":"mv-1","input_attachment_id":"f-3","task_type":"ocr"}'
+ocr_inference_request="$(cat <<JSON
+{"model_version_id":"${ocr_model_version_id}","input_attachment_id":"${ocr_inference_attachment_id}","task_type":"ocr"}
+JSON
+)"
 ocr_inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
@@ -169,13 +720,107 @@ if [[ -z "$ocr_inference_run_id" ]]; then
   exit 1
 fi
 
-if [[ "$ocr_fallback_source" != "mock_fallback" || -z "$ocr_fallback_reason" ]]; then
-  echo "[smoke-phase2] PaddleOCR runtime fallback assertion failed"
-  echo "$ocr_inference_result"
-  exit 1
+if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
+  if [[ "$ocr_fallback_source" != "mock_fallback" || -z "$ocr_fallback_reason" ]]; then
+    echo "[smoke-phase2] PaddleOCR runtime fallback assertion failed"
+    echo "$ocr_inference_result"
+    exit 1
+  fi
+else
+  if [[ -z "$ocr_fallback_source" ]]; then
+    echo "[smoke-phase2] PaddleOCR inference source should not be empty"
+    echo "$ocr_inference_result"
+    exit 1
+  fi
 fi
 
-doctr_training_request='{"name":"doctr-smoke-job","task_type":"ocr","framework":"doctr","dataset_id":"d-1","dataset_version_id":"dv-1","base_model":"doctr-base","config":{"epochs":"1","batch_size":"1"}}'
+ocr_training_dataset_list="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets")"
+ocr_training_dataset_id="$(echo "$ocr_training_dataset_list" | jq -r '.data[] | select(.task_type=="ocr" and .status=="ready") | .id' | head -n 1)"
+if [[ -z "$ocr_training_dataset_id" ]]; then
+  ocr_training_dataset_id="$(echo "$ocr_training_dataset_list" | jq -r '.data[] | select(.task_type=="ocr") | .id' | head -n 1)"
+fi
+if [[ -z "$ocr_training_dataset_id" ]]; then
+  ocr_training_dataset_create_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -X POST \
+    -d "{\"name\":\"phase2-doctr-ocr-target-$(date +%s)\",\"description\":\"phase2 doctr ocr training target\",\"task_type\":\"ocr\",\"label_schema\":{\"classes\":[\"text_line\"]}}" \
+    "${BASE_URL}/api/datasets")"
+  ocr_training_dataset_id="$(echo "$ocr_training_dataset_create_resp" | jq -r '.data.id // empty')"
+  if [[ -z "$ocr_training_dataset_id" ]]; then
+    echo "[smoke-phase2] failed to create OCR dataset for docTR training smoke"
+    echo "$ocr_training_dataset_create_resp"
+    exit 1
+  fi
+
+  ocr_training_upload_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -X POST \
+    -d "{\"filename\":\"phase2-doctr-ocr-target-$(date +%s).jpg\"}" \
+    "${BASE_URL}/api/files/dataset/${ocr_training_dataset_id}/upload")"
+  ocr_training_attachment_id="$(echo "$ocr_training_upload_resp" | jq -r '.data.id // empty')"
+  if [[ -z "$ocr_training_attachment_id" ]]; then
+    echo "[smoke-phase2] failed to upload OCR dataset sample for docTR training smoke"
+    echo "$ocr_training_upload_resp"
+    exit 1
+  fi
+  wait_attachment_ready "${BASE_URL}/api/files/dataset/${ocr_training_dataset_id}" "${ocr_training_attachment_id}" "ocr training dataset"
+
+  ocr_training_dataset_detail="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${ocr_training_dataset_id}")"
+  ocr_training_item_id="$(echo "$ocr_training_dataset_detail" | jq -r '.data.items[0].id // empty')"
+  if [[ -z "$ocr_training_item_id" ]]; then
+    echo "[smoke-phase2] OCR training dataset item was not generated"
+    echo "$ocr_training_dataset_detail"
+    exit 1
+  fi
+
+  ocr_training_annotation_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -X POST \
+    -d "{\"dataset_item_id\":\"${ocr_training_item_id}\",\"task_type\":\"ocr\",\"source\":\"manual\",\"status\":\"annotated\",\"payload\":{\"lines\":[{\"text\":\"phase2 doctr target sample\",\"confidence\":0.99}]}}" \
+    "${BASE_URL}/api/datasets/${ocr_training_dataset_id}/annotations")"
+  ocr_training_annotation_status="$(echo "$ocr_training_annotation_resp" | jq -r '.data.status // empty')"
+  if [[ "$ocr_training_annotation_status" != "annotated" ]]; then
+    echo "[smoke-phase2] failed to annotate OCR training dataset sample"
+    echo "$ocr_training_annotation_resp"
+    exit 1
+  fi
+fi
+
+ocr_training_versions="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${ocr_training_dataset_id}/versions")"
+ocr_training_dataset_version_id="$(echo "$ocr_training_versions" | jq -r '.data[] | select((.split_summary.train // 0) > 0 and (.annotation_coverage // 0) > 0) | .id' | head -n 1)"
+if [[ -z "$ocr_training_dataset_version_id" ]]; then
+  ocr_split_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -d '{"train_ratio":0.8,"val_ratio":0.1,"test_ratio":0.1,"seed":17}' \
+    "${BASE_URL}/api/datasets/${ocr_training_dataset_id}/split")"
+  ocr_split_train_count="$(echo "$ocr_split_resp" | jq -r '.data.split_summary.train // 0')"
+  if [[ "$ocr_split_train_count" -lt 1 ]]; then
+    echo "[smoke-phase2] OCR dataset split did not produce train items for docTR training smoke"
+    echo "$ocr_split_resp"
+    exit 1
+  fi
+
+  ocr_version_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -d "{\"version_name\":\"phase2-doctr-ocr-$(date +%s)\"}" \
+    "${BASE_URL}/api/datasets/${ocr_training_dataset_id}/versions")"
+  ocr_training_dataset_version_id="$(echo "$ocr_version_resp" | jq -r '.data.id // empty')"
+  if [[ -z "$ocr_training_dataset_version_id" ]]; then
+    echo "[smoke-phase2] OCR dataset version creation failed for docTR training smoke"
+    echo "$ocr_version_resp"
+    exit 1
+  fi
+fi
+
+doctr_training_request="$(cat <<JSON
+{"name":"doctr-smoke-job","task_type":"ocr","framework":"doctr","dataset_id":"${ocr_training_dataset_id}","dataset_version_id":"${ocr_training_dataset_version_id}","base_model":"doctr-base","config":{"epochs":"1","batch_size":"1"}}
+JSON
+)"
 doctr_training_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
@@ -235,7 +880,7 @@ if [[ -z "$doctr_model_version_id" ]]; then
 fi
 
 doctr_inference_request="$(cat <<JSON
-{"model_version_id":"${doctr_model_version_id}","input_attachment_id":"f-3","task_type":"ocr"}
+{"model_version_id":"${doctr_model_version_id}","input_attachment_id":"${ocr_inference_attachment_id}","task_type":"ocr"}
 JSON
 )"
 doctr_inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
@@ -253,9 +898,87 @@ if [[ -z "$doctr_inference_run_id" ]]; then
   exit 1
 fi
 
-if [[ "$doctr_fallback_source" != "mock_fallback" || -z "$doctr_fallback_reason" ]]; then
-  echo "[smoke-phase2] docTR runtime fallback assertion failed"
-  echo "$doctr_inference_result"
+if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
+  if [[ "$doctr_fallback_source" != "mock_fallback" || -z "$doctr_fallback_reason" ]]; then
+    echo "[smoke-phase2] docTR runtime fallback assertion failed"
+    echo "$doctr_inference_result"
+    exit 1
+  fi
+else
+  if [[ -z "$doctr_fallback_source" ]]; then
+    echo "[smoke-phase2] docTR inference source should not be empty"
+    echo "$doctr_inference_result"
+    exit 1
+  fi
+fi
+
+coverage_dataset_payload='{"name":"Coverage Gate Smoke","description":"coverage gate validation","task_type":"detection","label_schema":{"classes":["carriage"]}}'
+coverage_dataset_created="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$coverage_dataset_payload" \
+  "${BASE_URL}/api/datasets")"
+coverage_dataset_id="$(echo "$coverage_dataset_created" | jq -r '.data.id // empty')"
+if [[ -z "$coverage_dataset_id" ]]; then
+  echo "[smoke-phase2] Coverage gate dataset creation failed"
+  echo "$coverage_dataset_created"
+  exit 1
+fi
+
+coverage_upload_attachment="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"filename":"coverage-gate-image.png"}' \
+  "${BASE_URL}/api/files/dataset/${coverage_dataset_id}/upload")"
+coverage_attachment_id="$(echo "$coverage_upload_attachment" | jq -r '.data.id // empty')"
+if [[ -z "$coverage_attachment_id" ]]; then
+  echo "[smoke-phase2] Coverage gate upload failed"
+  echo "$coverage_upload_attachment"
+  exit 1
+fi
+
+sleep 1.6
+
+coverage_split_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"train_ratio":1,"val_ratio":0,"test_ratio":0,"seed":7}' \
+  "${BASE_URL}/api/datasets/${coverage_dataset_id}/split")"
+coverage_split_train="$(echo "$coverage_split_result" | jq -r '.data.split_summary.train // 0')"
+if [[ "$coverage_split_train" -lt 1 ]]; then
+  echo "[smoke-phase2] Coverage gate split did not produce train item"
+  echo "$coverage_split_result"
+  exit 1
+fi
+
+coverage_version_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"version_name":"coverage-gate-v1"}' \
+  "${BASE_URL}/api/datasets/${coverage_dataset_id}/versions")"
+coverage_version_id="$(echo "$coverage_version_result" | jq -r '.data.id // empty')"
+coverage_value="$(echo "$coverage_version_result" | jq -r '.data.annotation_coverage // -1')"
+if [[ -z "$coverage_version_id" || "$coverage_value" != "0" ]]; then
+  echo "[smoke-phase2] Coverage gate dataset version was not created with zero coverage"
+  echo "$coverage_version_result"
+  exit 1
+fi
+
+coverage_training_request="$(cat <<JSON
+{"name":"coverage-gate-job","task_type":"detection","framework":"yolo","dataset_id":"${coverage_dataset_id}","dataset_version_id":"${coverage_version_id}","base_model":"yolo11n","config":{"epochs":"1","batch_size":"1","learning_rate":"0.001"}}
+JSON
+)"
+coverage_training_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$coverage_training_request" \
+  "${BASE_URL}/api/training/jobs")"
+coverage_training_success="$(echo "$coverage_training_result" | jq -r '.success // false')"
+coverage_training_error_code="$(echo "$coverage_training_result" | jq -r '.error.code // empty')"
+coverage_training_error_message="$(echo "$coverage_training_result" | jq -r '.error.message // empty')"
+if [[ "$coverage_training_success" != "false" || "$coverage_training_error_code" != "VALIDATION_ERROR" || "$coverage_training_error_message" != *"annotation coverage"* ]]; then
+  echo "[smoke-phase2] Coverage gate validation did not reject zero-coverage training launch as expected"
+  echo "$coverage_training_result"
   exit 1
 fi
 
@@ -275,3 +998,7 @@ echo "doctr_model_version_id=${doctr_model_version_id}"
 echo "doctr_inference_run_id=${doctr_inference_run_id}"
 echo "doctr_fallback_source=${doctr_fallback_source}"
 echo "doctr_fallback_reason=${doctr_fallback_reason}"
+echo "no_train_gate_version_id=${no_train_version_id}"
+echo "version_mismatch_gate_version_id=${version_mismatch_version_id}"
+echo "coverage_gate_dataset_id=${coverage_dataset_id}"
+echo "coverage_gate_version_id=${coverage_version_id}"

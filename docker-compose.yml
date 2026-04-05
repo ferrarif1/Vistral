@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api
       args:
-        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:20-alpine}
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:20-alpine}
     image: ${VISTRAL_API_IMAGE:-vistral-api:round1}
     container_name: vistral-api
     environment:
@@ -44,8 +44,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:20-alpine}
-        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:-nginx:1.27-alpine}
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:20-alpine}
+        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:-docker.m.daocloud.io/library/nginx:1.27-alpine}
     image: ${VISTRAL_WEB_IMAGE:-vistral-web:round1}
     container_name: vistral-web
     depends_on:

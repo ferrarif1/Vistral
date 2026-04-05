@@ -167,6 +167,8 @@ export default function AttachmentUploader({
       <AdvancedSection
         title={t('Manual filename upload')}
         description={t('Use this compatibility mode when direct file selection is unavailable.')}
+        collapsible={Boolean(onUploadFiles)}
+        defaultOpen={!onUploadFiles}
       >
         <div className="row gap">
           <input

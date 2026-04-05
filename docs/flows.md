@@ -8,7 +8,7 @@ Actor: `user`
 
 1. open `/workspace/chat`
 2. choose a model from the curated foundation catalog and optionally start a new chat session from sidebar
-3. use the lightweight header to switch language; on desktop, open settings or logout from the sidebar footer / compact rail account menu, while compact/mobile layouts may still expose auth entry in the header
+3. open the account menu from the sidebar footer / compact rail avatar to access language switch plus settings/logout (compact/mobile layouts may still expose auth entry in the header when needed)
 4. optionally collapse the desktop sidebar for a wider canvas, or open/close the mobile sidebar drawer from the header
 5. click `+` to open the composer attachment tray, then upload or pick attachments for the current draft
 6. selected draft attachments appear as chips with status + remove controls beside the composer
@@ -16,10 +16,11 @@ Actor: `user`
 8. system starts conversation and returns assistant reply (mock or configured LLM)
 9. attachment tray collapses after send; sent attachments remain traceable in the corresponding message turn
 10. sidebar conversation history can be synced from backend and opened to restore full message timeline
-11. user can use desktop right-click or mobile long-press on history item for open/rename/pin/delete quick actions
-12. when context menu is open, keyboard shortcuts `O/R/P/D` execute corresponding actions quickly
-13. user can drag within pinned group to reorder priority chats
-14. user continues messaging with attachments in context
+11. on desktop, hovering a history row reveals a compact overflow button; clicking it, right-clicking, or mobile long-press opens the quick menu
+12. quick menu keeps rename/pin/delete actions out of the default row layout, while opening the chat stays on row click
+13. when context menu is open, keyboard shortcuts `R/P/D` execute corresponding actions quickly
+14. user can drag within pinned group to reorder priority chats
+15. user continues messaging with attachments in context
 
 Guest/access branch:
 1. unauthenticated user opens a login-required surface
@@ -105,15 +106,20 @@ Minimum actions:
 - segmentation polygon input (minimal)
 - save, undo, continue edit
 - submit to review
-- approve/reject with comment
+- approve/reject with persistent review context
+- reject requires an explicit reason code
 
 Current phase target:
-1. open `/datasets/:datasetId/annotate`
-2. select dataset item
-3. edit OCR/detection payload
-4. save as `in_progress`/`annotated`
-5. submit `annotated -> in_review`
-6. review as `approved` or `rejected`
+1. open `/datasets/:datasetId`
+2. review annotation summary and jump into a focused queue (`needs_work`, `in_review`, `rejected`, `approved`)
+3. open `/datasets/:datasetId/annotate`
+4. select dataset item directly or restore one from queue deep link
+5. edit OCR/detection payload
+6. save as `in_progress`/`annotated`
+7. submit `annotated -> in_review`
+8. review as `approved` or `rejected`
+9. once an item enters `in_review`, annotation payload becomes read-only in the upsert path; only the review endpoint may move it to `approved`/`rejected`
+10. when rejected, reviewer must provide `review_reason_code`; latest review reason/comment remain visible during rework until next review, and moving the item back to `in_progress` should keep the same item open inside the `needs_work` queue before any further edits
 
 ## 6. Flow E: Training Job Workflow (Phase 1 skeleton, Phase 3 runtime)
 Actor: `user`
@@ -121,10 +127,11 @@ Actor: `user`
 1. open `/training/jobs/new`
 2. stepper flow:
    - Step 1 task + framework
-   - Step 2 dataset + base model
+   - Step 2 dataset + dataset version snapshot + base model
    - Step 3 parameters (advanced collapsed)
    - Step 4 review + submit
-3. create training job
+3. select a dataset version snapshot, confirm launch readiness (dataset status / split summary / annotation coverage), then create training job
+   - launch is blocked when `split_summary.train <= 0` or `annotation_coverage <= 0`
 4. job transitions through:
    - `draft`
    - `queued`
@@ -150,7 +157,7 @@ Actor: `user`
 4. select model version
 5. run inference
 6. inspect visualized predictions + raw output + normalized output
-7. if failure sample, click feedback action to send sample to dataset
+7. if failure sample, click feedback action to send sample to a dataset with matching task type
 8. system records `feedback_dataset_id`, ensures a dataset-scoped attachment exists in target dataset, and upserts a traceable dataset item for next-round annotation/training
 
 ## 9. Closed Business Loop 1: OCR Fine-tune
@@ -184,9 +191,6 @@ Actor: `admin`
 6. paginate and inspect failed checks in report detail panel
 7. export filtered reports as JSON for release evidence
 8. decide go/no-go for intranet rollout handoff
-9. run `docker:release:bundle` with:
-   - optional `VERIFY_REPORT_PATH` to pin report
-   - optional `VERIFY_REPORT_MAX_AGE_SECONDS` to enforce report freshness
 
 ## 12. Unified UX Constraints
 - multi-step flows must have top stepper

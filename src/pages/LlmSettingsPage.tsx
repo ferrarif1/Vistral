@@ -364,7 +364,7 @@ export default function LlmSettingsPage() {
                 onChange={(event) => update('temperature', Number(event.target.value))}
               />
             </label>
-            <label className="workspace-form-span-2 row gap align-center">
+            <label className="workspace-form-span-2 row gap align-center workspace-checkbox-row">
               <input
                 type="checkbox"
                 checked={form.enabled}

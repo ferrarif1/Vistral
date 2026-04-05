@@ -53,6 +53,7 @@ Allowed transitions:
 1. annotator submits `annotated -> in_review`
 2. reviewer approves or rejects
 3. rejected items must include reject reason and return to `in_progress`
+4. latest review reason/comment remain visible in rework UI until a new review is created
 
 ### 5.2 Minimum audit fields
 - `annotation_id`
@@ -61,6 +62,7 @@ Allowed transitions:
 - `source` (`manual` / `import` / `pre_annotation`)
 - `annotated_by`
 - `reviewed_by` (nullable)
+- `review_reason_code` (nullable on approve, required on reject)
 - `status`
 - `quality_score` (nullable)
 - `review_comment` (nullable)
@@ -76,7 +78,7 @@ Allowed transitions:
 ## 7. Sampling and Quality Policy (baseline)
 - review can run full-set or sampled mode
 - sampled mode percentage is dataset-version scoped
-- rejected reasons are categorized (`box_mismatch`, `label_error`, `text_error`, `missing_object`, `other`)
+- rejected reasons are categorized (`box_mismatch`, `label_error`, `text_error`, `missing_object`, `polygon_issue`, `other`)
 
 ## 8. Phase Scope
 - Phase 2 must ship minimal usable annotation + review loop for OCR and detection.

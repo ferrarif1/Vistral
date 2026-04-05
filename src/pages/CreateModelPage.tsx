@@ -5,6 +5,7 @@ import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -79,22 +80,24 @@ export default function CreateModelPage() {
     });
   }, [refreshModelFiles]);
 
-  useEffect(() => {
-    if (!draftModel) {
-      return;
-    }
+  const readyFileCount = useMemo(() => modelFiles.filter((file) => file.status === 'ready').length, [modelFiles]);
+  const hasTransientModelFiles = useMemo(
+    () => modelFiles.some((file) => file.status === 'uploading' || file.status === 'processing'),
+    [modelFiles]
+  );
+  const draftStatusLabel = draftModel ? t(draftModel.status) : t('not started');
 
-    const timer = window.setInterval(() => {
+  useBackgroundPolling(
+    () => {
       refreshModelFiles().catch(() => {
         // No-op in poll loop.
       });
-    }, backgroundRefreshIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [draftModel, refreshModelFiles]);
-
-  const readyFileCount = useMemo(() => modelFiles.filter((file) => file.status === 'ready').length, [modelFiles]);
-  const draftStatusLabel = draftModel ? t(draftModel.status) : t('not started');
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled: Boolean(draftModel) && hasTransientModelFiles
+    }
+  );
 
   const createDraft = async () => {
     if (!name.trim() || !description.trim()) {
@@ -323,7 +326,7 @@ export default function CreateModelPage() {
             </div>
           </section>
           <AdvancedSection>
-            <label className="row gap align-center">
+            <label className="row gap align-center workspace-checkbox-row">
               <input
                 type="checkbox"
                 checked={enableEarlyStop}

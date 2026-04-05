@@ -2,12 +2,16 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
-PROBE_PASSWORD="${PROBE_PASSWORD:-healthcheck123}"
 BUSINESS_USERNAME="${BUSINESS_USERNAME:-alice}"
 BUSINESS_PASSWORD="${BUSINESS_PASSWORD:-mock-pass}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-mock-pass-admin}"
+PROBE_USERNAME="${PROBE_USERNAME:-${BUSINESS_USERNAME}}"
+PROBE_PASSWORD="${PROBE_PASSWORD:-${BUSINESS_PASSWORD}}"
 POLL_MAX_TRIES="${POLL_MAX_TRIES:-20}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-0.3}"
 VERIFY_SKIP_HEALTHZ="${VERIFY_SKIP_HEALTHZ:-0}"
+OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND:-false}"
 RUN_TAG="$(date +%Y%m%d%H%M%S)"
 REPORT_DIR="${REPORT_DIR:-.data/verify-reports}"
 REPORT_BASENAME="${REPORT_BASENAME:-docker-verify-full-${RUN_TAG}}"
@@ -21,13 +25,13 @@ fi
 
 PROBE_COOKIE="$(mktemp)"
 BUSINESS_COOKIE="$(mktemp)"
-PROBE_USERNAME="verify-$(date +%s)"
 STARTED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 CHECKS_JSON='[]'
 CURRENT_STEP=''
 REPORT_FINALIZED='false'
 
 CONVERSATION_ID=''
+CONVERSATION_MODEL_ID=''
 MODEL_ID=''
 APPROVAL_ID=''
 DETECTION_RUN_ID=''
@@ -73,6 +77,7 @@ finalize_report() {
     --arg business_username "${BUSINESS_USERNAME}" \
     --arg probe_username "${PROBE_USERNAME}" \
     --arg conversation_id "${CONVERSATION_ID}" \
+    --arg conversation_model_id "${CONVERSATION_MODEL_ID}" \
     --arg model_id "${MODEL_ID}" \
     --arg approval_id "${APPROVAL_ID}" \
     --arg detection_run_id "${DETECTION_RUN_ID}" \
@@ -92,6 +97,7 @@ finalize_report() {
       },
       entities: {
         conversation_id: $conversation_id,
+        conversation_model_id: $conversation_model_id,
         model_id: $model_id,
         approval_id: $approval_id,
         detection_run_id: $detection_run_id,
@@ -124,6 +130,7 @@ finalize_report() {
 ## Key IDs
 - attachment_id: ${ATTACHMENT_ID}
 - conversation_id: ${CONVERSATION_ID}
+- conversation_model_id: ${CONVERSATION_MODEL_ID}
 - model_id: ${MODEL_ID}
 - approval_id: ${APPROVAL_ID}
 - detection_run_id: ${DETECTION_RUN_ID}
@@ -169,7 +176,7 @@ get_csrf_token() {
 }
 
 CURRENT_STEP='infrastructure health checks'
-echo "[docker-verify-full] 1/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 1/16 ${CURRENT_STEP}"
 if [[ "${VERIFY_SKIP_HEALTHZ}" != "1" ]]; then
   curl -fsS "${BASE_URL}/healthz" >/dev/null
 fi
@@ -180,14 +187,8 @@ else
   append_check "${CURRENT_STEP}" "passed" "health endpoints are reachable"
 fi
 
-CURRENT_STEP='probe register + login'
-echo "[docker-verify-full] 2/11 ${CURRENT_STEP}"
-curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
-  -X POST "${BASE_URL}/api/auth/register" \
-  -H 'Content-Type: application/json' \
-  -d "{\"username\":\"${PROBE_USERNAME}\",\"password\":\"${PROBE_PASSWORD}\"}" | \
-  jq -e ".success == true and .data.username == \"${PROBE_USERNAME}\" and .data.role == \"user\"" >/dev/null
-
+CURRENT_STEP='probe login'
+echo "[docker-verify-full] 2/16 ${CURRENT_STEP}"
 curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -203,10 +204,10 @@ curl -sS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
 curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
   "${BASE_URL}/api/users/me" | \
   jq -e ".success == true and .data.username == \"${PROBE_USERNAME}\" and .data.role == \"user\"" >/dev/null
-append_check "${CURRENT_STEP}" "passed" "probe user register/login/me succeeded and wrong-password was rejected"
+append_check "${CURRENT_STEP}" "passed" "probe user login/me succeeded and wrong-password was rejected"
 
 CURRENT_STEP='business account login'
-echo "[docker-verify-full] 3/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 3/16 ${CURRENT_STEP}"
 curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -220,8 +221,39 @@ if [[ -z "${BUSINESS_CSRF}" || "${BUSINESS_CSRF}" == 'null' ]]; then
 fi
 append_check "${CURRENT_STEP}" "passed" "business user login and csrf succeeded"
 
+CURRENT_STEP='resolve conversation model'
+echo "[docker-verify-full] 4/16 ${CURRENT_STEP}"
+CONVERSATION_MODEL_ID="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/models" | jq -r '.data[0].id // empty')"
+if [[ -z "${CONVERSATION_MODEL_ID}" ]]; then
+  CONVERSATION_MODEL_RESP="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+    -X POST "${BASE_URL}/api/models/draft" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: ${BUSINESS_CSRF}" \
+    -d "{\"name\":\"verify-conversation-model-${RUN_TAG}\",\"description\":\"deployment verification conversation seed\",\"model_type\":\"detection\",\"visibility\":\"private\"}")"
+  CONVERSATION_MODEL_ID="$(echo "${CONVERSATION_MODEL_RESP}" | jq -r '.data.id // empty')"
+fi
+if [[ -z "${CONVERSATION_MODEL_ID}" || "${CONVERSATION_MODEL_ID}" == 'null' ]]; then
+  echo "[docker-verify-full] failed to resolve/create conversation model"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "conversation_model=${CONVERSATION_MODEL_ID}"
+
+CURRENT_STEP='account governance'
+echo "[docker-verify-full] 5/16 ${CURRENT_STEP}"
+ACCOUNT_GOVERNANCE_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" ADMIN_USERNAME="${ADMIN_USERNAME}" ADMIN_PASSWORD="${ADMIN_PASSWORD}" bash scripts/smoke-account-governance.sh)"
+echo "${ACCOUNT_GOVERNANCE_OUTPUT}"
+ACCOUNT_GOVERNANCE_CREATED_USER_ID="$(echo "${ACCOUNT_GOVERNANCE_OUTPUT}" | awk -F= '/^created_user_id=/{print $2; exit}')"
+ACCOUNT_GOVERNANCE_CREATED_USERNAME="$(echo "${ACCOUNT_GOVERNANCE_OUTPUT}" | awk -F= '/^created_username=/{print $2; exit}')"
+ACCOUNT_GOVERNANCE_ADMIN_ID="$(echo "${ACCOUNT_GOVERNANCE_OUTPUT}" | awk -F= '/^admin_id=/{print $2; exit}')"
+if [[ -z "${ACCOUNT_GOVERNANCE_CREATED_USER_ID}" || -z "${ACCOUNT_GOVERNANCE_CREATED_USERNAME}" || -z "${ACCOUNT_GOVERNANCE_ADMIN_ID}" ]]; then
+  echo "[docker-verify-full] account-governance output missing required ids"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "created_user=${ACCOUNT_GOVERNANCE_CREATED_USERNAME}(${ACCOUNT_GOVERNANCE_CREATED_USER_ID}), admin=${ACCOUNT_GOVERNANCE_ADMIN_ID}"
+
 CURRENT_STEP='conversation attachment upload lifecycle'
-echo "[docker-verify-full] 4/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 6/16 ${CURRENT_STEP}"
 printf 'docker verify conversation upload payload (%s)\n' "${RUN_TAG}" >"${CONVERSATION_UPLOAD_FILE}"
 ATTACHMENT_UPLOAD_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/files/conversation/upload" \
@@ -253,12 +285,12 @@ fi
 append_check "${CURRENT_STEP}" "passed" "attachment ${ATTACHMENT_ID} reached ready state"
 
 CURRENT_STEP='start conversation with attachment'
-echo "[docker-verify-full] 5/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 7/16 ${CURRENT_STEP}"
 CONVERSATION_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/conversations/start" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: ${BUSINESS_CSRF}" \
-  -d "{\"model_id\":\"m-1\",\"initial_message\":\"deployment verify ${RUN_TAG}\",\"attachment_ids\":[\"${ATTACHMENT_ID}\"]}")"
+  -d "{\"model_id\":\"${CONVERSATION_MODEL_ID}\",\"initial_message\":\"deployment verify ${RUN_TAG}\",\"attachment_ids\":[\"${ATTACHMENT_ID}\"]}")"
 CONVERSATION_ID="$(echo "${CONVERSATION_RESPONSE}" | jq -r '.data.conversation.id')"
 
 if [[ -z "${CONVERSATION_ID}" || "${CONVERSATION_ID}" == 'null' ]]; then
@@ -270,8 +302,23 @@ fi
 echo "${CONVERSATION_RESPONSE}" | jq -e '.success == true and (.data.messages | length) >= 2' >/dev/null
 append_check "${CURRENT_STEP}" "passed" "conversation ${CONVERSATION_ID} created with assistant reply"
 
+CURRENT_STEP='conversation operational actions'
+echo "[docker-verify-full] 8/16 ${CURRENT_STEP}"
+CONVERSATION_ACTIONS_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-conversation-actions.sh)"
+echo "${CONVERSATION_ACTIONS_OUTPUT}"
+CONVERSATION_ACTIONS_DATASET_ID="$(echo "${CONVERSATION_ACTIONS_OUTPUT}" | awk -F= '/^dataset_id=/{print $2; exit}')"
+CONVERSATION_ACTIONS_MODEL_DRAFT_ID="$(echo "${CONVERSATION_ACTIONS_OUTPUT}" | awk -F= '/^model_draft_id=/{print $2; exit}')"
+CONVERSATION_ACTIONS_TRAINING_JOB_ID="$(echo "${CONVERSATION_ACTIONS_OUTPUT}" | awk -F= '/^training_job_id=/{print $2; exit}')"
+CONVERSATION_ACTIONS_TRAINING_DATASET_ID="$(echo "${CONVERSATION_ACTIONS_OUTPUT}" | awk -F= '/^training_dataset_id=/{print $2; exit}')"
+CONVERSATION_ACTIONS_TRAINING_DATASET_VERSION_ID="$(echo "${CONVERSATION_ACTIONS_OUTPUT}" | awk -F= '/^training_dataset_version_id=/{print $2; exit}')"
+if [[ -z "${CONVERSATION_ACTIONS_DATASET_ID}" || -z "${CONVERSATION_ACTIONS_MODEL_DRAFT_ID}" || -z "${CONVERSATION_ACTIONS_TRAINING_JOB_ID}" || -z "${CONVERSATION_ACTIONS_TRAINING_DATASET_ID}" || -z "${CONVERSATION_ACTIONS_TRAINING_DATASET_VERSION_ID}" ]]; then
+  echo "[docker-verify-full] conversation-actions output missing required ids"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "dataset=${CONVERSATION_ACTIONS_DATASET_ID}, model_draft=${CONVERSATION_ACTIONS_MODEL_DRAFT_ID}, training_job=${CONVERSATION_ACTIONS_TRAINING_JOB_ID}, training_dataset=${CONVERSATION_ACTIONS_TRAINING_DATASET_ID}, training_dataset_version=${CONVERSATION_ACTIONS_TRAINING_DATASET_VERSION_ID}"
+
 CURRENT_STEP='model draft -> model file -> approval submit'
-echo "[docker-verify-full] 6/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 9/16 ${CURRENT_STEP}"
 MODEL_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/models/draft" \
   -H 'Content-Type: application/json' \
@@ -324,7 +371,7 @@ APPROVAL_ID="$(echo "${APPROVAL_RESPONSE}" | jq -r '.data.id')"
 append_check "${CURRENT_STEP}" "passed" "model ${MODEL_ID} submitted as approval ${APPROVAL_ID}"
 
 CURRENT_STEP='runtime connectivity contract'
-echo "[docker-verify-full] 7/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 10/16 ${CURRENT_STEP}"
 RUNTIME_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/runtime/connectivity")"
 echo "${RUNTIME_RESPONSE}" | jq -e '.success == true and (.data | length) >= 3 and ([.data[].error_kind] | all(. != null))' >/dev/null
@@ -335,12 +382,25 @@ RUNTIME_METRICS_RETENTION_JSON="$(echo "${RUNTIME_METRICS_RETENTION_RESPONSE}" |
 append_check "${CURRENT_STEP}" "passed" "runtime connectivity + metrics retention summary available"
 
 CURRENT_STEP='detection + ocr inference'
-echo "[docker-verify-full] 8/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 11/16 ${CURRENT_STEP}"
+MODEL_VERSIONS_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/model-versions")"
+DETECTION_MODEL_VERSION_ID="$(echo "${MODEL_VERSIONS_RESPONSE}" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
+OCR_MODEL_VERSION_ID="$(echo "${MODEL_VERSIONS_RESPONSE}" | jq -r '.data[] | select(.task_type=="ocr" and .framework=="paddleocr" and .status=="registered") | .id' | head -n 1)"
+if [[ -z "${OCR_MODEL_VERSION_ID}" ]]; then
+  OCR_MODEL_VERSION_ID="$(echo "${MODEL_VERSIONS_RESPONSE}" | jq -r '.data[] | select(.task_type=="ocr" and .status=="registered") | .id' | head -n 1)"
+fi
+if [[ -z "${DETECTION_MODEL_VERSION_ID}" || -z "${OCR_MODEL_VERSION_ID}" ]]; then
+  echo "[docker-verify-full] required registered detection/ocr model versions were not found"
+  echo "${MODEL_VERSIONS_RESPONSE}"
+  exit 1
+fi
+
 DETECTION_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/inference/runs" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: ${BUSINESS_CSRF}" \
-  -d "{\"model_version_id\":\"mv-2\",\"input_attachment_id\":\"${ATTACHMENT_ID}\",\"task_type\":\"detection\"}")"
+  -d "{\"model_version_id\":\"${DETECTION_MODEL_VERSION_ID}\",\"input_attachment_id\":\"${ATTACHMENT_ID}\",\"task_type\":\"detection\"}")"
 DETECTION_RUN_ID="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.id')"
 if [[ -z "${DETECTION_RUN_ID}" || "${DETECTION_RUN_ID}" == 'null' ]]; then
   echo "[docker-verify-full] detection inference failed"
@@ -353,7 +413,7 @@ OCR_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/inference/runs" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: ${BUSINESS_CSRF}" \
-  -d "{\"model_version_id\":\"mv-1\",\"input_attachment_id\":\"${ATTACHMENT_ID}\",\"task_type\":\"ocr\"}")"
+  -d "{\"model_version_id\":\"${OCR_MODEL_VERSION_ID}\",\"input_attachment_id\":\"${ATTACHMENT_ID}\",\"task_type\":\"ocr\"}")"
 OCR_RUN_ID="$(echo "${OCR_RESPONSE}" | jq -r '.data.id')"
 if [[ -z "${OCR_RUN_ID}" || "${OCR_RUN_ID}" == 'null' ]]; then
   echo "[docker-verify-full] ocr inference failed"
@@ -361,20 +421,280 @@ if [[ -z "${OCR_RUN_ID}" || "${OCR_RUN_ID}" == 'null' ]]; then
   exit 1
 fi
 echo "${OCR_RESPONSE}" | jq -e '.success == true and (.data.normalized_output.ocr.lines | length) >= 1' >/dev/null
-append_check "${CURRENT_STEP}" "passed" "detection run ${DETECTION_RUN_ID} and ocr run ${OCR_RUN_ID} succeeded"
+append_check "${CURRENT_STEP}" "passed" "detection run ${DETECTION_RUN_ID} (${DETECTION_MODEL_VERSION_ID}) and ocr run ${OCR_RUN_ID} (${OCR_MODEL_VERSION_ID}) succeeded"
 
 CURRENT_STEP='inference feedback to dataset'
-echo "[docker-verify-full] 9/11 ${CURRENT_STEP}"
-FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+echo "[docker-verify-full] 12/16 ${CURRENT_STEP}"
+DATASETS_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/datasets")"
+DETECTION_FEEDBACK_DATASET_ID="$(echo "${DATASETS_RESPONSE}" | jq -r '.data[] | select(.task_type=="detection") | .id' | head -n 1)"
+if [[ -z "${DETECTION_FEEDBACK_DATASET_ID}" && -n "${CONVERSATION_ACTIONS_TRAINING_DATASET_ID}" ]]; then
+  DETECTION_FEEDBACK_DATASET_ID="${CONVERSATION_ACTIONS_TRAINING_DATASET_ID}"
+fi
+if [[ -z "${DETECTION_FEEDBACK_DATASET_ID}" ]]; then
+  echo "[docker-verify-full] no detection dataset found for valid feedback path"
+  echo "${DATASETS_RESPONSE}"
+  exit 1
+fi
+
+OCR_FEEDBACK_DATASET_ID="$(echo "${DATASETS_RESPONSE}" | jq -r '.data[] | select(.task_type=="ocr") | .id' | head -n 1)"
+if [[ -z "${OCR_FEEDBACK_DATASET_ID}" ]]; then
+  OCR_DATASET_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+    -X POST "${BASE_URL}/api/datasets" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: ${BUSINESS_CSRF}" \
+    -d "{\"name\":\"verify-feedback-ocr-${RUN_TAG}\",\"description\":\"auto ocr feedback dataset\",\"task_type\":\"ocr\",\"label_schema\":{\"classes\":[\"text\"]}}")"
+  OCR_FEEDBACK_DATASET_ID="$(echo "${OCR_DATASET_RESPONSE}" | jq -r '.data.id // empty')"
+  if [[ -z "${OCR_FEEDBACK_DATASET_ID}" ]]; then
+    echo "[docker-verify-full] failed to create ocr feedback dataset"
+    echo "${OCR_DATASET_RESPONSE}"
+    exit 1
+  fi
+fi
+
+MISMATCH_DETECTION_DATASET_ID="${OCR_FEEDBACK_DATASET_ID}"
+mismatch_detection_feedback_response="$(curl -sS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/inference/runs/${DETECTION_RUN_ID}/feedback" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: ${BUSINESS_CSRF}" \
-  -d '{"dataset_id":"d-2","reason":"deployment_verify"}')"
-echo "${FEEDBACK_RESPONSE}" | jq -e '.success == true and .data.feedback_dataset_id == "d-2"' >/dev/null
-append_check "${CURRENT_STEP}" "passed" "inference feedback linked to dataset d-2"
+  -d "{\"dataset_id\":\"${MISMATCH_DETECTION_DATASET_ID}\",\"reason\":\"deployment_verify_mismatch_detection\"}")"
+mismatch_detection_feedback_success="$(echo "${mismatch_detection_feedback_response}" | jq -r '.success // false')"
+mismatch_detection_feedback_error_code="$(echo "${mismatch_detection_feedback_response}" | jq -r '.error.code // empty')"
+mismatch_detection_feedback_error_message="$(echo "${mismatch_detection_feedback_response}" | jq -r '.error.message // empty')"
+if [[ "${mismatch_detection_feedback_success}" != "false" || "${mismatch_detection_feedback_error_code}" != "VALIDATION_ERROR" || "${mismatch_detection_feedback_error_message}" != *"task_type"* || "${mismatch_detection_feedback_error_message}" != *"match"* ]]; then
+  echo "[docker-verify-full] detection mismatch feedback should be rejected with validation error"
+  echo "${mismatch_detection_feedback_response}"
+  exit 1
+fi
+
+MISMATCH_OCR_DATASET_ID="${DETECTION_FEEDBACK_DATASET_ID}"
+mismatch_ocr_feedback_response="$(curl -sS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/inference/runs/${OCR_RUN_ID}/feedback" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"dataset_id\":\"${MISMATCH_OCR_DATASET_ID}\",\"reason\":\"deployment_verify_mismatch_ocr\"}")"
+mismatch_ocr_feedback_success="$(echo "${mismatch_ocr_feedback_response}" | jq -r '.success // false')"
+mismatch_ocr_feedback_error_code="$(echo "${mismatch_ocr_feedback_response}" | jq -r '.error.code // empty')"
+mismatch_ocr_feedback_error_message="$(echo "${mismatch_ocr_feedback_response}" | jq -r '.error.message // empty')"
+if [[ "${mismatch_ocr_feedback_success}" != "false" || "${mismatch_ocr_feedback_error_code}" != "VALIDATION_ERROR" || "${mismatch_ocr_feedback_error_message}" != *"task_type"* || "${mismatch_ocr_feedback_error_message}" != *"match"* ]]; then
+  echo "[docker-verify-full] ocr mismatch feedback should be rejected with validation error"
+  echo "${mismatch_ocr_feedback_response}"
+  exit 1
+fi
+
+DETECTION_FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/inference/runs/${DETECTION_RUN_ID}/feedback" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"dataset_id\":\"${DETECTION_FEEDBACK_DATASET_ID}\",\"reason\":\"deployment_verify_detection\"}")"
+detection_feedback_success="$(echo "${DETECTION_FEEDBACK_RESPONSE}" | jq -r '.success // false')"
+detection_feedback_dataset_id="$(echo "${DETECTION_FEEDBACK_RESPONSE}" | jq -r '.data.feedback_dataset_id // empty')"
+if [[ "${detection_feedback_success}" != "true" || "${detection_feedback_dataset_id}" != "${DETECTION_FEEDBACK_DATASET_ID}" ]]; then
+  echo "[docker-verify-full] detection valid feedback path failed"
+  echo "${DETECTION_FEEDBACK_RESPONSE}"
+  exit 1
+fi
+
+OCR_FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/inference/runs/${OCR_RUN_ID}/feedback" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"dataset_id\":\"${OCR_FEEDBACK_DATASET_ID}\",\"reason\":\"deployment_verify_ocr\"}")"
+ocr_feedback_success="$(echo "${OCR_FEEDBACK_RESPONSE}" | jq -r '.success // false')"
+ocr_feedback_dataset_id="$(echo "${OCR_FEEDBACK_RESPONSE}" | jq -r '.data.feedback_dataset_id // empty')"
+if [[ "${ocr_feedback_success}" != "true" || "${ocr_feedback_dataset_id}" != "${OCR_FEEDBACK_DATASET_ID}" ]]; then
+  echo "[docker-verify-full] ocr valid feedback path failed"
+  echo "${OCR_FEEDBACK_RESPONSE}"
+  exit 1
+fi
+
+DETECTION_DATASET_AFTER_FEEDBACK="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/datasets/${DETECTION_FEEDBACK_DATASET_ID}")"
+detection_feedback_item_count="$(echo "${DETECTION_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${DETECTION_RUN_ID}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
+if [[ "${detection_feedback_item_count}" -lt 1 ]]; then
+  echo "[docker-verify-full] detection feedback dataset item was not created"
+  echo "${DETECTION_DATASET_AFTER_FEEDBACK}"
+  exit 1
+fi
+detection_feedback_attachment_id="$(echo "${DETECTION_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${DETECTION_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .attachment_id // empty' | head -n 1)"
+detection_dataset_attachment_count="$(echo "${DETECTION_DATASET_AFTER_FEEDBACK}" | jq -r --arg attachment_id "${detection_feedback_attachment_id}" '[.data.attachments[] | select(.id == $attachment_id)] | length')"
+detection_feedback_source_attachment_id="$(echo "${DETECTION_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${DETECTION_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.source_attachment_id // empty' | head -n 1)"
+detection_feedback_metadata_run_id="$(echo "${DETECTION_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${DETECTION_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.inference_run_id // empty' | head -n 1)"
+if [[ -z "${detection_feedback_attachment_id}" || "${detection_dataset_attachment_count}" -lt 1 ]]; then
+  echo "[docker-verify-full] detection feedback attachment is not dataset-scoped"
+  echo "${DETECTION_DATASET_AFTER_FEEDBACK}"
+  exit 1
+fi
+if [[ "${detection_feedback_source_attachment_id}" != "${ATTACHMENT_ID}" || "${detection_feedback_metadata_run_id}" != "${DETECTION_RUN_ID}" ]]; then
+  echo "[docker-verify-full] detection feedback metadata attachment/run linkage mismatch"
+  echo "${DETECTION_DATASET_AFTER_FEEDBACK}"
+  exit 1
+fi
+
+OCR_DATASET_AFTER_FEEDBACK="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/datasets/${OCR_FEEDBACK_DATASET_ID}")"
+ocr_feedback_item_count="$(echo "${OCR_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${OCR_RUN_ID}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
+if [[ "${ocr_feedback_item_count}" -lt 1 ]]; then
+  echo "[docker-verify-full] ocr feedback dataset item was not created"
+  echo "${OCR_DATASET_AFTER_FEEDBACK}"
+  exit 1
+fi
+ocr_feedback_attachment_id="$(echo "${OCR_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${OCR_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .attachment_id // empty' | head -n 1)"
+ocr_dataset_attachment_count="$(echo "${OCR_DATASET_AFTER_FEEDBACK}" | jq -r --arg attachment_id "${ocr_feedback_attachment_id}" '[.data.attachments[] | select(.id == $attachment_id)] | length')"
+ocr_feedback_source_attachment_id="$(echo "${OCR_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${OCR_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.source_attachment_id // empty' | head -n 1)"
+ocr_feedback_metadata_run_id="$(echo "${OCR_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${OCR_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.inference_run_id // empty' | head -n 1)"
+if [[ -z "${ocr_feedback_attachment_id}" || "${ocr_dataset_attachment_count}" -lt 1 ]]; then
+  echo "[docker-verify-full] ocr feedback attachment is not dataset-scoped"
+  echo "${OCR_DATASET_AFTER_FEEDBACK}"
+  exit 1
+fi
+if [[ "${ocr_feedback_source_attachment_id}" != "${ATTACHMENT_ID}" || "${ocr_feedback_metadata_run_id}" != "${OCR_RUN_ID}" ]]; then
+  echo "[docker-verify-full] ocr feedback metadata attachment/run linkage mismatch"
+  echo "${OCR_DATASET_AFTER_FEEDBACK}"
+  exit 1
+fi
+
+IDEMPOTENT_DETECTION_REASON="deployment_verify_detection_idempotent"
+IDEMPOTENT_DETECTION_FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/inference/runs/${DETECTION_RUN_ID}/feedback" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"dataset_id\":\"${DETECTION_FEEDBACK_DATASET_ID}\",\"reason\":\"${IDEMPOTENT_DETECTION_REASON}\"}")"
+idempotent_detection_feedback_success="$(echo "${IDEMPOTENT_DETECTION_FEEDBACK_RESPONSE}" | jq -r '.success // false')"
+if [[ "${idempotent_detection_feedback_success}" != "true" ]]; then
+  echo "[docker-verify-full] detection idempotent feedback request failed"
+  echo "${IDEMPOTENT_DETECTION_FEEDBACK_RESPONSE}"
+  exit 1
+fi
+
+IDEMPOTENT_OCR_REASON="deployment_verify_ocr_idempotent"
+IDEMPOTENT_OCR_FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/inference/runs/${OCR_RUN_ID}/feedback" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"dataset_id\":\"${OCR_FEEDBACK_DATASET_ID}\",\"reason\":\"${IDEMPOTENT_OCR_REASON}\"}")"
+idempotent_ocr_feedback_success="$(echo "${IDEMPOTENT_OCR_FEEDBACK_RESPONSE}" | jq -r '.success // false')"
+if [[ "${idempotent_ocr_feedback_success}" != "true" ]]; then
+  echo "[docker-verify-full] ocr idempotent feedback request failed"
+  echo "${IDEMPOTENT_OCR_FEEDBACK_RESPONSE}"
+  exit 1
+fi
+
+DETECTION_DATASET_AFTER_IDEMPOTENT="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/datasets/${DETECTION_FEEDBACK_DATASET_ID}")"
+detection_idempotent_item_count="$(echo "${DETECTION_DATASET_AFTER_IDEMPOTENT}" | jq -r --arg run_id "${DETECTION_RUN_ID}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
+detection_idempotent_reason="$(echo "${DETECTION_DATASET_AFTER_IDEMPOTENT}" | jq -r --arg run_id "${DETECTION_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.feedback_reason // empty' | head -n 1)"
+detection_idempotent_source_attachment_id="$(echo "${DETECTION_DATASET_AFTER_IDEMPOTENT}" | jq -r --arg run_id "${DETECTION_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.source_attachment_id // empty' | head -n 1)"
+if [[ "${detection_idempotent_item_count}" != "1" || "${detection_idempotent_reason}" != "${IDEMPOTENT_DETECTION_REASON}" || "${detection_idempotent_source_attachment_id}" != "${ATTACHMENT_ID}" ]]; then
+  echo "[docker-verify-full] detection feedback idempotency expectation failed"
+  echo "${DETECTION_DATASET_AFTER_IDEMPOTENT}"
+  exit 1
+fi
+
+OCR_DATASET_AFTER_IDEMPOTENT="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/datasets/${OCR_FEEDBACK_DATASET_ID}")"
+ocr_idempotent_item_count="$(echo "${OCR_DATASET_AFTER_IDEMPOTENT}" | jq -r --arg run_id "${OCR_RUN_ID}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
+ocr_idempotent_reason="$(echo "${OCR_DATASET_AFTER_IDEMPOTENT}" | jq -r --arg run_id "${OCR_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.feedback_reason // empty' | head -n 1)"
+ocr_idempotent_source_attachment_id="$(echo "${OCR_DATASET_AFTER_IDEMPOTENT}" | jq -r --arg run_id "${OCR_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.source_attachment_id // empty' | head -n 1)"
+if [[ "${ocr_idempotent_item_count}" != "1" || "${ocr_idempotent_reason}" != "${IDEMPOTENT_OCR_REASON}" || "${ocr_idempotent_source_attachment_id}" != "${ATTACHMENT_ID}" ]]; then
+  echo "[docker-verify-full] ocr feedback idempotency expectation failed"
+  echo "${OCR_DATASET_AFTER_IDEMPOTENT}"
+  exit 1
+fi
+
+REUSE_FEEDBACK_DATASET_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/datasets" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"name\":\"verify-feedback-reuse-${RUN_TAG}\",\"description\":\"verify dataset-scoped attachment reuse\",\"task_type\":\"detection\",\"label_schema\":{\"classes\":[\"defect\"]}}")"
+REUSE_FEEDBACK_DATASET_ID="$(echo "${REUSE_FEEDBACK_DATASET_RESPONSE}" | jq -r '.data.id // empty')"
+if [[ -z "${REUSE_FEEDBACK_DATASET_ID}" ]]; then
+  echo "[docker-verify-full] failed to create reuse feedback dataset"
+  echo "${REUSE_FEEDBACK_DATASET_RESPONSE}"
+  exit 1
+fi
+
+REUSE_FEEDBACK_ATTACHMENT_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/files/dataset/${REUSE_FEEDBACK_DATASET_ID}/upload" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"filename\":\"verify-feedback-reuse-${RUN_TAG}.jpg\"}")"
+REUSE_FEEDBACK_ATTACHMENT_ID="$(echo "${REUSE_FEEDBACK_ATTACHMENT_RESPONSE}" | jq -r '.data.id // empty')"
+if [[ -z "${REUSE_FEEDBACK_ATTACHMENT_ID}" ]]; then
+  echo "[docker-verify-full] failed to upload reuse feedback dataset attachment"
+  echo "${REUSE_FEEDBACK_ATTACHMENT_RESPONSE}"
+  exit 1
+fi
+
+REUSE_FEEDBACK_ATTACHMENT_STATUS=''
+for _ in $(seq 1 "${POLL_MAX_TRIES}"); do
+  REUSE_DATASET_FILES_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+    "${BASE_URL}/api/files/dataset/${REUSE_FEEDBACK_DATASET_ID}")"
+  REUSE_FEEDBACK_ATTACHMENT_STATUS="$(echo "${REUSE_DATASET_FILES_RESPONSE}" | jq -r --arg id "${REUSE_FEEDBACK_ATTACHMENT_ID}" '.data[] | select(.id == $id) | .status // empty')"
+  if [[ "${REUSE_FEEDBACK_ATTACHMENT_STATUS}" == 'ready' || "${REUSE_FEEDBACK_ATTACHMENT_STATUS}" == 'error' ]]; then
+    break
+  fi
+  sleep "${POLL_INTERVAL_SECONDS}"
+done
+if [[ "${REUSE_FEEDBACK_ATTACHMENT_STATUS}" != 'ready' ]]; then
+  echo "[docker-verify-full] reuse feedback attachment did not become ready"
+  echo "${REUSE_DATASET_FILES_RESPONSE}"
+  exit 1
+fi
+
+REUSE_INFERENCE_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/inference/runs" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"model_version_id\":\"${DETECTION_MODEL_VERSION_ID}\",\"input_attachment_id\":\"${REUSE_FEEDBACK_ATTACHMENT_ID}\",\"task_type\":\"detection\"}")"
+REUSE_RUN_ID="$(echo "${REUSE_INFERENCE_RESPONSE}" | jq -r '.data.id // empty')"
+if [[ -z "${REUSE_RUN_ID}" ]]; then
+  echo "[docker-verify-full] failed to create reuse-path inference run"
+  echo "${REUSE_INFERENCE_RESPONSE}"
+  exit 1
+fi
+
+REUSE_FEEDBACK_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  -X POST "${BASE_URL}/api/inference/runs/${REUSE_RUN_ID}/feedback" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: ${BUSINESS_CSRF}" \
+  -d "{\"dataset_id\":\"${REUSE_FEEDBACK_DATASET_ID}\",\"reason\":\"deployment_verify_reuse\"}")"
+reuse_feedback_success="$(echo "${REUSE_FEEDBACK_RESPONSE}" | jq -r '.success // false')"
+reuse_feedback_dataset_id="$(echo "${REUSE_FEEDBACK_RESPONSE}" | jq -r '.data.feedback_dataset_id // empty')"
+if [[ "${reuse_feedback_success}" != "true" || "${reuse_feedback_dataset_id}" != "${REUSE_FEEDBACK_DATASET_ID}" ]]; then
+  echo "[docker-verify-full] reuse-path feedback request failed"
+  echo "${REUSE_FEEDBACK_RESPONSE}"
+  exit 1
+fi
+
+REUSE_DATASET_AFTER_FEEDBACK="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
+  "${BASE_URL}/api/datasets/${REUSE_FEEDBACK_DATASET_ID}")"
+reuse_feedback_item_count="$(echo "${REUSE_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${REUSE_RUN_ID}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
+reuse_feedback_attachment_id="$(echo "${REUSE_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${REUSE_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .attachment_id // empty' | head -n 1)"
+reuse_dataset_attachment_count="$(echo "${REUSE_DATASET_AFTER_FEEDBACK}" | jq -r --arg attachment_id "${REUSE_FEEDBACK_ATTACHMENT_ID}" '[.data.attachments[] | select(.id == $attachment_id)] | length')"
+reuse_feedback_metadata_source_attachment_id="$(echo "${REUSE_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${REUSE_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.source_attachment_id // empty' | head -n 1)"
+reuse_feedback_metadata_reason="$(echo "${REUSE_DATASET_AFTER_FEEDBACK}" | jq -r --arg run_id "${REUSE_RUN_ID}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .metadata.feedback_reason // empty' | head -n 1)"
+if [[ "${reuse_feedback_item_count}" != "1" || "${reuse_feedback_attachment_id}" != "${REUSE_FEEDBACK_ATTACHMENT_ID}" || "${reuse_dataset_attachment_count}" != "1" || "${reuse_feedback_metadata_source_attachment_id}" != "${REUSE_FEEDBACK_ATTACHMENT_ID}" || "${reuse_feedback_metadata_reason}" != "deployment_verify_reuse" ]]; then
+  echo "[docker-verify-full] reuse-path feedback did not reuse dataset-scoped attachment"
+  echo "${REUSE_DATASET_AFTER_FEEDBACK}"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "detection mismatch->${MISMATCH_DETECTION_DATASET_ID} rejected and linked->${DETECTION_FEEDBACK_DATASET_ID}; ocr mismatch->${MISMATCH_OCR_DATASET_ID} rejected and linked->${OCR_FEEDBACK_DATASET_ID}; reuse dataset=${REUSE_FEEDBACK_DATASET_ID} run=${REUSE_RUN_ID}"
+
+CURRENT_STEP='phase2 annotation/review + launch-readiness guards'
+echo "[docker-verify-full] 13/16 ${CURRENT_STEP}"
+PHASE2_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" EXPECT_RUNTIME_FALLBACK=false bash scripts/smoke-phase2.sh)"
+echo "${PHASE2_OUTPUT}"
+PHASE2_DATASET_ID="$(echo "${PHASE2_OUTPUT}" | awk -F= '/^dataset_id=/{print $2; exit}')"
+PHASE2_NO_TRAIN_VERSION_ID="$(echo "${PHASE2_OUTPUT}" | awk -F= '/^no_train_gate_version_id=/{print $2; exit}')"
+if [[ -z "${PHASE2_DATASET_ID}" || -z "${PHASE2_NO_TRAIN_VERSION_ID}" ]]; then
+  echo "[docker-verify-full] phase2 output missing required ids"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "phase2 dataset=${PHASE2_DATASET_ID}, no-train gate version=${PHASE2_NO_TRAIN_VERSION_ID}"
 
 CURRENT_STEP='dataset export/import roundtrip'
-echo "[docker-verify-full] 10/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 14/16 ${CURRENT_STEP}"
 DATASET_ROUNDTRIP_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-dataset-export-roundtrip.sh)"
 echo "${DATASET_ROUNDTRIP_OUTPUT}"
 
@@ -388,7 +708,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "roundtrip targets: det=${ROUNDTRIP_DET_TARGET}, ocr=${ROUNDTRIP_OCR_TARGET}, seg=${ROUNDTRIP_SEG_TARGET}"
 
 CURRENT_STEP='real closure smoke (yolo + paddleocr + doctr)'
-echo "[docker-verify-full] 11/11 ${CURRENT_STEP}"
+echo "[docker-verify-full] 15/16 ${CURRENT_STEP}"
 REAL_CLOSURE_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-real-closure.sh)"
 echo "${REAL_CLOSURE_OUTPUT}"
 
@@ -400,6 +720,30 @@ if [[ -z "${REAL_CLOSURE_YOLO_SOURCE}" || -z "${REAL_CLOSURE_OCR_SOURCE}" || -z 
   exit 1
 fi
 append_check "${CURRENT_STEP}" "passed" "sources: yolo=${REAL_CLOSURE_YOLO_SOURCE}, paddleocr=${REAL_CLOSURE_OCR_SOURCE}, doctr=${REAL_CLOSURE_DOCTR_SOURCE}"
+
+CURRENT_STEP='ocr closure smoke (paddleocr + doctr)'
+echo "[docker-verify-full] 16/16 ${CURRENT_STEP}"
+OCR_CLOSURE_OUTPUT="$(START_API=false OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-ocr-closure.sh)"
+echo "${OCR_CLOSURE_OUTPUT}"
+
+OCR_CLOSURE_PADDLE_SOURCE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^paddle_execution_source=/{print $2; exit}')"
+OCR_CLOSURE_DOCTR_SOURCE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^doctr_execution_source=/{print $2; exit}')"
+OCR_CLOSURE_PADDLE_ACCURACY="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^paddle_accuracy=/{print $2; exit}')"
+OCR_CLOSURE_DOCTR_PRIMARY_NAME="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^doctr_primary_metric_name=/{print $2; exit}')"
+OCR_CLOSURE_DOCTR_PRIMARY_VALUE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^doctr_primary_metric_value=/{print $2; exit}')"
+if [[ -z "${OCR_CLOSURE_PADDLE_SOURCE}" || -z "${OCR_CLOSURE_DOCTR_SOURCE}" ]]; then
+  echo "[docker-verify-full] ocr closure output missing execution sources."
+  exit 1
+fi
+if [[ -z "${OCR_CLOSURE_PADDLE_ACCURACY}" || "${OCR_CLOSURE_PADDLE_ACCURACY}" == "null" ]]; then
+  echo "[docker-verify-full] ocr closure output missing paddle_accuracy."
+  exit 1
+fi
+if [[ -z "${OCR_CLOSURE_DOCTR_PRIMARY_NAME}" || -z "${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}" || "${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}" == "null" ]]; then
+  echo "[docker-verify-full] ocr closure output missing docTR primary metric."
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "execution_sources: paddleocr=${OCR_CLOSURE_PADDLE_SOURCE}, doctr=${OCR_CLOSURE_DOCTR_SOURCE}; metrics: paddle_accuracy=${OCR_CLOSURE_PADDLE_ACCURACY}, doctr_${OCR_CLOSURE_DOCTR_PRIMARY_NAME}=${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}"
 
 finalize_report "passed" "full deployment verification succeeded"
 

@@ -30,6 +30,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+wait_inference_attachment_ready() {
+  local attachment_id="$1"
+  local list_resp=""
+  local attachment_status=""
+
+  for _ in {1..120}; do
+    list_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/inference")"
+    attachment_status="$(echo "${list_resp}" | jq -r --arg id "${attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
+    if [[ "${attachment_status}" == "ready" ]]; then
+      return 0
+    fi
+    if [[ "${attachment_status}" == "error" ]]; then
+      echo "[smoke-execution-fields] inference attachment entered error state."
+      echo "${list_resp}"
+      exit 1
+    fi
+    sleep 0.25
+  done
+
+  echo "[smoke-execution-fields] inference attachment not ready in time."
+  echo "${list_resp}"
+  exit 1
+}
+
 cd "${ROOT_DIR}"
 
 APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
@@ -63,12 +87,64 @@ if [[ -z "${csrf_token}" ]]; then
   exit 1
 fi
 
+model_versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/model-versions")"
+detection_model_version_id="$(echo "${model_versions_resp}" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
+if [[ -z "${detection_model_version_id}" ]]; then
+  echo "[smoke-execution-fields] no registered detection model version found."
+  echo "${model_versions_resp}"
+  exit 1
+fi
+
+datasets_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets")"
+detection_dataset_id="$(echo "${datasets_resp}" | jq -r '.data[] | select(.task_type=="detection" and .status=="ready") | .id' | head -n 1)"
+if [[ -z "${detection_dataset_id}" ]]; then
+  detection_dataset_id="$(echo "${datasets_resp}" | jq -r '.data[] | select(.task_type=="detection") | .id' | head -n 1)"
+fi
+ocr_dataset_id="$(echo "${datasets_resp}" | jq -r '.data[] | select(.task_type=="ocr" and .status=="ready") | .id' | head -n 1)"
+if [[ -z "${ocr_dataset_id}" ]]; then
+  ocr_dataset_id="$(echo "${datasets_resp}" | jq -r '.data[] | select(.task_type=="ocr") | .id' | head -n 1)"
+fi
+if [[ -z "${detection_dataset_id}" || -z "${ocr_dataset_id}" ]]; then
+  echo "[smoke-execution-fields] required detection/ocr datasets not found."
+  echo "${datasets_resp}"
+  exit 1
+fi
+
+detection_versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${detection_dataset_id}/versions")"
+detection_dataset_version_id="$(echo "${detection_versions_resp}" | jq -r '.data[] | select((.split_summary.train // 0) > 0 and (.annotation_coverage // 0) > 0) | .id' | head -n 1)"
+if [[ -z "${detection_dataset_version_id}" ]]; then
+  echo "[smoke-execution-fields] no trainable detection dataset version found."
+  echo "${detection_versions_resp}"
+  exit 1
+fi
+
+ocr_versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${ocr_dataset_id}/versions")"
+ocr_dataset_version_id="$(echo "${ocr_versions_resp}" | jq -r '.data[] | select((.split_summary.train // 0) > 0 and (.annotation_coverage // 0) > 0) | .id' | head -n 1)"
+if [[ -z "${ocr_dataset_version_id}" ]]; then
+  echo "[smoke-execution-fields] no trainable OCR dataset version found."
+  echo "${ocr_versions_resp}"
+  exit 1
+fi
+
+detection_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/files/inference/upload" \
+  -d "{\"filename\":\"execution-fields-detection-$(date +%s).jpg\"}")"
+detection_input_attachment_id="$(echo "${detection_upload_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${detection_input_attachment_id}" ]]; then
+  echo "[smoke-execution-fields] failed to upload detection inference attachment."
+  echo "${detection_upload_resp}"
+  exit 1
+fi
+wait_inference_attachment_ready "${detection_input_attachment_id}"
+
 # 1) YOLO local-command training should persist execution_mode=local_command
 local_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d '{"name":"exec-mode-local","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"4","batch_size":"2","learning_rate":"0.0008"}}')"
+  -d "{\"name\":\"exec-mode-local\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${detection_dataset_id}\",\"dataset_version_id\":\"${detection_dataset_version_id}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"4\",\"batch_size\":\"2\",\"learning_rate\":\"0.0008\"}}")"
 local_job_id="$(echo "${local_job_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${local_job_id}" ]]; then
   echo "[smoke-execution-fields] failed to create local-command training job."
@@ -110,7 +186,7 @@ paddle_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d '{"name":"exec-mode-simulated","task_type":"ocr","framework":"paddleocr","dataset_id":"d-1","dataset_version_id":"dv-1","base_model":"paddleocr-PP-OCRv4","config":{"epochs":"4","batch_size":"2","learning_rate":"0.001"}}')"
+  -d "{\"name\":\"exec-mode-simulated\",\"task_type\":\"ocr\",\"framework\":\"paddleocr\",\"dataset_id\":\"${ocr_dataset_id}\",\"dataset_version_id\":\"${ocr_dataset_version_id}\",\"base_model\":\"paddleocr-PP-OCRv4\",\"config\":{\"epochs\":\"4\",\"batch_size\":\"2\",\"learning_rate\":\"0.001\"}}")"
 paddle_job_id="$(echo "${paddle_job_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${paddle_job_id}" ]]; then
   echo "[smoke-execution-fields] failed to create PaddleOCR training job."
@@ -152,7 +228,7 @@ infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/inference/runs" \
-  -d '{"model_version_id":"mv-2","input_attachment_id":"f-1","task_type":"detection"}')"
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${detection_input_attachment_id}\",\"task_type\":\"detection\"}")"
 
 execution_source="$(echo "${infer_resp}" | jq -r '.data.execution_source // empty')"
 normalized_source="$(echo "${infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"

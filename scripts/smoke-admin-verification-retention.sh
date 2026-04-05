@@ -16,6 +16,10 @@ API_LOG="$(mktemp)"
 APP_DATA_DIR="$(mktemp -d)"
 REPORTS_DIR="${ROOT_DIR}/.data/verify-reports"
 REPORT_FILE="${REPORTS_DIR}/docker-verify-full-retention-smoke-$(date +%s).json"
+RUN_TAG="$(date +%s)"
+SAMPLE_MODEL_ID="m-smoke-${RUN_TAG}"
+SAMPLE_APPROVAL_ID="ar-smoke-${RUN_TAG}"
+SAMPLE_TOP_JOB_ID="tj-smoke-${RUN_TAG}"
 API_PID=""
 
 cleanup() {
@@ -30,7 +34,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "${REPORTS_DIR}"
-cat > "${REPORT_FILE}" <<'JSONEOF'
+cat > "${REPORT_FILE}" <<JSONEOF
 {
   "status": "passed",
   "summary": "retention smoke report",
@@ -42,8 +46,8 @@ cat > "${REPORT_FILE}" <<'JSONEOF'
     "probe_username": "verify-smoke"
   },
   "entities": {
-    "model_id": "m-1",
-    "approval_id": "ar-1"
+    "model_id": "${SAMPLE_MODEL_ID}",
+    "approval_id": "${SAMPLE_APPROVAL_ID}"
   },
   "checks": [
     {
@@ -61,7 +65,7 @@ cat > "${REPORT_FILE}" <<'JSONEOF'
     "max_rows_single_job": 90,
     "near_total_cap": false,
     "top_jobs": [
-      { "training_job_id": "tj-982", "rows": 90 }
+      { "training_job_id": "${SAMPLE_TOP_JOB_ID}", "rows": 90 }
     ]
   }
 }

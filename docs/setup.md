@@ -4,6 +4,9 @@
 - Git
 - A POSIX shell environment
 - Your preferred editor/IDE
+- Docker Engine + Docker Compose
+
+Optional for repository maintenance only:
 - Node.js 20+
 - npm 10+
 
@@ -24,7 +27,23 @@ Follow this order before making changes:
 7. `docs/data-model.md`
 8. `docs/api-contract.md`
 
-## 4) Local development
+## 4) Single Docker Path
+```bash
+cp .env.example .env
+npm run docker:up
+```
+
+Open `http://127.0.0.1:8080`.
+
+Recommended verification:
+```bash
+npm run docker:healthcheck
+npm run docker:verify:full
+```
+
+## 5) Optional source-mode maintenance
+This mode is kept only for internal repository debugging and Codex maintenance. It is not the primary product run path.
+
 ```bash
 npm install
 npm run dev
@@ -32,33 +51,19 @@ npm run dev
 
 Open `http://127.0.0.1:5173`.
 
-## 5) Docker deployment (intranet-ready)
-```bash
-cp .env.example .env
-docker compose up --build -d
-```
-
-Open `http://127.0.0.1:8080`.
-
-If deployment host cannot build/pull from Docker Hub, use prebuilt registry images:
-```bash
-docker compose -f docker-compose.registry.yml up -d
-```
-
 Useful deployment helpers:
 ```bash
-npm run docker:images:build
-npm run docker:images:build-push
-npm run docker:images:save
-IMAGE_TAR=vistral-images-round1.tar npm run docker:images:load-up
 npm run docker:healthcheck
 npm run docker:verify:full
-npm run docker:release:bundle
-VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified
+npm run smoke:account-governance
 npm run smoke:admin:verification-reports
+npm run smoke:conversation-actions
 npm run smoke:demo:train-data
 npm run smoke:ocr-closure
 npm run smoke:real-closure
+npm run smoke:inference-feedback-guard
+npm run smoke:no-seed-hardcoding
+npm run smoke:core-closure
 npm run smoke:restart-resume
 npm run smoke:local-command
 npm run smoke:execution-fields
@@ -72,6 +77,17 @@ npm run smoke:dataset-export-roundtrip
 npm run smoke:admin:verification-retention
 npm run smoke:verify-report-retention-e2e
 ```
+
+`smoke:conversation-actions` environment knobs:
+- `EXPECTED_TRAINING_DATASET_ID`
+- `EXPECTED_TRAINING_DATASET_VERSION_ID`
+- `AUTO_PREPARE_TRAINING_TARGET` (default `true`)
+
+`smoke:inference-feedback-guard` environment knobs:
+- `EXPECTED_VALID_FEEDBACK_DATASET_ID`
+- `EXPECTED_OCR_FEEDBACK_DATASET_ID`
+- `EXPECTED_MISMATCH_FEEDBACK_DATASET_ID`
+- `AUTO_PREPARE_FEEDBACK_DATASETS` (default `true`)
 
 `smoke:dataset-export-roundtrip` currently covers:
 - detection: yolo/coco/labelme export->import roundtrip
@@ -102,10 +118,12 @@ Persistence-related env vars (prototype):
 - placeholder examples: `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 
 `docker:verify:full` writes audit-style reports to `.data/verify-reports/`.
-It now also validates dataset export/import roundtrip (detection/ocr/segmentation) and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
-`docker:release:bundle` accepts optional gates:
-- `VERIFY_REPORT_PATH=<report.json|report.md>` include specific report files
-- `VERIFY_REPORT_MAX_AGE_SECONDS=<seconds>` fail if selected report is too old
+It now also validates account governance, conversation operational actions, phase2 annotation/review + launch-readiness gates (including dataset-version ownership under the selected dataset), dataset export/import roundtrip (detection/ocr/segmentation), and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
+By default it runs OCR closure in non-strict mode (`OCR_CLOSURE_STRICT_LOCAL_COMMAND=false`) so deployment verification can tolerate simulated fallback when local commands are unavailable.
+
+Strict OCR closure options:
+- `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run smoke:ocr-closure`
+- `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run docker:verify:full`
 
 ## 6) Baseline Validation
 For docs-focused changes, run at least:

@@ -1,13 +1,18 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type ChangeEvent as ReactChangeEvent,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
+  type ReactNode,
+  type SetStateAction,
   type TouchEvent as ReactTouchEvent
 } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -27,6 +32,7 @@ import {
 } from '../../shared/uploadLimits';
 import SessionMenu from '../components/SessionMenu';
 import { useI18n } from '../i18n/I18nProvider';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import StateBlock from '../components/StateBlock';
 import StatusBadge from '../components/StatusBadge';
 import { api } from '../services/api';
@@ -40,38 +46,24 @@ interface LocalChatHistoryItem {
   pinned: boolean;
 }
 
-type HistoryGroupKey = 'pinned' | 'today' | 'yesterday' | 'previous_7_days' | 'older';
-type SidebarSectionKey = 'controls' | 'history' | 'quick' | 'preferences';
-
-interface HistoryGroup {
-  key: HistoryGroupKey;
-  label: string;
-  items: LocalChatHistoryItem[];
-}
-
 interface HistoryContextMenuState {
   id: string;
   x: number;
   y: number;
 }
 
-type HistoryContextMenuAction = 'open' | 'rename' | 'pin' | 'delete';
+type HistoryContextMenuAction = 'rename' | 'pin' | 'delete';
+interface AttachmentStatusSummary {
+  uploading: number;
+  processing: number;
+  ready: number;
+  error: number;
+}
 
 const historyStorageKey = 'vistral-conversation-history';
 const hiddenHistoryStorageKey = 'vistral-hidden-conversations';
-const collapsedHistoryGroupStorageKey = 'vistral-collapsed-history-groups';
 const pinnedOrderStorageKey = 'vistral-pinned-history-order';
 const sidebarCollapsedStorageKey = 'vistral-chat-sidebar-collapsed';
-const collapsedSidebarSectionsStorageKey = 'vistral-chat-collapsed-sidebar-sections';
-const historyGroupKeys: HistoryGroupKey[] = [
-  'pinned',
-  'today',
-  'yesterday',
-  'previous_7_days',
-  'older'
-];
-const sidebarSectionKeys: SidebarSectionKey[] = ['controls', 'history', 'quick', 'preferences'];
-const defaultCollapsedSidebarSections: SidebarSectionKey[] = ['quick', 'preferences'];
 const compactViewportMaxWidth = 960;
 const backgroundRefreshIntervalMs = 5000;
 
@@ -133,66 +125,6 @@ const readHiddenConversationIdsFromStorage = (): string[] => {
 const writeHiddenConversationIdsToStorage = (ids: string[]) => {
   try {
     localStorage.setItem(hiddenHistoryStorageKey, JSON.stringify(normalizeHiddenConversationIds(ids)));
-  } catch {
-    // Ignore storage errors in prototype mode.
-  }
-};
-
-const readCollapsedHistoryGroupsFromStorage = (): HistoryGroupKey[] => {
-  try {
-    const raw = localStorage.getItem(collapsedHistoryGroupStorageKey);
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw) as string[];
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    const parsedSet = new Set(parsed);
-    return historyGroupKeys.filter((key) => parsedSet.has(key));
-  } catch {
-    return [];
-  }
-};
-
-const writeCollapsedHistoryGroupsToStorage = (groupKeys: HistoryGroupKey[]) => {
-  try {
-    const unique = Array.from(new Set(groupKeys)).filter((key): key is HistoryGroupKey =>
-      historyGroupKeys.includes(key as HistoryGroupKey)
-    );
-    localStorage.setItem(collapsedHistoryGroupStorageKey, JSON.stringify(unique));
-  } catch {
-    // Ignore storage errors in prototype mode.
-  }
-};
-
-const readCollapsedSidebarSectionsFromStorage = (): SidebarSectionKey[] => {
-  try {
-    const raw = localStorage.getItem(collapsedSidebarSectionsStorageKey);
-    if (!raw) {
-      return defaultCollapsedSidebarSections;
-    }
-
-    const parsed = JSON.parse(raw) as string[];
-    if (!Array.isArray(parsed)) {
-      return defaultCollapsedSidebarSections;
-    }
-
-    const parsedSet = new Set(parsed);
-    return sidebarSectionKeys.filter((key) => parsedSet.has(key));
-  } catch {
-    return defaultCollapsedSidebarSections;
-  }
-};
-
-const writeCollapsedSidebarSectionsToStorage = (sectionKeys: SidebarSectionKey[]) => {
-  try {
-    const unique = Array.from(new Set(sectionKeys)).filter((key): key is SidebarSectionKey =>
-      sidebarSectionKeys.includes(key as SidebarSectionKey)
-    );
-    localStorage.setItem(collapsedSidebarSectionsStorageKey, JSON.stringify(unique));
   } catch {
     // Ignore storage errors in prototype mode.
   }
@@ -377,43 +309,6 @@ const daysDiffFromNow = (iso: string): number => {
   return Math.floor((todayStart - targetStart) / (1000 * 60 * 60 * 24));
 };
 
-const toHistoryGroups = (items: LocalChatHistoryItem[]): HistoryGroup[] => {
-  const groupBuckets: HistoryGroup[] = [
-    { key: 'pinned', label: 'Pinned', items: [] },
-    { key: 'today', label: 'Today', items: [] },
-    { key: 'yesterday', label: 'Yesterday', items: [] },
-    { key: 'previous_7_days', label: 'Previous 7 Days', items: [] },
-    { key: 'older', label: 'Older', items: [] }
-  ];
-
-  for (const item of items) {
-    if (item.pinned) {
-      groupBuckets[0].items.push(item);
-      continue;
-    }
-
-    const dayDiff = daysDiffFromNow(item.updated_at);
-    if (dayDiff <= 0) {
-      groupBuckets[1].items.push(item);
-      continue;
-    }
-
-    if (dayDiff === 1) {
-      groupBuckets[2].items.push(item);
-      continue;
-    }
-
-    if (dayDiff <= 7) {
-      groupBuckets[3].items.push(item);
-      continue;
-    }
-
-    groupBuckets[4].items.push(item);
-  }
-
-  return groupBuckets.filter((group) => group.items.length > 0);
-};
-
 const mergeHistoryWithConversations = (
   conversations: ConversationRecord[],
   previous: LocalChatHistoryItem[],
@@ -530,6 +425,957 @@ const actionRouteByEntityType: Record<'Dataset' | 'TrainingJob' | 'Model', strin
 
 const datasetIdPattern = /\((d-\d+)\)$/i;
 const isAuthenticationRequiredMessage = (message: string): boolean => message === 'Authentication required.';
+type TranslateFn = (source: string, vars?: Record<string, string | number>) => string;
+
+interface ConversationHistoryItemRowProps {
+  item: LocalChatHistoryItem;
+  isActive: boolean;
+  isPinnedItem: boolean;
+  isDragging: boolean;
+  isDragOver: boolean;
+  isLongPressing: boolean;
+  isMenuOpen: boolean;
+  isEditing: boolean;
+  editingConversationTitle: string;
+  isRenaming: boolean;
+  isRestoring: boolean;
+  t: TranslateFn;
+  renderConversationTitle: (title: string) => string;
+  setEditingConversationTitle: Dispatch<SetStateAction<string>>;
+  requestSaveConversationTitle: (conversationId: string) => void;
+  onCancelRenameConversation: () => void;
+  requestRestoreConversation: (conversationId: string) => void;
+  consumeHistoryLongPressTrigger: () => boolean;
+  onHistoryItemKeyDown: (event: ReactKeyboardEvent<HTMLElement>, itemId: string) => void;
+  onOpenHistoryContextMenu: (event: ReactMouseEvent<HTMLLIElement>, itemId: string) => void;
+  onOpenHistoryContextMenuFromButton: (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    itemId: string
+  ) => void;
+  onHistoryItemTouchStart: (event: ReactTouchEvent<HTMLLIElement>, itemId: string) => void;
+  onHistoryItemTouchMove: () => void;
+  onHistoryItemTouchEnd: () => void;
+  onHistoryItemTouchCancel: () => void;
+  onPinnedDragStart: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDragOver: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDrop: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDragEnd: () => void;
+}
+
+const ConversationHistoryItemRow = memo(function ConversationHistoryItemRow({
+  item,
+  isActive,
+  isPinnedItem,
+  isDragging,
+  isDragOver,
+  isLongPressing,
+  isMenuOpen,
+  isEditing,
+  editingConversationTitle,
+  isRenaming,
+  isRestoring,
+  t,
+  renderConversationTitle,
+  setEditingConversationTitle,
+  requestSaveConversationTitle,
+  onCancelRenameConversation,
+  requestRestoreConversation,
+  consumeHistoryLongPressTrigger,
+  onHistoryItemKeyDown,
+  onOpenHistoryContextMenu,
+  onOpenHistoryContextMenuFromButton,
+  onHistoryItemTouchStart,
+  onHistoryItemTouchMove,
+  onHistoryItemTouchEnd,
+  onHistoryItemTouchCancel,
+  onPinnedDragStart,
+  onPinnedDragOver,
+  onPinnedDrop,
+  onPinnedDragEnd
+}: ConversationHistoryItemRowProps) {
+  const itemClasses = [
+    isActive ? 'chat-history-item active' : 'chat-history-item',
+    isMenuOpen ? 'menu-open' : '',
+    isPinnedItem ? 'chat-history-item-draggable' : '',
+    isDragging ? 'dragging' : '',
+    isDragOver ? 'drag-over' : '',
+    isLongPressing ? 'long-pressing' : ''
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLLIElement>) => {
+      onPinnedDragStart(event, item.id);
+    },
+    [item.id, onPinnedDragStart]
+  );
+
+  const handleDragOver = useCallback(
+    (event: ReactDragEvent<HTMLLIElement>) => {
+      if (isPinnedItem) {
+        onPinnedDragOver(event, item.id);
+      }
+    },
+    [isPinnedItem, item.id, onPinnedDragOver]
+  );
+
+  const handleDrop = useCallback(
+    (event: ReactDragEvent<HTMLLIElement>) => {
+      if (isPinnedItem) {
+        onPinnedDrop(event, item.id);
+      }
+    },
+    [isPinnedItem, item.id, onPinnedDrop]
+  );
+
+  const handleContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLLIElement>) => {
+      onOpenHistoryContextMenu(event, item.id);
+    },
+    [item.id, onOpenHistoryContextMenu]
+  );
+
+  const handleTouchStart = useCallback(
+    (event: ReactTouchEvent<HTMLLIElement>) => {
+      onHistoryItemTouchStart(event, item.id);
+    },
+    [item.id, onHistoryItemTouchStart]
+  );
+
+  const handleRestore = useCallback(() => {
+    if (consumeHistoryLongPressTrigger()) {
+      return;
+    }
+
+    requestRestoreConversation(item.id);
+  }, [consumeHistoryLongPressTrigger, item.id, requestRestoreConversation]);
+
+  const handleItemKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      onHistoryItemKeyDown(event, item.id);
+    },
+    [item.id, onHistoryItemKeyDown]
+  );
+
+  const handleOpenMenuFromButton = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
+      onOpenHistoryContextMenuFromButton(event, item.id);
+    },
+    [item.id, onOpenHistoryContextMenuFromButton]
+  );
+
+  const handleEditingTitleChange = useCallback(
+    (event: ReactChangeEvent<HTMLInputElement>) => {
+      setEditingConversationTitle(event.target.value);
+    },
+    [setEditingConversationTitle]
+  );
+
+  const handleEditingTitleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        requestSaveConversationTitle(item.id);
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCancelRenameConversation();
+      }
+    },
+    [item.id, onCancelRenameConversation, requestSaveConversationTitle]
+  );
+
+  const handleSaveTitle = useCallback(() => {
+    requestSaveConversationTitle(item.id);
+  }, [item.id, requestSaveConversationTitle]);
+
+  return (
+    <li
+      className={itemClasses}
+      draggable={isPinnedItem && !isEditing}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      onDragEnd={onPinnedDragEnd}
+      onContextMenu={handleContextMenu}
+      onTouchStart={handleTouchStart}
+      onTouchMove={onHistoryItemTouchMove}
+      onTouchEnd={onHistoryItemTouchEnd}
+      onTouchCancel={onHistoryItemTouchCancel}
+    >
+      {isEditing ? (
+        <div className="chat-history-edit stack tight">
+          <input
+            value={editingConversationTitle}
+            onChange={handleEditingTitleChange}
+            onKeyDown={handleEditingTitleKeyDown}
+            placeholder={t('Conversation title')}
+            autoFocus
+            disabled={isRenaming}
+          />
+          <div className="row gap">
+            <button
+              className="small-btn chat-history-action"
+              onClick={handleSaveTitle}
+              disabled={isRenaming}
+              type="button"
+            >
+              {isRenaming ? t('Saving...') : t('Save')}
+            </button>
+            <button
+              className="small-btn chat-history-action"
+              onClick={onCancelRenameConversation}
+              disabled={isRenaming}
+              type="button"
+            >
+              {t('Cancel')}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="chat-history-item-shell">
+          <button
+            className="chat-history-open"
+            onClick={handleRestore}
+            onKeyDown={handleItemKeyDown}
+            disabled={isRestoring}
+            type="button"
+          >
+            <span className="chat-history-title-row">
+              {isPinnedItem ? (
+                <span className="chat-history-drag-handle" aria-hidden="true">
+                  ::
+                </span>
+              ) : null}
+              <span className="chat-history-title-text">{renderConversationTitle(item.title)}</span>
+            </span>
+            <small>{formatHistoryTimestamp(item.updated_at)}</small>
+          </button>
+          <button
+            className={`chat-history-more${isMenuOpen ? ' active' : ''}`}
+            type="button"
+            onClick={handleOpenMenuFromButton}
+            title={t('More actions')}
+            aria-label={t('More actions')}
+            aria-haspopup="menu"
+            aria-expanded={isMenuOpen}
+          >
+            <span className="chat-history-more-dots" aria-hidden="true">
+              <span className="chat-history-more-dot" />
+              <span className="chat-history-more-dot" />
+              <span className="chat-history-more-dot" />
+            </span>
+          </button>
+        </div>
+      )}
+    </li>
+  );
+});
+
+interface ConversationHistoryListProps {
+  historyItems: LocalChatHistoryItem[];
+  activeConversationId: string | null;
+  menuConversationId: string | null;
+  editingConversationId: string | null;
+  editingConversationTitle: string;
+  renamingConversationId: string | null;
+  restoringConversationId: string | null;
+  draggingPinnedConversationId: string | null;
+  dragOverPinnedConversationId: string | null;
+  longPressingConversationId: string | null;
+  t: TranslateFn;
+  renderConversationTitle: (title: string) => string;
+  setEditingConversationTitle: Dispatch<SetStateAction<string>>;
+  requestSaveConversationTitle: (conversationId: string) => void;
+  onCancelRenameConversation: () => void;
+  requestRestoreConversation: (conversationId: string) => void;
+  consumeHistoryLongPressTrigger: () => boolean;
+  onHistoryItemKeyDown: (event: ReactKeyboardEvent<HTMLElement>, itemId: string) => void;
+  onOpenHistoryContextMenu: (event: ReactMouseEvent<HTMLLIElement>, itemId: string) => void;
+  onOpenHistoryContextMenuFromButton: (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    itemId: string
+  ) => void;
+  onHistoryItemTouchStart: (event: ReactTouchEvent<HTMLLIElement>, itemId: string) => void;
+  onHistoryItemTouchMove: () => void;
+  onHistoryItemTouchEnd: () => void;
+  onHistoryItemTouchCancel: () => void;
+  onPinnedDragStart: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDragOver: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDrop: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDragEnd: () => void;
+}
+
+const ConversationHistoryList = memo(function ConversationHistoryList({
+  historyItems,
+  activeConversationId,
+  menuConversationId,
+  editingConversationId,
+  editingConversationTitle,
+  renamingConversationId,
+  restoringConversationId,
+  draggingPinnedConversationId,
+  dragOverPinnedConversationId,
+  longPressingConversationId,
+  t,
+  renderConversationTitle,
+  setEditingConversationTitle,
+  requestSaveConversationTitle,
+  onCancelRenameConversation,
+  requestRestoreConversation,
+  consumeHistoryLongPressTrigger,
+  onHistoryItemKeyDown,
+  onOpenHistoryContextMenu,
+  onOpenHistoryContextMenuFromButton,
+  onHistoryItemTouchStart,
+  onHistoryItemTouchMove,
+  onHistoryItemTouchEnd,
+  onHistoryItemTouchCancel,
+  onPinnedDragStart,
+  onPinnedDragOver,
+  onPinnedDrop,
+  onPinnedDragEnd
+}: ConversationHistoryListProps) {
+  return historyItems.map((item) => (
+    <ConversationHistoryItemRow
+      key={item.id}
+      item={item}
+      isActive={item.id === activeConversationId}
+      isPinnedItem={item.pinned}
+      isDragging={draggingPinnedConversationId === item.id}
+      isDragOver={
+        dragOverPinnedConversationId === item.id &&
+        draggingPinnedConversationId !== item.id
+      }
+      isLongPressing={longPressingConversationId === item.id}
+      isMenuOpen={menuConversationId === item.id}
+      isEditing={editingConversationId === item.id}
+      editingConversationTitle={editingConversationTitle}
+      isRenaming={renamingConversationId === item.id}
+      isRestoring={restoringConversationId === item.id}
+      t={t}
+      renderConversationTitle={renderConversationTitle}
+      setEditingConversationTitle={setEditingConversationTitle}
+      requestSaveConversationTitle={requestSaveConversationTitle}
+      onCancelRenameConversation={onCancelRenameConversation}
+      requestRestoreConversation={requestRestoreConversation}
+      consumeHistoryLongPressTrigger={consumeHistoryLongPressTrigger}
+      onHistoryItemKeyDown={onHistoryItemKeyDown}
+      onOpenHistoryContextMenu={onOpenHistoryContextMenu}
+      onOpenHistoryContextMenuFromButton={onOpenHistoryContextMenuFromButton}
+      onHistoryItemTouchStart={onHistoryItemTouchStart}
+      onHistoryItemTouchMove={onHistoryItemTouchMove}
+      onHistoryItemTouchEnd={onHistoryItemTouchEnd}
+      onHistoryItemTouchCancel={onHistoryItemTouchCancel}
+      onPinnedDragStart={onPinnedDragStart}
+      onPinnedDragOver={onPinnedDragOver}
+      onPinnedDrop={onPinnedDrop}
+      onPinnedDragEnd={onPinnedDragEnd}
+    />
+  ));
+});
+
+interface ConversationHistorySidebarPanelProps {
+  t: TranslateFn;
+  historyItems: LocalChatHistoryItem[];
+  activeConversationId: string | null;
+  editingConversationId: string | null;
+  editingConversationTitle: string;
+  renamingConversationId: string | null;
+  restoringConversationId: string | null;
+  historyContextMenu: HistoryContextMenuState | null;
+  historyContextMenuActiveIndex: number;
+  historyContextMenuActions: HistoryContextMenuAction[];
+  draggingPinnedConversationId: string | null;
+  dragOverPinnedConversationId: string | null;
+  longPressingConversationId: string | null;
+  historyMenuButtonRefs: MutableRefObject<Array<HTMLButtonElement | null>>;
+  contextMenuPinned: boolean;
+  renderConversationTitle: (title: string) => string;
+  setEditingConversationTitle: Dispatch<SetStateAction<string>>;
+  requestSaveConversationTitle: (conversationId: string) => void;
+  onCancelRenameConversation: () => void;
+  requestRestoreConversation: (conversationId: string) => void;
+  consumeHistoryLongPressTrigger: () => boolean;
+  onSetHistoryContextMenuActiveIndex: Dispatch<SetStateAction<number>>;
+  onExecuteHistoryContextAction: (action: HistoryContextMenuAction) => void;
+  getHistoryContextMenuActionLabel: (action: HistoryContextMenuAction) => string;
+  getHistoryContextMenuActionShortcut: (action: HistoryContextMenuAction) => string;
+  getHistoryContextMenuActionIcon: (action: HistoryContextMenuAction) => ReactNode;
+  onHistoryItemKeyDown: (event: ReactKeyboardEvent<HTMLElement>, itemId: string) => void;
+  onOpenHistoryContextMenu: (event: ReactMouseEvent<HTMLLIElement>, itemId: string) => void;
+  onOpenHistoryContextMenuFromButton: (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    itemId: string
+  ) => void;
+  onHistoryItemTouchStart: (event: ReactTouchEvent<HTMLLIElement>, itemId: string) => void;
+  onHistoryItemTouchMove: () => void;
+  onHistoryItemTouchEnd: () => void;
+  onHistoryItemTouchCancel: () => void;
+  onPinnedDragStart: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDragOver: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDrop: (event: ReactDragEvent<HTMLLIElement>, itemId: string) => void;
+  onPinnedDragEnd: () => void;
+}
+
+const ConversationHistorySidebarPanel = memo(function ConversationHistorySidebarPanel({
+  t,
+  historyItems,
+  activeConversationId,
+  editingConversationId,
+  editingConversationTitle,
+  renamingConversationId,
+  restoringConversationId,
+  historyContextMenu,
+  historyContextMenuActiveIndex,
+  historyContextMenuActions,
+  draggingPinnedConversationId,
+  dragOverPinnedConversationId,
+  longPressingConversationId,
+  historyMenuButtonRefs,
+  contextMenuPinned,
+  renderConversationTitle,
+  setEditingConversationTitle,
+  requestSaveConversationTitle,
+  onCancelRenameConversation,
+  requestRestoreConversation,
+  consumeHistoryLongPressTrigger,
+  onSetHistoryContextMenuActiveIndex,
+  onExecuteHistoryContextAction,
+  getHistoryContextMenuActionLabel,
+  getHistoryContextMenuActionShortcut,
+  getHistoryContextMenuActionIcon,
+  onHistoryItemKeyDown,
+  onOpenHistoryContextMenu,
+  onOpenHistoryContextMenuFromButton,
+  onHistoryItemTouchStart,
+  onHistoryItemTouchMove,
+  onHistoryItemTouchEnd,
+  onHistoryItemTouchCancel,
+  onPinnedDragStart,
+  onPinnedDragOver,
+  onPinnedDrop,
+  onPinnedDragEnd
+}: ConversationHistorySidebarPanelProps) {
+  return (
+    <section className="chat-sidebar-section chat-sidebar-history-only">
+      <div className="chat-history-wrap">
+        {historyItems.length > 0 ? (
+          <ul className="chat-history-list">
+            <ConversationHistoryList
+              historyItems={historyItems}
+              activeConversationId={activeConversationId}
+              menuConversationId={historyContextMenu?.id ?? null}
+              editingConversationId={editingConversationId}
+              editingConversationTitle={editingConversationTitle}
+              renamingConversationId={renamingConversationId}
+              restoringConversationId={restoringConversationId}
+              draggingPinnedConversationId={draggingPinnedConversationId}
+              dragOverPinnedConversationId={dragOverPinnedConversationId}
+              longPressingConversationId={longPressingConversationId}
+              t={t}
+              renderConversationTitle={renderConversationTitle}
+              setEditingConversationTitle={setEditingConversationTitle}
+              requestSaveConversationTitle={requestSaveConversationTitle}
+              onCancelRenameConversation={onCancelRenameConversation}
+              requestRestoreConversation={requestRestoreConversation}
+              consumeHistoryLongPressTrigger={consumeHistoryLongPressTrigger}
+              onHistoryItemKeyDown={onHistoryItemKeyDown}
+              onOpenHistoryContextMenu={onOpenHistoryContextMenu}
+              onOpenHistoryContextMenuFromButton={onOpenHistoryContextMenuFromButton}
+              onHistoryItemTouchStart={onHistoryItemTouchStart}
+              onHistoryItemTouchMove={onHistoryItemTouchMove}
+              onHistoryItemTouchEnd={onHistoryItemTouchEnd}
+              onHistoryItemTouchCancel={onHistoryItemTouchCancel}
+              onPinnedDragStart={onPinnedDragStart}
+              onPinnedDragOver={onPinnedDragOver}
+              onPinnedDrop={onPinnedDrop}
+              onPinnedDragEnd={onPinnedDragEnd}
+            />
+          </ul>
+        ) : null}
+        {historyContextMenu ? (
+          <div
+            className="chat-history-menu"
+            style={{ left: historyContextMenu.x, top: historyContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+            role="menu"
+            aria-label={t('Conversation actions')}
+          >
+            {historyContextMenuActions.map((action, index) => (
+              <div key={action}>
+                {action === 'delete' ? <div className="chat-history-menu-divider" aria-hidden="true" /> : null}
+                <button
+                  className={`chat-history-menu-item${action === 'delete' ? ' danger' : ''}${historyContextMenuActiveIndex === index ? ' active' : ''}`}
+                  onMouseEnter={() => onSetHistoryContextMenuActiveIndex(index)}
+                  onClick={() => onExecuteHistoryContextAction(action)}
+                  ref={(element) => {
+                    historyMenuButtonRefs.current[index] = element;
+                  }}
+                  tabIndex={historyContextMenuActiveIndex === index ? 0 : -1}
+                  aria-selected={historyContextMenuActiveIndex === index}
+                  role="menuitem"
+                >
+                  <span className="chat-history-menu-item-label">
+                    <span className="chat-history-menu-icon">
+                      {getHistoryContextMenuActionIcon(action)}
+                    </span>
+                    <span className="chat-history-menu-item-main">
+                      {action === 'pin' ? (contextMenuPinned ? t('Unpin') : t('Pin')) : getHistoryContextMenuActionLabel(action)}
+                    </span>
+                  </span>
+                  <span className="chat-history-menu-shortcut" aria-hidden="true">
+                    {getHistoryContextMenuActionShortcut(action)}
+                  </span>
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+});
+
+interface ConversationMessageViewportProps {
+  t: TranslateFn;
+  loading: boolean;
+  error: string;
+  authRequired: boolean;
+  modelCount: number;
+  messages: MessageRecord[];
+  currentUsername: string | null;
+  onCopyMessage: (content: string) => void;
+  onQuoteMessage: (content: string) => void;
+  onApplyConversationSuggestion: (action: ConversationActionMetadata, suggestion: string) => void;
+  formatConversationActionLabel: (action: ConversationActionMetadata['action']) => string;
+  formatConversationActionStatusLabel: (status: ConversationActionMetadata['status']) => string;
+  formatConversationActionFieldLabel: (field: string) => string;
+  resolveConversationActionHref: (action: ConversationActionMetadata) => string | null;
+  resolveMessageAttachmentNames: (message: MessageRecord) => string[];
+}
+
+const ConversationMessageViewport = memo(function ConversationMessageViewport({
+  t,
+  loading,
+  error,
+  authRequired,
+  modelCount,
+  messages,
+  currentUsername,
+  onCopyMessage,
+  onQuoteMessage,
+  onApplyConversationSuggestion,
+  formatConversationActionLabel,
+  formatConversationActionStatusLabel,
+  formatConversationActionFieldLabel,
+  resolveConversationActionHref,
+  resolveMessageAttachmentNames
+}: ConversationMessageViewportProps) {
+  return (
+    <section className="chat-message-stage">
+      {loading ? (
+        <StateBlock
+          variant="loading"
+          title={t('Preparing Workspace')}
+          description={t('Loading models and attachment context.')}
+        />
+      ) : null}
+
+      {error ? <StateBlock variant="error" title={t('Conversation Error')} description={error} /> : null}
+
+      {!loading && !error && authRequired ? (
+        <StateBlock
+          variant="empty"
+          title={t('Login to use conversation workspace')}
+          description={t('Sign in to access chat history, settings, attachments, and real conversation actions.')}
+          extra={
+            <div className="chat-auth-state-actions">
+              <Link to="/auth/login" className="entry-cta">
+                {t('Login')}
+              </Link>
+            </div>
+          }
+        />
+      ) : null}
+
+      {!loading && !error && !authRequired && modelCount === 0 ? (
+        <StateBlock
+          variant="empty"
+          title={t('No Available Models')}
+          description={t('No model is visible for this account. Publish or authorize one first.')}
+        />
+      ) : null}
+
+      {!loading && !error && !authRequired && modelCount > 0 ? (
+        <div className="chat-message-scroll">
+          {messages.length === 0 ? (
+            <div className="chat-empty-center">
+              <h2>{t('How can I help you today?')}</h2>
+              <small className="muted">
+                {t('Upload files, ask a question, then iterate in this chat-style workspace.')}
+              </small>
+            </div>
+          ) : (
+            <ul className="chat-message-list">
+              {messages.map((message) => {
+                const actionMetadata = message.metadata?.conversation_action ?? null;
+                const actionHref = actionMetadata ? resolveConversationActionHref(actionMetadata) : null;
+                const attachmentNames = resolveMessageAttachmentNames(message);
+                const contentParagraphs = formatMessageParagraphs(message.content);
+
+                return (
+                  <li
+                    key={message.id}
+                    className={message.sender === 'user' ? 'chat-message-row user' : 'chat-message-row assistant'}
+                  >
+                    <div className="chat-message-meta">
+                      <span>{message.sender === 'user' ? currentUsername || t('you') : t('Vistral')}</span>
+                      <small>{new Date(message.created_at).toLocaleTimeString()}</small>
+                    </div>
+                    <div className="chat-message-bubble">
+                      <div className="chat-message-content">
+                        {(contentParagraphs.length > 0 ? contentParagraphs : [message.content]).map((paragraph, index) => (
+                          <p key={`${message.id}-p-${index}`} className="chat-message-paragraph">
+                            {paragraph}
+                          </p>
+                        ))}
+                      </div>
+                      {attachmentNames.length > 0 ? (
+                        <small className="muted chat-message-attachment-summary">
+                          {t('Attachments:')} {attachmentNames.join(', ')}
+                        </small>
+                      ) : null}
+                      {actionMetadata ? (
+                        <div className={`chat-message-action-card ${actionMetadata.status}`}>
+                          <div className="chat-message-action-card-header">
+                            <strong>{formatConversationActionLabel(actionMetadata.action)}</strong>
+                            <span className={`chat-message-action-status ${actionMetadata.status}`}>
+                              {formatConversationActionStatusLabel(actionMetadata.status)}
+                            </span>
+                          </div>
+                          {actionMetadata.missing_fields.length > 0 ? (
+                            <div className="stack tight">
+                              <small className="muted">{t('Missing Information')}</small>
+                              <div className="chat-message-action-tags">
+                                {actionMetadata.missing_fields.map((field) => (
+                                  <span key={`${message.id}-missing-${field}`} className="chat-message-action-tag">
+                                    {formatConversationActionFieldLabel(field)}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                          {Object.keys(actionMetadata.collected_fields).length > 0 ? (
+                            <div className="stack tight">
+                              <small className="muted">{t('Collected Information')}</small>
+                              <ul className="chat-message-action-details">
+                                {Object.entries(actionMetadata.collected_fields).map(([field, value]) => (
+                                  <li key={`${message.id}-collected-${field}`}>
+                                    <strong>{formatConversationActionFieldLabel(field)}:</strong> {value}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                          {actionMetadata.suggestions && actionMetadata.suggestions.length > 0 ? (
+                            <div className="stack tight">
+                              <small className="muted">{t('Suggestions')}</small>
+                              <div className="chat-message-action-tags">
+                                {actionMetadata.suggestions.map((suggestion) => (
+                                  <button
+                                    key={`${message.id}-suggestion-${suggestion}`}
+                                    type="button"
+                                    className="chat-message-action-tag chat-message-action-tag-button muted"
+                                    onClick={() => onApplyConversationSuggestion(actionMetadata, suggestion)}
+                                  >
+                                    {suggestion}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                          {actionHref ? (
+                            <div className="row gap wrap">
+                              <Link className="small-btn chat-action-btn" to={actionHref}>
+                                {t('Open Result')}
+                              </Link>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <div className="chat-message-actions row gap wrap">
+                        <button
+                          className="small-btn chat-action-btn"
+                          onClick={() => onCopyMessage(message.content)}
+                          type="button"
+                        >
+                          {t('Copy')}
+                        </button>
+                        <button
+                          className="small-btn chat-action-btn"
+                          onClick={() => onQuoteMessage(message.content)}
+                          type="button"
+                        >
+                          {t('Reuse')}
+                        </button>
+                        {message.sender === 'assistant' ? (
+                          <button
+                            className="small-btn chat-action-btn"
+                            onClick={() => onQuoteMessage(`Analyze further: ${message.content}`)}
+                            type="button"
+                          >
+                            {t('Quote')}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+});
+
+interface ConversationDraftAttachmentPanelProps {
+  t: TranslateFn;
+  selectedAttachments: FileAttachment[];
+  hasPendingSelectedAttachments: boolean;
+  sending: boolean;
+  uploading: boolean;
+  attachmentListExpanded: boolean;
+  attachments: FileAttachment[];
+  selectedAttachmentCount: number;
+  readyAttachmentCount: number;
+  attachmentStatusSummary: AttachmentStatusSummary;
+  selectedAttachmentIdSet: Set<string>;
+  draggingSelectedAttachmentId: string | null;
+  dragOverSelectedAttachmentId: string | null;
+  onOpenUploadFileDialog: () => void;
+  onIncludeAllReadyAttachments: () => void;
+  onClearCurrentAttachmentContext: () => void;
+  onOpenAttachment: (attachmentId: string) => void;
+  onExcludeAttachmentFromCurrentMessage: (attachment: FileAttachment) => void;
+  onIncludeAttachmentInCurrentMessage: (attachment: FileAttachment) => void;
+  onRemoveAttachment: (attachmentId: string) => void;
+  onSelectedAttachmentDragStart: (event: ReactDragEvent<HTMLLIElement>, attachmentId: string) => void;
+  onSelectedAttachmentDragOver: (event: ReactDragEvent<HTMLLIElement>, attachmentId: string) => void;
+  onSelectedAttachmentDrop: (event: ReactDragEvent<HTMLLIElement>, attachmentId: string) => void;
+  onSelectedAttachmentDragEnd: () => void;
+}
+
+const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachmentPanel({
+  t,
+  selectedAttachments,
+  hasPendingSelectedAttachments,
+  sending,
+  uploading,
+  attachmentListExpanded,
+  attachments,
+  selectedAttachmentCount,
+  readyAttachmentCount,
+  attachmentStatusSummary,
+  selectedAttachmentIdSet,
+  draggingSelectedAttachmentId,
+  dragOverSelectedAttachmentId,
+  onOpenUploadFileDialog,
+  onIncludeAllReadyAttachments,
+  onClearCurrentAttachmentContext,
+  onOpenAttachment,
+  onExcludeAttachmentFromCurrentMessage,
+  onIncludeAttachmentInCurrentMessage,
+  onRemoveAttachment,
+  onSelectedAttachmentDragStart,
+  onSelectedAttachmentDragOver,
+  onSelectedAttachmentDrop,
+  onSelectedAttachmentDragEnd
+}: ConversationDraftAttachmentPanelProps) {
+  if (selectedAttachments.length === 0 && !attachmentListExpanded) {
+    return null;
+  }
+
+  return (
+    <>
+      {selectedAttachments.length > 0 ? (
+        <div className="chat-simple-selected-inline">
+          <ul className="chat-simple-selected-list">
+            {selectedAttachments.map((attachment) => {
+              const isDragging = draggingSelectedAttachmentId === attachment.id;
+              const isDragOver =
+                dragOverSelectedAttachmentId === attachment.id &&
+                draggingSelectedAttachmentId !== attachment.id;
+              const chipClasses = [
+                'chat-simple-selected-chip',
+                isDragging ? 'dragging' : '',
+                isDragOver ? 'drag-over' : ''
+              ]
+                .filter(Boolean)
+                .join(' ');
+
+              return (
+                <li
+                  key={attachment.id}
+                  className={chipClasses}
+                  draggable={!sending && selectedAttachments.length > 1}
+                  onDragStart={(event) => onSelectedAttachmentDragStart(event, attachment.id)}
+                  onDragOver={(event) => onSelectedAttachmentDragOver(event, attachment.id)}
+                  onDrop={(event) => onSelectedAttachmentDrop(event, attachment.id)}
+                  onDragEnd={onSelectedAttachmentDragEnd}
+                >
+                  {attachment.status === 'ready' ? (
+                    <button
+                      type="button"
+                      className="chat-simple-selected-chip-main"
+                      onClick={() => onOpenAttachment(attachment.id)}
+                      disabled={sending}
+                      title={attachment.filename}
+                    >
+                      <span className="chat-simple-selected-chip-handle" aria-hidden="true">
+                        ≡
+                      </span>
+                      <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
+                    </button>
+                  ) : (
+                    <span className="chat-simple-selected-chip-main" title={attachment.filename}>
+                      <span className="chat-simple-selected-chip-handle" aria-hidden="true">
+                        ≡
+                      </span>
+                      <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
+                    </span>
+                  )}
+                  <StatusBadge status={attachment.status} />
+                  <button
+                    type="button"
+                    className="chat-simple-selected-chip-remove"
+                    onClick={() => onExcludeAttachmentFromCurrentMessage(attachment)}
+                    disabled={sending}
+                    title={t('Exclude')}
+                    aria-label={t('Exclude')}
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="chat-simple-selected-inline-meta">
+            <small className="muted">{t('Draft attachments are shown only while composing this message.')}</small>
+            {hasPendingSelectedAttachments ? (
+              <small className="muted">{t('Wait for selected files to finish processing before sending.')}</small>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {attachmentListExpanded ? (
+        <div className="chat-simple-attachment-tray">
+          <div className="chat-simple-attachment-toolbar">
+            <div className="chat-simple-attachment-toolbar-actions">
+              <button
+                type="button"
+                className="small-btn chat-simple-attachment-action-btn"
+                onClick={onOpenUploadFileDialog}
+                disabled={uploading || sending}
+              >
+                {uploading ? t('Working...') : t('Upload photos and files')}
+              </button>
+              <button
+                type="button"
+                className="small-btn chat-simple-attachment-action-btn"
+                onClick={onIncludeAllReadyAttachments}
+                disabled={uploading || sending || readyAttachmentCount === 0}
+              >
+                {t('Use all ready files')}
+              </button>
+              <button
+                type="button"
+                className="small-btn chat-simple-attachment-action-btn"
+                onClick={onClearCurrentAttachmentContext}
+                disabled={uploading || sending || selectedAttachmentCount === 0}
+              >
+                {t('Clear current context')}
+              </button>
+            </div>
+            <small className="muted chat-simple-attachment-toolbar-summary">
+              {t('Attachments:')} {attachments.length} · {t('{count} selected', { count: selectedAttachmentCount })} ·{' '}
+              {t('Ready: {count}', { count: attachmentStatusSummary.ready })}
+            </small>
+          </div>
+          <small className="muted chat-simple-attachment-toolbar-summary">
+            {t('BMP and common image/document files are supported. Keep each file under {limit}.', {
+              limit: UPLOAD_SOFT_LIMIT_LABEL
+            })}
+          </small>
+          {attachments.length > 0 ? (
+            <ul className="chat-simple-attachment-list">
+              {attachments.map((item) => {
+                const isSelected = selectedAttachmentIdSet.has(item.id);
+
+                return (
+                  <li
+                    key={item.id}
+                    className={`chat-simple-attachment-item${isSelected ? ' selected' : ''}`}
+                  >
+                    {item.status === 'ready' ? (
+                      <button
+                        className="chat-simple-attachment-open"
+                        onClick={() => onOpenAttachment(item.id)}
+                        disabled={uploading || sending}
+                        title={item.filename}
+                        type="button"
+                      >
+                        {item.filename}
+                      </button>
+                    ) : (
+                      <span className="chat-simple-attachment-name" title={item.filename}>
+                        {item.filename}
+                      </span>
+                    )}
+                    <StatusBadge status={item.status} />
+                    {isSelected || item.status === 'ready' ? (
+                      <button
+                        type="button"
+                        className={`small-btn chat-simple-attachment-item-action${isSelected ? ' active' : ''}`}
+                        onClick={() =>
+                          isSelected
+                            ? onExcludeAttachmentFromCurrentMessage(item)
+                            : onIncludeAttachmentInCurrentMessage(item)
+                        }
+                        disabled={uploading || sending || (!isSelected && item.status !== 'ready')}
+                      >
+                        {isSelected ? t('Exclude') : t('Include')}
+                      </button>
+                    ) : null}
+                    <button
+                      className="chat-simple-attachment-delete"
+                      onClick={() => onRemoveAttachment(item.id)}
+                      disabled={uploading || sending}
+                      title={t('Delete')}
+                      aria-label={t('Delete')}
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <small className="muted chat-simple-selected-empty">
+              {t('No files yet. Use + to upload files for this draft or reopen recent conversation files.')}
+            </small>
+          )}
+        </div>
+      ) : null}
+    </>
+  );
+});
 
 export default function ConversationPage() {
   const navigate = useNavigate();
@@ -549,22 +1395,14 @@ export default function ConversationPage() {
   );
   const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() => detectCompactViewport());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [collapsedHistoryGroups, setCollapsedHistoryGroups] = useState<HistoryGroupKey[]>(() =>
-    readCollapsedHistoryGroupsFromStorage()
-  );
-  const [collapsedSidebarSections, setCollapsedSidebarSections] = useState<SidebarSectionKey[]>(() =>
-    readCollapsedSidebarSectionsFromStorage()
-  );
   const [pinnedHistoryOrder, setPinnedHistoryOrder] = useState<string[]>(() =>
     readPinnedHistoryOrderFromStorage()
   );
-  const [historySearch, setHistorySearch] = useState('');
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
   const [editingConversationTitle, setEditingConversationTitle] = useState('');
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [restoringConversationId, setRestoringConversationId] = useState<string | null>(null);
   const [renamingConversationId, setRenamingConversationId] = useState<string | null>(null);
   const [historyContextMenu, setHistoryContextMenu] = useState<HistoryContextMenuState | null>(null);
@@ -605,20 +1443,15 @@ export default function ConversationPage() {
   }, []);
 
   const refreshConversations = useCallback(async () => {
-    setHistoryLoading(true);
-    try {
-      const conversationResults = await api.listConversations();
-      setHistory((previous) =>
-        mergeHistoryWithConversations(
-          conversationResults,
-          previous,
-          hiddenHistoryIdsRef.current,
-          pinnedHistoryOrderRef.current
-        )
-      );
-    } finally {
-      setHistoryLoading(false);
-    }
+    const conversationResults = await api.listConversations();
+    setHistory((previous) =>
+      mergeHistoryWithConversations(
+        conversationResults,
+        previous,
+        hiddenHistoryIdsRef.current,
+        pinnedHistoryOrderRef.current
+      )
+    );
   }, []);
 
   const clearWorkspaceForAnonymousSession = useCallback(() => {
@@ -699,20 +1532,6 @@ export default function ConversationPage() {
   }, [loadWorkspace]);
 
   useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      refreshAttachments().catch(() => {
-        // Keep UI stable in polling loop; explicit errors are reported by direct actions.
-      });
-    }, backgroundRefreshIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [currentUser, refreshAttachments]);
-
-  useEffect(() => {
     writeHistoryToStorage(history);
   }, [history]);
 
@@ -724,14 +1543,6 @@ export default function ConversationPage() {
   useEffect(() => {
     writeSidebarCollapsedToStorage(sidebarCollapsed);
   }, [sidebarCollapsed]);
-
-  useEffect(() => {
-    writeCollapsedHistoryGroupsToStorage(collapsedHistoryGroups);
-  }, [collapsedHistoryGroups]);
-
-  useEffect(() => {
-    writeCollapsedSidebarSectionsToStorage(collapsedSidebarSections);
-  }, [collapsedSidebarSections]);
 
   useEffect(() => {
     pinnedHistoryOrderRef.current = pinnedHistoryOrder;
@@ -836,8 +1647,8 @@ export default function ConversationPage() {
     [selectedAttachments]
   );
 
-  const attachmentStatusSummary = useMemo(() => {
-    const summary = {
+  const attachmentStatusSummary = useMemo<AttachmentStatusSummary>(() => {
+    const summary: AttachmentStatusSummary = {
       uploading: 0,
       processing: 0,
       ready: 0,
@@ -850,6 +1661,20 @@ export default function ConversationPage() {
 
     return summary;
   }, [attachments]);
+
+  useBackgroundPolling(
+    () => {
+      refreshAttachments().catch(() => {
+        // Keep UI stable in polling loop; explicit errors are reported by direct actions.
+      });
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled:
+        Boolean(currentUser) &&
+        (attachmentStatusSummary.uploading > 0 || attachmentStatusSummary.processing > 0)
+    }
+  );
 
   useEffect(() => {
     setSelectedAttachmentIds((previous) => {
@@ -1032,13 +1857,13 @@ export default function ConversationPage() {
     }
   }, [refreshAttachments, t]);
 
-  const openUploadFileDialog = () => {
+  const openUploadFileDialog = useCallback(() => {
     uploadFileInputRef.current?.click();
-  };
+  }, []);
 
-  const toggleAttachmentTray = () => {
+  const toggleAttachmentTray = useCallback(() => {
     setAttachmentListExpanded((previous) => !previous);
-  };
+  }, []);
 
   const onUploadFileInputChange = async (event: ReactChangeEvent<HTMLInputElement>) => {
     const selected = event.target.files ? Array.from(event.target.files) : [];
@@ -1050,7 +1875,7 @@ export default function ConversationPage() {
     await uploadAttachmentsByFiles(selected);
   };
 
-  const removeAttachment = async (attachmentId: string) => {
+  const removeAttachment = useCallback(async (attachmentId: string) => {
     setUploading(true);
     setError('');
 
@@ -1063,13 +1888,13 @@ export default function ConversationPage() {
     } finally {
       setUploading(false);
     }
-  };
+  }, [refreshAttachments]);
 
-  const openAttachment = (attachmentId: string) => {
+  const openAttachment = useCallback((attachmentId: string) => {
     window.open(api.attachmentContentUrl(attachmentId), '_blank', 'noopener,noreferrer');
-  };
+  }, []);
 
-  const includeAttachmentInCurrentMessage = (attachment: FileAttachment) => {
+  const includeAttachmentInCurrentMessage = useCallback((attachment: FileAttachment) => {
     if (attachment.status !== 'ready') {
       return;
     }
@@ -1081,27 +1906,27 @@ export default function ConversationPage() {
 
     setSelectedAttachmentIds((previous) => [...previous, attachment.id]);
     setNotice(t('Attachment {filename} included in current message.', { filename: attachment.filename }));
-  };
+  }, [selectedAttachmentIdSet, t]);
 
-  const excludeAttachmentFromCurrentMessage = (attachment: FileAttachment) => {
+  const excludeAttachmentFromCurrentMessage = useCallback((attachment: FileAttachment) => {
     if (!selectedAttachmentIdSet.has(attachment.id)) {
       return;
     }
 
     setSelectedAttachmentIds((previous) => previous.filter((itemId) => itemId !== attachment.id));
     setNotice(t('Attachment {filename} removed from current message.', { filename: attachment.filename }));
-  };
+  }, [selectedAttachmentIdSet, t]);
 
-  const includeAllReadyAttachments = () => {
+  const includeAllReadyAttachments = useCallback(() => {
     setSelectedAttachmentIds(readyAttachmentIds);
     setAttachmentListExpanded(false);
     setNotice(t('All ready files are now included in current message.'));
-  };
+  }, [readyAttachmentIds, t]);
 
-  const clearCurrentAttachmentContext = () => {
+  const clearCurrentAttachmentContext = useCallback(() => {
     setSelectedAttachmentIds([]);
     setNotice(t('Current attachment context has been cleared.'));
-  };
+  }, [t]);
 
   const closeMobileSidebar = useCallback(() => {
     setMobileSidebarOpen(false);
@@ -1170,19 +1995,7 @@ export default function ConversationPage() {
     setInput('');
   };
 
-  const startNewConversation = () => {
-    setConversation(null);
-    setMessages([]);
-    cancelRenameConversation();
-    setInput('');
-    setSelectedAttachmentIds([]);
-    setAttachmentListExpanded(false);
-    setError('');
-    setNotice(t('Started a fresh conversation.'));
-    closeMobileSidebar();
-  };
-
-  const toggleHistoryPin = (id: string) => {
+  const toggleHistoryPin = useCallback((id: string) => {
     const target = history.find((item) => item.id === id);
     if (!target) {
       return;
@@ -1200,36 +2013,32 @@ export default function ConversationPage() {
         nextPinnedOrder
       )
     );
-  };
+  }, [history, pinnedHistoryOrder]);
 
-  const toggleHistoryGroup = (groupKey: HistoryGroupKey) => {
-    setCollapsedHistoryGroups((previous) =>
-      previous.includes(groupKey)
-        ? previous.filter((item) => item !== groupKey)
-        : [...previous, groupKey]
-    );
-  };
-
-  const toggleSidebarSection = (sectionKey: SidebarSectionKey) => {
-    setCollapsedSidebarSections((previous) =>
-      previous.includes(sectionKey)
-        ? previous.filter((item) => item !== sectionKey)
-        : [...previous, sectionKey]
-    );
-  };
-
-  const beginRenameConversation = (item: LocalChatHistoryItem) => {
+  const beginRenameConversation = useCallback((item: LocalChatHistoryItem) => {
     setEditingConversationId(item.id);
     setEditingConversationTitle(item.title);
     setNotice('');
-  };
+  }, []);
 
-  const cancelRenameConversation = () => {
+  const cancelRenameConversation = useCallback(() => {
     setEditingConversationId(null);
     setEditingConversationTitle('');
-  };
+  }, []);
 
-  const saveConversationTitleLocal = (conversationId: string, nextTitle: string) => {
+  const startNewConversation = useCallback(() => {
+    setConversation(null);
+    setMessages([]);
+    cancelRenameConversation();
+    setInput('');
+    setSelectedAttachmentIds([]);
+    setAttachmentListExpanded(false);
+    setError('');
+    setNotice(t('Started a fresh conversation.'));
+    closeMobileSidebar();
+  }, [cancelRenameConversation, closeMobileSidebar, t]);
+
+  const saveConversationTitleLocal = useCallback((conversationId: string, nextTitle: string) => {
     setHistory((previous) =>
       sortHistoryItems(
         previous.map((item) =>
@@ -1238,9 +2047,9 @@ export default function ConversationPage() {
         pinnedHistoryOrderRef.current
       )
     );
-  };
+  }, []);
 
-  const saveConversationTitle = async (conversationId: string) => {
+  const saveConversationTitle = useCallback(async (conversationId: string) => {
     const normalizedTitle = editingConversationTitle.trim();
     if (!normalizedTitle) {
       setNotice(t('Title cannot be empty.'));
@@ -1276,7 +2085,7 @@ export default function ConversationPage() {
     } finally {
       setRenamingConversationId(null);
     }
-  };
+  }, [cancelRenameConversation, conversation?.id, editingConversationTitle, refreshConversations, saveConversationTitleLocal, t]);
 
   const appendHiddenHistoryIds = useCallback((ids: string[]) => {
     if (ids.length === 0) {
@@ -1286,7 +2095,7 @@ export default function ConversationPage() {
     setHiddenHistoryIds((previous) => normalizeHiddenConversationIds([...previous, ...ids]));
   }, []);
 
-  const restoreConversation = async (conversationId: string) => {
+  const restoreConversation = useCallback(async (conversationId: string) => {
     if (conversation?.id === conversationId) {
       return;
     }
@@ -1322,9 +2131,9 @@ export default function ConversationPage() {
     } finally {
       setRestoringConversationId(null);
     }
-  };
+  }, [closeMobileSidebar, conversation?.id, t]);
 
-  const deleteHistoryItem = (id: string) => {
+  const deleteHistoryItem = useCallback((id: string) => {
     appendHiddenHistoryIds([id]);
     setHistory((previous) => previous.filter((item) => item.id !== id));
     if (editingConversationId === id) {
@@ -1338,48 +2147,12 @@ export default function ConversationPage() {
       setAttachmentListExpanded(false);
     }
     setNotice(t('Removed from sidebar (local).'));
-  };
-
-  const clearHistory = () => {
-    appendHiddenHistoryIds(history.map((item) => item.id));
-    setHistory([]);
-    cancelRenameConversation();
-    if (conversation && history.some((item) => item.id === conversation.id)) {
-      setConversation(null);
-      setMessages([]);
-      setInput('');
-      setSelectedAttachmentIds([]);
-      setAttachmentListExpanded(false);
-    }
-    setNotice(t('Cleared local chat sidebar.'));
-  };
-
-  const showHiddenHistory = async () => {
-    setHiddenHistoryIds([]);
-    hiddenHistoryIdsRef.current = [];
-    try {
-      await refreshConversations();
-      setNotice(t('Hidden chats are visible again.'));
-    } catch (refreshError) {
-      setError((refreshError as Error).message);
-    }
-  };
+  }, [appendHiddenHistoryIds, cancelRenameConversation, conversation?.id, editingConversationId, t]);
 
   const sortedHistory = useMemo(
     () => sortHistoryItems(history, pinnedHistoryOrder),
     [history, pinnedHistoryOrder]
   );
-
-  const filteredHistory = useMemo(() => {
-    const keyword = historySearch.trim().toLowerCase();
-    if (!keyword) {
-      return sortedHistory;
-    }
-
-    return sortedHistory.filter((item) => item.title.toLowerCase().includes(keyword));
-  }, [historySearch, sortedHistory]);
-
-  const groupedHistory = useMemo(() => toHistoryGroups(filteredHistory), [filteredHistory]);
 
   const contextMenuItem = useMemo(
     () => (historyContextMenu ? history.find((item) => item.id === historyContextMenu.id) ?? null : null),
@@ -1387,16 +2160,12 @@ export default function ConversationPage() {
   );
 
   const historyContextMenuActions = useMemo<HistoryContextMenuAction[]>(
-    () => ['open', 'rename', 'pin', 'delete'],
+    () => ['rename', 'pin', 'delete'],
     []
   );
 
   const getHistoryContextMenuActionLabel = useCallback(
     (action: HistoryContextMenuAction): string => {
-      if (action === 'open') {
-        return t('Open');
-      }
-
       if (action === 'rename') {
         return t('Rename');
       }
@@ -1408,6 +2177,85 @@ export default function ConversationPage() {
       return t('Delete');
     },
     [contextMenuItem?.pinned, t]
+  );
+
+  const getHistoryContextMenuActionShortcut = useCallback(
+    (action: HistoryContextMenuAction): string => {
+      if (action === 'rename') {
+        return 'R';
+      }
+
+      if (action === 'pin') {
+        return 'P';
+      }
+
+      return 'D';
+    },
+    []
+  );
+
+  const getHistoryContextMenuActionIcon = useCallback(
+    (action: HistoryContextMenuAction): ReactNode => {
+      if (action === 'rename') {
+        return (
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M3 11.75 4 9l5.9-5.9a1.4 1.4 0 0 1 2 0l1 1a1.4 1.4 0 0 1 0 2L7 12l-2.75.75Z"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.4"
+            />
+            <path
+              d="M8.8 4.2 11.8 7.2"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.4"
+            />
+          </svg>
+        );
+      }
+
+      if (action === 'pin') {
+        return (
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M5 2.75h6l-1.6 3.1 1.95 2.15H4.65L6.6 5.85 5 2.75Z"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.4"
+            />
+            <path
+              d="M8 8.1v5.15"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.4"
+            />
+          </svg>
+        );
+      }
+
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path
+            d="M5.25 4.25h5.5m-4.75 0 .35-1.1c.12-.36.45-.6.83-.6h1.64c.38 0 .71.24.83.6l.35 1.1m1.3 0-.45 7.05c-.04.64-.57 1.15-1.21 1.15H6.4c-.64 0-1.17-.5-1.21-1.15l-.45-7.05m2 1.75v4.1m2.5-4.1v4.1"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.4"
+          />
+        </svg>
+      );
+    },
+    []
   );
 
   const closeHistoryContextMenu = useCallback(() => {
@@ -1433,16 +2281,12 @@ export default function ConversationPage() {
     target?.focus();
   }, [historyContextMenu, historyContextMenuActiveIndex]);
 
-  const executeHistoryContextAction = (action: HistoryContextMenuAction) => {
+  const executeHistoryContextAction = useCallback((action: HistoryContextMenuAction) => {
     if (!contextMenuItem) {
       return;
     }
 
-    if (action === 'open') {
-      restoreConversation(contextMenuItem.id).catch(() => {
-        // handled by local error state
-      });
-    } else if (action === 'rename') {
+    if (action === 'rename') {
       beginRenameConversation(contextMenuItem);
     } else if (action === 'pin') {
       toggleHistoryPin(contextMenuItem.id);
@@ -1451,7 +2295,7 @@ export default function ConversationPage() {
     }
 
     closeHistoryContextMenu();
-  };
+  }, [beginRenameConversation, closeHistoryContextMenu, contextMenuItem, deleteHistoryItem, toggleHistoryPin]);
 
   useEffect(() => {
     if (!historyContextMenu) {
@@ -1510,7 +2354,6 @@ export default function ConversationPage() {
 
       const shortcutKey = event.key.toLowerCase();
       const shortcutActionMap: Record<string, HistoryContextMenuAction> = {
-        o: 'open',
         r: 'rename',
         p: 'pin',
         d: 'delete'
@@ -1552,8 +2395,8 @@ export default function ConversationPage() {
       }
 
       const viewportPadding = 8;
-      const menuWidth = Math.max(170, Math.min(220, window.innerWidth - viewportPadding * 2));
-      const menuHeight = 230;
+      const menuWidth = Math.max(190, Math.min(232, window.innerWidth - viewportPadding * 2));
+      const menuHeight = 188;
       const safeX = Math.max(
         viewportPadding,
         Math.min(x, window.innerWidth - menuWidth - viewportPadding)
@@ -1574,22 +2417,26 @@ export default function ConversationPage() {
     [editingConversationId]
   );
 
-  const openHistoryContextMenu = (event: ReactMouseEvent<HTMLLIElement>, itemId: string) => {
+  const openHistoryContextMenu = useCallback((event: ReactMouseEvent<HTMLLIElement>, itemId: string) => {
     event.preventDefault();
     openHistoryContextMenuByPoint(itemId, event.clientX, event.clientY);
-  };
+  }, [openHistoryContextMenuByPoint]);
 
-  const openHistoryContextMenuFromButton = (
+  const openHistoryContextMenuFromButton = useCallback((
     event: ReactMouseEvent<HTMLButtonElement>,
     itemId: string
   ) => {
     event.preventDefault();
     event.stopPropagation();
+    if (historyContextMenu?.id === itemId) {
+      closeHistoryContextMenu();
+      return;
+    }
     const rect = event.currentTarget.getBoundingClientRect();
     openHistoryContextMenuByPoint(itemId, rect.right - 4, rect.bottom + 6);
-  };
+  }, [closeHistoryContextMenu, historyContextMenu?.id, openHistoryContextMenuByPoint]);
 
-  const onHistoryItemKeyDown = (
+  const onHistoryItemKeyDown = useCallback((
     event: ReactKeyboardEvent<HTMLElement>,
     itemId: string
   ) => {
@@ -1598,9 +2445,9 @@ export default function ConversationPage() {
       const rect = event.currentTarget.getBoundingClientRect();
       openHistoryContextMenuByPoint(itemId, rect.left + rect.width / 2, rect.top + 28);
     }
-  };
+  }, [openHistoryContextMenuByPoint]);
 
-  const onHistoryItemTouchStart = (event: ReactTouchEvent<HTMLLIElement>, itemId: string) => {
+  const onHistoryItemTouchStart = useCallback((event: ReactTouchEvent<HTMLLIElement>, itemId: string) => {
     if (editingConversationId === itemId) {
       return;
     }
@@ -1621,24 +2468,33 @@ export default function ConversationPage() {
       triggerHapticFeedback();
       openHistoryContextMenuByPoint(itemId, touchX, touchY);
     }, 550);
-  };
+  }, [clearHistoryLongPressTimer, editingConversationId, openHistoryContextMenuByPoint]);
 
-  const onHistoryItemTouchMove = () => {
+  const onHistoryItemTouchMove = useCallback(() => {
     clearHistoryLongPressTimer();
     setLongPressingConversationId(null);
-  };
+  }, [clearHistoryLongPressTimer]);
 
-  const onHistoryItemTouchEnd = () => {
+  const onHistoryItemTouchEnd = useCallback(() => {
     clearHistoryLongPressTimer();
     setLongPressingConversationId(null);
-  };
+  }, [clearHistoryLongPressTimer]);
 
-  const onHistoryItemTouchCancel = () => {
+  const onHistoryItemTouchCancel = useCallback(() => {
     clearHistoryLongPressTimer();
     setLongPressingConversationId(null);
-  };
+  }, [clearHistoryLongPressTimer]);
 
-  const reorderPinnedByDrag = (draggedId: string, targetId: string) => {
+  const consumeHistoryLongPressTrigger = useCallback(() => {
+    if (!historyLongPressTriggeredRef.current) {
+      return false;
+    }
+
+    historyLongPressTriggeredRef.current = false;
+    return true;
+  }, []);
+
+  const reorderPinnedByDrag = useCallback((draggedId: string, targetId: string) => {
     const currentOrder = pinnedHistoryOrderRef.current;
     const next = reorderPinnedHistoryOrder(currentOrder, draggedId, targetId);
     if (arraysEqual(currentOrder, next)) {
@@ -1648,22 +2504,22 @@ export default function ConversationPage() {
     setPinnedHistoryOrder(next);
     pinnedHistoryOrderRef.current = next;
     setHistory((previous) => sortHistoryItems(previous, next));
-  };
+  }, []);
 
-  const onPinnedDragStart = (event: ReactDragEvent<HTMLLIElement>, itemId: string) => {
+  const onPinnedDragStart = useCallback((event: ReactDragEvent<HTMLLIElement>, itemId: string) => {
     setDraggingPinnedConversationId(itemId);
     setDragOverPinnedConversationId(itemId);
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', itemId);
-  };
+  }, []);
 
-  const onPinnedDragOver = (event: ReactDragEvent<HTMLLIElement>, itemId: string) => {
+  const onPinnedDragOver = useCallback((event: ReactDragEvent<HTMLLIElement>, itemId: string) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     setDragOverPinnedConversationId(itemId);
-  };
+  }, []);
 
-  const onPinnedDrop = (event: ReactDragEvent<HTMLLIElement>, itemId: string) => {
+  const onPinnedDrop = useCallback((event: ReactDragEvent<HTMLLIElement>, itemId: string) => {
     event.preventDefault();
     const draggedId = event.dataTransfer.getData('text/plain') || draggingPinnedConversationId;
     if (draggedId) {
@@ -1671,22 +2527,34 @@ export default function ConversationPage() {
     }
     setDraggingPinnedConversationId(null);
     setDragOverPinnedConversationId(null);
-  };
+  }, [draggingPinnedConversationId, reorderPinnedByDrag]);
 
-  const onPinnedDragEnd = () => {
+  const onPinnedDragEnd = useCallback(() => {
     setDraggingPinnedConversationId(null);
     setDragOverPinnedConversationId(null);
-  };
+  }, []);
 
-  const reorderSelectedAttachmentsByDrag = (draggedId: string, targetId: string) => {
+  const requestSaveConversationTitle = useCallback((conversationId: string) => {
+    saveConversationTitle(conversationId).catch(() => {
+      // handled by local error state
+    });
+  }, [saveConversationTitle]);
+
+  const requestRestoreConversation = useCallback((conversationId: string) => {
+    restoreConversation(conversationId).catch(() => {
+      // handled by local error state
+    });
+  }, [restoreConversation]);
+
+  const reorderSelectedAttachmentsByDrag = useCallback((draggedId: string, targetId: string) => {
     setSelectedAttachmentIds((previous) => {
       const next = reorderSelectedAttachmentOrder(previous, draggedId, targetId);
       return arraysEqual(previous, next) ? previous : next;
     });
     setNotice(t('Attachment order updated for current message.'));
-  };
+  }, [t]);
 
-  const onSelectedAttachmentDragStart = (
+  const onSelectedAttachmentDragStart = useCallback((
     event: ReactDragEvent<HTMLLIElement>,
     attachmentId: string
   ) => {
@@ -1694,18 +2562,18 @@ export default function ConversationPage() {
     setDragOverSelectedAttachmentId(attachmentId);
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', attachmentId);
-  };
+  }, []);
 
-  const onSelectedAttachmentDragOver = (
+  const onSelectedAttachmentDragOver = useCallback((
     event: ReactDragEvent<HTMLLIElement>,
     attachmentId: string
   ) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     setDragOverSelectedAttachmentId(attachmentId);
-  };
+  }, []);
 
-  const onSelectedAttachmentDrop = (
+  const onSelectedAttachmentDrop = useCallback((
     event: ReactDragEvent<HTMLLIElement>,
     attachmentId: string
   ) => {
@@ -1716,12 +2584,12 @@ export default function ConversationPage() {
     }
     setDraggingSelectedAttachmentId(null);
     setDragOverSelectedAttachmentId(null);
-  };
+  }, [draggingSelectedAttachmentId, reorderSelectedAttachmentsByDrag]);
 
-  const onSelectedAttachmentDragEnd = () => {
+  const onSelectedAttachmentDragEnd = useCallback(() => {
     setDraggingSelectedAttachmentId(null);
     setDragOverSelectedAttachmentId(null);
-  };
+  }, []);
 
   const onTextareaKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1734,19 +2602,31 @@ export default function ConversationPage() {
     }
   };
 
-  const copyMessage = async (content: string) => {
+  const copyMessage = useCallback(async (content: string) => {
     const copied = await copyToClipboard(content);
     setNotice(
       copied
         ? t('Message copied to clipboard.')
         : t('Unable to copy message in this browser.')
     );
-  };
+  }, [t]);
 
-  const quoteMessage = (content: string) => {
+  const quoteMessage = useCallback((content: string) => {
     setInput(`"${content}"\n\n`);
     setNotice(t('Quoted message into composer.'));
-  };
+  }, [t]);
+
+  const requestCopyMessage = useCallback((content: string) => {
+    copyMessage(content).catch(() => {
+      // notice handled by helper
+    });
+  }, [copyMessage]);
+
+  const requestRemoveAttachment = useCallback((attachmentId: string) => {
+    removeAttachment(attachmentId).catch(() => {
+      // handled by local error state
+    });
+  }, [removeAttachment]);
 
   const applyConversationSuggestion = useCallback(
     (action: ConversationActionMetadata, suggestion: string) => {
@@ -1792,16 +2672,6 @@ export default function ConversationPage() {
     !hasPendingSelectedAttachments &&
     models.length > 0 &&
     Boolean(input.trim());
-  const historyGroupLabels: Record<HistoryGroupKey, string> = useMemo(
-    () => ({
-      pinned: t('Pinned'),
-      today: t('Today'),
-      yesterday: t('Yesterday'),
-      previous_7_days: t('Previous 7 Days'),
-      older: t('Older')
-    }),
-    [t]
-  );
   const renderConversationTitle = useCallback(
     (title: string) => (title === 'New chat' ? t('New chat') : title),
     [t]
@@ -1809,7 +2679,6 @@ export default function ConversationPage() {
   const conversationInfo = conversation
     ? renderConversationTitle(conversation.title)
     : t('not started');
-  const hasHistorySearch = historySearch.trim().length > 0;
   const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
   const pageClassName = [
     'chat-workspace-page',
@@ -1827,18 +2696,6 @@ export default function ConversationPage() {
       ? t('Expand sidebar')
       : t('Collapse sidebar');
   const sidebarToggleToken = isCompactViewport ? (mobileSidebarOpen ? 'X' : '=') : isDesktopSidebarCollapsed ? '>' : '<';
-  const historyEmptyLabel = historyLoading
-    ? t('Syncing conversation history...')
-    : filteredHistory.length === 0
-      ? hasHistorySearch
-        ? t('No chats match this search.')
-        : t('No visible chats yet.')
-      : '';
-  const controlsSectionCollapsed = collapsedSidebarSections.includes('controls');
-  const historySectionCollapsed = collapsedSidebarSections.includes('history');
-  const quickSectionCollapsed = collapsedSidebarSections.includes('quick');
-  const preferencesSectionCollapsed = collapsedSidebarSections.includes('preferences');
-
   const logout = useCallback(async () => {
     try {
       await api.logout();
@@ -1885,6 +2742,16 @@ export default function ConversationPage() {
                 </div>
               </div>
               <div className="chat-sidebar-brand-actions">
+                <button
+                  type="button"
+                  className="chat-sidebar-toggle-inline"
+                  onClick={startNewConversation}
+                  disabled={sending || authRequired}
+                  aria-label={t('+ New chat')}
+                  title={t('+ New chat')}
+                >
+                  +
+                </button>
                 <Link to="/workspace/console" className="chat-sidebar-console-chip">
                   {t('Console')}
                 </Link>
@@ -1902,366 +2769,74 @@ export default function ConversationPage() {
           </div>
 
           <div className="chat-sidebar-scroll">
-            <section className="chat-sidebar-section">
-              <button
-                type="button"
-                className="chat-sidebar-section-toggle"
-                onClick={() => toggleSidebarSection('controls')}
-                aria-label={controlsSectionCollapsed ? t('Expand section') : t('Collapse section')}
-              >
-                <span className="chat-sidebar-section-heading">
-                  <strong>{t('Chat controls')}</strong>
-                </span>
-                <span className="chat-sidebar-section-chevron" aria-hidden="true">
-                  {controlsSectionCollapsed ? '▸' : '▾'}
-                </span>
-              </button>
+            <ConversationHistorySidebarPanel
+              t={t}
+              historyItems={sortedHistory}
+              activeConversationId={conversation?.id ?? null}
+              editingConversationId={editingConversationId}
+              editingConversationTitle={editingConversationTitle}
+              renamingConversationId={renamingConversationId}
+              restoringConversationId={restoringConversationId}
+              historyContextMenu={historyContextMenu}
+              historyContextMenuActiveIndex={historyContextMenuActiveIndex}
+              historyContextMenuActions={historyContextMenuActions}
+              draggingPinnedConversationId={draggingPinnedConversationId}
+              dragOverPinnedConversationId={dragOverPinnedConversationId}
+              longPressingConversationId={longPressingConversationId}
+              historyMenuButtonRefs={historyMenuButtonRefs}
+              contextMenuPinned={Boolean(contextMenuItem?.pinned)}
+              renderConversationTitle={renderConversationTitle}
+              setEditingConversationTitle={setEditingConversationTitle}
+              requestSaveConversationTitle={requestSaveConversationTitle}
+              onCancelRenameConversation={cancelRenameConversation}
+              requestRestoreConversation={requestRestoreConversation}
+              consumeHistoryLongPressTrigger={consumeHistoryLongPressTrigger}
+              onSetHistoryContextMenuActiveIndex={setHistoryContextMenuActiveIndex}
+              onExecuteHistoryContextAction={executeHistoryContextAction}
+              getHistoryContextMenuActionLabel={getHistoryContextMenuActionLabel}
+              getHistoryContextMenuActionShortcut={getHistoryContextMenuActionShortcut}
+              getHistoryContextMenuActionIcon={getHistoryContextMenuActionIcon}
+              onHistoryItemKeyDown={onHistoryItemKeyDown}
+              onOpenHistoryContextMenu={openHistoryContextMenu}
+              onOpenHistoryContextMenuFromButton={openHistoryContextMenuFromButton}
+              onHistoryItemTouchStart={onHistoryItemTouchStart}
+              onHistoryItemTouchMove={onHistoryItemTouchMove}
+              onHistoryItemTouchEnd={onHistoryItemTouchEnd}
+              onHistoryItemTouchCancel={onHistoryItemTouchCancel}
+              onPinnedDragStart={onPinnedDragStart}
+              onPinnedDragOver={onPinnedDragOver}
+              onPinnedDrop={onPinnedDrop}
+              onPinnedDragEnd={onPinnedDragEnd}
+            />
+          </div>
 
-              {controlsSectionCollapsed ? null : (
-                <div className="chat-sidebar-section-body stack">
-                  <button
-                    className="chat-new-btn"
-                    onClick={startNewConversation}
-                    disabled={sending || authRequired}
-                    type="button"
-                  >
-                    {t('+ New chat')}
-                  </button>
-                  <label className="chat-search-shell" aria-label={t('Search chats')}>
-                    <span className="chat-search-prefix" aria-hidden="true">
-                      /
-                    </span>
-                    <input
-                      className="chat-search-input"
-                      value={historySearch}
-                      onChange={(event) => setHistorySearch(event.target.value)}
-                      placeholder={t('Search chats')}
-                      disabled={authRequired}
-                    />
-                  </label>
-                </div>
-              )}
-            </section>
-
-            <section className="chat-sidebar-section">
-              <button
-                type="button"
-                className="chat-sidebar-section-toggle"
-                onClick={() => toggleSidebarSection('history')}
-                aria-label={historySectionCollapsed ? t('Expand section') : t('Collapse section')}
-              >
-                <span className="chat-sidebar-section-heading">
-                  <strong>{t('Recent chats')}</strong>
-                  <small>{filteredHistory.length}</small>
-                </span>
-                <span className="chat-sidebar-section-chevron" aria-hidden="true">
-                  {historySectionCollapsed ? '▸' : '▾'}
-                </span>
-              </button>
-
-              {historySectionCollapsed ? null : (
-                <div className="chat-history-wrap">
-                  <div className="chat-history-toolbar">
-                    <div className="chat-history-toolbar-copy">
-                      <small className="muted">{t('Recent chats')}</small>
-                      <span className="chat-history-count">{filteredHistory.length}</span>
-                    </div>
-                    <div className="row gap wrap">
-                      <button
-                        className="small-btn chat-history-refresh"
-                        type="button"
-                        onClick={() => {
-                          refreshConversations().catch((refreshError) => {
-                            setError((refreshError as Error).message);
-                          });
-                        }}
-                        disabled={historyLoading}
-                      >
-                        {historyLoading ? t('Syncing...') : t('Sync')}
-                      </button>
-                      {history.length > 0 ? (
-                        <button className="small-btn chat-history-clear" onClick={clearHistory} type="button">
-                          {t('Clear')}
-                        </button>
-                      ) : null}
-                      {hiddenHistoryIds.length > 0 ? (
-                        <button className="small-btn chat-history-clear" onClick={showHiddenHistory} type="button">
-                          {t('Show hidden')}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                  <ul className="chat-history-list">
-                    {historyLoading || filteredHistory.length === 0 ? (
-                      <li className="chat-history-empty">{historyEmptyLabel}</li>
-                    ) : (
-                      groupedHistory.map((group) => (
-                        <li key={group.key} className="chat-history-group">
-                          <button
-                            className="chat-history-group-title"
-                            type="button"
-                            onClick={() => toggleHistoryGroup(group.key)}
-                          >
-                            <span className="chat-history-group-heading">
-                              <span>{historyGroupLabels[group.key]}</span>
-                              <small>{group.items.length}</small>
-                            </span>
-                            <span className="chat-history-group-chevron" aria-hidden="true">
-                              {collapsedHistoryGroups.includes(group.key) ? '▸' : '▾'}
-                            </span>
-                          </button>
-                          {collapsedHistoryGroups.includes(group.key) ? null : (
-                            <ul className="chat-history-sublist">
-                              {group.items.map((item) => {
-                                const isPinnedItem = group.key === 'pinned';
-                                const isDragging = draggingPinnedConversationId === item.id;
-                                const isDragOver =
-                                  dragOverPinnedConversationId === item.id &&
-                                  draggingPinnedConversationId !== item.id;
-                                const isLongPressing = longPressingConversationId === item.id;
-
-                                const itemClasses = [
-                                  item.id === conversation?.id ? 'chat-history-item active' : 'chat-history-item',
-                                  isPinnedItem ? 'chat-history-item-draggable' : '',
-                                  isDragging ? 'dragging' : '',
-                                  isDragOver ? 'drag-over' : '',
-                                  isLongPressing ? 'long-pressing' : ''
-                                ]
-                                  .filter(Boolean)
-                                  .join(' ');
-
-                                return (
-                                  <li
-                                    key={item.id}
-                                    className={itemClasses}
-                                    draggable={isPinnedItem && editingConversationId !== item.id}
-                                    onDragStart={(event) => onPinnedDragStart(event, item.id)}
-                                    onDragOver={(event) => {
-                                      if (isPinnedItem) {
-                                        onPinnedDragOver(event, item.id);
-                                      }
-                                    }}
-                                    onDrop={(event) => {
-                                      if (isPinnedItem) {
-                                        onPinnedDrop(event, item.id);
-                                      }
-                                    }}
-                                    onDragEnd={onPinnedDragEnd}
-                                    onContextMenu={(event) => openHistoryContextMenu(event, item.id)}
-                                    onTouchStart={(event) => onHistoryItemTouchStart(event, item.id)}
-                                    onTouchMove={onHistoryItemTouchMove}
-                                    onTouchEnd={onHistoryItemTouchEnd}
-                                    onTouchCancel={onHistoryItemTouchCancel}
-                                  >
-                                    {editingConversationId === item.id ? (
-                                      <div className="chat-history-edit stack tight">
-                                        <input
-                                          value={editingConversationTitle}
-                                          onChange={(event) => setEditingConversationTitle(event.target.value)}
-                                          onKeyDown={(event) => {
-                                            if (event.key === 'Enter') {
-                                              event.preventDefault();
-                                              saveConversationTitle(item.id).catch(() => {
-                                                // handled by local error state
-                                              });
-                                            }
-
-                                            if (event.key === 'Escape') {
-                                              event.preventDefault();
-                                              cancelRenameConversation();
-                                            }
-                                          }}
-                                          placeholder={t('Conversation title')}
-                                          autoFocus
-                                          disabled={renamingConversationId === item.id}
-                                        />
-                                        <div className="row gap">
-                                          <button
-                                            className="small-btn chat-history-action"
-                                            onClick={() => {
-                                              saveConversationTitle(item.id).catch(() => {
-                                                // handled by local error state
-                                              });
-                                            }}
-                                            disabled={renamingConversationId === item.id}
-                                          >
-                                            {renamingConversationId === item.id ? t('Saving...') : t('Save')}
-                                          </button>
-                                          <button
-                                            className="small-btn chat-history-action"
-                                            onClick={cancelRenameConversation}
-                                            disabled={renamingConversationId === item.id}
-                                          >
-                                            {t('Cancel')}
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <div className="chat-history-item-shell">
-                                        <button
-                                          className="chat-history-open"
-                                          onClick={() => {
-                                            if (historyLongPressTriggeredRef.current) {
-                                              historyLongPressTriggeredRef.current = false;
-                                              return;
-                                            }
-                                            restoreConversation(item.id).catch(() => {
-                                              // handled by local error state
-                                            });
-                                          }}
-                                          onKeyDown={(event) => onHistoryItemKeyDown(event, item.id)}
-                                          disabled={restoringConversationId === item.id}
-                                          type="button"
-                                        >
-                                          <span className="chat-history-title-row">
-                                            {isPinnedItem ? (
-                                              <span className="chat-history-drag-handle" aria-hidden="true">
-                                                ::
-                                              </span>
-                                            ) : null}
-                                            <span className="chat-history-title-text">
-                                              {renderConversationTitle(item.title)}
-                                            </span>
-                                          </span>
-                                          <small>{formatHistoryTimestamp(item.updated_at)}</small>
-                                        </button>
-                                        <button
-                                          className="chat-history-more"
-                                          type="button"
-                                          onClick={(event) => openHistoryContextMenuFromButton(event, item.id)}
-                                          title={t('Conversation actions')}
-                                          aria-label={t('Conversation actions')}
-                                        >
-                                          ...
-                                        </button>
-                                      </div>
-                                    )}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          )}
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                  {historyContextMenu && contextMenuItem ? (
-                    <div
-                      className="chat-history-menu"
-                      style={{ left: historyContextMenu.x, top: historyContextMenu.y }}
-                      onClick={(event) => event.stopPropagation()}
-                      role="menu"
-                      aria-label={t('Conversation actions')}
-                    >
-                      {historyContextMenuActions.map((action, index) => (
-                        <button
-                          key={action}
-                          className={`chat-history-menu-item${action === 'delete' ? ' danger' : ''}${historyContextMenuActiveIndex === index ? ' active' : ''}`}
-                          onMouseEnter={() => setHistoryContextMenuActiveIndex(index)}
-                          onClick={() => executeHistoryContextAction(action)}
-                          ref={(element) => {
-                            historyMenuButtonRefs.current[index] = element;
-                          }}
-                          tabIndex={historyContextMenuActiveIndex === index ? 0 : -1}
-                          aria-selected={historyContextMenuActiveIndex === index}
-                          role="menuitem"
-                        >
-                          {getHistoryContextMenuActionLabel(action)}
-                        </button>
-                      ))}
-                      <small className="chat-history-menu-hint">{t('Keys: ↑/↓ · Enter · Esc · O/R/P/D')}</small>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-            </section>
-
-            <section className="chat-sidebar-section">
-              <button
-                type="button"
-                className="chat-sidebar-section-toggle"
-                onClick={() => toggleSidebarSection('quick')}
-                aria-label={quickSectionCollapsed ? t('Expand section') : t('Collapse section')}
-              >
-                <span className="chat-sidebar-section-heading">
-                  <strong>{t('Quick access')}</strong>
-                  <small>3</small>
-                </span>
-                <span className="chat-sidebar-section-chevron" aria-hidden="true">
-                  {quickSectionCollapsed ? '▸' : '▾'}
-                </span>
-              </button>
-
-              {quickSectionCollapsed ? null : (
-                <div className="chat-sidebar-section-body chat-sidebar-quick stack tight">
-                  <div className="chat-sidebar-quick-links">
-                    <Link to="/models/explore" className="chat-sidebar-quick-link">
-                      {t('Models')}
-                    </Link>
-                    <Link to="/datasets" className="chat-sidebar-quick-link">
-                      {t('Datasets')}
-                    </Link>
-                    <Link to="/training/jobs" className="chat-sidebar-quick-link">
-                      {t('Training')}
-                    </Link>
+          <div className="chat-sidebar-footer stack">
+            {currentUser ? (
+              <SessionMenu
+                currentUser={currentUser}
+                items={sessionMenuItems}
+                align="start"
+                direction="up"
+                variant="sidebar"
+                languageControl={{
+                  value: language,
+                  onChange: (nextLanguage) => setLanguage(nextLanguage)
+                }}
+              />
+            ) : (
+              <div className="chat-user-card guest">
+                <div className="chat-user-summary">
+                  <div className="chat-user-avatar">{getInitials()}</div>
+                  <div className="stack tight">
+                    <strong>{t('guest')}</strong>
+                    <small className="muted">{t('Login')}</small>
                   </div>
                 </div>
-              )}
-            </section>
-
-            <section className="chat-sidebar-section">
-              <button
-                type="button"
-                className="chat-sidebar-section-toggle"
-                onClick={() => toggleSidebarSection('preferences')}
-                aria-label={preferencesSectionCollapsed ? t('Expand section') : t('Collapse section')}
-              >
-                <span className="chat-sidebar-section-heading">
-                  <strong>{t('Workspace settings')}</strong>
-                  <small>{currentUser ? '2' : '3'}</small>
-                </span>
-                <span className="chat-sidebar-section-chevron" aria-hidden="true">
-                  {preferencesSectionCollapsed ? '▸' : '▾'}
-                </span>
-              </button>
-
-              {preferencesSectionCollapsed ? null : (
-                <div className="chat-sidebar-section-body chat-sidebar-footer stack">
-                  <label className="language-switch-inline chat-language-switch chat-language-switch-sidebar">
-                    <span>{t('Language')}</span>
-                    <select
-                      value={language}
-                      onChange={(event) => setLanguage(event.target.value as 'zh-CN' | 'en-US')}
-                    >
-                      <option value="zh-CN">{t('Chinese')}</option>
-                      <option value="en-US">{t('English')}</option>
-                    </select>
-                  </label>
-                  {currentUser ? (
-                    <SessionMenu
-                      currentUser={currentUser}
-                      items={sessionMenuItems}
-                      align="start"
-                      direction="up"
-                      variant="sidebar"
-                    />
-                  ) : (
-                    <div className="chat-user-card guest">
-                      <div className="chat-user-summary">
-                        <div className="chat-user-avatar">{getInitials()}</div>
-                        <div className="stack tight">
-                          <strong>{t('guest')}</strong>
-                          <small className="muted">{t('Login')}</small>
-                        </div>
-                      </div>
-                      <div className="chat-user-actions">
-                        <Link to="/auth/login">{t('Login')}</Link>
-                      </div>
-                    </div>
-                  )}
+                <div className="chat-user-actions">
+                  <Link to="/auth/login">{t('Login')}</Link>
                 </div>
-              )}
-            </section>
+              </div>
+            )}
           </div>
         </div>
 
@@ -2288,23 +2863,6 @@ export default function ConversationPage() {
           <Link className="chat-sidebar-rail-link" to="/workspace/console" aria-label={t('Console')} title={t('Console')}>
             C
           </Link>
-          <Link className="chat-sidebar-rail-link" to="/models/explore" aria-label={t('Models')} title={t('Models')}>
-            M
-          </Link>
-          <Link className="chat-sidebar-rail-link" to="/datasets" aria-label={t('Datasets')} title={t('Datasets')}>
-            D
-          </Link>
-          <Link className="chat-sidebar-rail-link" to="/training/jobs" aria-label={t('Training')} title={t('Training')}>
-            T
-          </Link>
-          <Link
-            className="chat-sidebar-rail-link"
-            to="/settings"
-            aria-label={t('Settings')}
-            title={t('Settings')}
-          >
-            S
-          </Link>
           <div className="chat-sidebar-rail-footer">
             {currentUser ? (
               <SessionMenu
@@ -2313,6 +2871,10 @@ export default function ConversationPage() {
                 align="start"
                 direction="up"
                 variant="rail"
+                languageControl={{
+                  value: language,
+                  onChange: (nextLanguage) => setLanguage(nextLanguage)
+                }}
               />
             ) : (
               <div className="chat-sidebar-rail-avatar" title={t('guest')}>
@@ -2359,18 +2921,15 @@ export default function ConversationPage() {
                   messageCount
                 })}
               </small>
-              <label className="language-switch-inline chat-language-switch">
-                <span>{t('Language')}</span>
-                <select
-                  value={language}
-                  onChange={(event) => setLanguage(event.target.value as 'zh-CN' | 'en-US')}
-                >
-                  <option value="zh-CN">{t('Chinese')}</option>
-                  <option value="en-US">{t('English')}</option>
-                </select>
-              </label>
               {currentUser && isCompactViewport ? (
-                <SessionMenu currentUser={currentUser} items={sessionMenuItems} />
+                <SessionMenu
+                  currentUser={currentUser}
+                  items={sessionMenuItems}
+                  languageControl={{
+                    value: language,
+                    onChange: (nextLanguage) => setLanguage(nextLanguage)
+                  }}
+                />
               ) : null}
               {currentUser ? null : (
                 <div className="chat-header-auth-links">
@@ -2381,169 +2940,23 @@ export default function ConversationPage() {
           </div>
         </header>
 
-        <section className="chat-message-stage">
-          {loading ? (
-            <StateBlock
-              variant="loading"
-              title={t('Preparing Workspace')}
-              description={t('Loading models and attachment context.')}
-            />
-          ) : null}
-
-          {error ? <StateBlock variant="error" title={t('Conversation Error')} description={error} /> : null}
-
-          {!loading && !error && authRequired ? (
-            <StateBlock
-              variant="empty"
-              title={t('Login to use conversation workspace')}
-              description={t('Sign in to access chat history, settings, attachments, and real conversation actions.')}
-              extra={
-                <div className="chat-auth-state-actions">
-                  <Link to="/auth/login" className="entry-cta">
-                    {t('Login')}
-                  </Link>
-                </div>
-              }
-            />
-          ) : null}
-
-          {!loading && !error && !authRequired && models.length === 0 ? (
-            <StateBlock
-              variant="empty"
-              title={t('No Available Models')}
-              description={t('No model is visible for this account. Publish or authorize one first.')}
-            />
-          ) : null}
-
-          {!loading && !error && !authRequired && models.length > 0 ? (
-            <div className="chat-message-scroll">
-              {messages.length === 0 ? (
-                <div className="chat-empty-center">
-                  <h2>{t('How can I help you today?')}</h2>
-                  <small className="muted">
-                    {t('Upload files, ask a question, then iterate in this chat-style workspace.')}
-                  </small>
-                </div>
-              ) : (
-                <ul className="chat-message-list">
-                  {messages.map((message) => {
-                    const actionMetadata = message.metadata?.conversation_action ?? null;
-                    const actionHref = actionMetadata ? resolveConversationActionHref(actionMetadata) : null;
-                    const attachmentNames = resolveMessageAttachmentNames(message);
-                    const contentParagraphs = formatMessageParagraphs(message.content);
-
-                    return (
-                      <li
-                        key={message.id}
-                        className={message.sender === 'user' ? 'chat-message-row user' : 'chat-message-row assistant'}
-                      >
-                        <div className="chat-message-meta">
-                          <span>{message.sender === 'user' ? currentUser?.username || t('you') : t('Vistral')}</span>
-                          <small>{new Date(message.created_at).toLocaleTimeString()}</small>
-                        </div>
-                        <div className="chat-message-bubble">
-                          <div className="chat-message-content">
-                            {(contentParagraphs.length > 0 ? contentParagraphs : [message.content]).map((paragraph, index) => (
-                              <p key={`${message.id}-p-${index}`} className="chat-message-paragraph">
-                                {paragraph}
-                              </p>
-                            ))}
-                          </div>
-                          {attachmentNames.length > 0 ? (
-                            <small className="muted chat-message-attachment-summary">
-                              {t('Attachments:')} {attachmentNames.join(', ')}
-                            </small>
-                          ) : null}
-                          {actionMetadata ? (
-                            <div className={`chat-message-action-card ${actionMetadata.status}`}>
-                              <div className="chat-message-action-card-header">
-                                <strong>{formatConversationActionLabel(actionMetadata.action)}</strong>
-                                <span className={`chat-message-action-status ${actionMetadata.status}`}>
-                                  {formatConversationActionStatusLabel(actionMetadata.status)}
-                                </span>
-                              </div>
-                              {actionMetadata.missing_fields.length > 0 ? (
-                                <div className="stack tight">
-                                  <small className="muted">{t('Missing Information')}</small>
-                                  <div className="chat-message-action-tags">
-                                    {actionMetadata.missing_fields.map((field) => (
-                                      <span key={`${message.id}-missing-${field}`} className="chat-message-action-tag">
-                                        {formatConversationActionFieldLabel(field)}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : null}
-                              {Object.keys(actionMetadata.collected_fields).length > 0 ? (
-                                <div className="stack tight">
-                                  <small className="muted">{t('Collected Information')}</small>
-                                  <ul className="chat-message-action-details">
-                                    {Object.entries(actionMetadata.collected_fields).map(([field, value]) => (
-                                      <li key={`${message.id}-collected-${field}`}>
-                                        <strong>{formatConversationActionFieldLabel(field)}:</strong> {value}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              ) : null}
-                              {actionMetadata.suggestions && actionMetadata.suggestions.length > 0 ? (
-                                <div className="stack tight">
-                                  <small className="muted">{t('Suggestions')}</small>
-                                  <div className="chat-message-action-tags">
-                                    {actionMetadata.suggestions.map((suggestion) => (
-                                      <button
-                                        key={`${message.id}-suggestion-${suggestion}`}
-                                        type="button"
-                                        className="chat-message-action-tag chat-message-action-tag-button muted"
-                                        onClick={() => applyConversationSuggestion(actionMetadata, suggestion)}
-                                      >
-                                        {suggestion}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : null}
-                              {actionHref ? (
-                                <div className="row gap wrap">
-                                  <Link className="small-btn chat-action-btn" to={actionHref}>
-                                    {t('Open Result')}
-                                  </Link>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          <div className="chat-message-actions row gap wrap">
-                            <button
-                              className="small-btn chat-action-btn"
-                              onClick={() => {
-                                copyMessage(message.content).catch(() => {
-                                  // notice handled by helper
-                                });
-                              }}
-                            >
-                              {t('Copy')}
-                            </button>
-                            <button className="small-btn chat-action-btn" onClick={() => quoteMessage(message.content)}>
-                              {t('Reuse')}
-                            </button>
-                            {message.sender === 'assistant' ? (
-                              <button
-                                className="small-btn chat-action-btn"
-                                onClick={() => quoteMessage(`Analyze further: ${message.content}`)}
-                              >
-                                {t('Quote')}
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          ) : null}
-        </section>
+        <ConversationMessageViewport
+          t={t}
+          loading={loading}
+          error={error}
+          authRequired={authRequired}
+          modelCount={models.length}
+          messages={messages}
+          currentUsername={currentUser?.username ?? null}
+          onCopyMessage={requestCopyMessage}
+          onQuoteMessage={quoteMessage}
+          onApplyConversationSuggestion={applyConversationSuggestion}
+          formatConversationActionLabel={formatConversationActionLabel}
+          formatConversationActionStatusLabel={formatConversationActionStatusLabel}
+          formatConversationActionFieldLabel={formatConversationActionFieldLabel}
+          resolveConversationActionHref={resolveConversationActionHref}
+          resolveMessageAttachmentNames={resolveMessageAttachmentNames}
+        />
 
         <footer className="chat-composer-wrap">
           {authRequired ? (
@@ -2555,174 +2968,32 @@ export default function ConversationPage() {
             </section>
           ) : (
           <section className="chat-composer-panel chat-simple-composer-panel">
-            {selectedAttachments.length > 0 ? (
-              <div className="chat-simple-selected-inline">
-                <ul className="chat-simple-selected-list">
-                  {selectedAttachments.map((attachment) => {
-                    const isDragging = draggingSelectedAttachmentId === attachment.id;
-                    const isDragOver =
-                      dragOverSelectedAttachmentId === attachment.id &&
-                      draggingSelectedAttachmentId !== attachment.id;
-                    const chipClasses = [
-                      'chat-simple-selected-chip',
-                      isDragging ? 'dragging' : '',
-                      isDragOver ? 'drag-over' : ''
-                    ]
-                      .filter(Boolean)
-                      .join(' ');
-
-                    return (
-                      <li
-                        key={attachment.id}
-                        className={chipClasses}
-                        draggable={!sending && selectedAttachments.length > 1}
-                        onDragStart={(event) => onSelectedAttachmentDragStart(event, attachment.id)}
-                        onDragOver={(event) => onSelectedAttachmentDragOver(event, attachment.id)}
-                        onDrop={(event) => onSelectedAttachmentDrop(event, attachment.id)}
-                        onDragEnd={onSelectedAttachmentDragEnd}
-                      >
-                        {attachment.status === 'ready' ? (
-                          <button
-                            type="button"
-                            className="chat-simple-selected-chip-main"
-                            onClick={() => openAttachment(attachment.id)}
-                            disabled={sending}
-                            title={attachment.filename}
-                          >
-                            <span className="chat-simple-selected-chip-handle" aria-hidden="true">
-                              ≡
-                            </span>
-                            <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
-                          </button>
-                        ) : (
-                          <span className="chat-simple-selected-chip-main" title={attachment.filename}>
-                            <span className="chat-simple-selected-chip-handle" aria-hidden="true">
-                              ≡
-                            </span>
-                            <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
-                          </span>
-                        )}
-                        <StatusBadge status={attachment.status} />
-                        <button
-                          type="button"
-                          className="chat-simple-selected-chip-remove"
-                          onClick={() => excludeAttachmentFromCurrentMessage(attachment)}
-                          disabled={sending}
-                          title={t('Exclude')}
-                          aria-label={t('Exclude')}
-                        >
-                          ×
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <div className="chat-simple-selected-inline-meta">
-                  <small className="muted">{t('Draft attachments are shown only while composing this message.')}</small>
-                  {hasPendingSelectedAttachments ? (
-                    <small className="muted">{t('Wait for selected files to finish processing before sending.')}</small>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-            {attachmentListExpanded ? (
-              <div className="chat-simple-attachment-tray">
-                <div className="chat-simple-attachment-toolbar">
-                  <div className="chat-simple-attachment-toolbar-actions">
-                    <button
-                      type="button"
-                      className="small-btn chat-simple-attachment-action-btn"
-                      onClick={openUploadFileDialog}
-                      disabled={uploading || sending}
-                    >
-                      {uploading ? t('Working...') : t('Upload photos and files')}
-                    </button>
-                    <button
-                      type="button"
-                      className="small-btn chat-simple-attachment-action-btn"
-                      onClick={includeAllReadyAttachments}
-                      disabled={uploading || sending || readyAttachmentIds.length === 0}
-                    >
-                      {t('Use all ready files')}
-                    </button>
-                    <button
-                      type="button"
-                      className="small-btn chat-simple-attachment-action-btn"
-                      onClick={clearCurrentAttachmentContext}
-                      disabled={uploading || sending || selectedAttachmentIds.length === 0}
-                    >
-                      {t('Clear current context')}
-                    </button>
-                  </div>
-                  <small className="muted chat-simple-attachment-toolbar-summary">
-                    {t('Attachments:')} {attachments.length} · {t('{count} selected', { count: selectedAttachmentIds.length })} ·{' '}
-                    {t('Ready: {count}', { count: attachmentStatusSummary.ready })}
-                  </small>
-                </div>
-                <small className="muted chat-simple-attachment-toolbar-summary">
-                  {t('BMP and common image/document files are supported. Keep each file under {limit}.', {
-                    limit: UPLOAD_SOFT_LIMIT_LABEL
-                  })}
-                </small>
-                {attachments.length > 0 ? (
-                  <ul className="chat-simple-attachment-list">
-                    {attachments.map((item) => {
-                      const isSelected = selectedAttachmentIdSet.has(item.id);
-
-                      return (
-                        <li
-                          key={item.id}
-                          className={`chat-simple-attachment-item${isSelected ? ' selected' : ''}`}
-                        >
-                          {item.status === 'ready' ? (
-                            <button
-                              className="chat-simple-attachment-open"
-                              onClick={() => openAttachment(item.id)}
-                              disabled={uploading || sending}
-                              title={item.filename}
-                            >
-                              {item.filename}
-                            </button>
-                          ) : (
-                            <span className="chat-simple-attachment-name" title={item.filename}>
-                              {item.filename}
-                            </span>
-                          )}
-                          <StatusBadge status={item.status} />
-                          {isSelected || item.status === 'ready' ? (
-                            <button
-                              type="button"
-                              className={`small-btn chat-simple-attachment-item-action${isSelected ? ' active' : ''}`}
-                              onClick={() =>
-                                isSelected
-                                  ? excludeAttachmentFromCurrentMessage(item)
-                                  : includeAttachmentInCurrentMessage(item)
-                              }
-                              disabled={uploading || sending || (!isSelected && item.status !== 'ready')}
-                            >
-                              {isSelected ? t('Exclude') : t('Include')}
-                            </button>
-                          ) : null}
-                          <button
-                            className="chat-simple-attachment-delete"
-                            onClick={() => removeAttachment(item.id)}
-                            disabled={uploading || sending}
-                            title={t('Delete')}
-                            aria-label={t('Delete')}
-                          >
-                            ×
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <small className="muted chat-simple-selected-empty">
-                    {t('No files yet. Use + to upload files for this draft or reopen recent conversation files.')}
-                  </small>
-                )}
-              </div>
-            ) : null}
+            <ConversationDraftAttachmentPanel
+              t={t}
+              selectedAttachments={selectedAttachments}
+              hasPendingSelectedAttachments={hasPendingSelectedAttachments}
+              sending={sending}
+              uploading={uploading}
+              attachmentListExpanded={attachmentListExpanded}
+              attachments={attachments}
+              selectedAttachmentCount={selectedAttachmentIds.length}
+              readyAttachmentCount={readyAttachmentIds.length}
+              attachmentStatusSummary={attachmentStatusSummary}
+              selectedAttachmentIdSet={selectedAttachmentIdSet}
+              draggingSelectedAttachmentId={draggingSelectedAttachmentId}
+              dragOverSelectedAttachmentId={dragOverSelectedAttachmentId}
+              onOpenUploadFileDialog={openUploadFileDialog}
+              onIncludeAllReadyAttachments={includeAllReadyAttachments}
+              onClearCurrentAttachmentContext={clearCurrentAttachmentContext}
+              onOpenAttachment={openAttachment}
+              onExcludeAttachmentFromCurrentMessage={excludeAttachmentFromCurrentMessage}
+              onIncludeAttachmentInCurrentMessage={includeAttachmentInCurrentMessage}
+              onRemoveAttachment={requestRemoveAttachment}
+              onSelectedAttachmentDragStart={onSelectedAttachmentDragStart}
+              onSelectedAttachmentDragOver={onSelectedAttachmentDragOver}
+              onSelectedAttachmentDrop={onSelectedAttachmentDrop}
+              onSelectedAttachmentDragEnd={onSelectedAttachmentDragEnd}
+            />
             <div className="chat-simple-composer-row">
               <button
                 type="button"

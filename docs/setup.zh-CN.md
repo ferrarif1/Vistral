@@ -4,6 +4,9 @@
 - Git
 - POSIX shell 环境
 - 任意编辑器/IDE
+- Docker Engine + Docker Compose
+
+仅在仓库维护/调试时才需要：
 - Node.js 20+
 - npm 10+
 
@@ -23,7 +26,23 @@ cd Vistral
 7. `docs/data-model.md`
 8. `docs/api-contract.md`
 
-## 4）本地开发
+## 4）唯一正式入口：Docker
+```bash
+cp .env.example .env
+npm run docker:up
+```
+
+打开：`http://127.0.0.1:8080`
+
+推荐验收：
+```bash
+npm run docker:healthcheck
+npm run docker:verify:full
+```
+
+## 5）可选源码维护模式
+这条路线仅保留给仓库维护和调试使用，不再作为正式产品入口。
+
 ```bash
 npm install
 npm run dev
@@ -31,32 +50,18 @@ npm run dev
 
 打开：`http://127.0.0.1:5173`
 
-## 5）Docker 内网部署
-```bash
-cp .env.example .env
-docker compose up --build -d
-```
-
-打开：`http://127.0.0.1:8080`
-
-若部署机不能本地 build 或无法访问 Docker Hub，可使用预构建镜像模式：
-```bash
-docker compose -f docker-compose.registry.yml up -d
-```
-
 常用部署辅助命令：
 ```bash
-npm run docker:images:build
-npm run docker:images:build-push
-npm run docker:images:save
-IMAGE_TAR=vistral-images-round1.tar npm run docker:images:load-up
 npm run docker:healthcheck
 npm run docker:verify:full
-npm run docker:release:bundle
-VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified
+npm run smoke:account-governance
 npm run smoke:admin:verification-reports
+npm run smoke:conversation-actions
 npm run smoke:demo:train-data
 npm run smoke:ocr-closure
+npm run smoke:inference-feedback-guard
+npm run smoke:no-seed-hardcoding
+npm run smoke:core-closure
 npm run smoke:restart-resume
 npm run smoke:local-command
 npm run smoke:execution-fields
@@ -69,6 +74,17 @@ npm run smoke:training-metrics-export-csv
 npm run smoke:admin:verification-retention
 npm run smoke:verify-report-retention-e2e
 ```
+
+`smoke:conversation-actions` 可用环境变量：
+- `EXPECTED_TRAINING_DATASET_ID`
+- `EXPECTED_TRAINING_DATASET_VERSION_ID`
+- `AUTO_PREPARE_TRAINING_TARGET`（默认 `true`）
+
+`smoke:inference-feedback-guard` 可用环境变量：
+- `EXPECTED_VALID_FEEDBACK_DATASET_ID`
+- `EXPECTED_OCR_FEEDBACK_DATASET_ID`
+- `EXPECTED_MISMATCH_FEEDBACK_DATASET_ID`
+- `AUTO_PREPARE_FEEDBACK_DATASETS`（默认 `true`）
 
 可选正向 real-runner 验证：
 - `REAL_YOLO_MODEL_PATH=/abs/path/to/yolo.pt npm run smoke:runner-real-positive`
@@ -93,9 +109,12 @@ npm run smoke:verify-report-retention-e2e
 - 占位符示例：`{{repo_root}}`、`{{job_id}}`、`{{dataset_id}}`、`{{task_type}}`、`{{metrics_path}}`、`{{output_path}}`
 
 `docker:verify:full` 会在 `.data/verify-reports/` 生成验收报告。
-`docker:release:bundle` 支持可选约束：
-- `VERIFY_REPORT_PATH=<report.json|report.md>` 指定要打包的验收报告
-- `VERIFY_REPORT_MAX_AGE_SECONDS=<秒>` 对报告时效做硬校验，超时即失败
+并会校验账号治理、对话侧真实创建动作、Phase2 标注复审与训练发起门禁（含 `dataset_version_id` 必须归属所选 `dataset_id`）、数据集导入导出 roundtrip（detection/ocr/segmentation），以及 YOLO/PaddleOCR/docTR real closure。
+默认以 non-strict 模式执行 OCR 闭环（`OCR_CLOSURE_STRICT_LOCAL_COMMAND=false`），便于部署环境在本地命令不可用时容忍 simulated fallback。
+
+如需 strict OCR 闭环校验，可执行：
+- `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run smoke:ocr-closure`
+- `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run docker:verify:full`
 
 ## 6）最小基线检查
 文档改动至少执行：

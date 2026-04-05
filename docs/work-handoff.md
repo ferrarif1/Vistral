@@ -218,6 +218,42 @@ Rules:
   - Chart currently renders raw values without smoothing/outlier treatment.
 - verification:
   - `npm run typecheck`
+
+## 2026-04-04 15:55 (Asia/Shanghai)
+- context: Chat-style conversation history refinement was in progress; interrupted to prioritize mainline product closure on dataset -> annotation/review -> training workflow.
+- done:
+  - Desktop chat history now uses hover-only overflow actions (`rename` / `pin` / `delete`) with row-click open behavior.
+  - Context menu interaction was aligned across desktop/mobile entry patterns and synced into IA/Flows docs.
+  - Conversation sidebar visual polish landed without changing backend conversation contracts.
+- next:
+  1. Keep any remaining conversation/sidebar polish as lower priority unless a concrete UX bug is reported.
+  2. Prioritize closing Phase 2 annotation/review loop from dataset detail through reviewer/rework flow.
+  3. After annotation/review closure, tighten dataset-version selection and launch readiness in training-job creation.
+- risks:
+  - Conversation sidebar files are currently dirty in the worktree; avoid overwriting those changes while working on mainline flow pages.
+  - Mainline workflow docs and implementation may still drift if reject/rework semantics are not made explicit before UI changes.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-05 10:20 (Asia/Shanghai)
+- context: While tightening Phase 4 closure, the in-progress task "inference feedback must enforce dataset task-type match" was interrupted by a new request to audit historical issues and verify unfinished items.
+- done:
+  - Re-checked contracts and implementation around inference feedback (`POST /inference/runs/{id}/feedback`).
+  - Confirmed current backend lacks task-type guard between inference run and target dataset.
+  - Confirmed current inference page allows selecting any dataset without task-type filtering.
+- next:
+  1. Run a history-to-implementation audit against major previously reported issues (chat/sidebar/settings/auth/upload/training core flows).
+  2. Patch unresolved core gaps first, including task-type-safe feedback loop.
+  3. Re-run validation (`smoke` subset + `typecheck` + `lint` + `build`) and summarize still-open items.
+- risks:
+  - Worktree contains many unrelated in-flight edits; patches must avoid accidental regressions.
+  - Some historical requests are UX-level and require browser visual verification in addition to static checks.
+- verification:
+  - `npm run typecheck`
   - `npm run lint`
   - `npm run build`
   - `npm run smoke:runner-real-upload`
@@ -380,7 +416,7 @@ Rules:
   - Synced docs/contracts and setup command lists (EN + ZH).
 - next:
   1. Add CSV export option for training metrics (alongside JSON) using existing training detail page controls.
-  2. Add optional report age check smoke path for `docker-release-bundle` gate behavior with retention-aware report selection.
+  2. Add optional report age check smoke path for deployment verification report freshness gating.
   3. Run positive YOLO real-branch smoke when local model path is available.
 - risks:
   - Positive real-branch smoke still depends on local model/dependencies.
@@ -877,3 +913,293 @@ Rules:
   - `START_API=false` mode expects the external API to already be configured with compatible local command/runtime settings; otherwise closure assertions may differ from the default self-started path.
 - verification:
   - `npm run smoke:ocr-closure`
+
+## 2026-04-05 10:18 (Asia/Shanghai)
+- context: Chat workspace visual polish (sidebar/header low-noise tuning) was in progress; interrupted to prioritize mainline Phase 4 OCR/detection business-loop closure.
+- done:
+  - Completed the latest chat-only visual cleanup pass in `src/styles/theme.css`:
+    - unified chat grayscale tokens
+    - refined history row hover/active/menu-open contrast
+    - reduced color noise in action cards and attachment chips
+  - Rebuilt frontend after each pass and kept behavior/layout unchanged.
+- next:
+  1. Audit current Phase 4 closure readiness against contracts (`docs/flows.md`, `docs/api-contract.md`, `docs/data-model.md`) and existing smoke coverage.
+  2. Run closure verification scripts (`npm run smoke:ocr-closure`, `npm run smoke:real-closure`) and identify remaining gaps.
+  3. Implement/fix missing backend/frontend contract points required to close OCR/detection loops, then rerun verification.
+- risks:
+  - Existing closure scripts rely on local runner/runtime prerequisites; missing env dependencies may mask true contract gaps.
+  - Repo currently has many in-flight file changes; Phase 4 fixes should avoid reverting unrelated work.
+- verification:
+  - `npm run build`
+
+## 2026-04-05 09:33 (Asia/Shanghai)
+- context: Continue unfinished core closure work with contract-first verification; user requested to keep moving forward after completion.
+- done:
+  - Re-validated current mainline closure status with executable checks instead of static assumptions:
+    - `npm run typecheck`
+    - `npm run lint`
+    - `npm run build`
+    - `npm run smoke:phase2`
+    - `npm run smoke:conversation-actions`
+    - `npm run smoke:real-closure`
+    - `npm run smoke:ocr-closure`
+    - `npm run smoke:auth-session`
+    - `npm run docker:verify:full`
+    - `npm run docker:up`
+    - `npm run docker:healthcheck`
+  - Added focused regression smoke for inference feedback task-type guard:
+    - new script `scripts/smoke-inference-feedback-guard.sh`
+    - new npm command `npm run smoke:inference-feedback-guard`
+    - verifies mismatch dataset rejection + matching dataset success + dataset item/attachment traceability
+  - Synced command docs for the new smoke entry:
+    - `README.md`
+    - `README.zh-CN.md`
+    - `docs/setup.md`
+    - `docs/setup.zh-CN.md`
+- next:
+  1. Run a browser visual pass on `/workspace/chat` and `/workspace/console` after this Docker rebuild to confirm sidebar/hover/account-menu style parity against latest UX requests.
+  2. Keep Phase 4 closure stable by including `smoke:inference-feedback-guard` in routine pre-release smoke batches.
+  3. Continue on remaining core backlog only if a concrete failing contract or user-visible regression is found.
+- risks:
+  - Repository remains a large dirty worktree; future patches should keep strictly scoped edits to avoid unrelated regressions.
+  - Screenshot-level UX acceptance still needs manual browser confirmation even when smoke/test suites pass.
+- verification:
+  - `npm run smoke:inference-feedback-guard`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+  - `npm run docker:up`
+  - `npm run docker:healthcheck`
+  - `npm run docker:verify:full`
+
+## 2026-04-05 09:34 (Asia/Shanghai)
+- context: Harden deployment verification contract after adding focused inference-feedback regression smoke.
+- done:
+  - Upgraded `scripts/docker-verify-full.sh` step `inference feedback to dataset` to assert:
+    - cross-task feedback (`detection` run -> `ocr` dataset) is explicitly rejected
+    - matching-task feedback still succeeds and links the dataset
+  - Re-ran `npm run docker:verify:full` after the script hardening, and full deployment verification passed.
+- next:
+  1. Keep this guard in deployment acceptance as a required contract check.
+  2. Continue core work only from concrete failing checks or user-visible regressions.
+- risks:
+  - OCR closure output still reports `doctr_f1` as blank in non-strict mode output summary; closure passes because alternate OCR metric path is accepted.
+  - If future runtime adapter changes affect OCR metric naming, summary printing may need harmonization for operator readability.
+- verification:
+  - `npm run docker:verify:full`
+
+## 2026-04-05 09:40 (Asia/Shanghai)
+- context: Continue core closure hardening after deployment verification guard update.
+- done:
+  - Improved OCR closure smoke output readability and metric robustness in `scripts/smoke-ocr-closure.sh`:
+    - added `doctr_primary_metric_name` and `doctr_primary_metric_value` output fields
+    - keeps `f1` priority and automatically falls back to `accuracy` when `f1` is absent in non-strict runtime paths
+  - Tightened `scripts/docker-verify-full.sh` OCR closure step:
+    - now validates both execution sources and non-empty OCR training metric values (`paddle_accuracy` + docTR primary metric)
+  - Added one-command core regression suite:
+    - new script `scripts/smoke-core-closure.sh`
+    - new npm command `npm run smoke:core-closure`
+    - sequence: `phase2` -> `conversation-actions` -> `inference-feedback-guard` -> `real-closure` -> `ocr-closure`
+  - Synced command docs for the new core suite:
+    - `README.md`
+    - `README.zh-CN.md`
+    - `docs/setup.md`
+    - `docs/setup.zh-CN.md`
+- next:
+  1. Use `smoke:core-closure` as the default quick gate before heavy deployment checks.
+  2. Keep `docker:verify:full` as release gate to retain strict inference-feedback and OCR metric assertions.
+  3. Continue with remaining work only when a contract fails or a user-visible regression is confirmed.
+- risks:
+  - `smoke:core-closure` is intentionally serial and may take longer on resource-constrained machines.
+  - OCR metric key naming can still vary with future real-runner implementations; fallback logic currently covers `f1`/`accuracy` only.
+- verification:
+  - `npm run smoke:ocr-closure`
+  - `npm run docker:verify:full`
+  - `npm run smoke:core-closure`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-05 09:44 (Asia/Shanghai)
+- context: Continue core closure by hardening annotation review state-machine contract checks and error normalization.
+- done:
+  - Strengthened `scripts/smoke-phase2.sh` review-loop coverage:
+    - added negative assertion: rejected review without `review_reason_code` must fail with `VALIDATION_ERROR`
+    - added negative assertion: approved review with `review_reason_code` must fail with `VALIDATION_ERROR`
+    - added second review cycle (`rework -> annotated -> in_review -> approved`) to verify transition integrity
+    - kept and re-validated latest-review context persistence after rejection and rework
+  - Fixed backend error normalization drift in `backend/src/apiError.ts`:
+    - `cannot include` and `invalid review_reason_code` now map to `VALIDATION_ERROR` instead of falling into `INTERNAL_ERROR`
+  - Synced smoke command description to reflect expanded review-state coverage:
+    - `README.md`
+    - `README.zh-CN.md`
+- next:
+  1. Keep `smoke:phase2` and `smoke:core-closure` as default core regressions before deployment verify.
+  2. Continue only from concrete contract gaps or user-visible regressions.
+- risks:
+  - Review error assertions currently depend on exact backend message text; if wording changes, smoke script assertions may need updates.
+  - Existing worktree remains heavily modified, so future patches should remain narrowly scoped.
+- verification:
+  - `npm run smoke:phase2`
+  - `npm run smoke:core-closure`
+  - `npm run docker:verify:full`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-05 09:49 (Asia/Shanghai)
+- context: Continue core launch-readiness closure after review state-machine hardening.
+- done:
+  - Extended `scripts/smoke-phase2.sh` with explicit train-split gate regression:
+    - builds a dataset version with `train_ratio=0`
+    - asserts training launch is blocked with `VALIDATION_ERROR` and message `Selected dataset version must include at least one train split item.`
+    - emits `no_train_gate_version_id` in script output for traceability
+  - Verified that existing coverage gate (`annotation_coverage <= 0`) and new train-split gate both stay enforced in the same smoke flow.
+  - Re-ran core and deployment suites:
+    - `smoke:phase2`
+    - `smoke:core-closure`
+    - `docker:verify:full`
+  - Synced `smoke:phase2` description in docs:
+    - `README.md`
+    - `README.zh-CN.md`
+- next:
+  1. Keep `smoke:phase2` as the contract guard for annotation-review + launch-readiness gates.
+  2. Continue only from concrete failing contracts or user-visible regressions.
+- risks:
+  - Assertions currently match exact backend error text for deterministic contract checks; message text changes will require smoke updates.
+  - Worktree remains broadly modified; continue narrow-scope edits to avoid accidental overlap.
+- verification:
+  - `npm run smoke:phase2`
+  - `npm run smoke:core-closure`
+  - `npm run docker:verify:full`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-05 09:58 (Asia/Shanghai)
+- context: Integrate phase2 contract checks into deployment verification and harden smoke portability for external API mode.
+- done:
+  - Upgraded `scripts/smoke-phase2.sh` to support both local self-started API and external API verification:
+    - added `BASE_URL`, `START_API`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `EXPECT_RUNTIME_FALLBACK`
+    - added reusable inference attachment readiness polling
+    - replaced fixed seed attachment/model references (`f-1`, `f-3`, `mv-1`, `mv-2`) with dynamic model-version selection + dynamic inference uploads
+    - keeps strict fallback assertions for local mode, and source-not-empty assertions for external deployment mode
+  - Integrated phase2 checks into `scripts/docker-verify-full.sh` as step `10/13`:
+    - now verifies annotation/review state machine and launch-readiness gates during deployment acceptance
+    - report captures phase2 output ids including `no_train_gate_version_id`
+  - Normalized verify step numbering to `1/13 ... 13/13`.
+  - Synced deployment verification coverage notes in:
+    - `README.md`
+    - `README.zh-CN.md`
+    - `docs/setup.md`
+    - `docs/setup.zh-CN.md`
+- next:
+  1. Keep `docker:verify:full` as the single release acceptance gate now that it includes phase2 contracts.
+  2. Continue only from concrete contract failures or user-visible regressions.
+- risks:
+  - External-mode assertions in `smoke-phase2` still rely on deterministic API error text for some validation cases.
+  - As verification scope grows, runtime cost increases; teams may need staged pre-checks (`smoke:core-closure`) before full deployment verify.
+- verification:
+  - `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass EXPECT_RUNTIME_FALLBACK=false bash scripts/smoke-phase2.sh`
+  - `npm run smoke:phase2`
+  - `npm run smoke:core-closure`
+  - `npm run docker:verify:full`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-05 10:03 (Asia/Shanghai)
+- context: Continue core deployment-gate closure by adding conversation operational action verification to full docker acceptance.
+- done:
+  - Refactored `scripts/smoke-conversation-actions.sh` to support both local and external API modes:
+    - added `BASE_URL`, `START_API`, `AUTH_USERNAME`, `AUTH_PASSWORD`
+    - added configurable training target defaults (`EXPECTED_TRAINING_DATASET_ID`, `EXPECTED_TRAINING_DATASET_VERSION_ID`)
+    - kept local default behavior while enabling deployment-mode reuse
+  - Integrated conversation operational action smoke into `scripts/docker-verify-full.sh`:
+    - new step `6/14 conversation operational actions`
+    - now asserts chat-side real backend creation loop (`dataset`, `model_draft`, `training_job`) during deployment acceptance
+    - updated verify step numbering to `1/14 ... 14/14`
+  - Synced docs coverage wording:
+    - `README.md`
+    - `README.zh-CN.md`
+    - `docs/setup.md`
+    - `docs/setup.zh-CN.md`
+- next:
+  1. Keep `docker:verify:full` as single release gate (now includes conversation actions + phase2 + closure loops).
+  2. Continue from concrete failing contracts or user-visible regressions only.
+- risks:
+  - Conversation action smoke still defaults to seeded dataset/version for training follow-up (`d-2`/`dv-2`) unless overridden by env; environments without these seeds should pass overrides explicitly.
+  - As full verify scope expands, runtime cost increases; run `smoke:core-closure` as preflight when needed.
+- verification:
+  - `npm run smoke:conversation-actions`
+  - `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass bash scripts/smoke-conversation-actions.sh`
+  - `npm run docker:verify:full`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-05 10:07 (Asia/Shanghai)
+- context: Harden conversation operational-action smoke to remove seed-id coupling and improve deployment portability.
+- done:
+  - Upgraded `scripts/smoke-conversation-actions.sh` training target selection:
+    - removed hard default coupling to `d-2` / `dv-2`
+    - auto-discovers a ready `detection` dataset when `EXPECTED_TRAINING_DATASET_ID` is not provided
+    - auto-discovers a trainable dataset version (`split_summary.train > 0` and `annotation_coverage > 0`) when `EXPECTED_TRAINING_DATASET_VERSION_ID` is not provided
+    - keeps explicit env override path for constrained environments
+  - Extended script output with:
+    - `training_dataset_id`
+    - `training_dataset_version_id`
+  - Tightened `scripts/docker-verify-full.sh` conversation-action step:
+    - now validates these additional training target ids are present
+    - report detail includes selected training dataset/version for traceability
+- next:
+  1. Keep conversation operational-action verification inside deployment gate without relying on fixed seed ids.
+  2. Continue only on concrete contract failures or user-visible regressions.
+- risks:
+  - Auto-discovery logic expects at least one ready detection dataset with a trainable version in target environment.
+  - If dataset availability policies become stricter later, deployment verify may need explicit override envs.
+- verification:
+  - `npm run smoke:conversation-actions`
+  - `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass bash scripts/smoke-conversation-actions.sh`
+  - `npm run docker:verify:full`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-05 10:14 (Asia/Shanghai)
+- context: Continue core deployment acceptance closure by adding account governance contract checks and removing remaining seed-coupling in verify path.
+- done:
+  - Added new smoke script `scripts/smoke-account-governance.sh` (supports local/external API):
+    - admin creates user
+    - user cannot access admin list
+    - user changes own password
+    - admin self-disable guard check
+    - admin disables user -> disabled session becomes unauthenticated
+    - disabled user cannot login
+    - admin reactivates user
+    - admin resets password
+    - user login succeeds with reset password
+  - Registered npm command:
+    - `npm run smoke:account-governance`
+  - Integrated account governance into `scripts/docker-verify-full.sh` as step `4/15`.
+  - Kept and validated conversation operational actions step with dynamic training target IDs (no fixed `d-2`/`dv-2` dependency), now reporting selected `training_dataset_id` and `training_dataset_version_id`.
+  - Updated docs command/coverage descriptions:
+    - `README.md`
+    - `README.zh-CN.md`
+    - `docs/setup.md`
+    - `docs/setup.zh-CN.md`
+- next:
+  1. Keep `docker:verify:full` as the single release gate (now includes auth + account governance + conversation operations + phase2 + closure loops).
+  2. Continue from concrete contract failures or user-visible regressions only.
+- risks:
+  - Account governance smoke still asserts some exact error strings (for deterministic contract checking); wording updates may require script sync.
+  - Account governance smoke creates temporary users each run; long-lived environments may need periodic data pruning.
+- verification:
+  - `npm run smoke:account-governance`
+  - `START_API=false BASE_URL=http://127.0.0.1:8080 ADMIN_USERNAME=admin ADMIN_PASSWORD=mock-pass-admin bash scripts/smoke-account-governance.sh`
+  - `npm run smoke:conversation-actions`
+  - `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass bash scripts/smoke-conversation-actions.sh`
+  - `npm run docker:verify:full`
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`

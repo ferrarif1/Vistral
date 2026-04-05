@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { TrainingJobRecord, TrainingJobStatus } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -77,15 +78,19 @@ export default function TrainingJobsPage() {
     load('initial').catch(() => {
       // no-op
     });
+  }, []);
 
-    const timer = window.setInterval(() => {
+  useBackgroundPolling(
+    () => {
       load('background').catch(() => {
         // no-op
       });
-    }, backgroundRefreshIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, []);
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled: jobs.some((job) => activeStatusSet.has(job.status))
+    }
+  );
 
   const sortedJobs = useMemo(
     () =>

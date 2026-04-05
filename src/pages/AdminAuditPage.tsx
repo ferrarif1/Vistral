@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { AuditLogRecord, User } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import VirtualList from '../components/VirtualList';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -10,6 +11,7 @@ export default function AdminAuditPage() {
   const [items, setItems] = useState<AuditLogRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const shouldVirtualizeAuditLogs = useMemo(() => items.length > 12, [items.length]);
 
   useEffect(() => {
     const load = async () => {
@@ -72,20 +74,42 @@ export default function AdminAuditPage() {
     <div className="stack">
       <h2>{t('Admin Audit Logs')}</h2>
       <p className="muted">{t('Recent governance and critical workflow events.')}</p>
-      <ul className="list">
-        {items.map((item) => (
-          <li key={item.id} className="card stack">
-            <div className="row between">
-              <strong>{item.action}</strong>
-              <small>{new Date(item.timestamp).toLocaleString()}</small>
+      {shouldVirtualizeAuditLogs ? (
+        <VirtualList
+          items={items}
+          itemHeight={112}
+          height={560}
+          ariaLabel={t('Admin Audit Logs')}
+          itemKey={(item) => item.id}
+          renderItem={(item: AuditLogRecord) => (
+            <div className="card stack virtualized">
+              <div className="row between">
+                <strong>{item.action}</strong>
+                <small>{new Date(item.timestamp).toLocaleString()}</small>
+              </div>
+              <small className="muted">
+                {item.entity_type} · {item.entity_id ?? t('n/a')} · {t('user')} {item.user_id ?? t('system')}
+              </small>
+              <small className="muted line-clamp-2">{t('metadata')}: {JSON.stringify(item.metadata)}</small>
             </div>
-            <small className="muted">
-              {item.entity_type} · {item.entity_id ?? t('n/a')} · {t('user')} {item.user_id ?? t('system')}
-            </small>
-            <small className="muted">{t('metadata')}: {JSON.stringify(item.metadata)}</small>
-          </li>
-        ))}
-      </ul>
+          )}
+        />
+      ) : (
+        <ul className="list">
+          {items.map((item) => (
+            <li key={item.id} className="card stack">
+              <div className="row between">
+                <strong>{item.action}</strong>
+                <small>{new Date(item.timestamp).toLocaleString()}</small>
+              </div>
+              <small className="muted">
+                {item.entity_type} · {item.entity_id ?? t('n/a')} · {t('user')} {item.user_id ?? t('system')}
+              </small>
+              <small className="muted">{t('metadata')}: {JSON.stringify(item.metadata)}</small>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

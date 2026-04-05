@@ -39,6 +39,10 @@ const isInvalidStateMessage = (message: string): boolean => {
     return true;
   }
 
+  if (normalized.startsWith('invalid annotation transition:')) {
+    return true;
+  }
+
   if (normalized.startsWith('only admin can ')) {
     return false;
   }
@@ -50,8 +54,12 @@ const isValidationMessage = (message: string): boolean => {
   const normalized = normalizeMessage(message);
   return includesAny(normalized, [
     'must be at least',
+    'must include',
+    'cannot include',
     'conversation title must be',
     'does not match',
+    'must match',
+    'invalid review_reason_code',
     'upload at least one ready model file',
     'llm api key is missing',
     'returned empty content',

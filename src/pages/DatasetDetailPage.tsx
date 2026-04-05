@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type {
+  AnnotationWithReview,
   DatasetItemRecord,
   DatasetRecord,
   DatasetVersionRecord,
@@ -10,6 +11,14 @@ import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import VirtualList from '../components/VirtualList';
+import {
+  filterItemsByAnnotationQueue,
+  getAnnotationByItemId,
+  summarizeAnnotationQueues,
+  type AnnotationQueueFilter
+} from '../features/annotationQueue';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -36,6 +45,22 @@ const parseMetadataText = (source: string): Record<string, string> =>
       .filter(([key]) => key.length > 0)
   );
 
+const buildAnnotationWorkspacePath = (
+  datasetId: string,
+  queue: AnnotationQueueFilter,
+  itemId?: string
+): string => {
+  const searchParams = new URLSearchParams();
+  if (queue !== 'all') {
+    searchParams.set('queue', queue);
+  }
+  if (itemId) {
+    searchParams.set('item', itemId);
+  }
+  const query = searchParams.toString();
+  return query ? `/datasets/${datasetId}/annotate?${query}` : `/datasets/${datasetId}/annotate`;
+};
+
 const backgroundRefreshIntervalMs = 5000;
 
 type LoadMode = 'initial' | 'manual' | 'background';
@@ -45,12 +70,14 @@ const buildDatasetDetailSignature = (detail: {
   attachments: FileAttachment[];
   items: DatasetItemRecord[];
   versions: DatasetVersionRecord[];
+  annotations: AnnotationWithReview[];
 }): string =>
   JSON.stringify({
     dataset: detail.dataset,
     attachments: [...detail.attachments].sort((left, right) => left.id.localeCompare(right.id)),
     items: [...detail.items].sort((left, right) => left.id.localeCompare(right.id)),
-    versions: [...detail.versions].sort((left, right) => left.id.localeCompare(right.id))
+    versions: [...detail.versions].sort((left, right) => left.id.localeCompare(right.id)),
+    annotations: [...detail.annotations].sort((left, right) => left.id.localeCompare(right.id))
   });
 
 export default function DatasetDetailPage() {
@@ -61,6 +88,7 @@ export default function DatasetDetailPage() {
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
   const [versions, setVersions] = useState<DatasetVersionRecord[]>([]);
+  const [annotations, setAnnotations] = useState<AnnotationWithReview[]>([]);
   const [splitTrain, setSplitTrain] = useState('0.7');
   const [splitVal, setSplitVal] = useState('0.2');
   const [splitTest, setSplitTest] = useState('0.1');
@@ -97,8 +125,14 @@ export default function DatasetDetailPage() {
     }
 
     try {
-      const detail = await api.getDatasetDetail(datasetId);
-      const nextSignature = buildDatasetDetailSignature(detail);
+      const [detail, annotationList] = await Promise.all([
+        api.getDatasetDetail(datasetId),
+        api.listDatasetAnnotations(datasetId)
+      ]);
+      const nextSignature = buildDatasetDetailSignature({
+        ...detail,
+        annotations: annotationList
+      });
 
       if (detailSignatureRef.current !== nextSignature) {
         detailSignatureRef.current = nextSignature;
@@ -106,6 +140,7 @@ export default function DatasetDetailPage() {
         setAttachments(detail.attachments);
         setItems(detail.items);
         setVersions(detail.versions);
+        setAnnotations(annotationList);
       }
     } finally {
       if (mode === 'initial') {
@@ -129,31 +164,101 @@ export default function DatasetDetailPage() {
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
   }, [datasetId, loadDetail]);
 
-  useEffect(() => {
-    if (!datasetId) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      loadDetail('background').catch(() => {
-        // keep UI stable in polling loop
-      });
-    }, backgroundRefreshIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [datasetId, loadDetail]);
-
   const readyCount = useMemo(
     () => attachments.filter((attachment) => attachment.status === 'ready').length,
     [attachments]
+  );
+  const hasTransientDatasetState = useMemo(
+    () =>
+      attachments.some((attachment) => attachment.status === 'uploading' || attachment.status === 'processing') ||
+      items.some((item) => item.status === 'uploading' || item.status === 'processing') ||
+      annotations.some((annotation) => annotation.status === 'in_review'),
+    [annotations, attachments, items]
   );
   const attachmentById = useMemo(
     () => new Map(attachments.map((attachment) => [attachment.id, attachment])),
     [attachments]
   );
+  const annotationByItemId = useMemo(() => getAnnotationByItemId(annotations), [annotations]);
+  const annotationSummary = useMemo(
+    () => summarizeAnnotationQueues(items, annotations),
+    [annotations, items]
+  );
   const selectedItem = useMemo(
     () => items.find((item) => item.id === selectedItemId) ?? null,
     [items, selectedItemId]
+  );
+  const shouldVirtualizeItemList = items.length > 10;
+  const queuePreviewEntries = useMemo(
+    () => {
+      const needsWorkItems = filterItemsByAnnotationQueue(items, annotations, 'needs_work');
+      const inReviewItems = filterItemsByAnnotationQueue(items, annotations, 'in_review');
+      const rejectedItems = filterItemsByAnnotationQueue(items, annotations, 'rejected');
+      const approvedItems = filterItemsByAnnotationQueue(items, annotations, 'approved');
+
+      return [
+        {
+          key: 'needs_work' as const,
+          label: t('Needs Work'),
+          count: annotationSummary.needs_work,
+          description: t('Items that still need annotation or submit-review actions.'),
+          items: needsWorkItems.slice(0, 3),
+          firstItemId: needsWorkItems[0]?.id ?? ''
+        },
+        {
+          key: 'in_review' as const,
+          label: t('in_review'),
+          count: annotationSummary.in_review,
+          description: t('Items waiting for reviewer approval or rejection.'),
+          items: inReviewItems.slice(0, 3),
+          firstItemId: inReviewItems[0]?.id ?? ''
+        },
+        {
+          key: 'rejected' as const,
+          label: t('rejected'),
+          count: annotationSummary.rejected,
+          description: t('Rejected items keep the latest review reason visible for rework.'),
+          items: rejectedItems.slice(0, 3),
+          firstItemId: rejectedItems[0]?.id ?? ''
+        },
+        {
+          key: 'approved' as const,
+          label: t('approved'),
+          count: annotationSummary.approved,
+          description: t('Approved items are ready for downstream dataset versioning and training.'),
+          items: approvedItems.slice(0, 3),
+          firstItemId: approvedItems[0]?.id ?? ''
+        }
+      ];
+    },
+    [annotationSummary.approved, annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected, annotations, items, t]
+  );
+  const prioritizedAnnotationWorkspacePath = useMemo(() => {
+    if (!datasetId) {
+      return '';
+    }
+
+    const queuePriority: AnnotationQueueFilter[] = ['rejected', 'in_review', 'needs_work', 'approved'];
+    for (const queue of queuePriority) {
+      const entry = queuePreviewEntries.find((item) => item.key === queue);
+      if (entry && entry.count > 0) {
+        return buildAnnotationWorkspacePath(datasetId, queue, entry.firstItemId);
+      }
+    }
+
+    return buildAnnotationWorkspacePath(datasetId, 'all');
+  }, [datasetId, queuePreviewEntries]);
+
+  useBackgroundPolling(
+    () => {
+      loadDetail('background').catch(() => {
+        // keep UI stable in polling loop
+      });
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled: Boolean(datasetId) && hasTransientDatasetState
+    }
   );
 
   useEffect(() => {
@@ -458,7 +563,7 @@ export default function DatasetDetailPage() {
           >
             {refreshing ? t('Refreshing...') : t('Refresh')}
           </button>
-          <Link className="quick-link" to={`/datasets/${dataset.id}/annotate`}>
+          <Link className="quick-link" to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}>
             {t('Open Annotation Workspace')}
           </Link>
         </div>
@@ -473,6 +578,73 @@ export default function DatasetDetailPage() {
           description={feedback.text}
         />
       ) : null}
+
+      <section className="card stack">
+        <div className="row between gap align-center">
+          <div className="stack tight">
+            <h3>{t('Annotation Summary')}</h3>
+            <small className="muted">
+              {t('Review annotation progress and jump directly into the next focused queue.')}
+            </small>
+          </div>
+          <Link className="quick-link" to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}>
+            {t('Open Annotation Workspace')}
+          </Link>
+        </div>
+
+        <div className="annotation-summary-grid">
+          {queuePreviewEntries.map((entry) => (
+            <article key={entry.key} className="annotation-summary-card">
+              <div className="annotation-summary-card-top">
+                <div className="stack tight">
+                  <small className="muted">{entry.label}</small>
+                  <strong className="metric">{entry.count}</strong>
+                </div>
+                <Link
+                  className="workspace-inline-button annotation-summary-action-link"
+                  to={buildAnnotationWorkspacePath(dataset.id, entry.key, entry.firstItemId)}
+                >
+                  {t('Open Queue')}
+                </Link>
+              </div>
+              <small className="muted">{entry.description}</small>
+              {entry.items.length > 0 ? (
+                <ul className="workspace-record-list compact">
+                  {entry.items.map((item) => {
+                    const itemAnnotation = annotationByItemId.get(item.id) ?? null;
+                    const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
+                    return (
+                      <li key={item.id} className="workspace-record-item compact">
+                        <div className="row between gap wrap">
+                          <strong>{itemFilename}</strong>
+                          <span className="chip">{t(itemAnnotation?.status ?? 'unannotated')}</span>
+                        </div>
+                        {itemAnnotation?.latest_review ? (
+                          <div className="row gap wrap">
+                            <span className="chip">{t('Latest Review')}: {t(itemAnnotation.latest_review.status)}</span>
+                            {itemAnnotation.latest_review.review_reason_code ? (
+                              <span className="chip">{t(itemAnnotation.latest_review.review_reason_code)}</span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <small className="muted">{item.id}</small>
+                        {itemAnnotation?.latest_review?.review_comment ? (
+                          <small className="muted">{itemAnnotation.latest_review.review_comment}</small>
+                        ) : null}
+                        <Link className="quick-link" to={buildAnnotationWorkspacePath(dataset.id, entry.key, item.id)}>
+                          {t('Open Item')}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <small className="muted">{t('No items in this queue right now.')}</small>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
 
       <AttachmentUploader
         title={t('Step 1. Dataset File Upload')}
@@ -719,33 +891,68 @@ export default function DatasetDetailPage() {
               </small>
             </section>
 
-            <ul className="list">
-              {items.map((item) => (
-                <li key={item.id} className="list-item">
-                  <div className="stack tight">
-                    <div className="row between gap">
-                      <span>{item.id}</span>
-                      <span className="chip">
-                        {t(item.split)} · {t(item.status)}
-                      </span>
-                    </div>
-                    <small className="muted">
-                      {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
-                    </small>
-                    <div className="row between gap">
+            {shouldVirtualizeItemList ? (
+              <VirtualList
+                items={items}
+                itemHeight={96}
+                height={420}
+                ariaLabel={t('Dataset Items')}
+                itemKey={(item) => item.id}
+                renderItem={(item) => (
+                  <div className="list-item virtualized">
+                    <div className="stack tight">
+                      <div className="row between gap">
+                        <span>{item.id}</span>
+                        <span className="chip">
+                          {t(item.split)} · {t(item.status)}
+                        </span>
+                      </div>
                       <small className="muted">
-                        {Object.keys(item.metadata).length > 0
-                          ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
-                          : t('No metadata')}
+                        {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
                       </small>
-                      <button onClick={() => selectItemForEditing(item)} disabled={busy}>
-                        {t('Edit Item')}
-                      </button>
+                      <div className="row between gap">
+                        <small className="muted">
+                          {Object.keys(item.metadata).length > 0
+                            ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
+                            : t('No metadata')}
+                        </small>
+                        <button onClick={() => selectItemForEditing(item)} disabled={busy}>
+                          {t('Edit Item')}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </li>
-              ))}
-            </ul>
+                )}
+              />
+            ) : (
+              <ul className="list">
+                {items.map((item) => (
+                  <li key={item.id} className="list-item">
+                    <div className="stack tight">
+                      <div className="row between gap">
+                        <span>{item.id}</span>
+                        <span className="chip">
+                          {t(item.split)} · {t(item.status)}
+                        </span>
+                      </div>
+                      <small className="muted">
+                        {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
+                      </small>
+                      <div className="row between gap">
+                        <small className="muted">
+                          {Object.keys(item.metadata).length > 0
+                            ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
+                            : t('No metadata')}
+                        </small>
+                        <button onClick={() => selectItemForEditing(item)} disabled={busy}>
+                          {t('Edit Item')}
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </section>

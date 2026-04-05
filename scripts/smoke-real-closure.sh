@@ -35,6 +35,32 @@ trap cleanup EXIT
 
 cd "${ROOT_DIR}"
 
+assert_feedback_trace() {
+  local dataset_id="$1"
+  local run_id="$2"
+  local label="$3"
+  local dataset_after_feedback=""
+  local feedback_item_count=""
+  local feedback_attachment_id=""
+  local dataset_attachment_count=""
+
+  dataset_after_feedback="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${dataset_id}")"
+  feedback_item_count="$(echo "${dataset_after_feedback}" | jq -r --arg run_id "${run_id}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
+  if [[ "${feedback_item_count}" -lt 1 ]]; then
+    echo "[smoke-real-closure] ${label} feedback dataset item was not created."
+    echo "${dataset_after_feedback}"
+    exit 1
+  fi
+
+  feedback_attachment_id="$(echo "${dataset_after_feedback}" | jq -r --arg run_id "${run_id}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .attachment_id // empty' | head -n 1)"
+  dataset_attachment_count="$(echo "${dataset_after_feedback}" | jq -r --arg attachment_id "${feedback_attachment_id}" '[.data.attachments[] | select(.id == $attachment_id)] | length')"
+  if [[ -z "${feedback_attachment_id}" || "${dataset_attachment_count}" -lt 1 ]]; then
+    echo "[smoke-real-closure] ${label} feedback attachment is not dataset-scoped."
+    echo "${dataset_after_feedback}"
+    exit 1
+  fi
+}
+
 if [[ "${START_API}" == "true" ]]; then
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
@@ -293,11 +319,35 @@ if [[ "${export_format}" != "yolo" || "${export_items_count}" -lt 1 || "${export
   exit 1
 fi
 
+split_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${dataset_id}/split" \
+  -d '{"train_ratio":0.8,"val_ratio":0.1,"test_ratio":0.1,"seed":42}')"
+split_train_count="$(echo "${split_resp}" | jq -r '.data.split_summary.train // 0')"
+if [[ "${split_train_count}" -lt 1 ]]; then
+  echo "[smoke-real-closure] dataset split did not produce train items."
+  echo "${split_resp}"
+  exit 1
+fi
+
+det_version_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${dataset_id}/versions" \
+  -d '{"version_name":"real-closure-det-v1"}')"
+det_dataset_version_id="$(echo "${det_version_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${det_dataset_version_id}" ]]; then
+  echo "[smoke-real-closure] detection dataset version creation failed."
+  echo "${det_version_resp}"
+  exit 1
+fi
+
 train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d "{\"name\":\"real-yolo-job-$(date +%s)\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${dataset_id}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"6\",\"batch_size\":\"2\",\"learning_rate\":\"0.0008\"}}")"
+  -d "{\"name\":\"real-yolo-job-$(date +%s)\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${dataset_id}\",\"dataset_version_id\":\"${det_dataset_version_id}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"6\",\"batch_size\":\"2\",\"learning_rate\":\"0.0008\"}}")"
 job_id="$(echo "${train_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${job_id}" ]]; then
   echo "[smoke-real-closure] training job create failed."
@@ -412,6 +462,36 @@ if [[ -z "${yolo_run_id}" || "${yolo_box_count}" -lt 1 ]]; then
   exit 1
 fi
 
+datasets_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets")"
+mismatch_feedback_dataset_id="$(echo "${datasets_resp}" | jq -r '.data[] | select(.task_type!="detection") | .id' | head -n 1)"
+if [[ -z "${mismatch_feedback_dataset_id}" ]]; then
+  mismatch_dataset_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf_token}" \
+    -X POST "${BASE_URL}/api/datasets" \
+    -d "{\"name\":\"real-closure-mismatch-$(date +%s)\",\"description\":\"feedback mismatch guard\",\"task_type\":\"ocr\",\"label_schema\":{\"classes\":[\"text\"]}}")"
+  mismatch_feedback_dataset_id="$(echo "${mismatch_dataset_resp}" | jq -r '.data.id // empty')"
+  if [[ -z "${mismatch_feedback_dataset_id}" ]]; then
+    echo "[smoke-real-closure] failed to create mismatch dataset."
+    echo "${mismatch_dataset_resp}"
+    exit 1
+  fi
+fi
+
+mismatch_feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/inference/runs/${yolo_run_id}/feedback" \
+  -d "{\"dataset_id\":\"${mismatch_feedback_dataset_id}\",\"reason\":\"task_mismatch_guard\"}")"
+mismatch_feedback_success="$(echo "${mismatch_feedback_resp}" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+mismatch_feedback_error_code="$(echo "${mismatch_feedback_resp}" | jq -r '.error.code // empty')"
+mismatch_feedback_message="$(echo "${mismatch_feedback_resp}" | jq -r '.error.message // empty')"
+if [[ "${mismatch_feedback_success}" != "false" || "${mismatch_feedback_error_code}" != "VALIDATION_ERROR" || "${mismatch_feedback_message}" != *"task_type"* || "${mismatch_feedback_message}" != *"match"* ]]; then
+  echo "[smoke-real-closure] inference feedback task-type mismatch guard failed."
+  echo "${mismatch_feedback_resp}"
+  exit 1
+fi
+
 feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
@@ -424,21 +504,7 @@ if [[ "${feedback_dataset_id}" != "${dataset_id}" ]]; then
   exit 1
 fi
 
-dataset_after_feedback="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${dataset_id}")"
-feedback_item_count="$(echo "${dataset_after_feedback}" | jq -r --arg run_id "${yolo_run_id}" '[.data.items[] | select((.metadata.inference_run_id // "") == $run_id)] | length')"
-if [[ "${feedback_item_count}" -lt 1 ]]; then
-  echo "[smoke-real-closure] feedback dataset item was not created."
-  echo "${dataset_after_feedback}"
-  exit 1
-fi
-
-feedback_attachment_id="$(echo "${dataset_after_feedback}" | jq -r --arg run_id "${yolo_run_id}" '.data.items[] | select((.metadata.inference_run_id // "") == $run_id) | .attachment_id // empty' | head -n 1)"
-dataset_attachment_count="$(echo "${dataset_after_feedback}" | jq -r --arg attachment_id "${feedback_attachment_id}" '[.data.attachments[] | select(.id == $attachment_id)] | length')"
-if [[ -z "${feedback_attachment_id}" || "${dataset_attachment_count}" -lt 1 ]]; then
-  echo "[smoke-real-closure] feedback attachment is not dataset-scoped."
-  echo "${dataset_after_feedback}"
-  exit 1
-fi
+assert_feedback_trace "${dataset_id}" "${yolo_run_id}" "detection"
 
 echo "Train No: CRH380A-1234" >"${TMP_OCR}"
 ocr_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -459,14 +525,26 @@ for _ in {1..40}; do
   sleep 0.2
 done
 
+ocr_model_versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/model-versions")"
+ocr_model_version_id="$(echo "${ocr_model_versions_resp}" | jq -r '.data[] | select(.task_type=="ocr" and .framework=="paddleocr" and .status=="registered") | .id' | head -n 1)"
+if [[ -z "${ocr_model_version_id}" ]]; then
+  ocr_model_version_id="$(echo "${ocr_model_versions_resp}" | jq -r '.data[] | select(.task_type=="ocr" and .status=="registered") | .id' | head -n 1)"
+fi
+if [[ -z "${ocr_model_version_id}" ]]; then
+  echo "[smoke-real-closure] no registered OCR model version found for OCR inference step."
+  echo "${ocr_model_versions_resp}"
+  exit 1
+fi
+
 ocr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/inference/runs" \
-  -d "{\"model_version_id\":\"mv-1\",\"input_attachment_id\":\"${ocr_attachment_id}\",\"task_type\":\"ocr\"}")"
+  -d "{\"model_version_id\":\"${ocr_model_version_id}\",\"input_attachment_id\":\"${ocr_attachment_id}\",\"task_type\":\"ocr\"}")"
+ocr_run_id="$(echo "${ocr_infer_resp}" | jq -r '.data.id // empty')"
 ocr_source="$(echo "${ocr_infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 ocr_lines="$(echo "${ocr_infer_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
-if [[ "${ocr_lines}" -lt 1 ]]; then
+if [[ -z "${ocr_run_id}" || "${ocr_lines}" -lt 1 ]]; then
   echo "[smoke-real-closure] paddleocr inference produced no text lines."
   echo "${ocr_infer_resp}"
   exit 1
@@ -474,15 +552,131 @@ fi
 
 ocr_dataset_id="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets" | jq -r '.data[] | select(.task_type == "ocr") | .id' | head -n 1)"
 if [[ -z "${ocr_dataset_id}" ]]; then
-  echo "[smoke-real-closure] no OCR dataset found for doctr training."
+  ocr_dataset_create_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf_token}" \
+    -X POST "${BASE_URL}/api/datasets" \
+    -d "{\"name\":\"real-closure-ocr-target-$(date +%s)\",\"description\":\"real closure doctr ocr target\",\"task_type\":\"ocr\",\"label_schema\":{\"classes\":[\"text_line\"]}}")"
+  ocr_dataset_id="$(echo "${ocr_dataset_create_resp}" | jq -r '.data.id // empty')"
+  if [[ -z "${ocr_dataset_id}" ]]; then
+    echo "[smoke-real-closure] failed to create OCR dataset for doctr training."
+    echo "${ocr_dataset_create_resp}"
+    exit 1
+  fi
+
+  ocr_dataset_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf_token}" \
+    -X POST "${BASE_URL}/api/files/dataset/${ocr_dataset_id}/upload" \
+    -d "{\"filename\":\"real-closure-ocr-target-$(date +%s).jpg\"}")"
+  ocr_dataset_attachment_id="$(echo "${ocr_dataset_upload_resp}" | jq -r '.data.id // empty')"
+  if [[ -z "${ocr_dataset_attachment_id}" ]]; then
+    echo "[smoke-real-closure] failed to upload OCR dataset sample for doctr training."
+    echo "${ocr_dataset_upload_resp}"
+    exit 1
+  fi
+
+  ocr_dataset_attachment_status=""
+  for _ in {1..120}; do
+    ocr_dataset_files_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/dataset/${ocr_dataset_id}")"
+    ocr_dataset_attachment_status="$(echo "${ocr_dataset_files_resp}" | jq -r --arg id "${ocr_dataset_attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
+    if [[ "${ocr_dataset_attachment_status}" == "ready" ]]; then
+      break
+    fi
+    if [[ "${ocr_dataset_attachment_status}" == "error" ]]; then
+      echo "[smoke-real-closure] OCR dataset sample attachment entered error state."
+      echo "${ocr_dataset_files_resp}"
+      exit 1
+    fi
+    sleep 0.2
+  done
+
+  if [[ "${ocr_dataset_attachment_status}" != "ready" ]]; then
+    echo "[smoke-real-closure] OCR dataset sample attachment not ready in time."
+    echo "${ocr_dataset_files_resp}"
+    exit 1
+  fi
+
+  ocr_dataset_detail_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${ocr_dataset_id}")"
+  ocr_dataset_item_id="$(echo "${ocr_dataset_detail_resp}" | jq -r '.data.items[0].id // empty')"
+  if [[ -z "${ocr_dataset_item_id}" ]]; then
+    echo "[smoke-real-closure] OCR dataset item was not generated."
+    echo "${ocr_dataset_detail_resp}"
+    exit 1
+  fi
+
+  ocr_annotation_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf_token}" \
+    -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/annotations" \
+    -d "{\"dataset_item_id\":\"${ocr_dataset_item_id}\",\"task_type\":\"ocr\",\"source\":\"manual\",\"status\":\"annotated\",\"payload\":{\"lines\":[{\"text\":\"real closure doctr sample\",\"confidence\":0.99}]}}")"
+  ocr_annotation_status="$(echo "${ocr_annotation_resp}" | jq -r '.data.status // empty')"
+  if [[ "${ocr_annotation_status}" != "annotated" ]]; then
+    echo "[smoke-real-closure] failed to annotate OCR dataset sample for doctr training."
+    echo "${ocr_annotation_resp}"
+    exit 1
+  fi
+fi
+
+ocr_dataset_version_id="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${ocr_dataset_id}/versions" | jq -r '.data[0].id // empty')"
+if [[ -z "${ocr_dataset_version_id}" ]]; then
+  ocr_split_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf_token}" \
+    -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/split" \
+    -d '{"train_ratio":0.8,"val_ratio":0.1,"test_ratio":0.1,"seed":42}')"
+  ocr_split_train_count="$(echo "${ocr_split_resp}" | jq -r '.data.split_summary.train // 0')"
+  if [[ "${ocr_split_train_count}" -lt 1 ]]; then
+    echo "[smoke-real-closure] ocr dataset split did not produce train items."
+    echo "${ocr_split_resp}"
+    exit 1
+  fi
+
+  ocr_version_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf_token}" \
+    -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/versions" \
+    -d '{"version_name":"real-closure-ocr-v1"}')"
+  ocr_dataset_version_id="$(echo "${ocr_version_resp}" | jq -r '.data.id // empty')"
+  if [[ -z "${ocr_dataset_version_id}" ]]; then
+    echo "[smoke-real-closure] ocr dataset version creation failed."
+    echo "${ocr_version_resp}"
+    exit 1
+  fi
+fi
+
+ocr_mismatch_feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/inference/runs/${ocr_run_id}/feedback" \
+  -d "{\"dataset_id\":\"${dataset_id}\",\"reason\":\"task_mismatch_ocr_guard\"}")"
+ocr_mismatch_feedback_success="$(echo "${ocr_mismatch_feedback_resp}" | jq -r 'if .success == true then "true" elif .success == false then "false" else "" end')"
+ocr_mismatch_feedback_error_code="$(echo "${ocr_mismatch_feedback_resp}" | jq -r '.error.code // empty')"
+ocr_mismatch_feedback_message="$(echo "${ocr_mismatch_feedback_resp}" | jq -r '.error.message // empty')"
+if [[ "${ocr_mismatch_feedback_success}" != "false" || "${ocr_mismatch_feedback_error_code}" != "VALIDATION_ERROR" || "${ocr_mismatch_feedback_message}" != *"task_type"* || "${ocr_mismatch_feedback_message}" != *"match"* ]]; then
+  echo "[smoke-real-closure] ocr inference feedback task-type mismatch guard failed."
+  echo "${ocr_mismatch_feedback_resp}"
   exit 1
 fi
+
+ocr_feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/inference/runs/${ocr_run_id}/feedback" \
+  -d "{\"dataset_id\":\"${ocr_dataset_id}\",\"reason\":\"ocr_low_confidence\"}")"
+ocr_feedback_dataset_id="$(echo "${ocr_feedback_resp}" | jq -r '.data.feedback_dataset_id // empty')"
+if [[ "${ocr_feedback_dataset_id}" != "${ocr_dataset_id}" ]]; then
+  echo "[smoke-real-closure] paddleocr feedback did not bind OCR dataset."
+  echo "${ocr_feedback_resp}"
+  exit 1
+fi
+assert_feedback_trace "${ocr_dataset_id}" "${ocr_run_id}" "paddleocr"
 
 doctr_train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d "{\"name\":\"real-doctr-job-$(date +%s)\",\"task_type\":\"ocr\",\"framework\":\"doctr\",\"dataset_id\":\"${ocr_dataset_id}\",\"base_model\":\"doctr-crnn\",\"config\":{\"epochs\":\"3\",\"batch_size\":\"2\",\"learning_rate\":\"0.001\"}}")"
+  -d "{\"name\":\"real-doctr-job-$(date +%s)\",\"task_type\":\"ocr\",\"framework\":\"doctr\",\"dataset_id\":\"${ocr_dataset_id}\",\"dataset_version_id\":\"${ocr_dataset_version_id}\",\"base_model\":\"doctr-crnn\",\"config\":{\"epochs\":\"3\",\"batch_size\":\"2\",\"learning_rate\":\"0.001\"}}")"
 doctr_job_id="$(echo "${doctr_train_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${doctr_job_id}" ]]; then
   echo "[smoke-real-closure] doctr training job create failed."
@@ -542,13 +736,27 @@ doctr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/inference/runs" \
   -d "{\"model_version_id\":\"${doctr_model_version_id}\",\"input_attachment_id\":\"${ocr_attachment_id}\",\"task_type\":\"ocr\"}")"
+doctr_run_id="$(echo "${doctr_infer_resp}" | jq -r '.data.id // empty')"
 doctr_source="$(echo "${doctr_infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 doctr_lines="$(echo "${doctr_infer_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
-if [[ "${doctr_lines}" -lt 1 ]]; then
+if [[ -z "${doctr_run_id}" || "${doctr_lines}" -lt 1 ]]; then
   echo "[smoke-real-closure] doctr inference produced no text lines."
   echo "${doctr_infer_resp}"
   exit 1
 fi
+
+doctr_feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/inference/runs/${doctr_run_id}/feedback" \
+  -d "{\"dataset_id\":\"${ocr_dataset_id}\",\"reason\":\"doctr_recheck\"}")"
+doctr_feedback_dataset_id="$(echo "${doctr_feedback_resp}" | jq -r '.data.feedback_dataset_id // empty')"
+if [[ "${doctr_feedback_dataset_id}" != "${ocr_dataset_id}" ]]; then
+  echo "[smoke-real-closure] doctr feedback did not bind OCR dataset."
+  echo "${doctr_feedback_resp}"
+  exit 1
+fi
+assert_feedback_trace "${ocr_dataset_id}" "${doctr_run_id}" "doctr"
 
 echo "[smoke-real-closure] PASS"
 echo "dataset_id=${dataset_id}"
@@ -556,6 +764,9 @@ echo "job_id=${job_id}"
 echo "model_version_id=${model_version_id}"
 echo "doctr_job_id=${doctr_job_id}"
 echo "doctr_model_version_id=${doctr_model_version_id}"
+echo "yolo_run_id=${yolo_run_id}"
+echo "ocr_run_id=${ocr_run_id}"
+echo "doctr_run_id=${doctr_run_id}"
 echo "yolo_source=${yolo_source}"
 echo "ocr_source=${ocr_source}"
 echo "doctr_source=${doctr_source}"

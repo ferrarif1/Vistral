@@ -646,6 +646,13 @@ Request:
 }
 ```
 
+Rules:
+- new annotations may start from `unannotated`, `in_progress`, or `annotated`
+- direct upsert editing is only allowed while the record is in draft/editable states (`unannotated`, `in_progress`, `annotated`)
+- once a record is in `in_review`, it becomes read-only in this endpoint; reviewer decisions must use `/review`
+- a `rejected` record must first move back to `in_progress` before further edits are accepted
+- `approved` records are read-only in this endpoint
+
 ### POST /datasets/{datasetId}/annotations/{annotationId}/submit-review
 Move annotation to `in_review`.
 
@@ -656,10 +663,17 @@ Request:
 ```json
 {
   "status": "approved",
+  "review_reason_code": null,
   "quality_score": 0.92,
   "review_comment": "Good quality"
 }
 ```
+
+Rules:
+- `review_reason_code` is required when `status=rejected`
+- allowed codes: `box_mismatch`, `label_error`, `text_error`, `missing_object`, `polygon_issue`, `other`
+- `review_reason_code` must be omitted or `null` when `status=approved`
+- list/detail responses that embed `latest_review` include `review_reason_code` so the client can show persistent rework context
 
 ### POST /datasets/{datasetId}/pre-annotations
 Run model-based pre-annotation on dataset ready items.
@@ -739,6 +753,13 @@ Request:
   }
 }
 ```
+
+Request rules:
+- `dataset_version_id` is required for new training jobs
+- `dataset_version_id` must belong to the selected `dataset_id`
+- selected dataset must already be launch-ready for training (`status=ready`)
+- selected dataset version must include at least one `train` item in `split_summary`
+- selected dataset version must have positive annotation coverage (`annotation_coverage > 0`)
 
 Server behavior (current):
 - create in `draft`, then queue into local single-node executor
@@ -898,6 +919,7 @@ Request:
 
 Behavior:
 - server sets `inference_runs.feedback_dataset_id` to target dataset id.
+- target dataset `task_type` must match the inference run `task_type`; otherwise request fails with validation error.
 - if run input attachment is already dataset-scoped on the target dataset, server reuses it.
 - otherwise server clones input attachment into a new dataset-scoped attachment (`attached_to_type=Dataset`, `attached_to_id=<dataset_id>`), preserving mime/size/local binary when available.
 - server upserts one dataset item for this feedback run and records metadata:

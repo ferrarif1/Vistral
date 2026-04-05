@@ -583,7 +583,7 @@ export const api = {
     task_type: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
     framework: 'paddleocr' | 'doctr' | 'yolo';
     dataset_id: string;
-    dataset_version_id?: string | null;
+    dataset_version_id: string;
     base_model: string;
     config: Record<string, string>;
   }) =>

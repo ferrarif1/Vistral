@@ -19,11 +19,11 @@ Already available:
 - admin approval queue and audit list
 - BYO LLM settings (prototype)
 - dockerized intranet baseline (`vistral-web` + `vistral-api`)
-- intranet rollout modes: local build + registry image mode + offline image import path
-- ops automation: release bundle packaging + full deployment verification scripts + report-included bundle handoff
+- intranet rollout path is now single-entry Docker (`npm run docker:up`)
+- ops automation focuses on deployment verification scripts + admin verification report governance
 - admin console now includes deployment verification report visibility for operations governance
 - username/password auth flow (public registration locked to `user`)
-- release bundle hardening: verify target precheck + report pinning (`VERIFY_REPORT_PATH`) + optional freshness gate (`VERIFY_REPORT_MAX_AGE_SECONDS`)
+- deployment verify hardening: strict/non-strict OCR closure controls plus runtime metrics retention reporting
 - admin verification reports page now supports filter/search + collapsible check details for operations review
 - permission smoke script for admin verification reports endpoint (`npm run smoke:admin:verification-reports`)
 - API error semantics hardened: core handlers now map to contract codes/status (`401/403/404/409/500`)
@@ -71,6 +71,7 @@ Status:
   - box draw/move/resize + keyboard nudge/delete
   - minimal segmentation polygon canvas with vertex drag/edit
   - phase smoke script (`npm run smoke:phase2`) validating segmentation persistence + inference fallback
+  - next closure target is reviewer queue + rejected rework visibility from dataset detail into annotation workspace
 
 ### Phase 3: Framework Adapter Integration
 
@@ -129,9 +130,11 @@ When work is interrupted by a new conversation task, append handoff details in `
 
 Current priority queue:
 
-1. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
-2. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.
+1. Close Phase 2 annotation workflow from dataset detail into reviewer/rework queue and persistent reject context.
+2. Tighten dataset-version-backed training launch readiness after annotation/review closure.
 3. Continue the lower-priority framework realification backlog:
    - dependency-aware real framework execution inside local runners
    - richer epoch-level metrics retention/export hardening
    - dependency-present smoke expansion without duplicate routes/pages
+4. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
+5. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.

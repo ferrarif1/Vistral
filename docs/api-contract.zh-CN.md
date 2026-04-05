@@ -188,6 +188,83 @@
 - 执行成功时，返回 `metadata.conversation_action.status=completed`
 - 执行失败或用户取消时，返回 `failed` / `cancelled`
 
+## 训练任务接口（补充）
+
+### POST /training/jobs
+创建训练任务。
+
+请求体示例：
+```json
+{
+  "name": "ocr-finetune-april",
+  "task_type": "ocr",
+  "framework": "paddleocr",
+  "dataset_id": "d-1",
+  "dataset_version_id": "dv-1",
+  "base_model": "paddleocr-PP-OCRv4",
+  "config": {
+    "epochs": 20,
+    "batch_size": 16,
+    "learning_rate": 0.001
+  }
+}
+```
+
+规则：
+- 新建训练任务时，`dataset_version_id` 必填
+- `dataset_version_id` 必须属于所选 `dataset_id`
+- 所选数据集必须已处于 `ready`
+- 所选数据集版本的 `split_summary.train` 必须大于 0，确保训练有可用训练切分
+- 所选数据集版本的 `annotation_coverage` 必须大于 0
+
+## 标注接口（补充）
+- `GET /datasets/{datasetId}/annotations`：获取该数据集标注列表（每条记录附带 `latest_review`）
+- `POST /datasets/{datasetId}/annotations`：创建或更新标注
+- `POST /datasets/{datasetId}/annotations/{annotationId}/submit-review`：提交审核，进入 `in_review`
+- `POST /datasets/{datasetId}/annotations/{annotationId}/review`：审核通过或拒绝
+
+`POST /datasets/{datasetId}/annotations` 规则：
+- 新建标注时，`status` 只能从 `unannotated`、`in_progress` 或 `annotated` 起步
+- 只有处于草稿/可编辑状态（`unannotated`、`in_progress`、`annotated`）的记录允许通过该接口直接保存
+- 条目进入 `in_review` 后，在该接口下应视为只读；审核流转必须走 `/review`
+- `rejected` 记录必须先回到 `in_progress`，之后才允许继续编辑
+- `approved` 记录在该接口下为只读
+
+`POST /datasets/{datasetId}/annotations/{annotationId}/review` 请求体示例：
+```json
+{
+  "status": "rejected",
+  "review_reason_code": "polygon_issue",
+  "quality_score": 0.51,
+  "review_comment": "Polygon needs cleaner boundary."
+}
+```
+
+规则：
+- 当 `status=rejected` 时，`review_reason_code` 必填
+- 允许值：`box_mismatch`、`label_error`、`text_error`、`missing_object`、`polygon_issue`、`other`
+- 当 `status=approved` 时，`review_reason_code` 必须省略或为 `null`
+- 返回中的 `latest_review` 会保留最近一次审核原因/备注，便于返工阶段持续展示
+
+## 推理反馈接口（补充）
+
+### POST /inference/runs/{id}/feedback
+将推理错样回流到数据集。
+
+请求体示例：
+```json
+{
+  "dataset_id": "d-2",
+  "reason": "missed_detection"
+}
+```
+
+规则：
+- 服务端会将 `inference_runs.feedback_dataset_id` 绑定到目标数据集
+- 目标数据集 `task_type` 必须与推理任务 `task_type` 一致，不一致时返回校验错误
+- 若输入附件已属于目标数据集，则复用该附件；否则在目标数据集作用域复制附件并写入数据集条目
+- 同一个 `run + dataset` 重复提交应保持幂等（更新元数据而非重复建条目）
+
 ## LLM 设置接口
 - `GET /settings/llm`：获取当前用户保存的 LLM 配置视图
   - 不返回明文 API key，只返回 `has_api_key` 与 `api_key_masked`

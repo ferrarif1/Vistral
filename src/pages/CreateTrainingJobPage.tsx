@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { DatasetRecord, RequirementTaskDraft } from '../../shared/domain';
+import type { DatasetRecord, DatasetVersionRecord, RequirementTaskDraft } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+
+const curatedBaseModelCatalog = {
+  paddleocr: ['paddleocr-PP-OCRv4'],
+  doctr: ['doctr-crnn-vitstr-base'],
+  yolo: ['yolo11n']
+} as const;
+
+type TrainingFramework = keyof typeof curatedBaseModelCatalog;
 
 export default function CreateTrainingJobPage() {
   const { t } = useI18n();
@@ -26,10 +34,11 @@ export default function CreateTrainingJobPage() {
   );
 
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
+  const [datasetVersions, setDatasetVersions] = useState<DatasetVersionRecord[]>([]);
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [taskType, setTaskType] = useState<'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>('ocr');
-  const [framework, setFramework] = useState<'paddleocr' | 'doctr' | 'yolo'>('paddleocr');
+  const [framework, setFramework] = useState<TrainingFramework>('paddleocr');
   const [datasetId, setDatasetId] = useState('');
   const [datasetVersionId, setDatasetVersionId] = useState('');
   const [baseModel, setBaseModel] = useState('');
@@ -42,6 +51,7 @@ export default function CreateTrainingJobPage() {
   const [drafting, setDrafting] = useState(false);
   const [taskDraft, setTaskDraft] = useState<RequirementTaskDraft | null>(null);
   const [loading, setLoading] = useState(true);
+  const [versionsLoading, setVersionsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const draftAnnotationType = taskDraft?.recommended_annotation_type ?? taskDraft?.annotation_type ?? '';
@@ -53,13 +63,54 @@ export default function CreateTrainingJobPage() {
       .then((result) => {
         setDatasets(result);
         const first = result.find((dataset) => dataset.task_type === taskType);
-        if (first) {
-          setDatasetId(first.id);
-        }
+        setDatasetId((current) =>
+          current && result.some((dataset) => dataset.id === current && dataset.task_type === taskType)
+            ? current
+            : (first?.id ?? '')
+        );
       })
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
       .finally(() => setLoading(false));
   }, [taskType]);
+
+  useEffect(() => {
+    if (!datasetId) {
+      setDatasetVersions([]);
+      setDatasetVersionId('');
+      return;
+    }
+
+    let active = true;
+    setVersionsLoading(true);
+
+    api
+      .listDatasetVersions(datasetId)
+      .then((result) => {
+        if (!active) {
+          return;
+        }
+
+        setDatasetVersions(result);
+        setDatasetVersionId((current) =>
+          current && result.some((version) => version.id === current) ? current : (result[0]?.id ?? '')
+        );
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setFeedback({ variant: 'error', text: (error as Error).message });
+      })
+      .finally(() => {
+        if (active) {
+          setVersionsLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [datasetId]);
 
   useEffect(() => {
     if (taskType === 'ocr' && framework === 'yolo') {
@@ -71,15 +122,43 @@ export default function CreateTrainingJobPage() {
     }
   }, [framework, taskType]);
 
+  const baseModelOptions = useMemo<string[]>(
+    () => [...curatedBaseModelCatalog[framework]],
+    [framework]
+  );
+
+  useEffect(() => {
+    setBaseModel((current) => {
+      if (current && baseModelOptions.includes(current)) {
+        return current;
+      }
+
+      return baseModelOptions[0] ?? '';
+    });
+  }, [baseModelOptions]);
+
   const filteredDatasets = useMemo(() => datasets.filter((dataset) => dataset.task_type === taskType), [datasets, taskType]);
   const selectedDataset = useMemo(
     () => filteredDatasets.find((dataset) => dataset.id === datasetId) ?? null,
     [datasetId, filteredDatasets]
   );
+  const selectedDatasetVersion = useMemo(
+    () => datasetVersions.find((version) => version.id === datasetVersionId) ?? null,
+    [datasetVersionId, datasetVersions]
+  );
   const readyMatchingDatasets = useMemo(
     () => filteredDatasets.filter((dataset) => dataset.status === 'ready').length,
     [filteredDatasets]
   );
+  const datasetStatusReady = selectedDataset?.status === 'ready';
+  const datasetVersionHasTrainSplit = (selectedDatasetVersion?.split_summary.train ?? 0) > 0;
+  const datasetVersionHasAnnotationCoverage = (selectedDatasetVersion?.annotation_coverage ?? 0) > 0;
+  const launchReady =
+    Boolean(selectedDataset) &&
+    datasetStatusReady &&
+    Boolean(selectedDatasetVersion) &&
+    datasetVersionHasTrainSplit &&
+    datasetVersionHasAnnotationCoverage;
 
   const taskFrameworkOptions = useMemo(() => {
     if (taskType === 'ocr') {
@@ -113,6 +192,31 @@ export default function CreateTrainingJobPage() {
       return;
     }
 
+    if (!datasetVersionId.trim()) {
+      setFeedback({ variant: 'error', text: t('Please select a dataset version.') });
+      return;
+    }
+
+    if (!selectedDatasetVersion) {
+      setFeedback({ variant: 'error', text: t('Selected dataset version is unavailable.') });
+      return;
+    }
+
+    if (!datasetStatusReady) {
+      setFeedback({ variant: 'error', text: t('Selected dataset must be ready before creating a training job.') });
+      return;
+    }
+
+    if (!datasetVersionHasTrainSplit) {
+      setFeedback({ variant: 'error', text: t('Selected dataset version must include train split items before launch.') });
+      return;
+    }
+
+    if (!datasetVersionHasAnnotationCoverage) {
+      setFeedback({ variant: 'error', text: t('Selected dataset version must include annotation coverage before launch.') });
+      return;
+    }
+
     setSubmitting(true);
     setFeedback(null);
 
@@ -122,8 +226,8 @@ export default function CreateTrainingJobPage() {
         task_type: taskType,
         framework,
         dataset_id: datasetId,
-        dataset_version_id: datasetVersionId.trim() || null,
-        base_model: baseModel.trim() || `${framework}-base`,
+        dataset_version_id: datasetVersionId.trim(),
+        base_model: baseModel.trim() || baseModelOptions[0] || `${framework}-base`,
         config: {
           epochs,
           batch_size: batchSize,
@@ -187,6 +291,26 @@ export default function CreateTrainingJobPage() {
         : t('Pick a dataset that matches the selected task type.')
     },
     {
+      label: t('Dataset Version'),
+      done: Boolean(selectedDatasetVersion),
+      hint: selectedDatasetVersion
+        ? `${selectedDatasetVersion.version_name} (${selectedDatasetVersion.id})`
+        : t('Choose an immutable dataset version snapshot for this run.')
+    },
+    {
+      label: t('Launch readiness'),
+      done: launchReady,
+      hint: selectedDatasetVersion
+        ? t('Dataset {datasetStatus} · train {trainCount} · coverage {coverage}% · train split ready {trainReady} · coverage ready {coverageReady}', {
+            datasetStatus: selectedDataset ? t(selectedDataset.status) : t('N/A'),
+            trainCount: selectedDatasetVersion.split_summary.train,
+            coverage: Math.round(selectedDatasetVersion.annotation_coverage * 100),
+            trainReady: t(datasetVersionHasTrainSplit ? 'ready' : 'draft'),
+            coverageReady: t(datasetVersionHasAnnotationCoverage ? 'ready' : 'draft')
+          })
+        : t('Launch readiness becomes available after a dataset version is selected.')
+    },
+    {
       label: t('Params'),
       done: Boolean(epochs && batchSize && learningRate),
       hint:
@@ -196,7 +320,7 @@ export default function CreateTrainingJobPage() {
     },
     {
       label: t('Review'),
-      done: step === steps.length - 1 && Boolean(name.trim()) && Boolean(selectedDataset),
+      done: step === steps.length - 1 && Boolean(name.trim()) && launchReady,
       hint:
         step === steps.length - 1
           ? t('This run is ready for final review.')
@@ -278,22 +402,102 @@ export default function CreateTrainingJobPage() {
               </select>
             </label>
             <label>
-              {t('Dataset Version (optional)')}
-              <input
+              {t('Dataset Version')}
+              <select
                 value={datasetVersionId}
                 onChange={(event) => setDatasetVersionId(event.target.value)}
-                placeholder={t('for example: dv-1')}
-              />
+                disabled={!selectedDataset || versionsLoading || datasetVersions.length === 0}
+              >
+                <option value="">
+                  {versionsLoading ? t('Loading dataset versions...') : t('Select a dataset version')}
+                </option>
+                {datasetVersions.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    {version.version_name} ({version.id})
+                  </option>
+                ))}
+              </select>
             </label>
             <label>
               {t('Base Model')}
-              <input
+              <select
                 value={baseModel}
                 onChange={(event) => setBaseModel(event.target.value)}
-                placeholder={`${framework}-base`}
-              />
+              >
+                {baseModelOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
+          <small className="muted">
+            {t('Base model options are curated for future fine-tuning and keep only essential foundation choices.')}
+          </small>
+          {selectedDataset && datasetVersions.length === 0 && !versionsLoading ? (
+            <StateBlock
+              variant="empty"
+              title={t('No Dataset Version')}
+              description={t('Create a dataset version snapshot before launching training.')}
+              extra={
+                <Link to={`/datasets/${selectedDataset.id}`} className="workspace-inline-link">
+                  {t('Open Detail')}
+                </Link>
+              }
+            />
+          ) : null}
+          {selectedDatasetVersion ? (
+            <ul className="workspace-record-list compact">
+              <li className="workspace-record-item compact">
+                <div className="row between gap wrap">
+                  <strong>{t('Dataset version snapshot')}</strong>
+                  <span className={`workspace-status-pill ${launchReady ? 'ready' : 'draft'}`}>
+                    {launchReady ? t('Ready') : t('draft')}
+                  </span>
+                </div>
+                <small className="muted">
+                  {selectedDatasetVersion.version_name} ({selectedDatasetVersion.id})
+                </small>
+              </li>
+              <li className="workspace-record-item compact">
+                <div className="row between gap wrap">
+                  <strong>{t('Split summary')}</strong>
+                  <span className="chip">
+                    {t('train')}: {selectedDatasetVersion.split_summary.train}
+                  </span>
+                </div>
+                <small className="muted">
+                  train {selectedDatasetVersion.split_summary.train} · val {selectedDatasetVersion.split_summary.val} ·
+                  test {selectedDatasetVersion.split_summary.test} · unassigned {selectedDatasetVersion.split_summary.unassigned}
+                </small>
+              </li>
+              <li className="workspace-record-item compact">
+                <div className="row between gap wrap">
+                  <strong>{t('Annotation coverage')}</strong>
+                  <span className="chip">{Math.round(selectedDatasetVersion.annotation_coverage * 100)}%</span>
+                </div>
+                <small className="muted">
+                  {t('Training uses an explicit dataset version snapshot so this run stays reproducible.')}
+                </small>
+              </li>
+              <li className="workspace-record-item compact">
+                <div className="row between gap wrap">
+                  <strong>{t('Launch readiness checks')}</strong>
+                  <span className={`workspace-status-pill ${launchReady ? 'ready' : 'draft'}`}>
+                    {launchReady ? t('Ready') : t('draft')}
+                  </span>
+                </div>
+                <small className="muted">
+                  {t('Dataset ready {datasetReady} · train split {trainReady} · coverage {coverageReady}', {
+                    datasetReady: t(datasetStatusReady ? 'ready' : 'draft'),
+                    trainReady: t(datasetVersionHasTrainSplit ? 'ready' : 'draft'),
+                    coverageReady: t(datasetVersionHasAnnotationCoverage ? 'ready' : 'draft')
+                  })}
+                </small>
+              </li>
+            </ul>
+          ) : null}
         </section>
       );
     }
@@ -358,7 +562,7 @@ export default function CreateTrainingJobPage() {
               <span className="chip">{selectedDataset ? t(selectedDataset.status) : t('N/A')}</span>
             </div>
             <small className="muted">
-              {(selectedDataset?.name ?? datasetId) || t('N/A')} · {t('Dataset Version')}: {datasetVersionId || t('latest')}
+              {(selectedDataset?.name ?? datasetId) || t('N/A')} · {t('Dataset Version')}: {selectedDatasetVersion?.version_name || datasetVersionId || t('N/A')}
             </small>
           </li>
           <li className="workspace-record-item compact">
@@ -551,7 +755,11 @@ export default function CreateTrainingJobPage() {
               >
                 {t('Next')}
               </button>
-              <button type="button" onClick={submit} disabled={step !== steps.length - 1 || submitting || loading}>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !launchReady}
+              >
                 {submitting ? t('Submitting...') : t('Create Training Job')}
               </button>
               <Link to="/datasets" className="workspace-inline-link">

@@ -209,9 +209,15 @@ Attributes:
 - `annotation_id` (FK Annotation)
 - `reviewer_user_id` (FK User)
 - `status` (`approved` | `rejected`)
+- `review_reason_code` (`box_mismatch` | `label_error` | `text_error` | `missing_object` | `polygon_issue` | `other` | nullable)
 - `quality_score` (nullable float)
 - `review_comment` (nullable)
 - `created_at`
+
+Rules:
+- `review_reason_code` is required when `status=rejected`
+- approved reviews store `review_reason_code=null`
+- latest review stays attached to annotation list/detail responses so rework UIs can keep previous review context visible
 
 ### 4.11 DatasetVersion
 Attributes:
@@ -232,13 +238,18 @@ Attributes:
 - `framework` (Framework)
 - `status` (TrainingJobStatus)
 - `dataset_id` (FK Dataset)
-- `dataset_version_id` (FK DatasetVersion, nullable)
+- `dataset_version_id` (FK DatasetVersion, nullable only for legacy compatibility; new jobs must persist the selected dataset version snapshot)
 - `base_model`
 - `config` (JSON)
 - `execution_mode` (`simulated` | `local_command` | `unknown`)
 - `log_excerpt` (nullable)
 - `submitted_by` (FK User)
 - `created_at`, `updated_at`
+
+Launch readiness rules:
+- selected dataset must be `ready`
+- selected dataset version must include at least one `train` item (`split_summary.train > 0`)
+- selected dataset version must have positive annotation coverage (`annotation_coverage > 0`)
 
 Relationships:
 - has many `TrainingMetric`
@@ -304,6 +315,7 @@ Attributes:
 
 Runtime rule (current implementation):
 - `POST /inference/runs/{id}/feedback` binds `feedback_dataset_id` and guarantees a dataset item trace for the run in target dataset.
+- target dataset `task_type` must equal inference run `task_type`; cross-task feedback is rejected.
 - feedback item metadata stores `inference_run_id`, `feedback_reason`, and `source_attachment_id` for loop traceability.
 
 ## 5. State Transition Rules
@@ -311,6 +323,9 @@ Runtime rule (current implementation):
 ### 5.1 Annotation
 - `unannotated -> in_progress -> annotated -> in_review -> approved`
 - rejection path: `in_review -> rejected -> in_progress`
+- direct upsert editing is only valid while the current annotation is still editable (`unannotated`, `in_progress`, `annotated`)
+- once an annotation enters `in_review`, only the dedicated review endpoint may move it to `approved` or `rejected`
+- `approved` stays read-only in the upsert path
 
 ### 5.2 TrainingJob
 - `draft -> queued -> preparing -> running -> evaluating -> completed`

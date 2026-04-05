@@ -36,6 +36,13 @@ export type AnnotationStatus =
   | 'in_review'
   | 'approved'
   | 'rejected';
+export type AnnotationReviewReasonCode =
+  | 'box_mismatch'
+  | 'label_error'
+  | 'text_error'
+  | 'missing_object'
+  | 'polygon_issue'
+  | 'other';
 
 export type TrainingJobStatus =
   | 'draft'
@@ -229,6 +236,7 @@ export interface AnnotationReviewRecord {
   annotation_id: string;
   reviewer_user_id: string;
   status: 'approved' | 'rejected';
+  review_reason_code: AnnotationReviewReasonCode | null;
   quality_score: number | null;
   review_comment: string | null;
   created_at: string;
@@ -479,7 +487,7 @@ export interface CreateTrainingJobInput {
   task_type: TaskType;
   framework: ModelFramework;
   dataset_id: string;
-  dataset_version_id?: string | null;
+  dataset_version_id: string;
   base_model: string;
   config: Record<string, string>;
 }
@@ -494,6 +502,7 @@ export interface UpsertAnnotationInput {
 
 export interface ReviewAnnotationInput {
   status: 'approved' | 'rejected';
+  review_reason_code?: AnnotationReviewReasonCode | null;
   quality_score?: number | null;
   review_comment?: string | null;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import type { CreateUserInput, User } from '../../shared/domain';
 import SettingsTabs from '../components/settings/SettingsTabs';
@@ -20,6 +20,7 @@ export default function AccountSettingsPage() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [directoryQuery, setDirectoryQuery] = useState('');
+  const deferredDirectoryQuery = useDeferredValue(directoryQuery);
   const [directoryRoleFilter, setDirectoryRoleFilter] = useState<'all' | User['role']>('all');
   const [directoryStatusFilter, setDirectoryStatusFilter] = useState<'all' | User['status']>('all');
   const [loading, setLoading] = useState(true);
@@ -132,7 +133,7 @@ export default function AccountSettingsPage() {
   );
 
   const filteredUsers = useMemo(() => {
-    const normalizedQuery = directoryQuery.trim().toLowerCase();
+    const normalizedQuery = deferredDirectoryQuery.trim().toLowerCase();
     return sortedUsers.filter((user) => {
       const matchesRole = directoryRoleFilter === 'all' || user.role === directoryRoleFilter;
       const matchesStatus =
@@ -141,7 +142,7 @@ export default function AccountSettingsPage() {
         normalizedQuery.length === 0 || user.username.toLowerCase().includes(normalizedQuery);
       return matchesRole && matchesStatus && matchesQuery;
     });
-  }, [directoryQuery, directoryRoleFilter, directoryStatusFilter, sortedUsers]);
+  }, [deferredDirectoryQuery, directoryRoleFilter, directoryStatusFilter, sortedUsers]);
 
   const authRequired = loadError === 'Authentication required.';
   const managedAccountCount = currentUser?.role === 'admin' ? users.length : currentUser ? 1 : 0;

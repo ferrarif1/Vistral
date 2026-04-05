@@ -3,8 +3,8 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
 COOKIE_FILE="$(mktemp)"
-USERNAME="healthcheck-$(date +%s)"
-PASSWORD="${HEALTHCHECK_PASSWORD:-healthcheck123}"
+USERNAME="${HEALTHCHECK_USERNAME:-alice}"
+PASSWORD="${HEALTHCHECK_PASSWORD:-mock-pass}"
 
 cleanup() {
   rm -f "${COOKIE_FILE}"
@@ -16,12 +16,6 @@ curl -fsS "${BASE_URL}/healthz" >/dev/null
 
 echo "[docker-healthcheck] Checking API health endpoint"
 curl -fsS "${BASE_URL}/api/health" >/dev/null
-
-echo "[docker-healthcheck] Registering probe account"
-curl -fsS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-  -X POST "${BASE_URL}/api/auth/register" \
-  -H 'Content-Type: application/json' \
-  -d "{\"username\":\"${USERNAME}\",\"password\":\"${PASSWORD}\"}" >/dev/null
 
 echo "[docker-healthcheck] Logging in with username/password"
 curl -fsS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \

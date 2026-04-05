@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   DatasetRecord,
   FileAttachment,
@@ -7,13 +7,14 @@ import type {
   RuntimeConnectivityRecord
 } from '../../shared/domain';
 import AttachmentUploader from '../components/AttachmentUploader';
-import PredictionVisualizer from '../components/PredictionVisualizer';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 const backgroundRefreshIntervalMs = 5000;
+const PredictionVisualizer = lazy(() => import('../components/PredictionVisualizer'));
 
 type LoadMode = 'initial' | 'manual' | 'background';
 
@@ -111,16 +112,6 @@ export default function InferenceValidationPage() {
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
   }, [loadAll]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      loadAll('background').catch(() => {
-        // no-op
-      });
-    }, backgroundRefreshIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [loadAll]);
-
   const selectedVersion = useMemo(
     () => versions.find((version) => version.id === selectedVersionId) ?? null,
     [versions, selectedVersionId]
@@ -129,6 +120,21 @@ export default function InferenceValidationPage() {
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
     [runs, selectedRunId]
+  );
+  const feedbackTaskType = useMemo(
+    () => selectedRun?.task_type ?? selectedVersion?.task_type ?? null,
+    [selectedRun?.task_type, selectedVersion?.task_type]
+  );
+  const feedbackDatasets = useMemo(
+    () =>
+      feedbackTaskType
+        ? datasets.filter((dataset) => dataset.task_type === feedbackTaskType)
+        : datasets,
+    [datasets, feedbackTaskType]
+  );
+  const selectedFeedbackDataset = useMemo(
+    () => feedbackDatasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
+    [feedbackDatasets, selectedDatasetId]
   );
   const selectedRunPreviewUrl = useMemo(() => {
     if (!selectedRun) {
@@ -257,6 +263,24 @@ export default function InferenceValidationPage() {
     () => runs.filter((run) => Boolean(run.feedback_dataset_id)).length,
     [runs]
   );
+  const hasTransientInferenceState = useMemo(
+    () =>
+      attachments.some((attachment) => attachment.status === 'uploading' || attachment.status === 'processing') ||
+      runs.some((run) => run.status === 'queued' || run.status === 'running'),
+    [attachments, runs]
+  );
+
+  useBackgroundPolling(
+    () => {
+      loadAll('background').catch(() => {
+        // no-op
+      });
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled: hasTransientInferenceState
+    }
+  );
 
   const reachableRuntimeCount = useMemo(
     () => runtimeChecks.filter((item) => item.source === 'reachable').length,
@@ -279,6 +303,19 @@ export default function InferenceValidationPage() {
   useEffect(() => {
     void loadRuntimeConnectivity();
   }, [loadRuntimeConnectivity]);
+
+  useEffect(() => {
+    if (feedbackDatasets.length === 0) {
+      if (selectedDatasetId) {
+        setSelectedDatasetId('');
+      }
+      return;
+    }
+
+    if (!feedbackDatasets.some((dataset) => dataset.id === selectedDatasetId)) {
+      setSelectedDatasetId(feedbackDatasets[0].id);
+    }
+  }, [feedbackDatasets, selectedDatasetId]);
 
   const uploadInput = async (filename: string) => {
     await api.uploadInferenceAttachment(filename);
@@ -329,6 +366,14 @@ export default function InferenceValidationPage() {
   const sendFeedback = async () => {
     if (!selectedRun || !selectedDatasetId) {
       setFeedback({ variant: 'error', text: t('Run inference and select dataset before feedback.') });
+      return;
+    }
+
+    if (!selectedFeedbackDataset || selectedFeedbackDataset.task_type !== selectedRun.task_type) {
+      setFeedback({
+        variant: 'error',
+        text: t('Feedback target dataset task type must match inference task type.')
+      });
       return;
     }
 
@@ -575,10 +620,20 @@ export default function InferenceValidationPage() {
                   title={runtimeInsight?.title ?? t('Runtime Fallback Active')}
                   description={runtimeInsight?.description ?? t('Using mock fallback because runtime endpoint is unavailable.')}
                 />
-                <PredictionVisualizer
-                  output={selectedRun.normalized_output}
-                  imageUrl={selectedRunPreviewUrl}
-                />
+                <Suspense
+                  fallback={
+                    <StateBlock
+                      variant="loading"
+                      title={t('Loading')}
+                      description={t('Preparing prediction visualization.')}
+                    />
+                  }
+                >
+                  <PredictionVisualizer
+                    output={selectedRun.normalized_output}
+                    imageUrl={selectedRunPreviewUrl}
+                  />
+                </Suspense>
                 <h4>{t('Raw Output')}</h4>
                 <pre className="code-block">{JSON.stringify(selectedRun.raw_output, null, 2)}</pre>
                 <h4>{t('Normalized Output')}</h4>
@@ -668,6 +723,22 @@ export default function InferenceValidationPage() {
                 description={t('Create or import a dataset before sending failure samples back.')}
               />
             ) : null}
+            {datasets.length > 0 && feedbackDatasets.length === 0 ? (
+              <StateBlock
+                variant="empty"
+                title={t('No Matching Datasets')}
+                description={t('Create a dataset with task type {taskType} before sending feedback from this run.', {
+                  taskType: feedbackTaskType ? t(feedbackTaskType) : t('unknown')
+                })}
+              />
+            ) : null}
+            {feedbackTaskType ? (
+              <small className="muted">
+                {t('Only datasets with task {taskType} are shown for feedback.', {
+                  taskType: t(feedbackTaskType)
+                })}
+              </small>
+            ) : null}
 
             <label>
               {t('Target Dataset')}
@@ -675,7 +746,7 @@ export default function InferenceValidationPage() {
                 value={selectedDatasetId}
                 onChange={(event) => setSelectedDatasetId(event.target.value)}
               >
-                {datasets.map((dataset) => (
+                {feedbackDatasets.map((dataset) => (
                   <option key={dataset.id} value={dataset.id}>
                     {dataset.name} ({t(dataset.task_type)})
                   </option>

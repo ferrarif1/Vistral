@@ -37,7 +37,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/dataset-management.md`
    - `docs/annotation-workflow.md`
    - `docs/model-runtime-architecture.md`
-4. Follow local setup instructions in `docs/setup.md`.
+4. Follow the single Docker deployment path in `docs/deployment.docker.md`.
 5. If a new request interrupts unfinished work, append a handoff entry to `docs/work-handoff.md` before switching context.
 
 ## Repository Working Model (How Codex should work in this repo)
@@ -65,10 +65,14 @@ Please read `docs/contributing.md` before opening a change.
 License file is not yet added in this baseline; add one before production distribution.
 
 
-## Development (Round 1 Baseline)
-1. `npm install`
-2. `npm run dev` (runs API + web together)
-3. Open `http://127.0.0.1:5173`
+## Docker Quick Start
+1. `cp .env.example .env`
+2. `npm run docker:up`
+3. Open `http://127.0.0.1:8080`
+4. Run `npm run docker:healthcheck`
+5. Run `npm run docker:verify:full`
+
+Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:web` remain available only for repository maintenance and debugging. They are not the primary product run path.
 
 ### Auth (username/password)
 - Login is username/password based.
@@ -86,14 +90,27 @@ License file is not yet added in this baseline; add one before production distri
 - `npm run build`
 - `npm run smoke:auth-session`
   - verifies public registration is disabled, admin-only account provisioning works, account disable/reactivate + admin password reset rules hold, and per-user password change takes effect
+- `npm run smoke:account-governance`
+  - verifies admin account operations (`create`, `disable/reactivate`, `password-reset`), self-disable guard, session invalidation after disable, and user self password change
 - `npm run smoke:phase2`
-  - verifies segmentation annotation persistence plus YOLO/PaddleOCR/docTR runtime fallback behavior in the mock loop
+  - verifies segmentation annotation persistence, review-state contract guards (rejected reason required / approved reason forbidden), rework latest-review context retention, training launch readiness gates (`train split > 0`, `annotation_coverage > 0`, and dataset-version ownership under the selected dataset), plus YOLO/PaddleOCR/docTR runtime fallback behavior in the mock loop
 - `npm run smoke:attachments`
   - verifies multipart upload/read/delete loops for conversation/model/dataset attachments
 - `npm run smoke:conversation-context`
   - verifies conversation message attachment order follows the selected context order
 - `npm run smoke:conversation-actions`
   - verifies conversation can request missing fields and then create real dataset/model-draft/training-job entities via backend APIs
+  - when `EXPECTED_TRAINING_DATASET_ID` / `EXPECTED_TRAINING_DATASET_VERSION_ID` are not provided, it auto-prepares a trainable detection dataset/version target by default (`AUTO_PREPARE_TRAINING_TARGET=true`)
+- `npm run smoke:inference-feedback-guard`
+  - verifies `POST /api/inference/runs/{id}/feedback` for both detection and OCR loops: rejects cross-task datasets, accepts matching-task datasets, and keeps dataset item/attachment traceability
+  - validates idempotency for repeated feedback on the same run+dataset (no duplicate dataset items; metadata reason is updated)
+  - validates dataset-scoped attachment reuse when run input attachment already belongs to target dataset (no cloned attachment)
+  - validates feedback metadata integrity (`inference_run_id`, `source_attachment_id`, `feedback_reason`) on created/upserted dataset items
+  - by default auto-prepares dedicated feedback datasets (`AUTO_PREPARE_FEEDBACK_DATASETS=true`); can be overridden via `EXPECTED_VALID_FEEDBACK_DATASET_ID`, `EXPECTED_OCR_FEEDBACK_DATASET_ID`, and `EXPECTED_MISMATCH_FEEDBACK_DATASET_ID`
+- `npm run smoke:no-seed-hardcoding`
+  - guards against hardcoded seed entity ids (`d-*`, `dv-*`, `mv-*`, `f-*`, etc.) in smoke/verify scripts so deployment-mode tests stay portable
+- `npm run smoke:core-closure`
+  - runs the core closure suite (`no-seed-hardcoding` + `account-governance` + `phase2` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure`) in one command
 - `npm run smoke:llm-settings`
   - verifies LLM settings save/edit/clear flow, including keeping the saved key while editing and loading encrypted config after API restart
 - `npm run smoke:runtime-success`
@@ -104,8 +121,9 @@ License file is not yet added in this baseline; add one before production distri
   - imports local files via real multipart upload into a new detection dataset, waits for upload lifecycle completion, then creates split + dataset version
 - `npm run smoke:ocr-closure`
   - validates a dedicated OCR closure on real uploaded data: OCR import -> PaddleOCR/docTR local-command training -> metrics/artifact summary -> model-version register -> inference upload/run
+  - default is strict local-command assertions; use `OCR_CLOSURE_STRICT_LOCAL_COMMAND=false npm run smoke:ocr-closure` for fallback-tolerant checks
 - `npm run smoke:real-closure`
-  - validates a more complete real closure: requirement draft -> dataset upload/import/export -> YOLO training -> model version register -> YOLO/PaddleOCR/docTR inference -> feedback loop
+  - validates a more complete real closure: requirement draft -> dataset upload/import/export -> YOLO training -> model version register -> YOLO/PaddleOCR/docTR inference -> detection/OCR feedback loops with dataset traceability
 - `npm run smoke:restart-resume`
   - verifies app-state persistence and automatic training-job resume after API restart
 - `npm run smoke:local-command`
@@ -188,19 +206,12 @@ License file is not yet added in this baseline; add one before production distri
 ## Docker Deployment
 - Quick guide: `docs/deployment.docker.md`
 - Copy env template: `cp .env.example .env` (update secrets if needed)
-- Start full stack: `docker compose up --build -d`
-- Internal registry mode (no local build): `docker compose -f docker-compose.registry.yml up -d`
-- Build images helper: `npm run docker:images:build`
-- Build and push helper: `npm run docker:images:build-push`
-- Offline export helper: `npm run docker:images:save`
-- Offline import + up helper: `npm run docker:images:load-up`
+- Start/update full stack (pure Docker single entry): `npm run docker:up`
 - Deployment self-check: `npm run docker:healthcheck`
 - Full deployment E2E verify: `npm run docker:verify:full`
-  - covers auth/permissions, real multipart attachment lifecycle, conversation + approval + inference feedback, dataset export/import roundtrip (detection/ocr/segmentation), and real closure smoke with YOLO/PaddleOCR/docTR
-- Release bundle generator: `npm run docker:release:bundle`
-- Release bundle with fresh verification: `VERIFY_BASE_URL=http://127.0.0.1:8080 npm run docker:release:bundle:verified`
-- Pin report for bundle: `VERIFY_REPORT_PATH=.data/verify-reports/<report>.json npm run docker:release:bundle`
-- Enforce report freshness: `VERIFY_REPORT_MAX_AGE_SECONDS=1800 npm run docker:release:bundle`
+  - covers auth/permissions, account governance checks, real multipart attachment lifecycle, conversation operational actions (dataset/model-draft/training-job creation), approval + inference feedback, phase2 annotation/review + training launch-readiness gates, dataset export/import roundtrip (detection/ocr/segmentation), detection real-closure smoke, and dedicated OCR closure smoke
+  - default runs OCR closure in non-strict mode (`OCR_CLOSURE_STRICT_LOCAL_COMMAND=false`) for deployment compatibility
+  - optional strict OCR closure in full verify: `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run docker:verify:full`
 - E2E verify outputs report files under `.data/verify-reports/` (JSON + Markdown)
 - Web entry: `http://127.0.0.1:8080`
 - API health: `http://127.0.0.1:8080/api/health`

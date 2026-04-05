@@ -31,6 +31,30 @@ cleanup() {
 
 trap cleanup EXIT
 
+wait_inference_attachment_ready() {
+  local attachment_id="$1"
+  local files_resp=""
+  local attachment_status=""
+
+  for _ in $(seq 1 120); do
+    files_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/files/inference")"
+    attachment_status="$(echo "$files_resp" | jq -r --arg id "${attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
+    if [[ "${attachment_status}" == "ready" ]]; then
+      return 0
+    fi
+    if [[ "${attachment_status}" == "error" ]]; then
+      echo "[smoke-runtime-success] inference attachment entered error state"
+      echo "$files_resp"
+      exit 1
+    fi
+    sleep 0.2
+  done
+
+  echo "[smoke-runtime-success] inference attachment not ready in time"
+  echo "$files_resp"
+  exit 1
+}
+
 RUNTIME_MOCK_PORT="$RUNTIME_MOCK_PORT" npx tsx scripts/mockRuntimeServer.ts >"$RUNTIME_LOG" 2>&1 &
 RUNTIME_PID=$!
 
@@ -75,10 +99,67 @@ if [[ -z "$csrf_token" ]]; then
   exit 1
 fi
 
+model_versions_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/model-versions")"
+detection_model_version_id="$(echo "$model_versions_resp" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
+ocr_model_version_id="$(echo "$model_versions_resp" | jq -r '.data[] | select(.task_type=="ocr" and .framework=="paddleocr" and .status=="registered") | .id' | head -n 1)"
+if [[ -z "$ocr_model_version_id" ]]; then
+  ocr_model_version_id="$(echo "$model_versions_resp" | jq -r '.data[] | select(.task_type=="ocr" and .status=="registered") | .id' | head -n 1)"
+fi
+if [[ -z "$detection_model_version_id" || -z "$ocr_model_version_id" ]]; then
+  echo "[smoke-runtime-success] required detection/ocr model versions not found"
+  echo "$model_versions_resp"
+  exit 1
+fi
+
+datasets_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets")"
+ocr_dataset_id="$(echo "$datasets_resp" | jq -r '.data[] | select(.task_type=="ocr" and .status=="ready") | .id' | head -n 1)"
+if [[ -z "$ocr_dataset_id" ]]; then
+  ocr_dataset_id="$(echo "$datasets_resp" | jq -r '.data[] | select(.task_type=="ocr") | .id' | head -n 1)"
+fi
+if [[ -z "$ocr_dataset_id" ]]; then
+  echo "[smoke-runtime-success] no OCR dataset found for docTR training"
+  echo "$datasets_resp"
+  exit 1
+fi
+
+ocr_versions_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${ocr_dataset_id}/versions")"
+ocr_dataset_version_id="$(echo "$ocr_versions_resp" | jq -r '.data[] | select((.split_summary.train // 0) > 0 and (.annotation_coverage // 0) > 0) | .id' | head -n 1)"
+if [[ -z "$ocr_dataset_version_id" ]]; then
+  echo "[smoke-runtime-success] no trainable OCR dataset version found"
+  echo "$ocr_versions_resp"
+  exit 1
+fi
+
+detection_upload_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"filename\":\"runtime-success-detection-$(date +%s).jpg\"}" \
+  "${BASE_URL}/api/files/inference/upload")"
+detection_input_attachment_id="$(echo "$detection_upload_resp" | jq -r '.data.id // empty')"
+if [[ -z "$detection_input_attachment_id" ]]; then
+  echo "[smoke-runtime-success] failed to upload detection inference attachment"
+  echo "$detection_upload_resp"
+  exit 1
+fi
+wait_inference_attachment_ready "${detection_input_attachment_id}"
+
+ocr_upload_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"filename\":\"runtime-success-ocr-$(date +%s).jpg\"}" \
+  "${BASE_URL}/api/files/inference/upload")"
+ocr_input_attachment_id="$(echo "$ocr_upload_resp" | jq -r '.data.id // empty')"
+if [[ -z "$ocr_input_attachment_id" ]]; then
+  echo "[smoke-runtime-success] failed to upload OCR inference attachment"
+  echo "$ocr_upload_resp"
+  exit 1
+fi
+wait_inference_attachment_ready "${ocr_input_attachment_id}"
+
 yolo_inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d '{"model_version_id":"mv-2","input_attachment_id":"f-1","task_type":"detection"}' \
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${detection_input_attachment_id}\",\"task_type\":\"detection\"}" \
   "${BASE_URL}/api/inference/runs")"
 
 yolo_source="$(echo "$yolo_inference_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
@@ -94,7 +175,7 @@ fi
 paddle_inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d '{"model_version_id":"mv-1","input_attachment_id":"f-3","task_type":"ocr"}' \
+  -d "{\"model_version_id\":\"${ocr_model_version_id}\",\"input_attachment_id\":\"${ocr_input_attachment_id}\",\"task_type\":\"ocr\"}" \
   "${BASE_URL}/api/inference/runs")"
 
 paddle_source="$(echo "$paddle_inference_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
@@ -110,7 +191,7 @@ fi
 doctr_training_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d '{"name":"doctr-runtime-success","task_type":"ocr","framework":"doctr","dataset_id":"d-1","dataset_version_id":"dv-1","base_model":"doctr-base","config":{"epochs":"1","batch_size":"1"}}' \
+  -d "{\"name\":\"doctr-runtime-success\",\"task_type\":\"ocr\",\"framework\":\"doctr\",\"dataset_id\":\"${ocr_dataset_id}\",\"dataset_version_id\":\"${ocr_dataset_version_id}\",\"base_model\":\"doctr-base\",\"config\":{\"epochs\":\"1\",\"batch_size\":\"1\"}}" \
   "${BASE_URL}/api/training/jobs")"
 
 doctr_training_job_id="$(echo "$doctr_training_result" | jq -r '.data.id // empty')"
@@ -165,7 +246,7 @@ fi
 doctr_inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d "{\"model_version_id\":\"${doctr_model_version_id}\",\"input_attachment_id\":\"f-3\",\"task_type\":\"ocr\"}" \
+  -d "{\"model_version_id\":\"${doctr_model_version_id}\",\"input_attachment_id\":\"${ocr_input_attachment_id}\",\"task_type\":\"ocr\"}" \
   "${BASE_URL}/api/inference/runs")"
 
 doctr_source="$(echo "$doctr_inference_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"

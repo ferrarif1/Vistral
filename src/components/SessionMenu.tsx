@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { User } from '../../shared/domain';
-import { useI18n } from '../i18n/I18nProvider';
+import { useI18n, type AppLanguage } from '../i18n/I18nProvider';
 
 interface SessionMenuItem {
   label: string;
@@ -16,6 +16,10 @@ interface SessionMenuProps {
   align?: 'start' | 'end';
   direction?: 'down' | 'up';
   variant?: 'pill' | 'sidebar' | 'rail';
+  languageControl?: {
+    value: AppLanguage;
+    onChange: (value: AppLanguage) => void;
+  };
 }
 
 const getInitials = (username?: string): string => {
@@ -31,7 +35,8 @@ export default function SessionMenu({
   items,
   align = 'end',
   direction = 'down',
-  variant = 'pill'
+  variant = 'pill',
+  languageControl
 }: SessionMenuProps) {
   const { t, roleLabel } = useI18n();
   const [open, setOpen] = useState(false);
@@ -114,6 +119,28 @@ export default function SessionMenu({
               </small>
             </div>
           </div>
+
+          {languageControl ? (
+            <div className="session-menu-language" role="group" aria-label={t('Language')}>
+              <small className="muted">{t('Language')}</small>
+              <div className="session-menu-language-options">
+                <button
+                  type="button"
+                  className={`session-menu-language-option${languageControl.value === 'zh-CN' ? ' active' : ''}`}
+                  onClick={() => languageControl.onChange('zh-CN')}
+                >
+                  {t('Chinese')}
+                </button>
+                <button
+                  type="button"
+                  className={`session-menu-language-option${languageControl.value === 'en-US' ? ' active' : ''}`}
+                  onClick={() => languageControl.onChange('en-US')}
+                >
+                  {t('English')}
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="session-menu-list">
             {items.map((item, index) =>

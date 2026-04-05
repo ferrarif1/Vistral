@@ -107,6 +107,9 @@ Vistral must provide one closed-loop platform where engineers can:
 ### FR-009 Training Jobs
 - create training job
 - choose task type/framework/base model
+- every new training job must bind to an explicit dataset version snapshot instead of an implicit "latest" dataset state
+- training launch readiness must surface at least dataset status, selected dataset-version split summary, and annotation coverage before submit
+- training launch must be blocked when selected dataset version has zero annotation coverage (`annotation_coverage <= 0`)
 - base model choices exposed in normal workspace flows must come from a curated foundation catalog suitable for future fine-tuning
 - internal smoke/verification/demo fixtures must not remain visible in the default workspace catalog; when sample records are needed, keep at most 1-2 curated examples
 - configure parameters and submit
@@ -125,6 +128,7 @@ Vistral must provide one closed-loop platform where engineers can:
 - show raw output + normalized output
 - persist inference runs
 - one-click feedback sample back to dataset
+- feedback target dataset must match the inference run task type (for example detection run -> detection dataset)
 
 ### FR-012 Adapter Abstraction
 Framework integrations must follow unified trainer interface:

@@ -103,7 +103,8 @@ admin_login_response="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -d '{"username":"admin","password":"mock-pass-admin"}')"
 admin_login_username="$(echo "${admin_login_response}" | jq -r '.data.username // empty')"
-if [[ "${admin_login_username}" != "admin" ]]; then
+admin_login_id="$(echo "${admin_login_response}" | jq -r '.data.id // empty')"
+if [[ "${admin_login_username}" != "admin" || -z "${admin_login_id}" ]]; then
   echo "[smoke-auth-session] admin login failed after logout."
   echo "${admin_login_response}"
   exit 1
@@ -278,7 +279,7 @@ fi
 admin_self_disable_status="$(curl -sS -o "${TMP_BODY}" -w '%{http_code}' -c "${ADMIN_COOKIE_FILE}" -b "${ADMIN_COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${admin_csrf_token}" \
-  -X POST "${BASE_URL}/api/admin/users/u-2/status" \
+  -X POST "${BASE_URL}/api/admin/users/${admin_login_id}/status" \
   -d '{"status":"disabled","reason":"self-test"}')"
 admin_self_disable_code="$(jq -r '.error.code // empty' <"${TMP_BODY}")"
 if [[ "${admin_self_disable_status}" != "400" || "${admin_self_disable_code}" != "VALIDATION_ERROR" ]]; then

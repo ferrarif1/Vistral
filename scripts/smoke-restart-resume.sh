@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8787}"
 BASE_URL="http://${API_HOST}:${API_PORT}"
+AUTH_USERNAME="${AUTH_USERNAME:-alice}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-mock-pass}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-restart-resume] jq is required."
@@ -62,11 +64,92 @@ cd "${ROOT_DIR}"
 
 start_api
 
-csrf_response="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/auth/csrf")"
-csrf_token="$(echo "${csrf_response}" | jq -r '.data.csrf_token // empty')"
+login_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/auth/login" \
+  -d "{\"username\":\"${AUTH_USERNAME}\",\"password\":\"${AUTH_PASSWORD}\"}")"
+login_success="$(echo "${login_resp}" | jq -r '.success // false')"
+if [[ "${login_success}" != "true" ]]; then
+  echo "[smoke-restart-resume] login failed before first run."
+  echo "${login_resp}"
+  exit 1
+fi
+
+csrf_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/auth/csrf")"
+csrf_token="$(echo "${csrf_resp}" | jq -r '.data.csrf_token // empty')"
 if [[ -z "${csrf_token}" ]]; then
-  echo "[smoke-restart-resume] failed to obtain CSRF token."
-  echo "${csrf_response}"
+  echo "[smoke-restart-resume] failed to obtain CSRF token before first run."
+  echo "${csrf_resp}"
+  exit 1
+fi
+
+dataset_create_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets" \
+  -d "{\"name\":\"restart-resume-detection-$(date +%s)\",\"description\":\"restart resume smoke dataset\",\"task_type\":\"detection\",\"label_schema\":{\"classes\":[\"defect\"]}}")"
+detection_dataset_id="$(echo "${dataset_create_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${detection_dataset_id}" ]]; then
+  echo "[smoke-restart-resume] failed to create detection dataset."
+  echo "${dataset_create_resp}"
+  exit 1
+fi
+
+dataset_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/files/dataset/${detection_dataset_id}/upload" \
+  -d "{\"filename\":\"restart-resume-detection-$(date +%s).jpg\"}")"
+dataset_attachment_id="$(echo "${dataset_upload_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${dataset_attachment_id}" ]]; then
+  echo "[smoke-restart-resume] failed to upload detection dataset file."
+  echo "${dataset_upload_resp}"
+  exit 1
+fi
+
+sleep 1.6
+
+dataset_detail_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${detection_dataset_id}")"
+dataset_item_id="$(echo "${dataset_detail_resp}" | jq -r '.data.items[0].id // empty')"
+if [[ -z "${dataset_item_id}" ]]; then
+  echo "[smoke-restart-resume] dataset item not generated from uploaded file."
+  echo "${dataset_detail_resp}"
+  exit 1
+fi
+
+annotation_upsert_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${detection_dataset_id}/annotations" \
+  -d "{\"dataset_item_id\":\"${dataset_item_id}\",\"task_type\":\"detection\",\"source\":\"manual\",\"status\":\"annotated\",\"payload\":{\"boxes\":[{\"id\":\"box-1\",\"x\":42,\"y\":55,\"width\":128,\"height\":94,\"label\":\"defect\"}]}}")"
+annotation_status="$(echo "${annotation_upsert_resp}" | jq -r '.data.status // empty')"
+if [[ "${annotation_status}" != "annotated" ]]; then
+  echo "[smoke-restart-resume] failed to create annotated detection sample."
+  echo "${annotation_upsert_resp}"
+  exit 1
+fi
+
+dataset_split_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${detection_dataset_id}/split" \
+  -d '{"train_ratio":1,"val_ratio":0,"test_ratio":0,"seed":31}')"
+train_count="$(echo "${dataset_split_resp}" | jq -r '.data.split_summary.train // 0')"
+if [[ "${train_count}" -lt 1 ]]; then
+  echo "[smoke-restart-resume] split did not produce train items."
+  echo "${dataset_split_resp}"
+  exit 1
+fi
+
+dataset_version_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${detection_dataset_id}/versions" \
+  -d "{\"version_name\":\"restart-resume-v1-$(date +%s)\"}")"
+detection_dataset_version_id="$(echo "${dataset_version_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${detection_dataset_version_id}" ]]; then
+  echo "[smoke-restart-resume] failed to create dataset version for restart resume smoke."
+  echo "${dataset_version_resp}"
   exit 1
 fi
 
@@ -74,7 +157,7 @@ train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d '{"name":"restart-resume-yolo","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"40","batch_size":"2","learning_rate":"0.0008"}}')"
+  -d "{\"name\":\"restart-resume-yolo-live\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${detection_dataset_id}\",\"dataset_version_id\":\"${detection_dataset_version_id}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"40\",\"batch_size\":\"2\",\"learning_rate\":\"0.0008\"}}")"
 job_id="$(echo "${train_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${job_id}" ]]; then
   echo "[smoke-restart-resume] failed to create training job."
@@ -102,6 +185,25 @@ if [[ "${job_status}" != "running" && "${job_status}" != "evaluating" && "${job_
   exit 1
 fi
 
+# Ensure the created job has been flushed into app-state snapshot before restart.
+persisted_before_restart="false"
+for _ in {1..80}; do
+  if [[ -f "${APP_STATE_FILE}" ]]; then
+    persisted_job_count="$(jq -r --arg job_id "${job_id}" '[ (.trainingJobs // [])[]?, (.training_jobs // [])[]? ] | map(select(.id == $job_id)) | length' "${APP_STATE_FILE}" 2>/dev/null || echo "0")"
+    if [[ "${persisted_job_count}" -ge 1 ]]; then
+      persisted_before_restart="true"
+      break
+    fi
+  fi
+  sleep 0.15
+done
+
+if [[ "${persisted_before_restart}" != "true" ]]; then
+  echo "[smoke-restart-resume] job was not persisted into app-state before restart."
+  [[ -f "${APP_STATE_FILE}" ]] && cat "${APP_STATE_FILE}"
+  exit 1
+fi
+
 stop_api
 
 for _ in {1..100}; do
@@ -115,6 +217,17 @@ if [[ ! -f "${APP_STATE_FILE}" ]]; then
 fi
 
 start_api
+
+relogin_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/auth/login" \
+  -d "{\"username\":\"${AUTH_USERNAME}\",\"password\":\"${AUTH_PASSWORD}\"}")"
+relogin_success="$(echo "${relogin_resp}" | jq -r '.success // false')"
+if [[ "${relogin_success}" != "true" ]]; then
+  echo "[smoke-restart-resume] login failed after restart."
+  echo "${relogin_resp}"
+  exit 1
+fi
 
 final_detail=""
 final_status=""

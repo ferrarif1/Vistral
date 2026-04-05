@@ -1,5 +1,5 @@
-ARG NODE_BASE_IMAGE=node:20-alpine
-ARG NGINX_BASE_IMAGE=nginx:1.27-alpine
+ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-alpine
+ARG NGINX_BASE_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
 
 FROM ${NODE_BASE_IMAGE} AS builder
 WORKDIR /app
@@ -7,7 +7,11 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-COPY . .
+COPY index.html ./
+COPY src ./src
+COPY shared ./shared
+COPY tsconfig*.json ./
+COPY vite.config.* ./
 RUN npm run build
 
 FROM ${NGINX_BASE_IMAGE} AS runtime

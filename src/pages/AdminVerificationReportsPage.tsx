@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import type { User, VerificationReportRecord, VerificationReportStatus } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import { useI18n } from '../i18n/I18nProvider';
@@ -46,6 +46,7 @@ export default function AdminVerificationReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const [statusFilter, setStatusFilter] = useState<'all' | VerificationReportStatus>('all');
   const [baseUrlFilter, setBaseUrlFilter] = useState('all');
   const [failedOnly, setFailedOnly] = useState(false);
@@ -86,7 +87,7 @@ export default function AdminVerificationReportsPage() {
   );
 
   const filteredItems = useMemo(() => {
-    const keyword = searchTerm.trim().toLowerCase();
+    const keyword = deferredSearchTerm.trim().toLowerCase();
     const fromBoundary = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null;
     const toBoundary = toDate ? new Date(`${toDate}T23:59:59.999`).getTime() : null;
 
@@ -156,11 +157,11 @@ export default function AdminVerificationReportsPage() {
     });
 
     return filtered;
-  }, [baseUrlFilter, failedOnly, fromDate, items, searchTerm, sortMode, statusFilter, toDate]);
+  }, [baseUrlFilter, deferredSearchTerm, failedOnly, fromDate, items, sortMode, statusFilter, toDate]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter, baseUrlFilter, failedOnly, fromDate, toDate, sortMode, pageSize]);
+  }, [deferredSearchTerm, statusFilter, baseUrlFilter, failedOnly, fromDate, toDate, sortMode, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -398,7 +399,7 @@ export default function AdminVerificationReportsPage() {
             {t('Clear Range')}
           </button>
         </div>
-        <label className="row align-center gap">
+        <label className="row align-center gap workspace-checkbox-row">
           <input
             type="checkbox"
             className="inline-checkbox"

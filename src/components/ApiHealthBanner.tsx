@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -65,12 +66,6 @@ export default function ApiHealthBanner() {
       // surfaced via local status
     });
 
-    const timer = window.setInterval(() => {
-      checkHealth().catch(() => {
-        // surfaced via local status
-      });
-    }, 15000);
-
     const onOnline = () => {
       checkHealth().catch(() => {
         // surfaced via local status
@@ -84,11 +79,21 @@ export default function ApiHealthBanner() {
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
   }, [checkHealth, t]);
+
+  useBackgroundPolling(
+    () => {
+      checkHealth().catch(() => {
+        // surfaced via local status
+      });
+    },
+    {
+      intervalMs: 15000
+    }
+  );
 
   const visible = state === 'degraded';
   const showEmptyBodyHint = detail.toLowerCase().includes('empty response body');
@@ -107,10 +112,14 @@ export default function ApiHealthBanner() {
       <div className="api-health-banner-inner">
         <div className="stack tight">
           <strong>{t('Backend service unreachable. Some actions may fail until API recovers.')}</strong>
-          <small>{t('Dev mode: ensure `npm run dev:api` is running and open http://127.0.0.1:5173.')}</small>
           <small>
             {t(
-              'Docker mode: access API via http://127.0.0.1:8080/api/* (host port 8787 may be intentionally closed).'
+              'Check that the Docker stack is running, then access the product via http://127.0.0.1:8080.'
+            )}
+          </small>
+          <small>
+            {t(
+              'API requests should go through http://127.0.0.1:8080/api/* (host port 8787 may be intentionally closed).'
             )}
           </small>
           {showEmptyBodyHint ? (

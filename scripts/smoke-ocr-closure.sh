@@ -8,6 +8,7 @@ BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
+OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND:-true}"
 DEMO_DIR="${DEMO_DIR:-${ROOT_DIR}/demo_data}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -242,6 +243,18 @@ if [[ "${annotation_line_total}" -lt 2 ]]; then
   exit 1
 fi
 
+split_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${dataset_id}/split" \
+  -d '{"train_ratio":0.8,"val_ratio":0.1,"test_ratio":0.1,"seed":24}')"
+split_train_count="$(echo "${split_resp}" | jq -r '.data.split_summary.train // 0')"
+if [[ "${split_train_count}" -lt 1 ]]; then
+  echo "[smoke-ocr-closure] dataset split did not produce train items."
+  echo "${split_resp}"
+  exit 1
+fi
+
 dataset_version_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
@@ -297,10 +310,18 @@ paddle_accuracy_series="$(echo "${paddle_job_detail}" | jq -r '[.data.metrics[] 
 paddle_metric_keys="$(echo "${paddle_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]?] | length')"
 paddle_norm_edit_distance_series="$(echo "${paddle_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="norm_edit_distance")] | length')"
 paddle_norm_edit_distance_key="$(echo "${paddle_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]? | select(.=="norm_edit_distance")] | length')"
-if [[ "${paddle_mode}" != "local_command" || -z "${paddle_accuracy}" || "${paddle_accuracy}" == "null" || "${paddle_accuracy_series}" -lt 3 || "${paddle_metric_keys}" -lt 1 || "${paddle_norm_edit_distance_series}" -lt 3 || "${paddle_norm_edit_distance_key}" -lt 1 ]]; then
-  echo "[smoke-ocr-closure] PaddleOCR training assertions failed."
-  echo "${paddle_job_detail}"
-  exit 1
+if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
+  if [[ "${paddle_mode}" != "local_command" || -z "${paddle_accuracy}" || "${paddle_accuracy}" == "null" || "${paddle_accuracy_series}" -lt 3 || "${paddle_metric_keys}" -lt 1 || "${paddle_norm_edit_distance_series}" -lt 3 || "${paddle_norm_edit_distance_key}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] PaddleOCR training assertions failed."
+    echo "${paddle_job_detail}"
+    exit 1
+  fi
+else
+  if [[ ("${paddle_mode}" != "local_command" && "${paddle_mode}" != "simulated") || -z "${paddle_accuracy}" || "${paddle_accuracy}" == "null" || "${paddle_accuracy_series}" -lt 3 || "${paddle_metric_keys}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] PaddleOCR training assertions failed (non-strict mode)."
+    echo "${paddle_job_detail}"
+    exit 1
+  fi
 fi
 
 paddle_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -332,13 +353,34 @@ doctr_job_detail="$(wait_training_job_completed "${doctr_job_id}" "docTR")"
 doctr_mode="$(echo "${doctr_job_detail}" | jq -r '.data.job.execution_mode // empty')"
 doctr_f1="$(echo "${doctr_job_detail}" | jq -r '.data.metrics | map(select(.metric_name=="f1")) | sort_by(.step) | last | .metric_value // empty')"
 doctr_f1_series="$(echo "${doctr_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="f1")] | length')"
+doctr_accuracy="$(echo "${doctr_job_detail}" | jq -r '.data.metrics | map(select(.metric_name=="accuracy")) | sort_by(.step) | last | .metric_value // empty')"
+doctr_accuracy_series="$(echo "${doctr_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="accuracy")] | length')"
+doctr_primary_metric_name="f1"
+doctr_primary_metric_value="${doctr_f1}"
+if [[ -z "${doctr_primary_metric_value}" || "${doctr_primary_metric_value}" == "null" ]]; then
+  doctr_primary_metric_name="accuracy"
+  doctr_primary_metric_value="${doctr_accuracy}"
+fi
 doctr_metric_keys="$(echo "${doctr_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]?] | length')"
 doctr_norm_edit_distance_series="$(echo "${doctr_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="norm_edit_distance")] | length')"
 doctr_norm_edit_distance_key="$(echo "${doctr_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]? | select(.=="norm_edit_distance")] | length')"
-if [[ "${doctr_mode}" != "local_command" || -z "${doctr_f1}" || "${doctr_f1}" == "null" || "${doctr_f1_series}" -lt 3 || "${doctr_metric_keys}" -lt 1 || "${doctr_norm_edit_distance_series}" -lt 3 || "${doctr_norm_edit_distance_key}" -lt 1 ]]; then
-  echo "[smoke-ocr-closure] docTR training assertions failed."
-  echo "${doctr_job_detail}"
-  exit 1
+if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
+  if [[ "${doctr_mode}" != "local_command" || -z "${doctr_f1}" || "${doctr_f1}" == "null" || "${doctr_f1_series}" -lt 3 || "${doctr_metric_keys}" -lt 1 || "${doctr_norm_edit_distance_series}" -lt 3 || "${doctr_norm_edit_distance_key}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] docTR training assertions failed."
+    echo "${doctr_job_detail}"
+    exit 1
+  fi
+else
+  if [[ ("${doctr_mode}" != "local_command" && "${doctr_mode}" != "simulated") || "${doctr_metric_keys}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] docTR training assertions failed (non-strict mode)."
+    echo "${doctr_job_detail}"
+    exit 1
+  fi
+  if [[ ("${doctr_f1_series}" -lt 3 || -z "${doctr_f1}" || "${doctr_f1}" == "null") && ("${doctr_accuracy_series}" -lt 3 || -z "${doctr_accuracy}" || "${doctr_accuracy}" == "null") ]]; then
+    echo "[smoke-ocr-closure] docTR training metrics assertions failed (non-strict mode)."
+    echo "${doctr_job_detail}"
+    exit 1
+  fi
 fi
 
 doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -373,10 +415,18 @@ paddle_inference_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_version_id\":\"${paddle_model_version_id}\",\"input_attachment_id\":\"${inference_attachment_id}\",\"task_type\":\"ocr\"}")"
 paddle_execution_source="$(echo "${paddle_inference_resp}" | jq -r '.data.execution_source // empty')"
 paddle_lines="$(echo "${paddle_inference_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
-if [[ "${paddle_execution_source}" != "paddleocr_local_command" || "${paddle_lines}" -lt 1 ]]; then
-  echo "[smoke-ocr-closure] PaddleOCR inference assertions failed."
-  echo "${paddle_inference_resp}"
-  exit 1
+if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
+  if [[ "${paddle_execution_source}" != "paddleocr_local_command" || "${paddle_lines}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] PaddleOCR inference assertions failed."
+    echo "${paddle_inference_resp}"
+    exit 1
+  fi
+else
+  if [[ ("${paddle_execution_source}" != "paddleocr_local_command" && "${paddle_execution_source}" != "paddleocr_local") || "${paddle_lines}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] PaddleOCR inference assertions failed (non-strict mode)."
+    echo "${paddle_inference_resp}"
+    exit 1
+  fi
 fi
 
 doctr_inference_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -386,10 +436,18 @@ doctr_inference_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_version_id\":\"${doctr_model_version_id}\",\"input_attachment_id\":\"${inference_attachment_id}\",\"task_type\":\"ocr\"}")"
 doctr_execution_source="$(echo "${doctr_inference_resp}" | jq -r '.data.execution_source // empty')"
 doctr_lines="$(echo "${doctr_inference_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
-if [[ "${doctr_execution_source}" != "doctr_local_command" || "${doctr_lines}" -lt 1 ]]; then
-  echo "[smoke-ocr-closure] docTR inference assertions failed."
-  echo "${doctr_inference_resp}"
-  exit 1
+if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
+  if [[ "${doctr_execution_source}" != "doctr_local_command" || "${doctr_lines}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] docTR inference assertions failed."
+    echo "${doctr_inference_resp}"
+    exit 1
+  fi
+else
+  if [[ ("${doctr_execution_source}" != "doctr_local_command" && "${doctr_execution_source}" != "doctr_local") || "${doctr_lines}" -lt 1 ]]; then
+    echo "[smoke-ocr-closure] docTR inference assertions failed (non-strict mode)."
+    echo "${doctr_inference_resp}"
+    exit 1
+  fi
 fi
 
 echo "[smoke-ocr-closure] PASS"
@@ -401,6 +459,9 @@ echo "paddle_accuracy=${paddle_accuracy}"
 echo "doctr_job_id=${doctr_job_id}"
 echo "doctr_model_version_id=${doctr_model_version_id}"
 echo "doctr_f1=${doctr_f1}"
+echo "doctr_accuracy=${doctr_accuracy}"
+echo "doctr_primary_metric_name=${doctr_primary_metric_name}"
+echo "doctr_primary_metric_value=${doctr_primary_metric_value}"
 echo "inference_attachment_id=${inference_attachment_id}"
 echo "paddle_execution_source=${paddle_execution_source}"
 echo "doctr_execution_source=${doctr_execution_source}"

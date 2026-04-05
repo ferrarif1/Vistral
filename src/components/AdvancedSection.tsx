@@ -5,15 +5,19 @@ interface AdvancedSectionProps {
   children: ReactNode;
   title?: string;
   description?: string;
+  defaultOpen?: boolean;
+  collapsible?: boolean;
 }
 
 export default function AdvancedSection({
   children,
   title,
-  description
+  description,
+  defaultOpen = false,
+  collapsible = true
 }: AdvancedSectionProps) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const finalTitle = title ?? t('Advanced Parameters');
   const finalDescription = description ?? t('Collapsed by default for progressive disclosure.');
 
@@ -21,12 +25,14 @@ export default function AdvancedSection({
     <section className="card stack">
       <div className="row between">
         <strong>{finalTitle}</strong>
-        <button type="button" className="link-btn" onClick={() => setOpen((value) => !value)}>
-          {open ? t('Hide') : t('Show')}
-        </button>
+        {collapsible ? (
+          <button type="button" className="link-btn" onClick={() => setOpen((value) => !value)}>
+            {open ? t('Hide') : t('Show')}
+          </button>
+        ) : null}
       </div>
       <p className="muted">{finalDescription}</p>
-      {open ? <div className="stack">{children}</div> : null}
+      {collapsible ? (open ? <div className="stack">{children}</div> : null) : <div className="stack">{children}</div>}
     </section>
   );
 }

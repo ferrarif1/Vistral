@@ -6,3 +6,15 @@ npm-debug.log
 *.tsbuildinfo
 .data
 .env
+release
+demo_data
+docs
+db
+scripts
+.agents
+AGENTS.md
+AGENTS.zh-CN.md
+PLANS.md
+README.md
+README.zh-CN.md
+.DS_Store

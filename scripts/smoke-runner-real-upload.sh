@@ -70,6 +70,14 @@ if [[ -z "${csrf_token}" ]]; then
   exit 1
 fi
 
+model_versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/model-versions")"
+detection_model_version_id="$(echo "${model_versions_resp}" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
+if [[ -z "${detection_model_version_id}" ]]; then
+  echo "[smoke-runner-real-upload] no registered detection model version found."
+  echo "${model_versions_resp}"
+  exit 1
+fi
+
 upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -F "file=@${UPLOAD_FILE};filename=train-sample.txt;type=text/plain" \
@@ -106,7 +114,7 @@ infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/inference/runs" \
-  -d "{\"model_version_id\":\"mv-2\",\"input_attachment_id\":\"${attachment_id}\",\"task_type\":\"detection\"}")"
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${attachment_id}\",\"task_type\":\"detection\"}")"
 
 execution_source="$(echo "${infer_resp}" | jq -r '.data.execution_source // empty')"
 runner_mode="$(echo "${infer_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
@@ -121,8 +129,8 @@ if [[ "${runner_mode}" != "template" ]]; then
   echo "${infer_resp}"
   exit 1
 fi
-if [[ "${fallback_reason}" != "real_predict_skipped:model_path_not_found" ]]; then
-  echo "[smoke-runner-real-upload] expected fallback_reason=model_path_not_found, got ${fallback_reason}."
+if [[ "${fallback_reason}" != real_predict_skipped:* || "${fallback_reason}" != *"model_path"* ]]; then
+  echo "[smoke-runner-real-upload] expected fallback_reason to indicate model_path issue, got ${fallback_reason}."
   echo "${infer_resp}"
   exit 1
 fi

@@ -242,7 +242,7 @@ export const datasets: DatasetRecord[] = [
     name: 'Surface Defect Dataset',
     description: 'Detection samples for scratches and dents.',
     task_type: 'detection',
-    status: 'draft',
+    status: 'ready',
     owner_user_id: 'u-1',
     label_schema: {
       classes: ['defect', 'scratch']
@@ -311,6 +311,7 @@ export const annotationReviews: AnnotationReviewRecord[] = [
     annotation_id: 'ann-1',
     reviewer_user_id: 'u-2',
     status: 'approved',
+    review_reason_code: null,
     quality_score: 0.97,
     review_comment: 'Good OCR quality.',
     created_at: now()
@@ -529,6 +530,43 @@ const normalizeInferenceRun = (entry: InferenceRunRecord): InferenceRunRecord =>
         : 'unknown'
 });
 
+const normalizeAnnotationReview = (entry: AnnotationReviewRecord): AnnotationReviewRecord => ({
+  ...entry,
+  review_reason_code:
+    typeof entry.review_reason_code === 'string' && entry.review_reason_code.trim()
+      ? entry.review_reason_code
+      : null
+});
+
+const promoteDatasetsWithReadyItems = (
+  sourceDatasets: DatasetRecord[],
+  sourceDatasetItems: DatasetItemRecord[]
+): { datasets: DatasetRecord[]; changed: boolean } => {
+  const readyDatasetIds = new Set(
+    sourceDatasetItems
+      .filter((item) => item.status === 'ready')
+      .map((item) => item.dataset_id)
+  );
+
+  let changed = false;
+  const normalizedDatasets: DatasetRecord[] = sourceDatasets.map(
+    (dataset): DatasetRecord => {
+      if (dataset.status !== 'draft' || !readyDatasetIds.has(dataset.id)) {
+        return dataset;
+      }
+
+      changed = true;
+      return {
+        ...dataset,
+        status: 'ready',
+        updated_at: now()
+      };
+    }
+  );
+
+  return { datasets: normalizedDatasets, changed };
+};
+
 const sanitizeAppStatePayload = (
   payload: Partial<AppStatePayload>
 ): { payload: Partial<AppStatePayload>; changed: boolean } => {
@@ -544,7 +582,7 @@ const sanitizeAppStatePayload = (
   const sourceDatasetItems = Array.isArray(payload.datasetItems) ? payload.datasetItems : [];
   const sourceAnnotations = Array.isArray(payload.annotations) ? payload.annotations : [];
   const sourceAnnotationReviews = Array.isArray(payload.annotationReviews)
-    ? payload.annotationReviews
+    ? payload.annotationReviews.map(normalizeAnnotationReview)
     : [];
   const sourceMessages = Array.isArray(payload.messages) ? payload.messages : [];
   const sourceApprovalRequests = Array.isArray(payload.approvalRequests)
@@ -552,12 +590,14 @@ const sanitizeAppStatePayload = (
     : [];
   const sourceTrainingMetrics = Array.isArray(payload.trainingMetrics) ? payload.trainingMetrics : [];
   const sourceAuditLogs = Array.isArray(payload.auditLogs) ? payload.auditLogs : [];
+  const datasetStatusReconciled = promoteDatasetsWithReadyItems(sourceDatasets, sourceDatasetItems);
+  const normalizedDatasets = datasetStatusReconciled.datasets;
   const normalizedUsers = sourceUsers.map(normalizeUser);
 
   const keptModels = sourceModels.filter((model) => !isFixtureModelRecord(model));
   const keptModelIds = new Set(keptModels.map((model) => model.id));
 
-  const keptDatasets = sourceDatasets.filter((dataset) => !isFixtureDatasetRecord(dataset));
+  const keptDatasets = normalizedDatasets.filter((dataset) => !isFixtureDatasetRecord(dataset));
   const keptDatasetIds = new Set(keptDatasets.map((dataset) => dataset.id));
 
   const keptDatasetVersions = sourceDatasetVersions.filter((version) =>
@@ -731,6 +771,7 @@ const sanitizeAppStatePayload = (
     keptApprovalRequests.length !== sourceApprovalRequests.length ||
     keptTrainingMetrics.length !== sourceTrainingMetrics.length ||
     keptAuditLogs.length !== sourceAuditLogs.length ||
+    datasetStatusReconciled.changed ||
     normalizedModelVersions.some((version, index) => {
       const sourceVersion = keptModelVersions[index];
       return sourceVersion ? sourceVersion.artifact_attachment_id !== version.artifact_attachment_id : false;
@@ -807,7 +848,7 @@ export const loadPersistedAppState = async (): Promise<void> => {
       replaceArray(annotations, state.annotations);
     }
     if (Array.isArray(state.annotationReviews)) {
-      replaceArray(annotationReviews, state.annotationReviews);
+      replaceArray(annotationReviews, state.annotationReviews.map(normalizeAnnotationReview));
     }
     if (Array.isArray(state.datasetVersions)) {
       replaceArray(datasetVersions, state.datasetVersions);

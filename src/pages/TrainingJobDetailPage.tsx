@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import type { TrainingArtifactSummary, TrainingJobRecord, TrainingMetricRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -96,19 +97,20 @@ export default function TrainingJobDetailPage() {
       .finally(() => setLoading(false));
   }, [jobId, load]);
 
-  useEffect(() => {
-    if (!jobId) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
+  useBackgroundPolling(
+    () => {
       load('background').catch(() => {
         // no-op
       });
-    }, backgroundRefreshIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [jobId, load]);
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled:
+        Boolean(jobId) &&
+        Boolean(job) &&
+        !['completed', 'failed', 'cancelled'].includes(job?.status ?? 'completed')
+    }
+  );
 
   const stepIndex = useMemo(() => {
     if (!job) {
