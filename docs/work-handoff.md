@@ -1203,3 +1203,62 @@ Rules:
   - `npm run typecheck`
   - `npm run lint`
   - `npm run build`
+
+## 2026-04-06 08:33 (Asia/Shanghai)
+- context: System cleanup and lag investigation was in progress; interrupted by request to return to unfinished full-site visual/design-system completion.
+- done:
+  - Verified Vistral runtime no longer had active training/inference jobs consuming workspace disk.
+  - Cleaned repo-level test artifacts and deployment leftovers:
+    - `.data/uploads/*`, `.data/training-jobs/*`, `.data/runtime-local-predict/*`, `.data/verify-reports/*`, `.data/dev.log`
+    - old `release/` extracted folders and old tar archives (kept latest package only)
+  - Pruned Docker caches/images/unused volumes and verified Docker health still passed.
+  - Cleared safe developer caches (`npm`, `pip`, `playwright`, `cypress`, updater caches, Homebrew/aws cache), increasing system free space from ~60Gi to ~88Gi.
+  - Confirmed major remaining disk hot spots are user content outside this repo (`~/Desktop/work` media and `~/Downloads/个人` VM images), not Vistral training tasks.
+- next:
+  1. Resume frontend design-system completion audit against `DESIGN.md` + `docs/ia.md` UX contracts.
+  2. Patch remaining visual inconsistencies (shared primitives/tokens first, page-local style last).
+  3. Re-run `typecheck/lint/build` + `docker:up` + `docker:healthcheck` and validate host-visible assets.
+- risks:
+  - User media/VM files are the primary remaining disk consumers; deleting them requires explicit user confirmation because they are non-cache personal assets.
+  - Editor plugin host processes (Cursor/VSCode) remain a CPU hotspot and may still contribute to perceived lag during development.
+- verification:
+  - `npm run docker:healthcheck`
+  - `docker system df -v`
+  - `du -sh .data release`
+  - `df -h /System/Volumes/Data`
+
+## 2026-04-07 20:46 (Asia/Shanghai)
+- context: Training worker dedicated-auth closure was in progress; interrupted by request to switch to full-page refactor using `notion/DESIGN.md`.
+- done:
+  - Completed dedicated per-worker auth implementation on the worker/control-plane mainline:
+    - bootstrap `claim` returns `training_worker_auth_token`
+    - control plane now accepts dedicated token for worker heartbeat and reference dataset package download
+    - worker dispatch and cancel now prefer per-worker dedicated auth, with shared token kept as legacy fallback
+    - worker-side setup/UI/scripts now prefer `TRAINING_WORKER_AUTH_TOKEN` and keep `TRAINING_WORKER_SHARED_TOKEN` as compatibility fallback
+  - Updated worker deployment/onboarding docs to describe dedicated token as the default path:
+    - `training-worker/README.md`
+    - `docs/setup.md`
+    - `docs/setup.zh-CN.md`
+    - `docs/deployment.docker.md`
+    - `docs/training-worker-onboarding.md`
+  - Added dedicated worker auth smoke coverage:
+    - new script `scripts/smoke-training-worker-dedicated-auth.sh`
+    - npm command `npm run smoke:training-worker-dedicated-auth`
+    - integrated into `scripts/smoke-core-closure.sh`
+    - documented in `README.md` / `README.zh-CN.md`
+- next:
+  1. Finish integrating `smoke-training-worker-dedicated-auth` into `scripts/docker-verify-full.sh` so deployment verify covers dedicated worker auth automatically.
+  2. Optionally refactor the existing worker smoke scripts to share common bootstrap/helper functions and support both `shared` and `dedicated` auth modes with less duplication.
+  3. Re-run the full deployment verification gate after the above (`npm run docker:verify:full`).
+- risks:
+  - `scripts/docker-verify-full.sh` does not yet include the dedicated worker auth smoke, so deployment acceptance is still stronger in local/core smoke than in the full docker gate.
+  - `docs/training-worker-onboarding.md` is currently untracked in git and should be reviewed together with the worker-doc updates before commit.
+  - Multiple worker smoke scripts still duplicate local bootstrapping logic; future auth-mode changes may require touching several scripts unless helpers are consolidated.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+  - `python3 -m py_compile training-worker/scripts/worker-train-api.py`
+  - `npm run smoke:training-worker-package-reference`
+  - `npm run smoke:training-worker-cancel`
+  - `npm run smoke:training-worker-dedicated-auth`

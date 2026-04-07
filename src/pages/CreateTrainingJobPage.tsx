@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { DatasetRecord, DatasetVersionRecord, RequirementTaskDraft } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { Badge, StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Input, Select, Textarea } from '../components/ui/Field';
+import { Card, Panel } from '../components/ui/Surface';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -12,6 +16,7 @@ const curatedBaseModelCatalog = {
   doctr: ['doctr-crnn-vitstr-base'],
   yolo: ['yolo11n']
 } as const;
+const taskTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
 
 type TrainingFramework = keyof typeof curatedBaseModelCatalog;
 
@@ -331,7 +336,7 @@ export default function CreateTrainingJobPage() {
   const renderStage = () => {
     if (step === 0) {
       return (
-        <section className="card stack">
+        <Card className="stack">
           <div className="stack tight">
             <h3>{stepTitles[step]}</h3>
             <small className="muted">{stepDescriptions[step]}</small>
@@ -339,11 +344,11 @@ export default function CreateTrainingJobPage() {
           <div className="workspace-form-grid">
             <label className="workspace-form-span-2">
               {t('Training Job Name')}
-              <input value={name} onChange={(event) => setName(event.target.value)} />
+              <Input value={name} onChange={(event) => setName(event.target.value)} />
             </label>
             <label>
               {t('Task Type')}
-              <select
+              <Select
                 value={taskType}
                 onChange={(event) =>
                   setTaskType(
@@ -351,16 +356,16 @@ export default function CreateTrainingJobPage() {
                   )
                 }
               >
-                <option value="ocr">{t('ocr')}</option>
-                <option value="detection">{t('detection')}</option>
-                <option value="classification">{t('classification')}</option>
-                <option value="segmentation">{t('segmentation')}</option>
-                <option value="obb">{t('obb')}</option>
-              </select>
+                {taskTypeOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {t(option)}
+                  </option>
+                ))}
+              </Select>
             </label>
             <label>
               {t('Framework')}
-              <select
+              <Select
                 value={framework}
                 onChange={(event) => setFramework(event.target.value as 'paddleocr' | 'doctr' | 'yolo')}
               >
@@ -369,16 +374,16 @@ export default function CreateTrainingJobPage() {
                     {t(option)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
           </div>
-        </section>
+        </Card>
       );
     }
 
     if (step === 1) {
       return (
-        <section className="card stack">
+        <Card className="stack">
           <div className="stack tight">
             <h3>{stepTitles[step]}</h3>
             <small className="muted">{stepDescriptions[step]}</small>
@@ -393,17 +398,17 @@ export default function CreateTrainingJobPage() {
           <div className="workspace-form-grid">
             <label className="workspace-form-span-2">
               {t('Dataset')}
-              <select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
+              <Select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
                 {filteredDatasets.map((dataset) => (
                   <option key={dataset.id} value={dataset.id}>
                     {dataset.name} ({t(dataset.status)})
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label>
               {t('Dataset Version')}
-              <select
+              <Select
                 value={datasetVersionId}
                 onChange={(event) => setDatasetVersionId(event.target.value)}
                 disabled={!selectedDataset || versionsLoading || datasetVersions.length === 0}
@@ -416,11 +421,11 @@ export default function CreateTrainingJobPage() {
                     {version.version_name} ({version.id})
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label>
               {t('Base Model')}
-              <select
+              <Select
                 value={baseModel}
                 onChange={(event) => setBaseModel(event.target.value)}
               >
@@ -429,7 +434,7 @@ export default function CreateTrainingJobPage() {
                     {option}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
           </div>
           <small className="muted">
@@ -441,9 +446,9 @@ export default function CreateTrainingJobPage() {
               title={t('No Dataset Version')}
               description={t('Create a dataset version snapshot before launching training.')}
               extra={
-                <Link to={`/datasets/${selectedDataset.id}`} className="workspace-inline-link">
+                <ButtonLink to={`/datasets/${selectedDataset.id}`} variant="secondary" size="sm">
                   {t('Open Detail')}
-                </Link>
+                </ButtonLink>
               }
             />
           ) : null}
@@ -452,9 +457,9 @@ export default function CreateTrainingJobPage() {
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Dataset version snapshot')}</strong>
-                  <span className={`workspace-status-pill ${launchReady ? 'ready' : 'draft'}`}>
+                  <StatusTag status={launchReady ? 'ready' : 'draft'}>
                     {launchReady ? t('Ready') : t('draft')}
-                  </span>
+                  </StatusTag>
                 </div>
                 <small className="muted">
                   {selectedDatasetVersion.version_name} ({selectedDatasetVersion.id})
@@ -463,9 +468,9 @@ export default function CreateTrainingJobPage() {
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Split summary')}</strong>
-                  <span className="chip">
+                  <Badge tone="info">
                     {t('train')}: {selectedDatasetVersion.split_summary.train}
-                  </span>
+                  </Badge>
                 </div>
                 <small className="muted">
                   train {selectedDatasetVersion.split_summary.train} · val {selectedDatasetVersion.split_summary.val} ·
@@ -475,7 +480,9 @@ export default function CreateTrainingJobPage() {
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Annotation coverage')}</strong>
-                  <span className="chip">{Math.round(selectedDatasetVersion.annotation_coverage * 100)}%</span>
+                  <Badge tone={datasetVersionHasAnnotationCoverage ? 'success' : 'warning'}>
+                    {Math.round(selectedDatasetVersion.annotation_coverage * 100)}%
+                  </Badge>
                 </div>
                 <small className="muted">
                   {t('Training uses an explicit dataset version snapshot so this run stays reproducible.')}
@@ -484,9 +491,9 @@ export default function CreateTrainingJobPage() {
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Launch readiness checks')}</strong>
-                  <span className={`workspace-status-pill ${launchReady ? 'ready' : 'draft'}`}>
+                  <StatusTag status={launchReady ? 'ready' : 'draft'}>
                     {launchReady ? t('Ready') : t('draft')}
-                  </span>
+                  </StatusTag>
                 </div>
                 <small className="muted">
                   {t('Dataset ready {datasetReady} · train split {trainReady} · coverage {coverageReady}', {
@@ -498,14 +505,14 @@ export default function CreateTrainingJobPage() {
               </li>
             </ul>
           ) : null}
-        </section>
+        </Card>
       );
     }
 
     if (step === 2) {
       return (
         <section className="stack">
-          <section className="card stack">
+          <Card className="stack">
             <div className="stack tight">
               <h3>{stepTitles[step]}</h3>
               <small className="muted">{stepDescriptions[step]}</small>
@@ -513,27 +520,27 @@ export default function CreateTrainingJobPage() {
             <div className="three-col">
               <label>
                 {t('Epochs')}
-                <input value={epochs} onChange={(event) => setEpochs(event.target.value)} />
+                <Input value={epochs} onChange={(event) => setEpochs(event.target.value)} />
               </label>
               <label>
                 {t('Batch Size')}
-                <input value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
+                <Input value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
               </label>
               <label>
                 {t('Learning Rate')}
-                <input value={learningRate} onChange={(event) => setLearningRate(event.target.value)} />
+                <Input value={learningRate} onChange={(event) => setLearningRate(event.target.value)} />
               </label>
             </div>
-          </section>
+          </Card>
 
           <AdvancedSection>
             <label>
               {t('Warmup Ratio')}
-              <input value={warmupRatio} onChange={(event) => setWarmupRatio(event.target.value)} />
+              <Input value={warmupRatio} onChange={(event) => setWarmupRatio(event.target.value)} />
             </label>
             <label>
               {t('Weight Decay')}
-              <input value={weightDecay} onChange={(event) => setWeightDecay(event.target.value)} />
+              <Input value={weightDecay} onChange={(event) => setWeightDecay(event.target.value)} />
             </label>
           </AdvancedSection>
         </section>
@@ -541,7 +548,7 @@ export default function CreateTrainingJobPage() {
     }
 
     return (
-      <section className="card stack">
+      <Card className="stack">
         <div className="stack tight">
           <h3>{stepTitles[step]}</h3>
           <small className="muted">{stepDescriptions[step]}</small>
@@ -550,7 +557,7 @@ export default function CreateTrainingJobPage() {
           <li className="workspace-record-item compact">
             <div className="row between gap wrap">
               <strong>{name || t('Unnamed job')}</strong>
-              <span className="chip">{t(framework)}</span>
+              <StatusTag status="info">{t(framework)}</StatusTag>
             </div>
             <small className="muted">
               {t('Task')}: {t(taskType)}
@@ -559,7 +566,9 @@ export default function CreateTrainingJobPage() {
           <li className="workspace-record-item compact">
             <div className="row between gap wrap">
               <strong>{t('Dataset')}</strong>
-              <span className="chip">{selectedDataset ? t(selectedDataset.status) : t('N/A')}</span>
+              <StatusTag status={selectedDataset?.status ?? 'draft'}>
+                {selectedDataset ? t(selectedDataset.status) : t('N/A')}
+              </StatusTag>
             </div>
             <small className="muted">
               {(selectedDataset?.name ?? datasetId) || t('N/A')} · {t('Dataset Version')}: {selectedDatasetVersion?.version_name || datasetVersionId || t('N/A')}
@@ -568,20 +577,20 @@ export default function CreateTrainingJobPage() {
           <li className="workspace-record-item compact">
             <div className="row between gap wrap">
               <strong>{t('Params')}</strong>
-              <span className="chip">{epochs}</span>
+              <StatusTag status="info">{epochs}</StatusTag>
             </div>
             <small className="muted">
               {t('Epochs')}: {epochs} · {t('Batch Size')}: {batchSize} · {t('Learning Rate')}: {learningRate}
             </small>
           </li>
         </ul>
-      </section>
+      </Card>
     );
   };
 
   return (
     <div className="workspace-overview-page stack">
-      <section className="card workspace-overview-hero">
+      <Card className="workspace-overview-hero">
         <div className="workspace-overview-hero-grid">
           <div className="workspace-overview-copy stack">
             <small className="workspace-eyebrow">{t('Training Job Builder')}</small>
@@ -605,7 +614,7 @@ export default function CreateTrainingJobPage() {
             </div>
           </div>
         </div>
-      </section>
+      </Card>
 
       {loading ? (
         <StateBlock variant="loading" title={t('Preparing')} description={t('Loading dataset options.')} />
@@ -620,34 +629,34 @@ export default function CreateTrainingJobPage() {
       ) : null}
 
       <section className="workspace-overview-signal-grid">
-        <article className="card stack workspace-signal-card">
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Matching datasets')}</h3>
             <small className="muted">{t('Datasets currently compatible with the selected task type.')}</small>
           </div>
           <strong className="metric">{filteredDatasets.length}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Ready Datasets')}</h3>
             <small className="muted">{t('Ready datasets available for immediate training launch.')}</small>
           </div>
           <strong className="metric">{readyMatchingDatasets}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Framework')}</h3>
             <small className="muted">{t('Current framework family selected for the run.')}</small>
           </div>
           <strong className="metric">{t(framework)}</strong>
-        </article>
-        <article className={`card stack workspace-signal-card${taskDraft ? '' : ' attention'}`}>
+        </Card>
+        <Card className={`stack workspace-signal-card${taskDraft ? '' : ' attention'}`}>
           <div className="workspace-signal-top">
             <h3>{t('Draft assist')}</h3>
             <small className="muted">{t('Optional requirement parsing that can pre-fill task choices.')}</small>
           </div>
           <strong className="metric">{taskDraft ? t('Ready') : t('N/A')}</strong>
-        </article>
+        </Card>
       </section>
 
       <section className="workspace-overview-panel-grid">
@@ -657,7 +666,7 @@ export default function CreateTrainingJobPage() {
         </div>
 
         <div className="workspace-overview-side">
-          <article className="card stack">
+          <Card className="stack">
             <div className="stack tight">
               <h3>{t('Requirement to Task Draft')}</h3>
               <small className="muted">
@@ -666,22 +675,22 @@ export default function CreateTrainingJobPage() {
             </div>
             <label>
               {t('Requirement Description')}
-              <textarea
+              <Textarea
                 value={requirementDescription}
                 onChange={(event) => setRequirementDescription(event.target.value)}
                 rows={4}
                 placeholder={t('Example: detect train body defects or read train serial number')}
               />
             </label>
-            <button type="button" onClick={createTaskDraft} disabled={drafting || loading}>
+            <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
               {drafting ? t('Generating...') : t('Generate Task Draft')}
-            </button>
+            </Button>
             {taskDraft ? (
               <ul className="workspace-record-list compact">
                 <li className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{t('Task Type')}</strong>
-                    <span className="chip">{t(taskDraft.task_type)}</span>
+                    <StatusTag status="info">{t(taskDraft.task_type)}</StatusTag>
                   </div>
                   <small className="muted">
                     {t('Framework')}: {t(taskDraft.recommended_framework)} · {t('annotation')}: {draftAnnotationType || t('N/A')}
@@ -690,21 +699,21 @@ export default function CreateTrainingJobPage() {
                 <li className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{t('labels')}</strong>
-                    <span className="chip">{taskDraft.label_hints.length}</span>
+                    <StatusTag status="info">{taskDraft.label_hints.length}</StatusTag>
                   </div>
                   <small className="muted">{taskDraft.label_hints.join(', ') || t('N/A')}</small>
                 </li>
                 <li className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{t('dataset suggestions')}</strong>
-                    <span className="chip">{taskDraft.dataset_suggestions.length}</span>
+                    <StatusTag status="info">{taskDraft.dataset_suggestions.length}</StatusTag>
                   </div>
                   <small className="muted">{taskDraft.dataset_suggestions.join('；') || t('N/A')}</small>
                 </li>
                 <li className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{t('rationale')}</strong>
-                    <span className="chip">{taskDraft.source}</span>
+                    <StatusTag status="info">{taskDraft.source}</StatusTag>
                   </div>
                   <small className="muted">{taskDraft.rationale}</small>
                 </li>
@@ -716,9 +725,9 @@ export default function CreateTrainingJobPage() {
                 description={t('Use the assist card to convert a free-form requirement into a structured training starting point.')}
               />
             )}
-          </article>
+          </Card>
 
-          <article className="card stack">
+          <Card className="stack">
             <div className="stack tight">
               <h3>{t('Current run plan')}</h3>
               <small className="muted">{stepDescriptions[step]}</small>
@@ -728,48 +737,50 @@ export default function CreateTrainingJobPage() {
                 <li key={item.label} className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{item.label}</strong>
-                    <span className={`workspace-status-pill ${item.done ? 'ready' : 'draft'}`}>
+                    <StatusTag status={item.done ? 'ready' : 'draft'}>
                       {item.done ? t('Ready') : t('draft')}
-                    </span>
+                    </StatusTag>
                   </div>
                   <small className="muted">{item.hint}</small>
                 </li>
               ))}
             </ul>
-          </article>
+          </Card>
 
-          <article className="card stack">
+          <Panel className="stack">
             <div className="stack tight">
               <h3>{t('Launch lane')}</h3>
               <small className="muted">{t('Keep the main training actions and supporting routes close together.')}</small>
             </div>
             <div className="workspace-button-stack">
-              <button type="button" className="workspace-inline-button" onClick={previousStep} disabled={step === 0 || submitting}>
+              <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || submitting} block>
                 {t('Back')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="workspace-inline-button"
+                variant="secondary"
                 onClick={nextStep}
                 disabled={step === steps.length - 1 || submitting || loading}
+                block
               >
                 {t('Next')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={submit}
                 disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !launchReady}
+                block
               >
                 {submitting ? t('Submitting...') : t('Create Training Job')}
-              </button>
-              <Link to="/datasets" className="workspace-inline-link">
+              </Button>
+              <ButtonLink to="/datasets" variant="secondary" block>
                 {t('Manage Datasets')}
-              </Link>
-              <Link to="/training/jobs" className="workspace-inline-link">
+              </ButtonLink>
+              <ButtonLink to="/training/jobs" variant="secondary" block>
                 {t('Open Training Jobs')}
-              </Link>
+              </ButtonLink>
             </div>
-          </article>
+          </Panel>
         </div>
       </section>
     </div>

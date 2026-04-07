@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
+import { Button } from './ui/Button';
+import { Panel } from './ui/Surface';
 
 interface AdvancedSectionProps {
   children: ReactNode;
@@ -22,17 +24,22 @@ export default function AdvancedSection({
   const finalDescription = description ?? t('Collapsed by default for progressive disclosure.');
 
   return (
-    <section className="card stack">
+    <Panel className="stack advanced-panel">
       <div className="row between">
         <strong>{finalTitle}</strong>
         {collapsible ? (
-          <button type="button" className="link-btn" onClick={() => setOpen((value) => !value)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setOpen((value) => !value)}
+          >
             {open ? t('Hide') : t('Show')}
-          </button>
+          </Button>
         ) : null}
       </div>
       <p className="muted">{finalDescription}</p>
       {collapsible ? (open ? <div className="stack">{children}</div> : null) : <div className="stack">{children}</div>}
-    </section>
+    </Panel>
   );
 }

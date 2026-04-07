@@ -1,7 +1,7 @@
 # Product Requirements Document (PRD)
 
 ## 1. Product Overview
-Vistral is an AI-native visual model platform with two work entries:
+Vistral is an AI-native visual model platform with two workspace routes:
 1. conversational workspace (natural language + attachments)
 2. professional engineering console (dataset/annotation/training/model-version/inference operations)
 
@@ -114,6 +114,11 @@ Vistral must provide one closed-loop platform where engineers can:
 - internal smoke/verification/demo fixtures must not remain visible in the default workspace catalog; when sample records are needed, keep at most 1-2 curated examples
 - configure parameters and submit
 - support start/cancel/retry lifecycle
+- training scheduling must support control-plane/worker topology:
+  - Vistral app can run as control plane on machine `A`
+  - one or more training workers can run on machines `B/C/D...`
+  - workers can be dynamically added/removed without service restart
+  - scheduler should assign queued jobs to available workers based on current load/capacity and fallback to control-plane local execution when no worker is eligible
 - status flow: `draft -> queued -> preparing -> running -> evaluating -> completed/failed/cancelled`
 
 ### FR-010 Evaluation and Model Versioning
@@ -152,6 +157,24 @@ Framework integrations must follow unified trainer interface:
 - administrators can choose the created account role (`user` or `admin`)
 - every authenticated user can change their own password by providing the current password plus a new password
 - privileged account creation, password change, and account status actions must produce audit logs
+
+### FR-014 Distributed Training Control Plane
+- provide admin-manageable training worker registry (list/add/update/remove)
+- provide guided worker onboarding from admin runtime settings (prefer Docker-first startup)
+- provide worker heartbeat/status reporting for load-aware scheduling
+- worker onboarding should support a graphical setup path after one-click worker start/install:
+  - collect required connection fields without forcing manual env editing for the common case
+  - validate control-plane connectivity, callback reachability, and declared capabilities before worker becomes schedulable
+  - surface concrete remediation guidance when required data is missing or validation fails
+- scheduler decisions must be auditable (selected worker, fallback reason, snapshot load)
+- when scheduler selects a worker with reachable endpoint, control plane should dispatch an actual training execution request to that worker and ingest returned logs/metrics/artifact summary into the same training job record
+- control plane should provide worker-usable dataset payload (or package reference) so cross-machine training does not depend on control-plane absolute filesystem paths
+- worker unavailability or overload must not block the platform:
+  - queued jobs can be re-scheduled
+  - when dispatch to a selected worker fails, scheduler should try another eligible online worker before local fallback
+  - re-dispatch should follow a bounded retry policy (max attempts + short backoff) to prevent endless dispatch thrashing
+  - dispatch failure can fallback to control-plane local execution when fallback policy is enabled
+- contracts should support rolling expansion and shrink (for example adding/removing `B/C/D` nodes during runtime)
 
 ## 8. Non-Functional Requirements
 

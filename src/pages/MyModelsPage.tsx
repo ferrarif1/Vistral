@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { ModelRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import VirtualList from '../components/VirtualList';
+import { Badge, StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Card, Panel } from '../components/ui/Surface';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 const readyStatusSet = new Set<ModelRecord['status']>(['approved', 'published']);
+const myModelsVirtualizationThreshold = 14;
+const myModelsVirtualRowHeight = 168;
+const myModelsVirtualViewportHeight = 620;
 
 const formatTimestamp = (iso: string): string => {
   const value = Date.parse(iso);
@@ -61,9 +67,11 @@ export default function MyModelsPage() {
     [models]
   );
 
+  const shouldVirtualizeModels = sortedModels.length > myModelsVirtualizationThreshold;
+
   return (
     <div className="workspace-overview-page stack">
-      <section className="card workspace-overview-hero">
+      <Card className="workspace-overview-hero">
         <div className="workspace-overview-hero-grid">
           <div className="workspace-overview-copy stack">
             <small className="workspace-eyebrow">{t('Ownership lane')}</small>
@@ -85,19 +93,19 @@ export default function MyModelsPage() {
             </div>
           </div>
         </div>
-      </section>
+      </Card>
 
       {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
 
       <section className="workspace-overview-signal-grid">
-        <article className="card stack workspace-signal-card">
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Owned models')}</h3>
             <small className="muted">{t('Ownership-scoped model inventory.')}</small>
           </div>
           <strong className="metric">{summary.total}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Ready models')}</h3>
             <small className="muted">
@@ -105,15 +113,15 @@ export default function MyModelsPage() {
             </small>
           </div>
           <strong className="metric">{summary.ready}</strong>
-        </article>
-        <article className={`card stack workspace-signal-card${summary.pending > 0 ? ' attention' : ''}`}>
+        </Card>
+        <Card as="article" className={`workspace-signal-card${summary.pending > 0 ? ' attention' : ''}`}>
           <div className="workspace-signal-top">
             <h3>{t('Pending reviews')}</h3>
             <small className="muted">{t('Pending approvals in your lane.')}</small>
           </div>
           <strong className="metric">{summary.pending}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Drafts / rework')}</h3>
             <small className="muted">
@@ -121,11 +129,11 @@ export default function MyModelsPage() {
             </small>
           </div>
           <strong className="metric">{summary.draftOrRework}</strong>
-        </article>
+        </Card>
       </section>
 
       <section className="workspace-overview-panel-grid">
-        <article className="card stack workspace-overview-main">
+        <Card as="article" className="workspace-overview-main">
           <div className="workspace-section-header">
             <div className="stack tight">
               <h3>{t('Owned Model Inventory')}</h3>
@@ -133,9 +141,10 @@ export default function MyModelsPage() {
                 {t('Follow the status of models you created, then move to versions or approval-related work.')}
               </small>
             </div>
-            <button
+            <Button
               type="button"
-              className="workspace-inline-button"
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 load().catch(() => {
                   // no-op
@@ -144,7 +153,7 @@ export default function MyModelsPage() {
               disabled={loading}
             >
               {loading ? t('Loading') : t('Refresh')}
-            </button>
+            </Button>
           </div>
 
           {loading ? (
@@ -155,10 +164,17 @@ export default function MyModelsPage() {
               title={t('No owned models yet.')}
               description={t('Your created models will appear here once you start a draft.')}
             />
-          ) : (
-            <ul className="workspace-record-list">
-              {sortedModels.map((model) => (
-                <li key={model.id} className="workspace-record-item">
+          ) : shouldVirtualizeModels ? (
+            <VirtualList
+              items={sortedModels}
+              itemHeight={myModelsVirtualRowHeight}
+              height={myModelsVirtualViewportHeight}
+              itemKey={(model) => model.id}
+              listClassName="workspace-record-list"
+              rowClassName="workspace-record-row"
+              ariaLabel={t('Owned Model Inventory')}
+              renderItem={(model) => (
+                <Panel className="workspace-record-item virtualized" tone="soft">
                   <div className="workspace-record-item-top">
                     <div className="workspace-record-summary stack tight">
                       <strong>{model.name}</strong>
@@ -167,29 +183,59 @@ export default function MyModelsPage() {
                       </small>
                     </div>
                     <div className="workspace-record-actions">
-                      <span className={`workspace-status-pill ${model.status}`}>{t(model.status)}</span>
+                      <StatusTag status={model.status}>{t(model.status)}</StatusTag>
                     </div>
                   </div>
-                  <p>{model.description || t('No description provided.')}</p>
+                  <p className="line-clamp-2">{model.description || t('No description provided.')}</p>
                   <div className="row gap wrap">
-                    <span className="chip">
+                    <Badge tone="neutral">
                       {t('Visibility')}: {t(model.visibility)}
-                    </span>
-                    <span className="chip">
+                    </Badge>
+                    <Badge tone="neutral">
                       {t('Model Type')}: {t(model.model_type)}
-                    </span>
-                    <span className="chip">
+                    </Badge>
+                    <Badge tone="info">
                       {t('owner')}: {model.owner_user_id}
-                    </span>
+                    </Badge>
                   </div>
-                </li>
+                </Panel>
+              )}
+            />
+          ) : (
+            <ul className="workspace-record-list">
+              {sortedModels.map((model) => (
+                <Panel key={model.id} as="li" className="workspace-record-item" tone="soft">
+                  <div className="workspace-record-item-top">
+                    <div className="workspace-record-summary stack tight">
+                      <strong>{model.name}</strong>
+                      <small className="muted">
+                        {t(model.model_type)} · {t(model.visibility)} · {t('Last updated')}: {formatTimestamp(model.updated_at)}
+                      </small>
+                    </div>
+                    <div className="workspace-record-actions">
+                      <StatusTag status={model.status}>{t(model.status)}</StatusTag>
+                    </div>
+                  </div>
+                  <p className="line-clamp-2">{model.description || t('No description provided.')}</p>
+                  <div className="row gap wrap">
+                    <Badge tone="neutral">
+                      {t('Visibility')}: {t(model.visibility)}
+                    </Badge>
+                    <Badge tone="neutral">
+                      {t('Model Type')}: {t(model.model_type)}
+                    </Badge>
+                    <Badge tone="info">
+                      {t('owner')}: {model.owner_user_id}
+                    </Badge>
+                  </div>
+                </Panel>
               ))}
             </ul>
           )}
-        </article>
+        </Card>
 
         <div className="workspace-overview-side">
-          <article className="card stack">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Create next draft')}</h3>
               <small className="muted">
@@ -200,12 +246,14 @@ export default function MyModelsPage() {
             <small className="muted">
               {t('Drafts / rework')}: {summary.draftOrRework}
             </small>
-            <Link to="/models/create" className="workspace-inline-link">
-              {t('Create New Model')}
-            </Link>
-          </article>
+            <div className="workspace-button-stack">
+              <ButtonLink to="/models/create" variant="secondary">
+                {t('Create New Model')}
+              </ButtonLink>
+            </div>
+          </Card>
 
-          <article className="card stack">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Approval follow-up')}</h3>
               <small className="muted">
@@ -213,30 +261,30 @@ export default function MyModelsPage() {
               </small>
             </div>
             <ul className="workspace-record-list compact">
-              <li className="workspace-record-item compact">
+              <Panel as="li" className="workspace-record-item compact" tone="soft">
                 <div className="row between gap wrap">
                   <strong>{t('Ready models')}</strong>
-                  <span className="chip">{summary.ready}</span>
+                  <Badge tone="success">{summary.ready}</Badge>
                 </div>
                 <small className="muted">{t('Ready models in your lane.')}</small>
-              </li>
-              <li className="workspace-record-item compact">
+              </Panel>
+              <Panel as="li" className="workspace-record-item compact" tone="soft">
                 <div className="row between gap wrap">
                   <strong>{t('Pending reviews')}</strong>
-                  <span className="chip">{summary.pending}</span>
+                  <Badge tone={summary.pending > 0 ? 'warning' : 'neutral'}>{summary.pending}</Badge>
                 </div>
                 <small className="muted">{t('Pending approvals in your lane.')}</small>
-              </li>
+              </Panel>
             </ul>
-            <div className="stack tight">
-              <Link to="/models/versions" className="workspace-inline-link">
+            <div className="workspace-button-stack">
+              <ButtonLink to="/models/versions" variant="secondary" size="sm">
                 {t('Open Model Versions')}
-              </Link>
-              <Link to="/models/explore" className="workspace-inline-link">
+              </ButtonLink>
+              <ButtonLink to="/models/explore" variant="secondary" size="sm">
                 {t('Explore Model Catalog')}
-              </Link>
+              </ButtonLink>
             </div>
-          </article>
+          </Card>
         </div>
       </section>
     </div>

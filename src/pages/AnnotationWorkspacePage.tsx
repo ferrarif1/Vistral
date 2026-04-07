@@ -1,5 +1,5 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import type {
   AnnotationReviewReasonCode,
   AnnotationWithReview,
@@ -14,6 +14,10 @@ import StateBlock from '../components/StateBlock';
 import StatusBadge from '../components/StatusBadge';
 import StepIndicator from '../components/StepIndicator';
 import VirtualList from '../components/VirtualList';
+import { Badge, StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
+import { Card, Panel } from '../components/ui/Surface';
 import {
   annotationQueueFilters,
   annotationStatusSortWeight,
@@ -983,46 +987,43 @@ export default function AnnotationWorkspacePage() {
     }
   };
 
-  if (!datasetId) {
-    return (
-      <div className="stack">
-        <h2>{t('Annotation Workspace')}</h2>
-        <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset detail page.')} />
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="stack">
-        <h2>{t('Annotation Workspace')}</h2>
-        <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation workspace.')} />
-      </div>
-    );
-  }
-
-  if (!dataset) {
-    return (
-      <div className="stack">
-        <h2>{t('Annotation Workspace')}</h2>
-        <StateBlock variant="error" title={t('Dataset Not Found')} description={t('Requested dataset is unavailable.')} />
-      </div>
-    );
-  }
-
-  return (
-    <div className="stack">
-      <div className="row between gap align-center">
-        <div className="stack tight">
-          <h2>{t('Annotation Workspace')}</h2>
+  const heroSection = (
+    <Card className="workspace-overview-hero">
+      <div className="workspace-overview-hero-grid">
+        <div className="workspace-overview-copy stack">
+          <small className="workspace-eyebrow">{t('Annotation Lane')}</small>
+          <h1>{t('Annotation Workspace')}</h1>
           <small className="muted">
-            {dataset.name} · {t('task')} {t(dataset.task_type)}
+            {dataset
+              ? `${dataset.name} · ${t('task')} ${t(dataset.task_type)}`
+              : t('Review queue status, annotate items, and complete approvals in one flow.')}
           </small>
         </div>
-        <div className="row gap align-center">
-          <button
+        <div className="workspace-overview-badges">
+          <div className="workspace-overview-badge">
+            <span>{t('Items')}</span>
+            <strong>{items.length}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Visible')}</span>
+            <strong>{filteredItems.length}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Models')}</span>
+            <strong>{modelVersions.length}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Queue')}</span>
+            <strong>{queueFilter === 'all' ? t('All') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}</strong>
+          </div>
+        </div>
+      </div>
+      {dataset ? (
+        <div className="row gap wrap">
+          <Button
             type="button"
-            className="workspace-inline-button"
+            variant="secondary"
+            size="sm"
             onClick={() => {
               load('manual').catch((error) => {
                 setFeedback({ variant: 'error', text: (error as Error).message });
@@ -1031,12 +1032,43 @@ export default function AnnotationWorkspacePage() {
             disabled={busy || refreshing}
           >
             {refreshing ? t('Refreshing...') : t('Refresh')}
-          </button>
-          <Link to={`/datasets/${dataset.id}`} className="quick-link">
+          </Button>
+          <ButtonLink to={`/datasets/${dataset.id}`} variant="ghost" size="sm">
             {t('Back to Dataset Detail')}
-          </Link>
+          </ButtonLink>
         </div>
-      </div>
+      ) : null}
+    </Card>
+  );
+
+  const renderShell = (content: ReactNode) => (
+    <div className="workspace-overview-page stack">
+      {heroSection}
+      {content}
+    </div>
+  );
+
+  if (!datasetId) {
+    return renderShell(
+      <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset detail page.')} />
+    );
+  }
+
+  if (loading) {
+    return renderShell(
+      <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation workspace.')} />
+    );
+  }
+
+  if (!dataset) {
+    return renderShell(
+      <StateBlock variant="error" title={t('Dataset Not Found')} description={t('Requested dataset is unavailable.')} />
+    );
+  }
+
+  return (
+    <div className="workspace-overview-page stack">
+      {heroSection}
 
       <StepIndicator steps={steps} current={currentStep} />
 
@@ -1054,8 +1086,39 @@ export default function AnnotationWorkspacePage() {
         />
       ) : null}
 
-      <section className="card stack">
-        <div className="row between gap align-center">
+      <section className="workspace-overview-signal-grid">
+        <Card as="article" className="workspace-signal-card">
+          <div className="workspace-signal-top">
+            <h3>{t('Needs Work')}</h3>
+            <small className="muted">{t('Items still awaiting annotation or submit-review actions.')}</small>
+          </div>
+          <strong className="metric">{annotationSummary.needs_work}</strong>
+        </Card>
+        <Card as="article" className={`workspace-signal-card${annotationSummary.in_review > 0 ? ' attention' : ''}`}>
+          <div className="workspace-signal-top">
+            <h3>{t('in_review')}</h3>
+            <small className="muted">{t('Items currently in reviewer lane.')}</small>
+          </div>
+          <strong className="metric">{annotationSummary.in_review}</strong>
+        </Card>
+        <Card as="article" className={`workspace-signal-card${annotationSummary.rejected > 0 ? ' attention' : ''}`}>
+          <div className="workspace-signal-top">
+            <h3>{t('rejected')}</h3>
+            <small className="muted">{t('Rejected items that should be moved back to rework flow.')}</small>
+          </div>
+          <strong className="metric">{annotationSummary.rejected}</strong>
+        </Card>
+        <Card as="article" className="workspace-signal-card">
+          <div className="workspace-signal-top">
+            <h3>{t('approved')}</h3>
+            <small className="muted">{t('Approved items are ready for downstream versioning and training.')}</small>
+          </div>
+          <strong className="metric">{annotationSummary.approved}</strong>
+        </Card>
+      </section>
+
+      <Card as="section">
+        <div className="row between gap wrap align-center">
           <div className="stack tight">
             <h3>{t('Annotation Queue')}</h3>
             <small className="muted">
@@ -1065,10 +1128,10 @@ export default function AnnotationWorkspacePage() {
               })}
             </small>
           </div>
-          <div className="row gap align-center">
-            <label>
+          <div className="row gap wrap align-center annotation-queue-controls">
+            <label className="annotation-toolbar-field">
               {t('Model Version')}
-              <select
+              <Select
                 value={selectedModelVersionId}
                 onChange={(event) => setSelectedModelVersionId(event.target.value)}
               >
@@ -1077,14 +1140,16 @@ export default function AnnotationWorkspacePage() {
                     {version.version_name} ({t(version.framework)})
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
-            <button
+            <Button
               onClick={runPreAnnotation}
+              variant="secondary"
+              size="sm"
               disabled={busy || items.length === 0 || modelVersions.length === 0}
             >
               {t('Run Pre-Annotation')}
-            </button>
+            </Button>
           </div>
         </div>
         <div className="annotation-filter-row">
@@ -1102,18 +1167,19 @@ export default function AnnotationWorkspacePage() {
             const isActive = queueFilter === filter;
 
             return (
-              <button
+              <Button
                 key={filter}
                 type="button"
-                className={`annotation-filter-chip${isActive ? ' active' : ''}`}
+                variant={isActive ? 'primary' : 'secondary'}
+                size="sm"
+                trailing={<Badge tone={isActive ? 'neutral' : 'info'}>{count}</Badge>}
                 onClick={() => {
                   focusWorkspaceItem(filter, nextSelectedItemId);
                 }}
                 disabled={busy}
               >
-                <span>{filter === 'all' ? t('All items') : filter === 'needs_work' ? t('Needs Work') : t(filter)}</span>
-                <strong>{count}</strong>
-              </button>
+                {filter === 'all' ? t('All items') : filter === 'needs_work' ? t('Needs Work') : t(filter)}
+              </Button>
             );
           })}
         </div>
@@ -1133,22 +1199,24 @@ export default function AnnotationWorkspacePage() {
           </small>
           <div className="annotation-queue-nav-actions">
             <small className="muted annotation-queue-shortcuts">{t('Queue shortcuts: J next · K previous')}</small>
-            <button
+            <Button
               type="button"
-              className="workspace-inline-button"
+              variant="secondary"
+              size="sm"
               onClick={() => focusAdjacentQueueItem(-1)}
               disabled={busy || !canMoveToPreviousQueueItem}
             >
               {t('Previous Item')}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="workspace-inline-button"
+              variant="secondary"
+              size="sm"
               onClick={() => focusAdjacentQueueItem(1)}
               disabled={busy || !canMoveToNextQueueItem}
             >
               {t('Next Item')}
-            </button>
+            </Button>
           </div>
         </div>
         {modelVersions.length === 0 ? (
@@ -1178,16 +1246,17 @@ export default function AnnotationWorkspacePage() {
                         {t('Follow-up shortcuts: press 1 / 2 / 3 to open visible queues.')}
                       </small>
                       {availableReviewFollowupQueues.map((queue, index) => (
-                        <button
+                        <Button
                           key={queue.key}
                           type="button"
-                          className="workspace-inline-button"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => openQueueFilter(queue.key)}
                           disabled={busy}
                           title={t('Shortcut {key}', { key: index + 1 })}
                         >
                           {queue.label}
-                        </button>
+                        </Button>
                       ))}
                     </>
                   ) : (
@@ -1203,14 +1272,15 @@ export default function AnnotationWorkspacePage() {
               itemHeight={112}
               height={440}
               ariaLabel={t('Annotation Queue')}
+              listClassName="workspace-record-list"
               itemKey={(item) => item.id}
               renderItem={(item) => {
                 const itemAnnotation = annotationByItemId.get(item.id) ?? null;
                 const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
                 return (
-                  <div className={`list-item virtualized${selectedItemId === item.id ? ' selected' : ''}`}>
-                    <label className="row gap align-center annotation-item-select">
-                      <input
+                  <div className={`workspace-record-item virtualized${selectedItemId === item.id ? ' selected' : ''}`}>
+                    <label className="row gap wrap align-center annotation-item-select">
+                      <Checkbox
                         type="radio"
                         name="selected_item"
                         checked={selectedItemId === item.id}
@@ -1222,12 +1292,12 @@ export default function AnnotationWorkspacePage() {
                         <strong>{itemFilename}</strong>
                         <small className="muted">{item.id}</small>
                       </div>
-                      <span className="chip">{t(item.split)}</span>
+                      <Badge tone="neutral">{t(item.split)}</Badge>
                       <StatusBadge status={item.status} />
-                      {itemAnnotation ? <span className="chip">{t('Annotation')}: {t(itemAnnotation.status)}</span> : null}
-                      {!itemAnnotation ? <span className="chip">{t('Annotation')}: {t('unannotated')}</span> : null}
+                      {itemAnnotation ? <Badge tone="info">{t('Annotation')}: {t(itemAnnotation.status)}</Badge> : null}
+                      {!itemAnnotation ? <Badge tone="warning">{t('Annotation')}: {t('unannotated')}</Badge> : null}
                       {itemAnnotation?.latest_review?.review_reason_code ? (
-                        <span className="chip">{t(itemAnnotation.latest_review.review_reason_code)}</span>
+                        <Badge tone="warning">{t(itemAnnotation.latest_review.review_reason_code)}</Badge>
                       ) : null}
                     </label>
                     {itemAnnotation?.latest_review?.review_comment ? (
@@ -1238,17 +1308,19 @@ export default function AnnotationWorkspacePage() {
               }}
             />
           ) : (
-            <ul className="list">
+            <ul className="workspace-record-list">
               {filteredItems.map((item) => {
                 const itemAnnotation = annotationByItemId.get(item.id) ?? null;
                 const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
                 return (
-                  <li
+                  <Panel
                     key={item.id}
-                    className={`list-item${selectedItemId === item.id ? ' selected' : ''}`}
+                    as="li"
+                    className={`workspace-record-item${selectedItemId === item.id ? ' selected' : ''}`}
+                    tone="soft"
                   >
-                    <label className="row gap align-center annotation-item-select">
-                      <input
+                    <label className="row gap wrap align-center annotation-item-select">
+                      <Checkbox
                         type="radio"
                         name="selected_item"
                         checked={selectedItemId === item.id}
@@ -1260,276 +1332,327 @@ export default function AnnotationWorkspacePage() {
                         <strong>{itemFilename}</strong>
                         <small className="muted">{item.id}</small>
                       </div>
-                      <span className="chip">{t(item.split)}</span>
+                      <Badge tone="neutral">{t(item.split)}</Badge>
                       <StatusBadge status={item.status} />
-                      {itemAnnotation ? <span className="chip">{t('Annotation')}: {t(itemAnnotation.status)}</span> : null}
-                      {!itemAnnotation ? <span className="chip">{t('Annotation')}: {t('unannotated')}</span> : null}
+                      {itemAnnotation ? <Badge tone="info">{t('Annotation')}: {t(itemAnnotation.status)}</Badge> : null}
+                      {!itemAnnotation ? <Badge tone="warning">{t('Annotation')}: {t('unannotated')}</Badge> : null}
                       {itemAnnotation?.latest_review?.review_reason_code ? (
-                        <span className="chip">{t(itemAnnotation.latest_review.review_reason_code)}</span>
+                        <Badge tone="warning">{t(itemAnnotation.latest_review.review_reason_code)}</Badge>
                       ) : null}
                     </label>
                     {itemAnnotation?.latest_review?.review_comment ? (
                       <small className="muted line-clamp-2">{itemAnnotation.latest_review.review_comment}</small>
                     ) : null}
-                  </li>
+                  </Panel>
                 );
               })}
             </ul>
           )
         }
-      </section>
+      </Card>
 
-      <section className="stack">
-        <Suspense
-          fallback={
-            <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation canvas.')} />
-          }
-        >
-          <AnnotationCanvas
-            title={t('Annotation Canvas')}
-            filename={selectedFilename}
-            boxes={boxes}
-            onChange={setBoxes}
-            disabled={busy || !selectedItem || isEditLocked}
-          />
-        </Suspense>
+      <section className="workspace-overview-panel-grid">
+        <div className="workspace-overview-main">
+          <section className="stack">
+            <Suspense
+              fallback={
+                <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation canvas.')} />
+              }
+            >
+              <AnnotationCanvas
+                title={t('Annotation Canvas')}
+                filename={selectedFilename}
+                boxes={boxes}
+                onChange={setBoxes}
+                disabled={busy || !selectedItem || isEditLocked}
+              />
+            </Suspense>
 
-        {dataset.task_type === 'ocr' ? (
-          <section className="card stack">
-            <h3>{t('OCR Text Lines')}</h3>
-            <div className="annotation-ocr-grid">
-              <label>
-                {t('Line Text')}
-                <input value={lineText} onChange={(event) => setLineText(event.target.value)} disabled={busy || isEditLocked} />
-              </label>
-              <label>
-                {t('Confidence')}
-                <input
-                  value={lineConfidence}
-                  onChange={(event) => setLineConfidence(event.target.value)}
-                  placeholder="0.90"
-                  disabled={busy || isEditLocked}
+            {dataset.task_type === 'ocr' ? (
+              <Card as="section">
+                <h3>{t('OCR Text Lines')}</h3>
+                <div className="annotation-ocr-grid">
+                  <label>
+                    {t('Line Text')}
+                    <Input value={lineText} onChange={(event) => setLineText(event.target.value)} disabled={busy || isEditLocked} />
+                  </label>
+                  <label>
+                    {t('Confidence')}
+                    <Input
+                      value={lineConfidence}
+                      onChange={(event) => setLineConfidence(event.target.value)}
+                      placeholder="0.90"
+                      disabled={busy || isEditLocked}
+                    />
+                  </label>
+                  <label>
+                    {t('Region Binding')}
+                    <Select value={lineRegionId} onChange={(event) => setLineRegionId(event.target.value)} disabled={busy || isEditLocked}>
+                      <option value="">{t('unbound')}</option>
+                      {boxes.map((box) => (
+                        <option key={box.id} value={box.id}>
+                          {box.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                </div>
+                <Button onClick={addOcrLine} variant="secondary" size="sm" disabled={busy || isEditLocked}>
+                  {t('Add OCR Line')}
+                </Button>
+
+                {ocrLines.length === 0 ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('No OCR Lines')}
+                    description={t('Add OCR text lines and optionally bind to regions.')}
+                  />
+                ) : (
+                  <ul className="workspace-record-list compact">
+                    {ocrLines.map((line) => (
+                      <Panel key={line.id} as="li" className="workspace-record-item compact row between gap wrap" tone="soft">
+                        <div className="stack tight">
+                          <strong>{line.text}</strong>
+                          <small className="muted">
+                            {t('confidence')} {line.confidence.toFixed(2)} · {t('region')} {line.region_id ?? t('unbound')}
+                          </small>
+                        </div>
+                        <Button onClick={() => removeOcrLine(line.id)} variant="ghost" size="sm" disabled={busy || isEditLocked}>
+                          {t('Delete')}
+                        </Button>
+                      </Panel>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            ) : null}
+
+            {dataset.task_type === 'segmentation' ? (
+              <Suspense
+                fallback={
+                  <StateBlock variant="loading" title={t('Loading')} description={t('Preparing polygon canvas.')} />
+                }
+              >
+                <PolygonCanvas
+                  title={t('Segmentation Polygon Canvas')}
+                  filename={selectedFilename}
+                  polygons={polygons}
+                  onChange={setPolygons}
+                  disabled={busy || !selectedItem || isEditLocked}
                 />
-              </label>
-              <label>
-                {t('Region Binding')}
-                <select value={lineRegionId} onChange={(event) => setLineRegionId(event.target.value)} disabled={busy || isEditLocked}>
-                  <option value="">{t('unbound')}</option>
-                  {boxes.map((box) => (
-                    <option key={box.id} value={box.id}>
-                      {box.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <button onClick={addOcrLine} disabled={busy || isEditLocked}>
-              {t('Add OCR Line')}
-            </button>
+              </Suspense>
+            ) : null}
+          </section>
 
-            {ocrLines.length === 0 ? (
+          <Card as="section">
+            <h3>{t('Annotation Actions')}</h3>
+            {selectedAnnotation ? (
+              <div className="row gap wrap align-center">
+                <Badge tone="info">{t('Status')}: {t(selectedAnnotation.status)}</Badge>
+                <Badge tone="neutral">{t('Source')}: {t(selectedAnnotation.source)}</Badge>
+                {selectedAnnotation.latest_review ? (
+                  <Badge tone="warning">{t('Latest Review')}: {t(selectedAnnotation.latest_review.status)}</Badge>
+                ) : null}
+              </div>
+            ) : (
+              <small className="muted">{t('No annotation yet for selected item.')}</small>
+            )}
+
+            {isEditLocked ? (
+              <StateBlock variant="empty" title={t('Editing Locked')} description={editLockMessage} />
+            ) : (
+              <div className="row gap wrap">
+                <Button
+                  onClick={undoLast}
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy || (!boxes.length && !ocrLines.length && !polygons.length)}
+                >
+                  {t('Undo Last Change')}
+                </Button>
+                <Button onClick={() => saveAnnotation('in_progress')} variant="secondary" size="sm" disabled={busy || !selectedItem}>
+                  {t('Save In Progress')}
+                </Button>
+                <Button onClick={() => saveAnnotation('annotated')} variant="secondary" size="sm" disabled={busy || !selectedItem}>
+                  {t('Mark Annotated')}
+                </Button>
+                <Button
+                  onClick={submitReview}
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy || !selectedAnnotation || selectedAnnotation.status !== 'annotated'}
+                >
+                  {t('Submit Review')}
+                </Button>
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <div className="workspace-overview-side">
+          <Card as="section">
+            <div className="stack tight">
+              <h3>{t('Queue Focus')}</h3>
+              <small className="muted">
+                {selectedQueueIndex >= 0
+                  ? t('Queue position {current} / {total}', {
+                      current: selectedQueueIndex + 1,
+                      total: filteredItems.length
+                    })
+                  : t('No item selected in current queue.')}
+              </small>
+            </div>
+            <div className="row gap wrap">
+              <Badge tone="neutral">{t('queue')}: {queueFilter === 'all' ? t('All items') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}</Badge>
+              {selectedItem ? <Badge tone="info">{selectedItem.id}</Badge> : null}
+            </div>
+            <small className="muted">{t('Queue shortcuts: J next · K previous')}</small>
+            <div className="workspace-button-stack">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => focusAdjacentQueueItem(-1)}
+                disabled={busy || !canMoveToPreviousQueueItem}
+              >
+                {t('Previous Item')}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => focusAdjacentQueueItem(1)}
+                disabled={busy || !canMoveToNextQueueItem}
+              >
+                {t('Next Item')}
+              </Button>
+            </div>
+          </Card>
+
+          {selectedAnnotation?.latest_review ? (
+            <Card as="section">
+              <div className="row between gap wrap align-center">
+                <h3>{t('Latest Review Context')}</h3>
+                <StatusTag status={selectedAnnotation.latest_review.status}>
+                  {t(selectedAnnotation.latest_review.status)}
+                </StatusTag>
+              </div>
+              <div className="row gap wrap">
+                {selectedAnnotation.latest_review.review_reason_code ? (
+                  <Badge tone="warning">{t(selectedAnnotation.latest_review.review_reason_code)}</Badge>
+                ) : null}
+                {selectedAnnotation.latest_review.quality_score !== null ? (
+                  <Badge tone="info">
+                    {t('Quality Score')}: {selectedAnnotation.latest_review.quality_score.toFixed(2)}
+                  </Badge>
+                ) : null}
+              </div>
+              {selectedAnnotation.latest_review.review_comment ? (
+                <p className="workspace-record-summary">{selectedAnnotation.latest_review.review_comment}</p>
+              ) : (
+                <small className="muted">{t('No review comment yet.')}</small>
+              )}
+            </Card>
+          ) : null}
+
+          <Card as="section">
+            <div className="row between gap wrap align-center">
+              <h3>{t('Review')}</h3>
+              {inReviewQueueContext ? (
+                <div className="review-queue-hints">
+                  <Badge tone="info">
+                    {t('In-review queue {current} / {total}', {
+                      current: inReviewQueueContext.current,
+                      total: inReviewQueueContext.total
+                    })}
+                  </Badge>
+                  <Badge tone="neutral">
+                    {t('Remaining after current: {count}', { count: inReviewQueueContext.remaining })}
+                  </Badge>
+                </div>
+              ) : null}
+            </div>
+            {!selectedAnnotation ? (
+              <StateBlock variant="empty" title={t('No Annotation')} description={t('Create or update annotation first.')} />
+            ) : selectedAnnotation.status !== 'in_review' ? (
               <StateBlock
                 variant="empty"
-                title={t('No OCR Lines')}
-                description={t('Add OCR text lines and optionally bind to regions.')}
+                title={t('Not In Review')}
+                description={t('Move annotation to in_review before approve/reject.')}
               />
             ) : (
-              <ul className="list">
-                {ocrLines.map((line) => (
-                  <li key={line.id} className="list-item row between gap">
-                    <div className="stack tight">
-                      <strong>{line.text}</strong>
-                      <small className="muted">
-                        {t('confidence')} {line.confidence.toFixed(2)} · {t('region')} {line.region_id ?? t('unbound')}
-                      </small>
-                    </div>
-                    <button onClick={() => removeOcrLine(line.id)} disabled={busy || isEditLocked}>
-                      {t('Delete')}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <label>
+                  {t('Reject Reason')}
+                  <Select
+                    value={reviewReasonCode}
+                    onChange={(event) => setReviewReasonCode(event.target.value as AnnotationReviewReasonCode)}
+                  >
+                    {reviewReasonOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {t(option)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <small className="muted">{t('Reject reason is required for reject actions.')}</small>
+                <small className="muted">
+                  {queueFilter === 'in_review'
+                    ? t('Review shortcuts: A approve-next · R reject-next')
+                    : t('Review shortcuts: A approve · R reject')}
+                </small>
+                <div className="row gap wrap review-action-row">
+                  <Button onClick={() => reviewAnnotation('approved')} variant="secondary" size="sm" disabled={busy}>
+                    {t('Approve')}
+                  </Button>
+                  {queueFilter === 'in_review' ? (
+                    <Button onClick={() => reviewAnnotation('approved', { continueInQueue: true })} variant="ghost" size="sm" disabled={busy}>
+                      {t('Approve & Next')}
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="row gap wrap review-action-row">
+                  <Button onClick={() => reviewAnnotation('rejected')} variant="danger" size="sm" disabled={busy}>
+                    {t('Reject')}
+                  </Button>
+                  {queueFilter === 'in_review' ? (
+                    <Button onClick={() => reviewAnnotation('rejected', { continueInQueue: true })} variant="danger" size="sm" disabled={busy}>
+                      {t('Reject & Next')}
+                    </Button>
+                  ) : null}
+                </div>
+                <details className="review-optional-metadata">
+                  <summary>{t('Optional review metadata')}</summary>
+                  <div className="stack">
+                    <label>
+                      {t('Quality Score')}
+                      <Input
+                        value={reviewQuality}
+                        onChange={(event) => setReviewQuality(event.target.value)}
+                        placeholder="0.9"
+                      />
+                    </label>
+                    <label>
+                      {t('Review Comment')}
+                      <Textarea
+                        value={reviewComment}
+                        rows={3}
+                        onChange={(event) => setReviewComment(event.target.value)}
+                        placeholder={t('No review comment yet.')}
+                      />
+                    </label>
+                  </div>
+                </details>
+              </>
             )}
-          </section>
-        ) : null}
 
-        {dataset.task_type === 'segmentation' ? (
-          <Suspense
-            fallback={
-              <StateBlock variant="loading" title={t('Loading')} description={t('Preparing polygon canvas.')} />
-            }
-          >
-            <PolygonCanvas
-              title={t('Segmentation Polygon Canvas')}
-              filename={selectedFilename}
-              polygons={polygons}
-              onChange={setPolygons}
-              disabled={busy || !selectedItem || isEditLocked}
-            />
-          </Suspense>
-        ) : null}
-      </section>
-
-      <section className="card stack">
-        <h3>{t('Annotation Actions')}</h3>
-        {selectedAnnotation ? (
-          <div className="row gap align-center">
-            <span className="chip">{t('Status')}: {t(selectedAnnotation.status)}</span>
-            <span className="chip">{t('Source')}: {t(selectedAnnotation.source)}</span>
-            {selectedAnnotation.latest_review ? (
-              <span className="chip">{t('Latest Review')}: {t(selectedAnnotation.latest_review.status)}</span>
+            {selectedAnnotation?.status === 'rejected' ? (
+              <Button onClick={moveRejectedToProgress} variant="ghost" size="sm" disabled={busy}>
+                {t('Move Rejected Annotation Back to In Progress')}
+              </Button>
             ) : null}
-          </div>
-        ) : (
-          <small className="muted">{t('No annotation yet for selected item.')}</small>
-        )}
-
-        {isEditLocked ? (
-          <StateBlock variant="empty" title={t('Editing Locked')} description={editLockMessage} />
-        ) : (
-          <div className="row gap wrap">
-            <button
-              onClick={undoLast}
-              disabled={busy || (!boxes.length && !ocrLines.length && !polygons.length)}
-            >
-              {t('Undo Last Change')}
-            </button>
-            <button onClick={() => saveAnnotation('in_progress')} disabled={busy || !selectedItem}>
-              {t('Save In Progress')}
-            </button>
-            <button onClick={() => saveAnnotation('annotated')} disabled={busy || !selectedItem}>
-              {t('Mark Annotated')}
-            </button>
-            <button
-              onClick={submitReview}
-              disabled={busy || !selectedAnnotation || selectedAnnotation.status !== 'annotated'}
-            >
-              {t('Submit Review')}
-            </button>
-          </div>
-        )}
-      </section>
-
-      {selectedAnnotation?.latest_review ? (
-        <section className="card stack">
-          <div className="row between gap align-center">
-            <h3>{t('Latest Review Context')}</h3>
-            <span className="chip">{t(selectedAnnotation.latest_review.status)}</span>
-          </div>
-          <div className="row gap wrap">
-            {selectedAnnotation.latest_review.review_reason_code ? (
-              <span className="chip">{t(selectedAnnotation.latest_review.review_reason_code)}</span>
-            ) : null}
-            {selectedAnnotation.latest_review.quality_score !== null ? (
-              <span className="chip">
-                {t('Quality Score')}: {selectedAnnotation.latest_review.quality_score.toFixed(2)}
-              </span>
-            ) : null}
-          </div>
-          {selectedAnnotation.latest_review.review_comment ? (
-            <p className="workspace-record-summary">{selectedAnnotation.latest_review.review_comment}</p>
-          ) : (
-            <small className="muted">{t('No review comment yet.')}</small>
-          )}
-        </section>
-      ) : null}
-
-      <section className="card stack">
-        <div className="row between gap align-center">
-          <h3>{t('Review')}</h3>
-          {inReviewQueueContext ? (
-            <div className="review-queue-hints">
-              <span className="chip">
-                {t('In-review queue {current} / {total}', {
-                  current: inReviewQueueContext.current,
-                  total: inReviewQueueContext.total
-                })}
-              </span>
-              <span className="chip">
-                {t('Remaining after current: {count}', { count: inReviewQueueContext.remaining })}
-              </span>
-            </div>
-          ) : null}
+          </Card>
         </div>
-        {!selectedAnnotation ? (
-          <StateBlock variant="empty" title={t('No Annotation')} description={t('Create or update annotation first.')} />
-        ) : selectedAnnotation.status !== 'in_review' ? (
-          <StateBlock
-            variant="empty"
-            title={t('Not In Review')}
-            description={t('Move annotation to in_review before approve/reject.')}
-          />
-        ) : (
-          <>
-            <label>
-              {t('Reject Reason')}
-              <select
-                value={reviewReasonCode}
-                onChange={(event) => setReviewReasonCode(event.target.value as AnnotationReviewReasonCode)}
-              >
-                {reviewReasonOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {t(option)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <small className="muted">{t('Reject reason is required for reject actions.')}</small>
-            <small className="muted">
-              {queueFilter === 'in_review'
-                ? t('Review shortcuts: A approve-next · R reject-next')
-                : t('Review shortcuts: A approve · R reject')}
-            </small>
-            <div className="row gap wrap review-action-row">
-              <button onClick={() => reviewAnnotation('approved')} disabled={busy}>
-                {t('Approve')}
-              </button>
-              {queueFilter === 'in_review' ? (
-                <button onClick={() => reviewAnnotation('approved', { continueInQueue: true })} disabled={busy}>
-                  {t('Approve & Next')}
-                </button>
-              ) : null}
-            </div>
-            <div className="row gap wrap review-action-row">
-              <button onClick={() => reviewAnnotation('rejected')} disabled={busy}>
-                {t('Reject')}
-              </button>
-              {queueFilter === 'in_review' ? (
-                <button onClick={() => reviewAnnotation('rejected', { continueInQueue: true })} disabled={busy}>
-                  {t('Reject & Next')}
-                </button>
-              ) : null}
-            </div>
-            <details className="review-optional-metadata">
-              <summary>{t('Optional review metadata')}</summary>
-              <div className="stack">
-                <label>
-                  {t('Quality Score')}
-                  <input
-                    value={reviewQuality}
-                    onChange={(event) => setReviewQuality(event.target.value)}
-                    placeholder="0.9"
-                  />
-                </label>
-                <label>
-                  {t('Review Comment')}
-                  <textarea
-                    value={reviewComment}
-                    rows={3}
-                    onChange={(event) => setReviewComment(event.target.value)}
-                    placeholder={t('No review comment yet.')}
-                  />
-                </label>
-              </div>
-            </details>
-          </>
-        )}
-
-        {selectedAnnotation?.status === 'rejected' ? (
-          <button onClick={moveRejectedToProgress} disabled={busy}>
-            {t('Move Rejected Annotation Back to In Progress')}
-          </button>
-        ) : null}
       </section>
     </div>
   );

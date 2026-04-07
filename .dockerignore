@@ -11,6 +11,8 @@ demo_data
 docs
 db
 scripts
+!scripts/local-runners/
+!scripts/local-runners/**
 .agents
 AGENTS.md
 AGENTS.zh-CN.md

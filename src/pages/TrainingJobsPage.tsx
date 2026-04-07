@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { TrainingJobRecord, TrainingJobStatus } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import VirtualList from '../components/VirtualList';
+import { StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Card, Panel } from '../components/ui/Surface';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -9,6 +12,12 @@ import { api } from '../services/api';
 const activeStatusSet = new Set<TrainingJobStatus>(['queued', 'preparing', 'running', 'evaluating']);
 const terminalStatusSet = new Set<TrainingJobStatus>(['completed', 'failed', 'cancelled']);
 const backgroundRefreshIntervalMs = 5000;
+const liveJobsVirtualizationThreshold = 12;
+const terminalJobsVirtualizationThreshold = 10;
+const liveJobsVirtualRowHeight = 130;
+const liveJobsVirtualViewportHeight = 620;
+const terminalJobsVirtualRowHeight = 122;
+const terminalJobsVirtualViewportHeight = 440;
 
 type LoadMode = 'initial' | 'manual' | 'background';
 
@@ -112,17 +121,19 @@ export default function TrainingJobsPage() {
   );
 
   const liveJobs = useMemo(
-    () => sortedJobs.filter((job) => activeStatusSet.has(job.status)).slice(0, 6),
+    () => sortedJobs.filter((job) => activeStatusSet.has(job.status)),
     [sortedJobs]
   );
   const recentTerminalJobs = useMemo(
-    () => sortedJobs.filter((job) => terminalStatusSet.has(job.status)).slice(0, 4),
+    () => sortedJobs.filter((job) => terminalStatusSet.has(job.status)),
     [sortedJobs]
   );
+  const shouldVirtualizeLiveJobs = liveJobs.length > liveJobsVirtualizationThreshold;
+  const shouldVirtualizeTerminalJobs = recentTerminalJobs.length > terminalJobsVirtualizationThreshold;
 
   return (
     <div className="workspace-overview-page stack">
-      <section className="card workspace-overview-hero">
+      <Card className="workspace-overview-hero">
         <div className="workspace-overview-hero-grid">
           <div className="workspace-overview-copy stack">
             <small className="workspace-eyebrow">{t('Training Control')}</small>
@@ -144,43 +155,43 @@ export default function TrainingJobsPage() {
             </div>
           </div>
         </div>
-      </section>
+      </Card>
 
       {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
 
       <section className="workspace-overview-signal-grid">
-        <article className="card stack workspace-signal-card">
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Running')}</h3>
             <small className="muted">{t('Queued, running, or evaluating jobs are treated as active work.')}</small>
           </div>
           <strong className="metric">{summary.running}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Completed')}</h3>
             <small className="muted">{t('Finished runs stay visible for version registration and follow-up review.')}</small>
           </div>
           <strong className="metric">{summary.completed}</strong>
-        </article>
-        <article className="card stack workspace-signal-card attention">
+        </Card>
+        <Card as="article" className="workspace-signal-card attention">
           <div className="workspace-signal-top">
             <h3>{t('Failed/Cancelled')}</h3>
             <small className="muted">{t('Problem runs remain easy to revisit from the detail page.')}</small>
           </div>
           <strong className="metric">{summary.failed}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Total')}</h3>
             <small className="muted">{t('All visible jobs across the current workspace scope.')}</small>
           </div>
           <strong className="metric">{jobs.length}</strong>
-        </article>
+        </Card>
       </section>
 
       <section className="workspace-overview-panel-grid">
-        <article className="card stack workspace-overview-main">
+        <Card as="article" className="workspace-overview-main">
           <div className="workspace-section-header">
             <div className="stack tight">
               <h3>{t('Live queue')}</h3>
@@ -188,9 +199,10 @@ export default function TrainingJobsPage() {
                 {t('Jobs that are still moving through preparation, runtime, or evaluation.')}
               </small>
             </div>
-            <button
+            <Button
               type="button"
-              className="workspace-inline-button"
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 load('manual').catch(() => {
                   // no-op
@@ -199,17 +211,24 @@ export default function TrainingJobsPage() {
               disabled={loading || refreshing}
             >
               {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
-            </button>
+            </Button>
           </div>
 
           {loading ? (
             <StateBlock variant="loading" title={t('Loading Jobs')} description={t('Fetching training jobs.')} />
           ) : liveJobs.length === 0 ? (
             <StateBlock variant="empty" title={t('No active jobs right now.')} description={t('Queued, running, or evaluating jobs will appear here.')} />
-          ) : (
-            <ul className="workspace-record-list">
-              {liveJobs.map((job) => (
-                <li key={job.id} className="workspace-record-item">
+          ) : shouldVirtualizeLiveJobs ? (
+            <VirtualList
+              items={liveJobs}
+              itemHeight={liveJobsVirtualRowHeight}
+              height={liveJobsVirtualViewportHeight}
+              itemKey={(job) => job.id}
+              listClassName="workspace-record-list"
+              rowClassName="workspace-record-row"
+              ariaLabel={t('Live queue')}
+              renderItem={(job) => (
+                <Panel className="workspace-record-item virtualized" tone="soft">
                   <div className="workspace-record-item-top">
                     <div className="workspace-record-summary stack tight">
                       <strong>{job.name}</strong>
@@ -218,21 +237,47 @@ export default function TrainingJobsPage() {
                       </small>
                     </div>
                     <div className="workspace-record-actions">
-                      <span className={`workspace-status-pill ${job.status}`}>{t(job.status)}</span>
-                      <Link className="workspace-inline-link" to={`/training/jobs/${job.id}`}>
+                      <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+                      <ButtonLink to={`/training/jobs/${job.id}`} variant="secondary" size="sm">
                         {t('Open Detail')}
-                      </Link>
+                      </ButtonLink>
                     </div>
                   </div>
-                  <small className="muted">{job.log_excerpt || t('Logs will become visible after execution starts.')}</small>
-                </li>
+                  <small className="muted line-clamp-2">
+                    {job.log_excerpt || t('Logs will become visible after execution starts.')}
+                  </small>
+                </Panel>
+              )}
+            />
+          ) : (
+            <ul className="workspace-record-list">
+              {liveJobs.map((job) => (
+                <Panel key={job.id} as="li" className="workspace-record-item" tone="soft">
+                  <div className="workspace-record-item-top">
+                    <div className="workspace-record-summary stack tight">
+                      <strong>{job.name}</strong>
+                      <small className="muted">
+                        {t(job.task_type)} · {t(job.framework)} · {t(job.status)} · {t('Last updated')}: {formatTimestamp(job.updated_at)}
+                      </small>
+                    </div>
+                    <div className="workspace-record-actions">
+                      <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+                      <ButtonLink to={`/training/jobs/${job.id}`} variant="secondary" size="sm">
+                        {t('Open Detail')}
+                      </ButtonLink>
+                    </div>
+                  </div>
+                  <small className="muted line-clamp-2">
+                    {job.log_excerpt || t('Logs will become visible after execution starts.')}
+                  </small>
+                </Panel>
               ))}
             </ul>
           )}
-        </article>
+        </Card>
 
         <div className="workspace-overview-side">
-          <article className="card stack">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Create next run')}</h3>
               <small className="muted">
@@ -243,12 +288,12 @@ export default function TrainingJobsPage() {
             <small className="muted">
               {t('Active runs')} · {summary.running} / {jobs.length}
             </small>
-            <Link to="/training/jobs/new" className="workspace-inline-link">
+            <ButtonLink to="/training/jobs/new" variant="secondary">
               {t('Create Training Job')}
-            </Link>
-          </article>
+            </ButtonLink>
+          </Card>
 
-          <article className="card stack">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Recent terminal runs')}</h3>
               <small className="muted">
@@ -258,10 +303,17 @@ export default function TrainingJobsPage() {
 
             {recentTerminalJobs.length === 0 ? (
               <StateBlock variant="empty" title={t('No terminal jobs yet.')} description={t('Finished jobs will appear here after execution ends.')} />
-            ) : (
-              <ul className="workspace-record-list compact">
-                {recentTerminalJobs.map((job) => (
-                  <li key={job.id} className="workspace-record-item compact">
+            ) : shouldVirtualizeTerminalJobs ? (
+              <VirtualList
+                items={recentTerminalJobs}
+                itemHeight={terminalJobsVirtualRowHeight}
+                height={terminalJobsVirtualViewportHeight}
+                itemKey={(job) => job.id}
+                listClassName="workspace-record-list compact"
+                rowClassName="workspace-record-row"
+                ariaLabel={t('Recent terminal runs')}
+                renderItem={(job) => (
+                  <Panel className="workspace-record-item compact virtualized" tone="soft">
                     <div className="workspace-record-item-top">
                       <div className="workspace-record-summary stack tight">
                         <strong>{job.name}</strong>
@@ -269,14 +321,41 @@ export default function TrainingJobsPage() {
                           {t(job.framework)} · {t(job.status)}
                         </small>
                       </div>
-                      <span className={`workspace-status-pill ${job.status}`}>{t(job.status)}</span>
+                      <div className="workspace-record-actions">
+                        <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+                        <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
+                          {t('Open Detail')}
+                        </ButtonLink>
+                      </div>
                     </div>
                     <small className="muted">{formatTimestamp(job.updated_at)}</small>
-                  </li>
+                  </Panel>
+                )}
+              />
+            ) : (
+              <ul className="workspace-record-list compact">
+                {recentTerminalJobs.map((job) => (
+                  <Panel key={job.id} as="li" className="workspace-record-item compact" tone="soft">
+                    <div className="workspace-record-item-top">
+                      <div className="workspace-record-summary stack tight">
+                        <strong>{job.name}</strong>
+                        <small className="muted">
+                          {t(job.framework)} · {t(job.status)}
+                        </small>
+                      </div>
+                      <div className="workspace-record-actions">
+                        <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+                        <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
+                          {t('Open Detail')}
+                        </ButtonLink>
+                      </div>
+                    </div>
+                    <small className="muted">{formatTimestamp(job.updated_at)}</small>
+                  </Panel>
                 ))}
               </ul>
             )}
-          </article>
+          </Card>
         </div>
       </section>
     </div>

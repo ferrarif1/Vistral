@@ -40,6 +40,15 @@ npm run docker:healthcheck
 npm run docker:verify:full
 ```
 
+训练机（B/C/D...）部署与安装相关资源已统一放在：
+- `training-worker/README.md`
+- `training-worker/.env.worker.example`
+- `training-worker/scripts/install-deps.sh`
+- `training-worker/scripts/worker-heartbeat.sh`
+- `training-worker/scripts/worker-train-api.py`
+- `training-worker/scripts/run-worker-node.sh`
+- 跨机器部署建议保持 `WORKER_USE_REQUEST_PATHS=false`，让 worker 仅使用本机 `WORKER_RUN_ROOT`
+
 ## 5）可选源码维护模式
 这条路线仅保留给仓库维护和调试使用，不再作为正式产品入口。
 
@@ -54,6 +63,7 @@ npm run dev
 ```bash
 npm run docker:healthcheck
 npm run docker:verify:full
+npm run data:cleanup-test
 npm run smoke:account-governance
 npm run smoke:admin:verification-reports
 npm run smoke:conversation-actions
@@ -71,6 +81,9 @@ npm run smoke:runner-real-positive
 npm run smoke:runtime-metrics-retention
 npm run smoke:training-metrics-export
 npm run smoke:training-metrics-export-csv
+npm run smoke:training-worker-scheduler
+npm run smoke:training-worker-dispatch
+npm run smoke:training-worker-cancel
 npm run smoke:admin:verification-retention
 npm run smoke:verify-report-retention-e2e
 ```
@@ -105,6 +118,12 @@ npm run smoke:verify-report-retention-e2e
 - `VISTRAL_YOLO_MODEL_PATH`
 - `VISTRAL_PADDLEOCR_LANG` / `VISTRAL_PADDLEOCR_USE_GPU`
 - `VISTRAL_DOCTR_DET_ARCH` / `VISTRAL_DOCTR_RECO_ARCH`
+- `TRAINING_WORKER_AUTH_TOKEN`（`/api/runtime/training-workers/heartbeat` 首选鉴权令牌；保留 shared fallback 兼容旧 worker）
+- `TRAINING_WORKER_HEARTBEAT_TTL_MS`（默认 `45000`，调度时判定 worker 心跳过期阈值）
+- `TRAINING_WORKER_DISPATCH_TIMEOUT_MS`（默认 `1800000`，控制面到 worker 训练请求超时）
+- `TRAINING_WORKER_DISPATCH_FALLBACK_LOCAL`（默认 `1`，worker 分发失败时是否回退本地执行）
+- `TRAINING_WORKER_INLINE_PACKAGE_MAX_FILES`（默认 `800`，下发给 worker 的内联数据包文件数上限）
+- `TRAINING_WORKER_INLINE_PACKAGE_MAX_BYTES`（默认 `41943040`，下发给 worker 的内联数据包总字节上限）
 - 本地命令模板脚本目录：`scripts/local-runners/`
 - 占位符示例：`{{repo_root}}`、`{{job_id}}`、`{{dataset_id}}`、`{{task_type}}`、`{{metrics_path}}`、`{{output_path}}`
 

@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom';
+import { Card } from '../ui/Surface';
 import { useI18n } from '../../i18n/I18nProvider';
 
 export default function SettingsTabs() {
   const { t } = useI18n();
 
   return (
-    <section className="card settings-surface-nav">
+    <Card className="settings-surface-nav">
       <div className="stack tight">
         <strong>{t('Settings')}</strong>
         <small className="muted">
@@ -39,6 +40,6 @@ export default function SettingsTabs() {
           {t('Runtime Settings')}
         </NavLink>
       </nav>
-    </section>
+    </Card>
   );
 }

@@ -5,8 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-8797}"
-BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
@@ -14,6 +12,28 @@ EXPECT_RUNTIME_FALLBACK="${EXPECT_RUNTIME_FALLBACK:-true}"
 PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 YOLO_RUNTIME_ENDPOINT_FOR_SMOKE="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[smoke-phase2] jq is required."
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[smoke-phase2] python3 is required."
+  exit 1
+fi
+
+if [[ "${START_API}" == "true" && -z "${API_PORT:-}" ]]; then
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
+API_PORT="${API_PORT:-8797}"
+BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 
 COOKIE_FILE="$(mktemp)"
 LOG_FILE="$(mktemp)"
@@ -80,6 +100,11 @@ fi
 
 if ! wait_for_health; then
   if [[ "${START_API}" == "true" ]]; then
+    if ! kill -0 "${API_PID}" >/dev/null 2>&1; then
+      echo "[smoke-phase2] API process exited before health check (possible port conflict)"
+      cat "$LOG_FILE"
+      exit 1
+    fi
     echo "[smoke-phase2] API failed to start"
     cat "$LOG_FILE"
   else

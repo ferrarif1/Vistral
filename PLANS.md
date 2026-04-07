@@ -2,7 +2,7 @@
 
 ## 1. Vision
 
-Build Vistral into an AI-native visual model engineering platform with dual entry:
+Build Vistral into an AI-native visual model engineering platform with two workspace routes:
 
 - conversational workspace for rapid interaction
 - professional console for dataset/annotation/training/model lifecycle operations
@@ -130,11 +130,19 @@ When work is interrupted by a new conversation task, append handoff details in `
 
 Current priority queue:
 
-1. Close Phase 2 annotation workflow from dataset detail into reviewer/rework queue and persistent reject context.
-2. Tighten dataset-version-backed training launch readiness after annotation/review closure.
-3. Continue the lower-priority framework realification backlog:
+1. Refactor the full frontend against `DESIGN.md` / `notion/DESIGN.md` so all pages share one AI-native design system and layout language.
+2. Close Phase 2 annotation workflow from dataset detail into reviewer/rework queue and persistent reject context.
+3. Tighten dataset-version-backed training launch readiness after annotation/review closure.
+4. Continue the lower-priority framework realification backlog:
    - dependency-aware real framework execution inside local runners
    - richer epoch-level metrics retention/export hardening
    - dependency-present smoke expansion without duplicate routes/pages
-4. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
-5. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.
+5. Continue worker rollout hardening after the paused dedicated-auth round:
+   - integrate `smoke-training-worker-dedicated-auth` into `docker:verify:full`
+   - reduce duplication across worker smoke scripts / helpers
+6. Design and implement worker GUI onboarding:
+   - runtime-side `Add Worker` wizard
+   - Docker-first worker bootstrap and pairing flow
+   - local worker setup UI + validation gates before scheduling enablement
+7. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
+8. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.

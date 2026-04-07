@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import StateView from './ui/StateView';
 
 interface StateBlockProps {
   variant: 'empty' | 'loading' | 'error' | 'success';
@@ -8,11 +9,5 @@ interface StateBlockProps {
 }
 
 export default function StateBlock({ variant, title, description, extra }: StateBlockProps) {
-  return (
-    <div className={`state-block ${variant}`}>
-      <h4>{title}</h4>
-      <p>{description}</p>
-      {extra}
-    </div>
-  );
+  return <StateView variant={variant} title={title} description={description} extra={extra} />;
 }

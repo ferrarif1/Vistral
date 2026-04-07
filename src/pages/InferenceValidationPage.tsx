@@ -9,6 +9,10 @@ import type {
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { Input, Select } from '../components/ui/Field';
+import { Card, Panel } from '../components/ui/Surface';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -398,7 +402,7 @@ export default function InferenceValidationPage() {
 
   const heroSection = (
     <>
-      <section className="card workspace-overview-hero">
+      <Card className="workspace-overview-hero">
         <div className="workspace-overview-hero-grid">
           <div className="workspace-overview-copy stack">
             <small className="workspace-eyebrow">{t('Validation Lane')}</small>
@@ -409,9 +413,10 @@ export default function InferenceValidationPage() {
                   {t('Run validation, inspect normalized output, and route failure samples back into dataset workflows.')}
                 </p>
               </div>
-              <button
+              <Button
                 type="button"
-                className="workspace-inline-button"
+                variant="secondary"
+                size="sm"
                 onClick={() => {
                   loadAll('manual').catch((error) => {
                     setFeedback({ variant: 'error', text: (error as Error).message });
@@ -420,7 +425,7 @@ export default function InferenceValidationPage() {
                 disabled={busy || refreshing}
               >
                 {refreshing ? t('Refreshing...') : t('Refresh')}
-              </button>
+              </Button>
             </div>
           </div>
           <div className="workspace-overview-badges">
@@ -442,7 +447,7 @@ export default function InferenceValidationPage() {
             </div>
           </div>
         </div>
-      </section>
+      </Card>
 
       <StepIndicator steps={steps} current={step} />
     </>
@@ -470,34 +475,34 @@ export default function InferenceValidationPage() {
       ) : null}
 
       <section className="workspace-overview-signal-grid">
-        <article className="card stack workspace-signal-card">
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Ready inputs')}</h3>
             <small className="muted">{t('Attachments that can be selected immediately for validation runs.')}</small>
           </div>
           <strong className="metric">{readyAttachmentCount}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Model versions')}</h3>
             <small className="muted">{t('Registered versions available for validation in the current workspace.')}</small>
           </div>
           <strong className="metric">{versions.length}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Datasets')}</h3>
             <small className="muted">{t('Target datasets available for failure-sample feedback routing.')}</small>
           </div>
           <strong className="metric">{datasets.length}</strong>
-        </article>
-        <article className={`card stack workspace-signal-card${reachableRuntimeCount === 0 ? ' attention' : ''}`}>
+        </Card>
+        <Card as="article" className={`workspace-signal-card${reachableRuntimeCount === 0 ? ' attention' : ''}`}>
           <div className="workspace-signal-top">
             <h3>{t('Reachable runtimes')}</h3>
             <small className="muted">{t('Framework bridges currently reachable from the validation workspace.')}</small>
           </div>
           <strong className="metric">{runtimeChecks.length === 0 && runtimeLoading ? t('Checking...') : reachableRuntimeCount}</strong>
-        </article>
+        </Card>
       </section>
 
       <section className="workspace-overview-panel-grid">
@@ -514,7 +519,7 @@ export default function InferenceValidationPage() {
             disabled={busy}
           />
 
-          <article className="card stack">
+          <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Run Inference')}</h3>
@@ -540,40 +545,44 @@ export default function InferenceValidationPage() {
               />
             ) : null}
 
-            <label>
-              {t('Model Version')}
-              <select
-                value={selectedVersionId}
-                onChange={(event) => setSelectedVersionId(event.target.value)}
-              >
-                {versions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.version_name} ({t(version.task_type)} / {t(version.framework)})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {t('Input Attachment')}
-              <select
-                value={selectedAttachmentId}
-                onChange={(event) => setSelectedAttachmentId(event.target.value)}
-              >
-                {attachments
-                  .filter((attachment) => attachment.status === 'ready')
-                  .map((attachment) => (
-                    <option key={attachment.id} value={attachment.id}>
-                      {attachment.filename}
+            <div className="workspace-form-grid">
+              <label>
+                {t('Model Version')}
+                <Select
+                  value={selectedVersionId}
+                  onChange={(event) => setSelectedVersionId(event.target.value)}
+                >
+                  {versions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.version_name} ({t(version.task_type)} / {t(version.framework)})
                     </option>
                   ))}
-              </select>
-            </label>
-            <button onClick={runInference} disabled={busy || !selectedVersionId || !selectedAttachmentId}>
-              {t('Run Inference')}
-            </button>
-          </article>
+                </Select>
+              </label>
+              <label>
+                {t('Input Attachment')}
+                <Select
+                  value={selectedAttachmentId}
+                  onChange={(event) => setSelectedAttachmentId(event.target.value)}
+                >
+                  {attachments
+                    .filter((attachment) => attachment.status === 'ready')
+                    .map((attachment) => (
+                      <option key={attachment.id} value={attachment.id}>
+                        {attachment.filename}
+                      </option>
+                    ))}
+                </Select>
+              </label>
+            </div>
+            <div className="row gap wrap">
+              <Button onClick={runInference} disabled={busy || !selectedVersionId || !selectedAttachmentId}>
+                {t('Run Inference')}
+              </Button>
+            </div>
+          </Card>
 
-          <article className="card stack">
+          <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Latest Inference Output')}</h3>
@@ -589,13 +598,13 @@ export default function InferenceValidationPage() {
               <>
                 <label>
                   {t('Select Run')}
-                  <select value={selectedRun.id} onChange={(event) => setSelectedRunId(event.target.value)}>
+                  <Select value={selectedRun.id} onChange={(event) => setSelectedRunId(event.target.value)}>
                     {runs.map((run) => (
                       <option key={run.id} value={run.id}>
                         {run.id} ({t(run.task_type)} / {t(run.framework)} / {t(run.status)})
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
                 <small className="muted">
                   {t('Run {runId} · Task {task} · Framework {framework}', {
@@ -605,15 +614,15 @@ export default function InferenceValidationPage() {
                   })}
                 </small>
                 <div className="row gap wrap">
-                  <span className="chip">
+                  <Badge tone="neutral">
                     {t('runtime source')}: {runtimeInsight?.source ? t(runtimeInsight.source) : t('unknown')}
-                  </span>
-                  <span className="chip">
+                  </Badge>
+                  <Badge tone="info">
                     {t('runtime framework')}: {runtimeInsight?.runtimeFramework ? t(runtimeInsight.runtimeFramework) : t('unknown')}
-                  </span>
-                  <span className="chip">
+                  </Badge>
+                  <Badge tone="neutral">
                     {t('runner mode')}: {runtimeInsight?.runnerMode ? t(runtimeInsight.runnerMode) : t('n/a')}
-                  </span>
+                  </Badge>
                 </div>
                 <StateBlock
                   variant={runtimeInsight?.variant ?? 'empty'}
@@ -634,17 +643,21 @@ export default function InferenceValidationPage() {
                     imageUrl={selectedRunPreviewUrl}
                   />
                 </Suspense>
-                <h4>{t('Raw Output')}</h4>
-                <pre className="code-block">{JSON.stringify(selectedRun.raw_output, null, 2)}</pre>
-                <h4>{t('Normalized Output')}</h4>
-                <pre className="code-block">{JSON.stringify(selectedRun.normalized_output, null, 2)}</pre>
+                <details className="workspace-details">
+                  <summary>{t('Raw Output')}</summary>
+                  <pre className="code-block">{JSON.stringify(selectedRun.raw_output, null, 2)}</pre>
+                </details>
+                <details className="workspace-details">
+                  <summary>{t('Normalized Output')}</summary>
+                  <pre className="code-block">{JSON.stringify(selectedRun.normalized_output, null, 2)}</pre>
+                </details>
               </>
             )}
-          </article>
+          </Card>
         </div>
 
         <div className="workspace-overview-side">
-          <article className="card stack">
+          <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Runtime Connectivity')}</h3>
@@ -652,61 +665,52 @@ export default function InferenceValidationPage() {
                   {t('Refresh framework diagnostics on demand without interrupting the validation lane.')}
                 </small>
               </div>
-              <button type="button" className="workspace-inline-button" onClick={loadRuntimeConnectivity} disabled={runtimeLoading || busy}>
+              <Button type="button" variant="secondary" size="sm" onClick={loadRuntimeConnectivity} disabled={runtimeLoading || busy}>
                 {runtimeLoading ? t('Checking...') : t('Refresh Runtime Status')}
-              </button>
+              </Button>
             </div>
             {runtimeError ? (
               <StateBlock variant="error" title={t('Runtime Check Failed')} description={runtimeError} />
             ) : null}
-            <div className="stack">
+            <ul className="workspace-record-list compact">
               {(['paddleocr', 'doctr', 'yolo'] as const).map((framework) => {
                 const item = runtimeByFramework.get(framework);
                 const source = item?.source ?? 'not_configured';
-                const isReady = item?.source === 'reachable';
-                const tone = source === 'reachable' ? 'ready' : source === 'unreachable' ? 'error' : 'draft';
+                const tone = source === 'reachable' ? 'success' : source === 'unreachable' ? 'warning' : 'neutral';
+                const sourceLabel =
+                  source === 'reachable'
+                    ? t('reachable')
+                    : source === 'unreachable'
+                      ? t('unreachable')
+                      : t('not configured');
+                const sourceDescription =
+                  source === 'reachable'
+                    ? t('Runtime endpoint is healthy and can serve prediction calls.')
+                    : source === 'unreachable'
+                      ? t('Runtime endpoint is configured but currently unreachable. Inference falls back until recovered.')
+                      : t('Runtime endpoint is not configured. Inference uses fallback mode by default.');
 
                 return (
-                  <article key={framework} className="workspace-record-item stack">
+                  <Panel key={framework} as="li" className="workspace-record-item compact" tone="soft">
                     <div className="row between gap wrap">
                       <strong>{t(framework)}</strong>
-                      <span className={`workspace-status-pill ${tone}`}>
-                        {source === 'reachable'
-                          ? t('reachable')
-                          : source === 'unreachable'
-                            ? t('unreachable')
-                            : t('not configured')}
-                      </span>
+                      <Badge tone={tone}>{sourceLabel}</Badge>
                     </div>
-                    <small className="muted">{t('endpoint')}: {item?.endpoint ?? t('not set')}</small>
-                    <small className="muted">{t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}</small>
+                    <div className="row gap wrap">
+                      <Badge tone="neutral">{t('endpoint')}: {item?.endpoint ?? t('not set')}</Badge>
+                      <Badge tone={item?.error_kind ? 'warning' : 'neutral'}>
+                        {t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}
+                      </Badge>
+                    </div>
                     <small className="muted">{item?.message ?? t('No check data yet.')}</small>
-                    {isReady ? (
-                      <StateBlock
-                        variant="success"
-                        title={t('Runtime Ready')}
-                        description={t('This framework can serve runtime prediction calls.')}
-                      />
-                    ) : source === 'unreachable' ? (
-                      <StateBlock
-                        variant="error"
-                        title={t('Runtime Unreachable')}
-                        description={t('Inference will use mock fallback until runtime endpoint is reachable.')}
-                      />
-                    ) : (
-                      <StateBlock
-                        variant="empty"
-                        title={t('Fallback Mode')}
-                        description={t('Inference will use mock fallback until runtime endpoint is reachable.')}
-                      />
-                    )}
-                  </article>
+                    <small className="muted">{sourceDescription}</small>
+                  </Panel>
                 );
               })}
-            </div>
-          </article>
+            </ul>
+          </Card>
 
-          <article className="card stack">
+          <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Feedback to Dataset')}</h3>
@@ -740,31 +744,35 @@ export default function InferenceValidationPage() {
               </small>
             ) : null}
 
-            <label>
-              {t('Target Dataset')}
-              <select
-                value={selectedDatasetId}
-                onChange={(event) => setSelectedDatasetId(event.target.value)}
-              >
-                {feedbackDatasets.map((dataset) => (
-                  <option key={dataset.id} value={dataset.id}>
-                    {dataset.name} ({t(dataset.task_type)})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {t('Feedback Reason')}
-              <input
-                value={feedbackReason}
-                onChange={(event) => setFeedbackReason(event.target.value)}
-                placeholder={t('for example: missing_detection')}
-              />
-            </label>
-            <button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>
-              {t('Send to Dataset')}
-            </button>
-          </article>
+            <div className="workspace-form-grid">
+              <label>
+                {t('Target Dataset')}
+                <Select
+                  value={selectedDatasetId}
+                  onChange={(event) => setSelectedDatasetId(event.target.value)}
+                >
+                  {feedbackDatasets.map((dataset) => (
+                    <option key={dataset.id} value={dataset.id}>
+                      {dataset.name} ({t(dataset.task_type)})
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label>
+                {t('Feedback Reason')}
+                <Input
+                  value={feedbackReason}
+                  onChange={(event) => setFeedbackReason(event.target.value)}
+                  placeholder={t('for example: missing_detection')}
+                />
+              </label>
+            </div>
+            <div className="row gap wrap">
+              <Button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>
+                {t('Send to Dataset')}
+              </Button>
+            </div>
+          </Card>
         </div>
       </section>
     </div>

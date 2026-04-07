@@ -3,6 +3,9 @@ import type {
   ApprovalRequest,
   AuditLogRecord,
   ChangePasswordInput,
+  ClaimTrainingWorkerBootstrapSessionInput,
+  ClaimTrainingWorkerBootstrapSessionResult,
+  CreateTrainingWorkerBootstrapSessionInput,
   ConversationRecord,
   CreateUserInput,
   DatasetItemRecord,
@@ -26,6 +29,8 @@ import type {
   TrainingJobRecord,
   TrainingMetricRecord,
   TrainingMetricsExport,
+  TrainingWorkerBootstrapSessionRecord,
+  TrainingWorkerNodeView,
   UpsertAnnotationInput,
   UpdateUserStatusInput,
   VerificationReportRecord,
@@ -269,6 +274,51 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input)
     }),
+  listTrainingWorkers: () => request<TrainingWorkerNodeView[]>('/api/admin/training-workers'),
+  listTrainingWorkerBootstrapSessions: () =>
+    request<TrainingWorkerBootstrapSessionRecord[]>('/api/admin/training-workers/bootstrap-sessions'),
+  createTrainingWorkerBootstrapSession: (input: CreateTrainingWorkerBootstrapSessionInput) =>
+    request<TrainingWorkerBootstrapSessionRecord>('/api/admin/training-workers/bootstrap-sessions', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+  downloadTrainingWorkerBootstrapBundle: async (sessionId: string) => {
+    const path = `/api/admin/training-workers/bootstrap-sessions/${encodeURIComponent(sessionId)}/bundle`;
+    const response = await fetch(path, {
+      method: 'GET',
+      credentials: 'include'
+    });
+
+    if (!response.ok) {
+      const { envelope, rawText } = await readApiEnvelope<unknown>(response);
+      if (envelope && !envelope.success) {
+        throw new Error(envelope.error.message);
+      }
+
+      throw new Error(buildRequestErrorMessage(response.status, rawText));
+    }
+
+    const blob = await response.blob();
+    const filename =
+      parseDownloadFilename(response.headers.get('Content-Disposition')) ??
+      `worker-bootstrap-${sessionId}.sh`;
+    return { blob, filename };
+  },
+  validateTrainingWorkerBootstrapCallback: (sessionId: string) =>
+    request<TrainingWorkerBootstrapSessionRecord>(
+      `/api/admin/training-workers/bootstrap-sessions/${encodeURIComponent(sessionId)}/validate-callback`,
+      {
+        method: 'POST'
+      }
+    ),
+  claimTrainingWorkerBootstrapSession: (input: ClaimTrainingWorkerBootstrapSessionInput) =>
+    request<ClaimTrainingWorkerBootstrapSessionResult>(
+      '/api/runtime/training-workers/bootstrap-sessions/claim',
+      {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }
+    ),
 
   listModels: async () => filterVisibleModels(await request<ModelRecord[]>('/api/models')),
   listMyModels: async () => filterVisibleModels(await request<ModelRecord[]>('/api/models/my')),

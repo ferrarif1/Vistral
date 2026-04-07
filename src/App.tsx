@@ -5,7 +5,6 @@ import ApiHealthBanner from './components/ApiHealthBanner';
 import StateBlock from './components/StateBlock';
 import { useI18n } from './i18n/I18nProvider';
 
-const DualEntryPage = lazy(() => import('./pages/DualEntryPage'));
 const ConversationPage = lazy(() => import('./pages/ConversationPage'));
 const ProfessionalConsolePage = lazy(() => import('./pages/ProfessionalConsolePage'));
 const ModelsExplorePage = lazy(() => import('./pages/ModelsExplorePage'));
@@ -46,7 +45,7 @@ export default function App() {
           }
         >
           <Routes>
-            <Route path="/" element={<DualEntryPage />} />
+            <Route path="/" element={<Navigate to="/workspace/chat" replace />} />
             <Route path="/workspace/chat" element={<ConversationPage />} />
             <Route path="/workspace/console" element={<ProfessionalConsolePage />} />
             <Route path="/settings" element={<Navigate to="/settings/account" replace />} />

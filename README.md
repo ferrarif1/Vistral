@@ -33,6 +33,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/flows.md`
    - `docs/data-model.md`
    - `docs/api-contract.md`
+   - `docs/training-worker-onboarding.md`
    - `docs/training-platform-roadmap.md`
    - `docs/dataset-management.md`
    - `docs/annotation-workflow.md`
@@ -74,6 +75,20 @@ License file is not yet added in this baseline; add one before production distri
 
 Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:web` remain available only for repository maintenance and debugging. They are not the primary product run path.
 
+### Training Worker Deployment Kit
+- Dedicated worker-side deployment/install assets are under `training-worker/`.
+- Start with `training-worker/README.md`.
+- Worker env template: `training-worker/.env.worker.example`.
+- Worker scripts:
+  - `training-worker/scripts/bootstrap-worker.sh`
+  - `training-worker/scripts/worker-doctor.sh`
+  - `training-worker/scripts/install-deps.sh`
+  - `training-worker/scripts/worker-heartbeat.sh`
+  - `training-worker/scripts/worker-train-api.py`
+  - `training-worker/scripts/run-worker-node.sh`
+- Cross-machine default: worker keeps `WORKER_USE_REQUEST_PATHS=false` and writes into local `WORKER_RUN_ROOT`.
+- Existing local command templates remain in `scripts/local-runners/` (shared by control-plane runtime adapters).
+
 ### Auth (username/password)
 - Login is username/password based.
 - Public self-registration is disabled.
@@ -85,6 +100,8 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - Administrators can reset another user's password, disable/reactivate accounts, and inspect `last_login_at` from the same account directory.
 
 ### Validation Commands
+- `npm run data:cleanup-test`
+  - safely prunes extra prototype test artifacts (stale verify reports/runtime caches/log noise) while keeping active app-state references
 - `npm run typecheck`
 - `npm run lint`
 - `npm run build`
@@ -110,7 +127,7 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - `npm run smoke:no-seed-hardcoding`
   - guards against hardcoded seed entity ids (`d-*`, `dv-*`, `mv-*`, `f-*`, etc.) in smoke/verify scripts so deployment-mode tests stay portable
 - `npm run smoke:core-closure`
-  - runs the core closure suite (`no-seed-hardcoding` + `account-governance` + `phase2` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure`) in one command
+  - runs the core closure suite (`no-seed-hardcoding` + `account-governance` + `phase2` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
 - `npm run smoke:llm-settings`
   - verifies LLM settings save/edit/clear flow, including keeping the saved key while editing and loading encrypted config after API restart
 - `npm run smoke:runtime-success`
@@ -148,6 +165,18 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - verifies `/api/admin/verification-reports` exposes `runtime_metrics_retention` from verify report JSON
 - `npm run smoke:verify-report-retention-e2e`
   - runs `docker-verify-full` against local API and asserts `runtime_metrics_retention` is consistent between report file and admin API
+- `npm run smoke:training-worker-dispatch`
+  - validates scheduled worker jobs are dispatched to worker endpoint, worker response metrics are ingested, and training reaches `completed`
+- `npm run smoke:training-worker-cancel`
+  - validates cancel propagation for worker-running jobs (control-plane cancel -> worker cancel endpoint -> final `cancelled`)
+- `npm run smoke:training-worker-failover`
+  - validates worker dispatch failover path (first worker fails -> scheduler re-dispatches to another online worker -> job completes)
+- `npm run smoke:training-worker-health-penalty`
+  - validates scheduler health-penalty behavior across jobs (recently failed worker is deprioritized for subsequent scheduling)
+- `npm run smoke:training-worker-package-reference`
+  - forces reference package dispatch mode (`reference_json_v1`) and validates worker package download + training completion path
+- `npm run smoke:training-worker-dedicated-auth`
+  - validates bootstrap-issued dedicated worker auth end-to-end: claim -> heartbeat -> reference package dispatch -> cancel propagation
 
 ### Prototype persistence and restart behavior
 - Business state is persisted to local JSON snapshot file (`.data/app-state.json` by default).
@@ -170,10 +199,28 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
     - `VISTRAL_DOCTR_DET_ARCH`, `VISTRAL_DOCTR_RECO_ARCH`
   - reusable runner templates: `scripts/local-runners/`
   - template placeholders include `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
+- Worker dispatch controls:
+  - `TRAINING_WORKER_SHARED_TOKEN`
+  - `TRAINING_WORKER_HEARTBEAT_TTL_MS`
+  - `TRAINING_WORKER_DISPATCH_TIMEOUT_MS`
+  - `TRAINING_WORKER_DISPATCH_FALLBACK_LOCAL`
+  - `TRAINING_WORKER_DISPATCH_MAX_ATTEMPTS`
+  - `TRAINING_WORKER_DISPATCH_RETRY_BASE_MS`
+  - `TRAINING_WORKER_FAILURE_PENALTY_WINDOW_MS`
+  - `TRAINING_WORKER_FAILURE_COOLDOWN_MS`
+  - `TRAINING_WORKER_FAILURE_PENALTY_STEP`
+  - `TRAINING_WORKER_FAILURE_PENALTY_CAP`
+  - `TRAINING_WORKER_INLINE_PACKAGE_MAX_FILES`
+  - `TRAINING_WORKER_INLINE_PACKAGE_MAX_BYTES`
+  - `TRAINING_WORKER_DISPATCH_BASE_URL` (required when dispatch switches to reference package mode)
+  - `TRAINING_WORKER_PACKAGE_STORAGE_ROOT`
+  - `TRAINING_WORKER_PACKAGE_TTL_MS`
+  - `TRAINING_WORKER_REFERENCE_PACKAGE_MAX_FILES`
+  - `TRAINING_WORKER_REFERENCE_PACKAGE_MAX_BYTES`
 
 ### Implemented in this round
 - Shared app shell and unified theme
-- Dual work entry: AI-native conversation workspace + professional console
+- Two workspace routes: AI-native conversation workspace + professional console
 - Conversation workflow with attachment upload/status/delete and assistant responses
   - conversation workspace now uses an immersive chat-style shell (left chat sidebar + centered timeline + floating composer)
   - attachment controls include local file picker, open/preview support, and in-context include/exclude actions

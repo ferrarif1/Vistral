@@ -1,0 +1,27 @@
+ARG PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim
+FROM ${PYTHON_BASE_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends bash curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY training-worker/requirements.txt /tmp/worker-requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+  && python -m pip install --no-cache-dir -r /tmp/worker-requirements.txt
+
+COPY . /app
+
+ENV WORKER_ENV_FILE=/worker-state/.env.worker \
+    WORKER_RUN_ROOT=/worker-state/runs \
+    WORKER_BIND_HOST=0.0.0.0 \
+    WORKER_BIND_PORT=9090 \
+    WORKER_RUN_DOCTOR_ON_START=true
+
+EXPOSE 9090
+
+CMD ["bash", "docker/worker-entrypoint.sh"]

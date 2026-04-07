@@ -1,7 +1,9 @@
 import {
+  startTransition,
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,9 +15,10 @@ import {
   type MutableRefObject,
   type ReactNode,
   type SetStateAction,
-  type TouchEvent as ReactTouchEvent
+  type TouchEvent as ReactTouchEvent,
+  type UIEvent as ReactUIEvent
 } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type {
   ConversationActionMetadata,
   ConversationRecord,
@@ -33,8 +36,14 @@ import {
 import SessionMenu from '../components/SessionMenu';
 import { useI18n } from '../i18n/I18nProvider';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
+import useCompactViewport from '../hooks/useCompactViewport';
 import StateBlock from '../components/StateBlock';
 import StatusBadge from '../components/StatusBadge';
+import VirtualList from '../components/VirtualList';
+import { Badge } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { AttachmentChip, ChatInput, MessageBubble } from '../components/ui/Chat';
+import { HiddenFileInput, Input, Select, Textarea } from '../components/ui/Field';
 import { api } from '../services/api';
 import { AUTH_UPDATED_EVENT, emitAuthUpdated } from '../services/authSession';
 import { LLM_CONFIG_UPDATED_EVENT } from '../services/llmConfig';
@@ -64,8 +73,14 @@ const historyStorageKey = 'vistral-conversation-history';
 const hiddenHistoryStorageKey = 'vistral-hidden-conversations';
 const pinnedOrderStorageKey = 'vistral-pinned-history-order';
 const sidebarCollapsedStorageKey = 'vistral-chat-sidebar-collapsed';
-const compactViewportMaxWidth = 960;
 const backgroundRefreshIntervalMs = 5000;
+const historyVirtualItemHeight = 44;
+const historyVirtualOverscan = 6;
+const historyVirtualMinCount = 20;
+const messageRenderBatchSize = 40;
+const attachmentTrayVirtualizationThreshold = 24;
+const attachmentTrayVirtualRowHeight = 48;
+const attachmentTrayVirtualViewportHeight = 156;
 
 const readHistoryFromStorage = (): LocalChatHistoryItem[] => {
   try {
@@ -177,9 +192,6 @@ const writeSidebarCollapsedToStorage = (collapsed: boolean) => {
   }
 };
 
-const detectCompactViewport = (): boolean =>
-  typeof window !== 'undefined' ? window.innerWidth <= compactViewportMaxWidth : false;
-
 const arraysEqual = (a: string[], b: string[]): boolean =>
   a.length === b.length && a.every((value, index) => value === b[index]);
 
@@ -287,28 +299,6 @@ const sortHistoryItems = (items: LocalChatHistoryItem[], pinnedOrder: string[]):
   return next;
 };
 
-const daysDiffFromNow = (iso: string): number => {
-  const targetTime = Date.parse(iso);
-  if (Number.isNaN(targetTime)) {
-    return 999;
-  }
-
-  const nowDate = new Date();
-  const todayStart = new Date(
-    nowDate.getFullYear(),
-    nowDate.getMonth(),
-    nowDate.getDate()
-  ).getTime();
-  const targetDate = new Date(targetTime);
-  const targetStart = new Date(
-    targetDate.getFullYear(),
-    targetDate.getMonth(),
-    targetDate.getDate()
-  ).getTime();
-
-  return Math.floor((todayStart - targetStart) / (1000 * 60 * 60 * 24));
-};
-
 const mergeHistoryWithConversations = (
   conversations: ConversationRecord[],
   previous: LocalChatHistoryItem[],
@@ -352,25 +342,6 @@ const getInitials = (username?: string): string => {
   }
 
   return username.slice(0, 2).toUpperCase();
-};
-
-const formatHistoryTimestamp = (iso: string): string => {
-  const raw = Date.parse(iso);
-  if (Number.isNaN(raw)) {
-    return 'Unknown time';
-  }
-
-  const diff = daysDiffFromNow(iso);
-  const date = new Date(raw);
-  if (diff <= 0) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
-  if (diff <= 7) {
-    return date.toLocaleDateString([], { weekday: 'short' });
-  }
-
-  return date.toLocaleDateString();
 };
 
 const triggerHapticFeedback = (): void => {
@@ -607,7 +578,7 @@ const ConversationHistoryItemRow = memo(function ConversationHistoryItemRow({
     >
       {isEditing ? (
         <div className="chat-history-edit stack tight">
-          <input
+          <Input
             value={editingConversationTitle}
             onChange={handleEditingTitleChange}
             onKeyDown={handleEditingTitleKeyDown}
@@ -616,28 +587,34 @@ const ConversationHistoryItemRow = memo(function ConversationHistoryItemRow({
             disabled={isRenaming}
           />
           <div className="row gap">
-            <button
-              className="small-btn chat-history-action"
+            <Button
+              className="chat-history-action"
+              variant="secondary"
+              size="sm"
               onClick={handleSaveTitle}
               disabled={isRenaming}
               type="button"
             >
               {isRenaming ? t('Saving...') : t('Save')}
-            </button>
-            <button
-              className="small-btn chat-history-action"
+            </Button>
+            <Button
+              className="chat-history-action"
+              variant="secondary"
+              size="sm"
               onClick={onCancelRenameConversation}
               disabled={isRenaming}
               type="button"
             >
               {t('Cancel')}
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <div className="chat-history-item-shell">
-          <button
+          <Button
             className="chat-history-open"
+            variant="ghost"
+            size="sm"
             onClick={handleRestore}
             onKeyDown={handleItemKeyDown}
             disabled={isRestoring}
@@ -651,23 +628,24 @@ const ConversationHistoryItemRow = memo(function ConversationHistoryItemRow({
               ) : null}
               <span className="chat-history-title-text">{renderConversationTitle(item.title)}</span>
             </span>
-            <small>{formatHistoryTimestamp(item.updated_at)}</small>
-          </button>
-          <button
+          </Button>
+          <Button
             className={`chat-history-more${isMenuOpen ? ' active' : ''}`}
+            variant="ghost"
+            size="icon"
             type="button"
             onClick={handleOpenMenuFromButton}
             title={t('More actions')}
             aria-label={t('More actions')}
             aria-haspopup="menu"
             aria-expanded={isMenuOpen}
-          >
-            <span className="chat-history-more-dots" aria-hidden="true">
-              <span className="chat-history-more-dot" />
-              <span className="chat-history-more-dot" />
-              <span className="chat-history-more-dot" />
-            </span>
-          </button>
+            >
+              <span className="chat-history-more-dots" aria-hidden="true">
+                <span className="chat-history-more-dot" />
+                <span className="chat-history-more-dot" />
+                <span className="chat-history-more-dot" />
+              </span>
+          </Button>
         </div>
       )}
     </li>
@@ -859,13 +837,112 @@ const ConversationHistorySidebarPanel = memo(function ConversationHistorySidebar
   onPinnedDrop,
   onPinnedDragEnd
 }: ConversationHistorySidebarPanelProps) {
+  const historyListRef = useRef<HTMLUListElement | null>(null);
+  const [historyViewportHeight, setHistoryViewportHeight] = useState(0);
+  const [historyScrollTop, setHistoryScrollTop] = useState(0);
+
+  useEffect(() => {
+    const container = historyListRef.current;
+    if (!container) {
+      setHistoryViewportHeight(0);
+      return;
+    }
+
+    const updateHeight = () => {
+      setHistoryViewportHeight(Math.max(0, Math.floor(container.clientHeight)));
+    };
+
+    updateHeight();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const resizeObserver = new ResizeObserver(() => {
+        updateHeight();
+      });
+      resizeObserver.observe(container);
+      return () => {
+        resizeObserver.disconnect();
+      };
+    }
+
+    window.addEventListener('resize', updateHeight);
+    return () => {
+      window.removeEventListener('resize', updateHeight);
+    };
+  }, [historyItems.length]);
+
+  const onHistoryScroll = useCallback((event: ReactUIEvent<HTMLUListElement>) => {
+    setHistoryScrollTop(event.currentTarget.scrollTop);
+  }, []);
+
+  const virtualizedWindow = useMemo(() => {
+    const shouldVirtualize =
+      historyItems.length >= historyVirtualMinCount &&
+      historyViewportHeight > 0 &&
+      !editingConversationId &&
+      !renamingConversationId;
+    if (!shouldVirtualize) {
+      return {
+        isVirtualized: false,
+        visibleItems: historyItems,
+        topSpacerHeight: 0,
+        bottomSpacerHeight: 0
+      };
+    }
+
+    const startIndex = Math.max(
+      0,
+      Math.floor(historyScrollTop / historyVirtualItemHeight) - historyVirtualOverscan
+    );
+    const endIndex = Math.min(
+      historyItems.length,
+      Math.ceil((historyScrollTop + historyViewportHeight) / historyVirtualItemHeight) + historyVirtualOverscan
+    );
+
+    return {
+      isVirtualized: true,
+      visibleItems: historyItems.slice(startIndex, endIndex),
+      topSpacerHeight: startIndex * historyVirtualItemHeight,
+      bottomSpacerHeight: Math.max(0, (historyItems.length - endIndex) * historyVirtualItemHeight)
+    };
+  }, [
+    editingConversationId,
+    historyItems,
+    historyScrollTop,
+    historyViewportHeight,
+    renamingConversationId
+  ]);
+
+  useEffect(() => {
+    const container = historyListRef.current;
+    if (!container) {
+      return;
+    }
+
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    if (historyScrollTop > maxScrollTop) {
+      setHistoryScrollTop(maxScrollTop);
+      container.scrollTop = maxScrollTop;
+    }
+  }, [historyItems.length, historyScrollTop]);
+
   return (
     <section className="chat-sidebar-section chat-sidebar-history-only">
       <div className="chat-history-wrap">
         {historyItems.length > 0 ? (
-          <ul className="chat-history-list">
+          <ul
+            className={`chat-history-list${virtualizedWindow.isVirtualized ? ' virtualized' : ''}`}
+            ref={historyListRef}
+            onScroll={onHistoryScroll}
+          >
+            {virtualizedWindow.topSpacerHeight > 0 ? (
+              <li
+                className="chat-history-spacer"
+                style={{ height: virtualizedWindow.topSpacerHeight }}
+                aria-hidden="true"
+              />
+            ) : null}
             <ConversationHistoryList
-              historyItems={historyItems}
+              historyItems={virtualizedWindow.visibleItems}
               activeConversationId={activeConversationId}
               menuConversationId={historyContextMenu?.id ?? null}
               editingConversationId={editingConversationId}
@@ -894,6 +971,13 @@ const ConversationHistorySidebarPanel = memo(function ConversationHistorySidebar
               onPinnedDrop={onPinnedDrop}
               onPinnedDragEnd={onPinnedDragEnd}
             />
+            {virtualizedWindow.bottomSpacerHeight > 0 ? (
+              <li
+                className="chat-history-spacer"
+                style={{ height: virtualizedWindow.bottomSpacerHeight }}
+                aria-hidden="true"
+              />
+            ) : null}
           </ul>
         ) : null}
         {historyContextMenu ? (
@@ -907,8 +991,10 @@ const ConversationHistorySidebarPanel = memo(function ConversationHistorySidebar
             {historyContextMenuActions.map((action, index) => (
               <div key={action}>
                 {action === 'delete' ? <div className="chat-history-menu-divider" aria-hidden="true" /> : null}
-                <button
+                <Button
                   className={`chat-history-menu-item${action === 'delete' ? ' danger' : ''}${historyContextMenuActiveIndex === index ? ' active' : ''}`}
+                  variant={action === 'delete' ? 'danger' : 'ghost'}
+                  size="sm"
                   onMouseEnter={() => onSetHistoryContextMenuActiveIndex(index)}
                   onClick={() => onExecuteHistoryContextAction(action)}
                   ref={(element) => {
@@ -929,7 +1015,7 @@ const ConversationHistorySidebarPanel = memo(function ConversationHistorySidebar
                   <span className="chat-history-menu-shortcut" aria-hidden="true">
                     {getHistoryContextMenuActionShortcut(action)}
                   </span>
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -945,8 +1031,10 @@ interface ConversationMessageViewportProps {
   error: string;
   authRequired: boolean;
   modelCount: number;
-  messages: MessageRecord[];
+  visibleMessages: MessageRecord[];
+  hiddenMessageCount: number;
   currentUsername: string | null;
+  onLoadEarlierMessages: () => void;
   onCopyMessage: (content: string) => void;
   onQuoteMessage: (content: string) => void;
   onApplyConversationSuggestion: (action: ConversationActionMetadata, suggestion: string) => void;
@@ -963,8 +1051,10 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
   error,
   authRequired,
   modelCount,
-  messages,
+  visibleMessages,
+  hiddenMessageCount,
   currentUsername,
+  onLoadEarlierMessages,
   onCopyMessage,
   onQuoteMessage,
   onApplyConversationSuggestion,
@@ -974,6 +1064,61 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
   resolveConversationActionHref,
   resolveMessageAttachmentNames
 }: ConversationMessageViewportProps) {
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
+  const prependAnchorRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+    hiddenMessageCount: number;
+  } | null>(null);
+  const previousLastMessageIdRef = useRef<string | null>(null);
+
+  const handleLoadEarlierMessages = useCallback(() => {
+    const container = messageScrollRef.current;
+    if (container) {
+      prependAnchorRef.current = {
+        scrollHeight: container.scrollHeight,
+        scrollTop: container.scrollTop,
+        hiddenMessageCount
+      };
+    }
+    onLoadEarlierMessages();
+  }, [hiddenMessageCount, onLoadEarlierMessages]);
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    const container = messageScrollRef.current;
+    if (!anchor || !container) {
+      return;
+    }
+
+    if (hiddenMessageCount < anchor.hiddenMessageCount) {
+      const deltaHeight = container.scrollHeight - anchor.scrollHeight;
+      container.scrollTop = anchor.scrollTop + Math.max(0, deltaHeight);
+    }
+
+    prependAnchorRef.current = null;
+  }, [hiddenMessageCount, visibleMessages.length]);
+
+  useEffect(() => {
+    const container = messageScrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    const nextLastMessageId = visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1]?.id ?? null : null;
+    const previousLastMessageId = previousLastMessageIdRef.current;
+    const hasNewTailMessage = Boolean(nextLastMessageId && nextLastMessageId !== previousLastMessageId);
+
+    if (hasNewTailMessage) {
+      const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      if (distanceToBottom <= 120 || previousLastMessageId === null) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    previousLastMessageIdRef.current = nextLastMessageId;
+  }, [visibleMessages]);
+
   return (
     <section className="chat-message-stage">
       {loading ? (
@@ -993,9 +1138,9 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
           description={t('Sign in to access chat history, settings, attachments, and real conversation actions.')}
           extra={
             <div className="chat-auth-state-actions">
-              <Link to="/auth/login" className="entry-cta">
+              <ButtonLink to="/auth/login" variant="secondary" size="sm">
                 {t('Login')}
-              </Link>
+              </ButtonLink>
             </div>
           }
         />
@@ -1010,8 +1155,8 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
       ) : null}
 
       {!loading && !error && !authRequired && modelCount > 0 ? (
-        <div className="chat-message-scroll">
-          {messages.length === 0 ? (
+        <div className="chat-message-scroll" ref={messageScrollRef}>
+          {visibleMessages.length === 0 ? (
             <div className="chat-empty-center">
               <h2>{t('How can I help you today?')}</h2>
               <small className="muted">
@@ -1019,8 +1164,22 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
               </small>
             </div>
           ) : (
-            <ul className="chat-message-list">
-              {messages.map((message) => {
+            <>
+              {hiddenMessageCount > 0 ? (
+                <div className="chat-message-load-earlier-wrap">
+                  <Button
+                    className="chat-message-load-earlier-btn"
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={handleLoadEarlierMessages}
+                  >
+                    {t('Load earlier messages ({count})', { count: hiddenMessageCount })}
+                  </Button>
+                </div>
+              ) : null}
+              <ul className="chat-message-list">
+                {visibleMessages.map((message) => {
                 const actionMetadata = message.metadata?.conversation_action ?? null;
                 const actionHref = actionMetadata ? resolveConversationActionHref(actionMetadata) : null;
                 const attachmentNames = resolveMessageAttachmentNames(message);
@@ -1035,7 +1194,10 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                       <span>{message.sender === 'user' ? currentUsername || t('you') : t('Vistral')}</span>
                       <small>{new Date(message.created_at).toLocaleTimeString()}</small>
                     </div>
-                    <div className="chat-message-bubble">
+                    <MessageBubble
+                      sender={message.sender}
+                      className="chat-message-bubble"
+                    >
                       <div className="chat-message-content">
                         {(contentParagraphs.length > 0 ? contentParagraphs : [message.content]).map((paragraph, index) => (
                           <p key={`${message.id}-p-${index}`} className="chat-message-paragraph">
@@ -1085,57 +1247,66 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                               <small className="muted">{t('Suggestions')}</small>
                               <div className="chat-message-action-tags">
                                 {actionMetadata.suggestions.map((suggestion) => (
-                                  <button
+                                  <Button
                                     key={`${message.id}-suggestion-${suggestion}`}
                                     type="button"
                                     className="chat-message-action-tag chat-message-action-tag-button muted"
+                                    variant="secondary"
+                                    size="sm"
                                     onClick={() => onApplyConversationSuggestion(actionMetadata, suggestion)}
                                   >
                                     {suggestion}
-                                  </button>
+                                  </Button>
                                 ))}
                               </div>
                             </div>
                           ) : null}
                           {actionHref ? (
                             <div className="row gap wrap">
-                              <Link className="small-btn chat-action-btn" to={actionHref}>
+                              <ButtonLink className="chat-action-btn" variant="secondary" size="sm" to={actionHref}>
                                 {t('Open Result')}
-                              </Link>
+                              </ButtonLink>
                             </div>
                           ) : null}
                         </div>
                       ) : null}
                       <div className="chat-message-actions row gap wrap">
-                        <button
-                          className="small-btn chat-action-btn"
+                        <Button
+                          className="chat-action-btn"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => onCopyMessage(message.content)}
                           type="button"
                         >
                           {t('Copy')}
-                        </button>
-                        <button
-                          className="small-btn chat-action-btn"
+                        </Button>
+                        <Button
+                          className="chat-action-btn"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => onQuoteMessage(message.content)}
                           type="button"
                         >
                           {t('Reuse')}
-                        </button>
+                        </Button>
                         {message.sender === 'assistant' ? (
-                          <button
-                            className="small-btn chat-action-btn"
+                          <Button
+                            className="chat-action-btn"
+                            variant="secondary"
+                            size="sm"
                             onClick={() => onQuoteMessage(`Analyze further: ${message.content}`)}
                             type="button"
                           >
                             {t('Quote')}
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
-                    </div>
+                    </MessageBubble>
                   </li>
                 );
-              })}
-            </ul>
+                })}
+              </ul>
+            </>
           )}
         </div>
       ) : null}
@@ -1196,6 +1367,63 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
   onSelectedAttachmentDrop,
   onSelectedAttachmentDragEnd
 }: ConversationDraftAttachmentPanelProps) {
+  const shouldVirtualizeAttachmentTray = attachments.length > attachmentTrayVirtualizationThreshold;
+
+  const renderAttachmentTrayItem = (item: FileAttachment) => {
+    const isSelected = selectedAttachmentIdSet.has(item.id);
+
+    return (
+      <div className={`chat-simple-attachment-item${isSelected ? ' selected' : ''}`}>
+        {item.status === 'ready' ? (
+          <Button
+            className="chat-simple-attachment-open"
+            variant="ghost"
+            size="sm"
+            onClick={() => onOpenAttachment(item.id)}
+            disabled={uploading || sending}
+            title={item.filename}
+            type="button"
+          >
+            {item.filename}
+          </Button>
+        ) : (
+          <span className="chat-simple-attachment-name" title={item.filename}>
+            {item.filename}
+          </span>
+        )}
+        <StatusBadge status={item.status} />
+        {isSelected || item.status === 'ready' ? (
+          <Button
+            type="button"
+            className={`chat-simple-attachment-item-action${isSelected ? ' active' : ''}`}
+            variant="secondary"
+            size="sm"
+            onClick={() =>
+              isSelected
+                ? onExcludeAttachmentFromCurrentMessage(item)
+                : onIncludeAttachmentInCurrentMessage(item)
+            }
+            disabled={uploading || sending || (!isSelected && item.status !== 'ready')}
+          >
+            {isSelected ? t('Exclude') : t('Include')}
+          </Button>
+        ) : null}
+        <Button
+          className="chat-simple-attachment-delete"
+          variant="secondary"
+          size="icon"
+          onClick={() => onRemoveAttachment(item.id)}
+          disabled={uploading || sending}
+          title={t('Delete')}
+          aria-label={t('Delete')}
+          type="button"
+        >
+          ×
+        </Button>
+      </div>
+    );
+  };
+
   if (selectedAttachments.length === 0 && !attachmentListExpanded) {
     return null;
   }
@@ -1228,38 +1456,37 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
                   onDrop={(event) => onSelectedAttachmentDrop(event, attachment.id)}
                   onDragEnd={onSelectedAttachmentDragEnd}
                 >
-                  {attachment.status === 'ready' ? (
-                    <button
-                      type="button"
-                      className="chat-simple-selected-chip-main"
-                      onClick={() => onOpenAttachment(attachment.id)}
-                      disabled={sending}
-                      title={attachment.filename}
-                    >
-                      <span className="chat-simple-selected-chip-handle" aria-hidden="true">
-                        ≡
-                      </span>
-                      <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
-                    </button>
-                  ) : (
-                    <span className="chat-simple-selected-chip-main" title={attachment.filename}>
-                      <span className="chat-simple-selected-chip-handle" aria-hidden="true">
-                        ≡
-                      </span>
-                      <span className="chat-simple-selected-chip-name">{attachment.filename}</span>
-                    </span>
-                  )}
-                  <StatusBadge status={attachment.status} />
-                  <button
-                    type="button"
-                    className="chat-simple-selected-chip-remove"
-                    onClick={() => onExcludeAttachmentFromCurrentMessage(attachment)}
+                  <AttachmentChip
+                    className="chat-simple-selected-chip"
+                    label={attachment.filename}
+                    title={attachment.filename}
+                    onOpen={
+                      attachment.status === 'ready'
+                        ? () => onOpenAttachment(attachment.id)
+                        : undefined
+                    }
                     disabled={sending}
-                    title={t('Exclude')}
-                    aria-label={t('Exclude')}
-                  >
-                    ×
-                  </button>
+                    leading={
+                      <span className="chat-simple-selected-chip-handle" aria-hidden="true">
+                        ≡
+                      </span>
+                    }
+                    status={<StatusBadge status={attachment.status} />}
+                    trailing={
+                      <Button
+                        type="button"
+                        className="chat-simple-selected-chip-remove"
+                        variant="secondary"
+                        size="icon"
+                        onClick={() => onExcludeAttachmentFromCurrentMessage(attachment)}
+                        disabled={sending}
+                        title={t('Exclude')}
+                        aria-label={t('Exclude')}
+                      >
+                        ×
+                      </Button>
+                    }
+                  />
                 </li>
               );
             })}
@@ -1277,30 +1504,36 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
         <div className="chat-simple-attachment-tray">
           <div className="chat-simple-attachment-toolbar">
             <div className="chat-simple-attachment-toolbar-actions">
-              <button
+              <Button
                 type="button"
-                className="small-btn chat-simple-attachment-action-btn"
+                className="chat-simple-attachment-action-btn"
+                variant="secondary"
+                size="sm"
                 onClick={onOpenUploadFileDialog}
                 disabled={uploading || sending}
               >
                 {uploading ? t('Working...') : t('Upload photos and files')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="small-btn chat-simple-attachment-action-btn"
+                className="chat-simple-attachment-action-btn"
+                variant="secondary"
+                size="sm"
                 onClick={onIncludeAllReadyAttachments}
                 disabled={uploading || sending || readyAttachmentCount === 0}
               >
                 {t('Use all ready files')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="small-btn chat-simple-attachment-action-btn"
+                className="chat-simple-attachment-action-btn"
+                variant="secondary"
+                size="sm"
                 onClick={onClearCurrentAttachmentContext}
                 disabled={uploading || sending || selectedAttachmentCount === 0}
               >
                 {t('Clear current context')}
-              </button>
+              </Button>
             </div>
             <small className="muted chat-simple-attachment-toolbar-summary">
               {t('Attachments:')} {attachments.length} · {t('{count} selected', { count: selectedAttachmentCount })} ·{' '}
@@ -1312,59 +1545,25 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
               limit: UPLOAD_SOFT_LIMIT_LABEL
             })}
           </small>
-          {attachments.length > 0 ? (
+          {attachments.length > 0 ? shouldVirtualizeAttachmentTray ? (
+            <VirtualList
+              items={attachments}
+              itemHeight={attachmentTrayVirtualRowHeight}
+              height={attachmentTrayVirtualViewportHeight}
+              itemKey={(item) => item.id}
+              className="chat-simple-attachment-list-viewport"
+              listClassName="chat-simple-attachment-list virtualized"
+              rowClassName="chat-simple-attachment-row"
+              ariaLabel={t('Attachment tray')}
+              renderItem={(item) => renderAttachmentTrayItem(item)}
+            />
+          ) : (
             <ul className="chat-simple-attachment-list">
-              {attachments.map((item) => {
-                const isSelected = selectedAttachmentIdSet.has(item.id);
-
-                return (
-                  <li
-                    key={item.id}
-                    className={`chat-simple-attachment-item${isSelected ? ' selected' : ''}`}
-                  >
-                    {item.status === 'ready' ? (
-                      <button
-                        className="chat-simple-attachment-open"
-                        onClick={() => onOpenAttachment(item.id)}
-                        disabled={uploading || sending}
-                        title={item.filename}
-                        type="button"
-                      >
-                        {item.filename}
-                      </button>
-                    ) : (
-                      <span className="chat-simple-attachment-name" title={item.filename}>
-                        {item.filename}
-                      </span>
-                    )}
-                    <StatusBadge status={item.status} />
-                    {isSelected || item.status === 'ready' ? (
-                      <button
-                        type="button"
-                        className={`small-btn chat-simple-attachment-item-action${isSelected ? ' active' : ''}`}
-                        onClick={() =>
-                          isSelected
-                            ? onExcludeAttachmentFromCurrentMessage(item)
-                            : onIncludeAttachmentInCurrentMessage(item)
-                        }
-                        disabled={uploading || sending || (!isSelected && item.status !== 'ready')}
-                      >
-                        {isSelected ? t('Exclude') : t('Include')}
-                      </button>
-                    ) : null}
-                    <button
-                      className="chat-simple-attachment-delete"
-                      onClick={() => onRemoveAttachment(item.id)}
-                      disabled={uploading || sending}
-                      title={t('Delete')}
-                      aria-label={t('Delete')}
-                      type="button"
-                    >
-                      ×
-                    </button>
-                  </li>
-                );
-              })}
+              {attachments.map((item) => (
+                <li key={item.id} className="chat-simple-attachment-list-item">
+                  {renderAttachmentTrayItem(item)}
+                </li>
+              ))}
             </ul>
           ) : (
             <small className="muted chat-simple-selected-empty">
@@ -1385,6 +1584,7 @@ export default function ConversationPage() {
   const [selectedModelId, setSelectedModelId] = useState('');
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
+  const [visibleMessageCount, setVisibleMessageCount] = useState(messageRenderBatchSize);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [history, setHistory] = useState<LocalChatHistoryItem[]>(() => readHistoryFromStorage());
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<string[]>(() =>
@@ -1393,7 +1593,7 @@ export default function ConversationPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
     readSidebarCollapsedFromStorage()
   );
-  const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() => detectCompactViewport());
+  const isCompactViewport = useCompactViewport(960);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [pinnedHistoryOrder, setPinnedHistoryOrder] = useState<string[]>(() =>
     readPinnedHistoryOrderFromStorage()
@@ -1550,18 +1750,6 @@ export default function ConversationPage() {
   }, [pinnedHistoryOrder]);
 
   useEffect(() => {
-    const syncViewport = () => {
-      setIsCompactViewport(detectCompactViewport());
-    };
-
-    syncViewport();
-    window.addEventListener('resize', syncViewport);
-    return () => {
-      window.removeEventListener('resize', syncViewport);
-    };
-  }, []);
-
-  useEffect(() => {
     if (!isCompactViewport) {
       setMobileSidebarOpen(false);
     }
@@ -1585,6 +1773,21 @@ export default function ConversationPage() {
       return arraysEqual(previous, next) ? previous : next;
     });
   }, [history]);
+
+  useEffect(() => {
+    setVisibleMessageCount(messageRenderBatchSize);
+  }, [conversation?.id]);
+
+  useEffect(() => {
+    setVisibleMessageCount((previous) => {
+      if (messages.length <= 0) {
+        return messageRenderBatchSize;
+      }
+
+      const normalizedPrevious = previous > 0 ? previous : messageRenderBatchSize;
+      return Math.min(messages.length, normalizedPrevious);
+    });
+  }, [messages.length]);
 
   useEffect(
     () => () => {
@@ -1661,6 +1864,32 @@ export default function ConversationPage() {
 
     return summary;
   }, [attachments]);
+
+  const visibleMessages = useMemo(() => {
+    if (messages.length <= visibleMessageCount) {
+      return messages;
+    }
+
+    return messages.slice(-visibleMessageCount);
+  }, [messages, visibleMessageCount]);
+
+  const hiddenMessageCount = useMemo(
+    () => Math.max(0, messages.length - visibleMessages.length),
+    [messages.length, visibleMessages.length]
+  );
+
+  const loadEarlierMessages = useCallback(() => {
+    if (messages.length <= visibleMessageCount) {
+      return;
+    }
+
+    startTransition(() => {
+      setVisibleMessageCount((previous) => {
+        const normalizedPrevious = Math.max(messageRenderBatchSize, previous);
+        return Math.min(messages.length, normalizedPrevious + messageRenderBatchSize);
+      });
+    });
+  }, [messages.length, visibleMessageCount]);
 
   useBackgroundPolling(
     () => {
@@ -2591,17 +2820,6 @@ export default function ConversationPage() {
     setDragOverSelectedAttachmentId(null);
   }, []);
 
-  const onTextareaKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      if (canSend) {
-        send().catch(() => {
-          // handled by local state
-        });
-      }
-    }
-  };
-
   const copyMessage = useCallback(async (content: string) => {
     const copied = await copyToClipboard(content);
     setNotice(
@@ -2662,7 +2880,6 @@ export default function ConversationPage() {
     [t]
   );
 
-  const messageCount = messages.length;
   const hasActiveConversation = Boolean(conversation);
   const canSend =
     !sending &&
@@ -2676,9 +2893,6 @@ export default function ConversationPage() {
     (title: string) => (title === 'New chat' ? t('New chat') : title),
     [t]
   );
-  const conversationInfo = conversation
-    ? renderConversationTitle(conversation.title)
-    : t('not started');
   const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
   const pageClassName = [
     'chat-workspace-page',
@@ -2720,9 +2934,10 @@ export default function ConversationPage() {
   return (
     <section className={pageClassName}>
       {isCompactViewport ? (
-        <button
+        <Button
           type="button"
           className={`chat-sidebar-scrim${mobileSidebarOpen ? ' visible' : ''}`}
+          unstyled
           onClick={closeMobileSidebar}
           aria-label={t('Close sidebar')}
         />
@@ -2736,35 +2951,20 @@ export default function ConversationPage() {
                 <span className="chat-sidebar-brand-mark" aria-hidden="true">
                   V
                 </span>
-                <div className="stack tight">
-                  <strong>{t('Vistral Chat')}</strong>
-                  <small className="muted">{t('Conversation Workspace')}</small>
-                </div>
+                <strong>{t('Vistral Chat')}</strong>
               </div>
-              <div className="chat-sidebar-brand-actions">
-                <button
-                  type="button"
-                  className="chat-sidebar-toggle-inline"
-                  onClick={startNewConversation}
-                  disabled={sending || authRequired}
-                  aria-label={t('+ New chat')}
-                  title={t('+ New chat')}
-                >
-                  +
-                </button>
-                <Link to="/workspace/console" className="chat-sidebar-console-chip">
-                  {t('Console')}
-                </Link>
-                <button
-                  type="button"
-                  className="chat-sidebar-toggle-inline"
-                  onClick={toggleSidebar}
-                  aria-label={sidebarToggleLabel}
-                  title={sidebarToggleLabel}
-                >
-                  {sidebarToggleToken}
-                </button>
-              </div>
+              <Button
+                type="button"
+                className="chat-sidebar-new-chat-btn"
+                variant="secondary"
+                size="icon"
+                onClick={startNewConversation}
+                disabled={sending || authRequired}
+                aria-label={t('+ New chat')}
+                title={t('+ New chat')}
+              >
+                +
+              </Button>
             </div>
           </div>
 
@@ -2833,7 +3033,9 @@ export default function ConversationPage() {
                   </div>
                 </div>
                 <div className="chat-user-actions">
-                  <Link to="/auth/login">{t('Login')}</Link>
+                  <ButtonLink to="/auth/login" variant="ghost" size="sm" className="chat-guest-login-link">
+                    {t('Login')}
+                  </ButtonLink>
                 </div>
               </div>
             )}
@@ -2841,28 +3043,18 @@ export default function ConversationPage() {
         </div>
 
         <div className="chat-sidebar-collapsed-rail">
-          <button
-            type="button"
-            className="chat-sidebar-rail-btn chat-sidebar-rail-control"
-            onClick={toggleSidebar}
-            aria-label={t('Expand sidebar')}
-            title={t('Expand sidebar')}
-          >
-            &gt;
-          </button>
-          <button
+          <Button
             type="button"
             className="chat-sidebar-rail-btn"
+            variant="secondary"
+            size="icon"
             onClick={startNewConversation}
             disabled={authRequired}
             aria-label={t('+ New chat')}
             title={t('+ New chat')}
           >
             +
-          </button>
-          <Link className="chat-sidebar-rail-link" to="/workspace/console" aria-label={t('Console')} title={t('Console')}>
-            C
-          </Link>
+          </Button>
           <div className="chat-sidebar-rail-footer">
             {currentUser ? (
               <SessionMenu
@@ -2877,9 +3069,16 @@ export default function ConversationPage() {
                 }}
               />
             ) : (
-              <div className="chat-sidebar-rail-avatar" title={t('guest')}>
+              <ButtonLink
+                className="chat-sidebar-rail-link chat-sidebar-rail-avatar-link"
+                to="/auth/login"
+                variant="ghost"
+                size="icon"
+                aria-label={t('Login')}
+                title={t('Login')}
+              >
                 {getInitials()}
-              </div>
+              </ButtonLink>
             )}
           </div>
         </div>
@@ -2889,18 +3088,20 @@ export default function ConversationPage() {
         <header className="chat-main-header">
           <div className="chat-main-header-row">
             <div className="chat-main-header-leading">
-              <button
+              <Button
                 type="button"
                 className="chat-sidebar-toggle"
+                variant="secondary"
+                size="icon"
                 onClick={toggleSidebar}
                 aria-label={sidebarToggleLabel}
                 title={sidebarToggleLabel}
               >
                 {sidebarToggleToken}
-              </button>
+              </Button>
               <label className="chat-model-select">
                 <span>{t('Model')}</span>
-                <select
+                <Select
                   value={selectedModelId}
                   onChange={(event) => setSelectedModelId(event.target.value)}
                   disabled={sending || hasActiveConversation}
@@ -2910,17 +3111,11 @@ export default function ConversationPage() {
                       {model.name} ({model.status})
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             </div>
             <div className="chat-main-header-meta">
-              <div className="chat-mode-chip">{t('Mode:')} {llmModeText}</div>
-              <small className="chat-main-header-summary muted">
-                {t('Conversation {conversationInfo} · messages {messageCount}', {
-                  conversationInfo,
-                  messageCount
-                })}
-              </small>
+              <Badge tone="neutral" className="chat-mode-badge">{t('Mode:')} {llmModeText}</Badge>
               {currentUser && isCompactViewport ? (
                 <SessionMenu
                   currentUser={currentUser}
@@ -2931,11 +3126,13 @@ export default function ConversationPage() {
                   }}
                 />
               ) : null}
-              {currentUser ? null : (
+              {!currentUser && isCompactViewport ? (
                 <div className="chat-header-auth-links">
-                  <Link to="/auth/login">{t('Login')}</Link>
+                  <ButtonLink to="/auth/login" variant="ghost" size="sm" className="chat-header-login-link">
+                    {t('Login')}
+                  </ButtonLink>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         </header>
@@ -2946,8 +3143,10 @@ export default function ConversationPage() {
           error={error}
           authRequired={authRequired}
           modelCount={models.length}
-          messages={messages}
+          visibleMessages={visibleMessages}
+          hiddenMessageCount={hiddenMessageCount}
           currentUsername={currentUser?.username ?? null}
+          onLoadEarlierMessages={loadEarlierMessages}
           onCopyMessage={requestCopyMessage}
           onQuoteMessage={quoteMessage}
           onApplyConversationSuggestion={applyConversationSuggestion}
@@ -2994,57 +3193,64 @@ export default function ConversationPage() {
               onSelectedAttachmentDrop={onSelectedAttachmentDrop}
               onSelectedAttachmentDragEnd={onSelectedAttachmentDragEnd}
             />
-            <div className="chat-simple-composer-row">
-              <button
-                type="button"
-                className={`chat-attachment-plus-btn chat-simple-plus-btn${
-                  attachmentListExpanded || selectedAttachments.length > 0 ? ' active' : ''
-                }`}
-                onClick={toggleAttachmentTray}
-                disabled={sending || loading || authRequired}
-                aria-label={attachmentListExpanded ? t('Hide') : t('Attachment options')}
-                title={attachmentListExpanded ? t('Hide') : t('Attachment options')}
-                aria-expanded={attachmentListExpanded}
-              >
-                <span className="chat-simple-plus-icon" aria-hidden="true">
-                  +
-                </span>
-              </button>
-              <textarea
+            <ChatInput
+              className="chat-simple-composer"
+              leading={
+                <Button
+                  type="button"
+                  className={`chat-attachment-plus-btn chat-simple-plus-btn${
+                    attachmentListExpanded || selectedAttachments.length > 0 ? ' active' : ''
+                  }`}
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleAttachmentTray}
+                  disabled={sending || loading || authRequired}
+                  aria-label={attachmentListExpanded ? t('Hide') : t('Attachment options')}
+                  title={attachmentListExpanded ? t('Hide') : t('Attachment options')}
+                  aria-expanded={attachmentListExpanded}
+                  >
+                    <span className="chat-simple-plus-icon" aria-hidden="true">
+                      +
+                    </span>
+                </Button>
+              }
+              trailing={
+                <Button
+                  className={`chat-simple-send-btn${canSend ? ' active' : ''}`}
+                  variant={canSend ? 'primary' : 'secondary'}
+                  size="icon"
+                  onClick={send}
+                  disabled={!canSend}
+                  aria-label={hasActiveConversation ? t('Send') : t('Start')}
+                  title={hasActiveConversation ? t('Send') : t('Start')}
+                  >
+                    <span className="chat-simple-send-icon" aria-hidden="true">
+                      ↑
+                    </span>
+                </Button>
+              }
+              meta={
+                <>
+                  {notice ? <small className="muted">{notice}</small> : null}
+                  <HiddenFileInput
+                    ref={uploadFileInputRef}
+                    multiple
+                    onChange={onUploadFileInputChange}
+                    disabled={uploading || sending || authRequired}
+                  />
+                </>
+              }
+            >
+              <Textarea
                 className="chat-simple-input"
                 ref={composerTextareaRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                onKeyDown={onTextareaKeyDown}
                 rows={1}
                 placeholder={t('Message Vistral...')}
                 disabled={sending || loading || authRequired || models.length === 0}
               />
-              <button
-                className={`chat-simple-send-btn${canSend ? ' active' : ''}`}
-                onClick={send}
-                disabled={!canSend}
-                aria-label={hasActiveConversation ? t('Send') : t('Start')}
-                title={hasActiveConversation ? t('Send') : t('Start')}
-              >
-                <span className="chat-simple-send-icon" aria-hidden="true">
-                  ↑
-                </span>
-              </button>
-              <input
-                ref={uploadFileInputRef}
-                type="file"
-                multiple
-                className="chat-hidden-file-input"
-                onChange={onUploadFileInputChange}
-                disabled={uploading || sending || authRequired}
-              />
-            </div>
-            {notice ? (
-              <div className="chat-simple-meta">
-                <small className="muted">{notice}</small>
-              </div>
-            ) : null}
+            </ChatInput>
           </section>
           )}
         </footer>

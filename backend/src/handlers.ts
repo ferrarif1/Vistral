@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
@@ -23,6 +24,9 @@ import {
   modelVersions,
   persistLlmConfigs,
   trainingJobs,
+  trainingWorkerAuthTokensByWorkerId,
+  trainingWorkerBootstrapSessions,
+  trainingWorkerNodes,
   trainingMetrics,
   userPasswordHashes,
   users
@@ -40,6 +44,11 @@ import type {
   ChangePasswordInput,
   ConversationActionMetadata,
   ConversationRecord,
+  ClaimTrainingWorkerBootstrapSessionInput,
+  ClaimTrainingWorkerBootstrapSessionResult,
+  CreateTrainingWorkerInput,
+  CreateTrainingWorkerBootstrapSessionInput,
+  GetTrainingWorkerBootstrapSessionStatusInput,
   CreateUserInput,
   CreateDatasetInput,
   CreateModelDraftInput,
@@ -68,6 +77,13 @@ import type {
   RuntimeConnectivityRecord,
   RuntimeMetricsRetentionSummary,
   RunInferenceInput,
+  TrainingSchedulerDecision,
+  TrainingWorkerBootstrapSessionRecord,
+  TrainingWorkerDeploymentMode,
+  TrainingWorkerHeartbeatInput,
+  TrainingWorkerNodeRecord,
+  TrainingWorkerNodeView,
+  TrainingWorkerProfile,
   SendMessageInput,
   StartConversationInput,
   SubmitApprovalInput,
@@ -77,6 +93,7 @@ import type {
   TrainingJobRecord,
   TrainingArtifactSummary,
   TrainingMetricRecord,
+  UpdateTrainingWorkerInput,
   UpdateUserStatusInput,
   UpsertAnnotationInput,
   VerificationCheckRecord,
@@ -169,6 +186,8 @@ const resolveMaxIdSeedFromState = (): number => {
     annotationReviews,
     datasetVersions,
     trainingJobs,
+    trainingWorkerNodes,
+    trainingWorkerBootstrapSessions,
     trainingMetrics,
     modelVersions,
     inferenceRuns,
@@ -3352,6 +3371,37 @@ interface DatasetTrainingSummary {
 const trainingRuntimeByJobId = new Map<string, TrainingRuntimeState>();
 const trainingLogLinesByJobId = new Map<string, string[]>();
 const trainingArtifactAttachmentByJobId = new Map<string, string>();
+const trainingWorkerDispatchAbortByJobId = new Map<string, AbortController>();
+type TrainingWorkerDispatchHealth = {
+  recent_failures: number;
+  consecutive_failures: number;
+  last_failure_at: number | null;
+  last_success_at: number | null;
+};
+const trainingWorkerDispatchHealthById = new Map<string, TrainingWorkerDispatchHealth>();
+type TrainingWorkerDatasetPackageRecord = {
+  id: string;
+  file_path: string;
+  created_at: string;
+  expires_at: string;
+  authorized_worker_id: string | null;
+  total_files: number;
+  total_bytes: number;
+};
+const trainingWorkerDatasetPackageById = new Map<
+  string,
+  TrainingWorkerDatasetPackageRecord
+>();
+const trainingWorkerBootstrapTtlMs = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_BOOTSTRAP_TTL_MS ?? '1800000', 10);
+  if (!Number.isFinite(parsed) || parsed < 60000) {
+    return 1800000;
+  }
+  return Math.min(parsed, 24 * 60 * 60 * 1000);
+})();
+const trainingWorkerRecommendedImage = (
+  process.env.TRAINING_WORKER_DOCKER_IMAGE ?? 'vistral-training-worker:local'
+).trim();
 const trainingMetricsMaxPointsPerJob = (() => {
   const parsed = Number.parseInt(process.env.TRAINING_METRICS_MAX_POINTS_PER_JOB ?? '180', 10);
   if (!Number.isFinite(parsed) || parsed < 8) {
@@ -3366,6 +3416,873 @@ const trainingMetricsMaxTotalRows = (() => {
   }
   return Math.min(parsed, 200000);
 })();
+const trainingWorkerHeartbeatTtlMs = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_HEARTBEAT_TTL_MS ?? '45000', 10);
+  if (!Number.isFinite(parsed) || parsed < 5000) {
+    return 45000;
+  }
+  return Math.min(parsed, 10 * 60 * 1000);
+})();
+const trainingWorkerDispatchTimeoutMs = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_DISPATCH_TIMEOUT_MS ?? '1800000', 10);
+  if (!Number.isFinite(parsed) || parsed < 5000) {
+    return 1800000;
+  }
+  return Math.min(parsed, 2 * 60 * 60 * 1000);
+})();
+const trainingWorkerDispatchFallbackLocal = (() => {
+  const raw = (process.env.TRAINING_WORKER_DISPATCH_FALLBACK_LOCAL ?? '1').trim().toLowerCase();
+  return !(raw === '0' || raw === 'false' || raw === 'no' || raw === 'off');
+})();
+const trainingWorkerDispatchMaxAttempts = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_DISPATCH_MAX_ATTEMPTS ?? '4', 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 4;
+  }
+  return Math.min(parsed, 20);
+})();
+const trainingWorkerDispatchRetryBaseMs = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_DISPATCH_RETRY_BASE_MS ?? '350', 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 350;
+  }
+  return Math.min(parsed, 10000);
+})();
+const trainingWorkerFailurePenaltyWindowMs = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_FAILURE_PENALTY_WINDOW_MS ?? '900000', 10);
+  if (!Number.isFinite(parsed) || parsed < 10000) {
+    return 900000;
+  }
+  return Math.min(parsed, 12 * 60 * 60 * 1000);
+})();
+const trainingWorkerFailureCooldownMs = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_FAILURE_COOLDOWN_MS ?? '120000', 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 120000;
+  }
+  return Math.min(parsed, 2 * 60 * 60 * 1000);
+})();
+const trainingWorkerFailurePenaltyStep = (() => {
+  const parsed = Number.parseFloat(process.env.TRAINING_WORKER_FAILURE_PENALTY_STEP ?? '0.18');
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0.18;
+  }
+  return Math.min(parsed, 2);
+})();
+const trainingWorkerFailurePenaltyCap = (() => {
+  const parsed = Number.parseFloat(process.env.TRAINING_WORKER_FAILURE_PENALTY_CAP ?? '1.2');
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 1.2;
+  }
+  return Math.min(parsed, 5);
+})();
+const trainingWorkerDispatchBaseUrl = (process.env.TRAINING_WORKER_DISPATCH_BASE_URL ?? '').trim().replace(/\/+$/, '');
+const trainingWorkerPackageStorageRoot = path.resolve(
+  process.cwd(),
+  (process.env.TRAINING_WORKER_PACKAGE_STORAGE_ROOT ?? '.data/worker-dispatch-packages').trim()
+);
+const trainingWorkerPackageTtlMs = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_PACKAGE_TTL_MS ?? '3600000', 10);
+  if (!Number.isFinite(parsed) || parsed < 60000) {
+    return 3600000;
+  }
+  return Math.min(parsed, 24 * 60 * 60 * 1000);
+})();
+const trainingWorkerInlinePackageMaxFiles = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_INLINE_PACKAGE_MAX_FILES ?? '800', 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 800;
+  }
+  return Math.min(parsed, 5000);
+})();
+const trainingWorkerInlinePackageMaxBytes = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_INLINE_PACKAGE_MAX_BYTES ?? `${40 * 1024 * 1024}`, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 40 * 1024 * 1024;
+  }
+  return Math.min(parsed, 256 * 1024 * 1024);
+})();
+const trainingWorkerReferencePackageMaxFiles = (() => {
+  const parsed = Number.parseInt(process.env.TRAINING_WORKER_REFERENCE_PACKAGE_MAX_FILES ?? '8000', 10);
+  if (!Number.isFinite(parsed) || parsed < 20) {
+    return 8000;
+  }
+  return Math.min(parsed, 60000);
+})();
+const trainingWorkerReferencePackageMaxBytes = (() => {
+  const parsed = Number.parseInt(
+    process.env.TRAINING_WORKER_REFERENCE_PACKAGE_MAX_BYTES ?? `${512 * 1024 * 1024}`,
+    10
+  );
+  if (!Number.isFinite(parsed) || parsed < 10 * 1024 * 1024) {
+    return 512 * 1024 * 1024;
+  }
+  return Math.min(parsed, 2 * 1024 * 1024 * 1024);
+})();
+const activeTrainingStatusesForWorkerLoad: TrainingJobRecord['status'][] = [
+  'queued',
+  'preparing',
+  'running',
+  'evaluating'
+];
+
+const normalizeWorkerStatus = (value: unknown): TrainingWorkerNodeRecord['status'] => {
+  if (value === 'online' || value === 'draining') {
+    return value;
+  }
+  return 'offline';
+};
+
+const normalizeWorkerEndpoint = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const endpoint = value.trim();
+  return endpoint.length > 0 ? endpoint : null;
+};
+
+const normalizeWorkerMetadata = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [String(key), String(item)]));
+};
+
+const normalizeWorkerCapabilities = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim());
+};
+
+const normalizeWorkerConcurrency = (value: unknown): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.min(64, Math.max(1, Math.round(parsed)));
+};
+
+const normalizeWorkerDeploymentMode = (
+  value: unknown
+): TrainingWorkerDeploymentMode => (value === 'script' ? 'script' : 'docker');
+
+const normalizeWorkerProfile = (value: unknown): TrainingWorkerProfile => {
+  if (value === 'paddleocr' || value === 'doctr' || value === 'mixed') {
+    return value;
+  }
+  return 'yolo';
+};
+
+const normalizeControlPlaneBaseUrl = (value: unknown): string => {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('Control plane base URL is required.');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new Error('Control plane base URL must be a full http(s) URL.');
+  }
+  if (!(parsed.protocol === 'http:' || parsed.protocol === 'https:')) {
+    throw new Error('Control plane base URL must use http or https.');
+  }
+  return parsed.toString().replace(/\/+$/, '');
+};
+
+const normalizeWorkerBindPort = (value: unknown): number => {
+  if (value === null || value === undefined || value === '') {
+    return 9090;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error('Worker bind port must be a valid number.');
+  }
+  const rounded = Math.round(parsed);
+  if (rounded < 1 || rounded > 65535) {
+    throw new Error('Worker bind port must be between 1 and 65535.');
+  }
+  return rounded;
+};
+
+const normalizeWorkerPublicHostInput = (
+  hostValue: unknown,
+  bindPortValue: unknown
+): { workerPublicHost: string | null; workerBindPort: number } => {
+  let workerBindPort = normalizeWorkerBindPort(bindPortValue);
+  if (typeof hostValue !== 'string' || !hostValue.trim()) {
+    return {
+      workerPublicHost: null,
+      workerBindPort
+    };
+  }
+
+  const rawValue = hostValue.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue) ? rawValue : `http://${rawValue}`);
+  } catch {
+    throw new Error('Worker public host must be a hostname, IP, or URL reachable by the control plane.');
+  }
+
+  if (!parsed.hostname) {
+    throw new Error('Worker public host must include a hostname or IP.');
+  }
+  if (!bindPortValue && parsed.port) {
+    workerBindPort = normalizeWorkerBindPort(parsed.port);
+  }
+
+  return {
+    workerPublicHost: parsed.hostname,
+    workerBindPort
+  };
+};
+
+const formatWorkerUrlHost = (value: string): string =>
+  value.includes(':') && !value.startsWith('[') ? `[${value}]` : value;
+
+const buildWorkerEndpointHint = (workerPublicHost: string | null, workerBindPort: number): string | null =>
+  workerPublicHost ? `http://${formatWorkerUrlHost(workerPublicHost)}:${workerBindPort}` : null;
+
+const buildWorkerSetupUrlHint = (workerPublicHost: string | null, workerBindPort: number): string => {
+  const endpoint = buildWorkerEndpointHint(workerPublicHost, workerBindPort);
+  return endpoint ? `${endpoint}/setup` : `http://<worker-host>:${workerBindPort}/setup`;
+};
+
+const toWorkerNameSlug = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'worker';
+
+const buildWorkerProfileCapabilities = (profile: TrainingWorkerProfile): string[] => {
+  if (profile === 'paddleocr') {
+    return ['framework:paddleocr', 'task:ocr'];
+  }
+  if (profile === 'doctr') {
+    return ['framework:doctr', 'task:ocr'];
+  }
+  if (profile === 'mixed') {
+    return [
+      'framework:yolo',
+      'framework:paddleocr',
+      'framework:doctr',
+      'task:detection',
+      'task:ocr'
+    ];
+  }
+  return ['framework:yolo', 'task:detection'];
+};
+
+const buildWorkerRuntimeProfile = (profile: TrainingWorkerProfile): string =>
+  profile === 'mixed' ? 'all' : profile;
+
+const buildBootstrapTokenPreview = (token: string): string => {
+  if (token.length <= 14) {
+    return token;
+  }
+  return `${token.slice(0, 8)}...${token.slice(-4)}`;
+};
+
+const buildWorkerAuthTokenPreview = (token: string): string => {
+  if (token.length <= 16) {
+    return token;
+  }
+  return `${token.slice(0, 9)}...${token.slice(-4)}`;
+};
+
+const issueDedicatedTrainingWorkerToken = (workerId: string): string => {
+  const existing = trainingWorkerAuthTokensByWorkerId[workerId];
+  if (typeof existing === 'string' && existing.trim()) {
+    return existing.trim();
+  }
+  const issued = `vtwa_${randomBytes(16).toString('hex')}`;
+  trainingWorkerAuthTokensByWorkerId[workerId] = issued;
+  markAppStateDirty();
+  return issued;
+};
+
+const revokeDedicatedTrainingWorkerToken = (workerId: string): void => {
+  if (!trainingWorkerAuthTokensByWorkerId[workerId]) {
+    return;
+  }
+  delete trainingWorkerAuthTokensByWorkerId[workerId];
+  markAppStateDirty();
+};
+
+const getDedicatedTrainingWorkerToken = (workerId: string | null | undefined): string | null => {
+  if (!workerId) {
+    return null;
+  }
+  const token = trainingWorkerAuthTokensByWorkerId[workerId];
+  return typeof token === 'string' && token.trim() ? token.trim() : null;
+};
+
+const getTrainingWorkerSharedFallbackToken = (): string | null => {
+  const token = (process.env.TRAINING_WORKER_SHARED_TOKEN ?? '').trim();
+  return token || null;
+};
+
+const resolveTrainingWorkerAuthMode = (workerId: string | null | undefined): 'shared' | 'dedicated' =>
+  getDedicatedTrainingWorkerToken(workerId) ? 'dedicated' : 'shared';
+
+const resolveTrainingWorkerAuthTokenPreview = (workerId: string | null | undefined): string | null => {
+  const dedicated = getDedicatedTrainingWorkerToken(workerId);
+  return dedicated ? buildWorkerAuthTokenPreview(dedicated) : null;
+};
+
+const applyTrainingWorkerAuthPresentation = (worker: TrainingWorkerNodeRecord): TrainingWorkerNodeRecord => ({
+  ...worker,
+  auth_mode: resolveTrainingWorkerAuthMode(worker.id),
+  auth_token_preview: resolveTrainingWorkerAuthTokenPreview(worker.id)
+});
+
+const applyBootstrapSessionAuthPresentation = (
+  session: TrainingWorkerBootstrapSessionRecord
+): TrainingWorkerBootstrapSessionRecord => ({
+  ...session,
+  issued_auth_mode: resolveTrainingWorkerAuthMode(session.worker_id),
+  issued_auth_token_preview: resolveTrainingWorkerAuthTokenPreview(session.worker_id)
+});
+
+const resolveOutboundTrainingWorkerToken = (workerId: string): string => {
+  const dedicated = getDedicatedTrainingWorkerToken(workerId);
+  if (dedicated) {
+    return dedicated;
+  }
+  const shared = getTrainingWorkerSharedFallbackToken();
+  if (shared) {
+    return shared;
+  }
+  throw new Error('Training worker token is not configured.');
+};
+
+const assertTrainingWorkerHeartbeatToken = (params: {
+  token: string | null | undefined;
+  worker_id?: string | null;
+  endpoint?: string | null;
+}): void => {
+  const incomingToken = params.token?.trim();
+  if (!incomingToken) {
+    throw new Error('Training worker token is invalid.');
+  }
+
+  const workerId = params.worker_id?.trim() ?? '';
+  const endpoint = params.endpoint?.trim() ?? '';
+  const dedicatedById = getDedicatedTrainingWorkerToken(workerId);
+  if (dedicatedById && incomingToken === dedicatedById) {
+    return;
+  }
+
+  if (endpoint) {
+    const matchedByEndpoint = trainingWorkerNodes.find((worker) => worker.endpoint === endpoint) ?? null;
+    const dedicatedByEndpoint = getDedicatedTrainingWorkerToken(matchedByEndpoint?.id ?? null);
+    if (dedicatedByEndpoint && incomingToken === dedicatedByEndpoint) {
+      return;
+    }
+  }
+
+  const shared = getTrainingWorkerSharedFallbackToken();
+  if (shared && incomingToken === shared) {
+    return;
+  }
+
+  if (!shared && !dedicatedById) {
+    throw new Error('Training worker token is not configured.');
+  }
+  throw new Error('Training worker token is invalid.');
+};
+
+const shellQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`;
+
+const buildTrainingWorkerCommands = (session: TrainingWorkerBootstrapSessionRecord) => {
+  const envAssignments = [
+    `WORKER_BOOTSTRAP_TOKEN=${shellQuote(session.pairing_token)}`,
+    `WORKER_BOOTSTRAP_CONTROL_PLANE_URL=${shellQuote(session.control_plane_base_url)}`,
+    `WORKER_RUNTIME_PROFILE=${shellQuote(session.worker_runtime_profile)}`,
+    `WORKER_MAX_CONCURRENCY=${shellQuote(String(session.max_concurrency))}`,
+    `WORKER_BIND_PORT=${shellQuote(String(session.worker_bind_port))}`
+  ];
+  if (session.worker_public_host) {
+    envAssignments.push(`WORKER_PUBLIC_HOST=${shellQuote(session.worker_public_host)}`);
+  }
+  if (session.worker_endpoint_hint) {
+    envAssignments.push(`WORKER_ENDPOINT=${shellQuote(session.worker_endpoint_hint)}`);
+  }
+  const envPrefix = envAssignments.join(' ');
+  const containerName = `vistral-${toWorkerNameSlug(session.worker_name)}`;
+  const dockerEnvArgs = envAssignments.map((entry) => `-e ${entry}`).join(' ');
+  return {
+    dockerCommand: `docker run -d --name ${containerName} -p ${session.worker_bind_port}:${session.worker_bind_port} ${dockerEnvArgs} -e WORKER_RUN_ROOT=/worker-state/runs -v vistral-worker-state:/worker-state ${trainingWorkerRecommendedImage}`,
+    scriptCommand: `${envPrefix} bash training-worker/scripts/bootstrap-worker.sh && ${envPrefix} bash training-worker/scripts/run-worker-node.sh`
+  };
+};
+
+const buildTrainingWorkerBootstrapBundle = (
+  session: TrainingWorkerBootstrapSessionRecord
+): { filename: string; content: string } => {
+  const mode = session.deployment_mode;
+  const safeName = toWorkerNameSlug(session.worker_name);
+  const fileName = `worker-bootstrap-${safeName || session.id}.sh`;
+  const content = `#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="\${1:-${mode}}"
+PAIRING_TOKEN=${shellQuote(session.pairing_token)}
+CONTROL_PLANE_BASE_URL=${shellQuote(session.control_plane_base_url)}
+RECOMMENDED_SETUP_URL=${shellQuote(session.setup_url_hint)}
+DOCKER_COMMAND=${shellQuote(session.docker_command)}
+SCRIPT_COMMAND=${shellQuote(session.script_command)}
+
+echo "[vistral-worker-bootstrap] worker=${session.worker_name}"
+echo "[vistral-worker-bootstrap] profile=${session.worker_profile}"
+echo "[vistral-worker-bootstrap] control_plane=\${CONTROL_PLANE_BASE_URL}"
+echo "[vistral-worker-bootstrap] setup_url=\${RECOMMENDED_SETUP_URL}"
+echo "[vistral-worker-bootstrap] mode=\${MODE}"
+
+if [[ "\${MODE}" == "--print" ]]; then
+  echo
+  echo "Pairing token: \${PAIRING_TOKEN}"
+  echo "Docker command:"
+  echo "\${DOCKER_COMMAND}"
+  echo
+  echo "Script command:"
+  echo "\${SCRIPT_COMMAND}"
+  exit 0
+fi
+
+if [[ "\${MODE}" == "docker" ]]; then
+  echo "[vistral-worker-bootstrap] starting docker worker..."
+  bash -lc "\${DOCKER_COMMAND}"
+elif [[ "\${MODE}" == "script" ]]; then
+  echo "[vistral-worker-bootstrap] running repo script flow..."
+  bash -lc "\${SCRIPT_COMMAND}"
+else
+  echo "[vistral-worker-bootstrap] unsupported mode: \${MODE}" >&2
+  echo "Use: $0 [docker|script|--print]" >&2
+  exit 2
+fi
+
+echo
+echo "[vistral-worker-bootstrap] next:"
+echo "  1. Open \${RECOMMENDED_SETUP_URL}"
+echo "  2. Click '使用配对码' (or paste pairing token manually if needed)"
+echo "  3. Confirm worker endpoint / capabilities / run root"
+echo "  4. Validate and save in the worker local setup UI"
+`;
+  return {
+    filename: fileName,
+    content
+  };
+};
+
+const parseBootstrapExpiry = (session: TrainingWorkerBootstrapSessionRecord): number =>
+  Date.parse(session.expires_at);
+
+const cleanupExpiredBootstrapSessions = (nowMs = Date.now()): void => {
+  let changed = false;
+  trainingWorkerBootstrapSessions.forEach((session) => {
+    if (session.status === 'online') {
+      return;
+    }
+    const expiresAtMs = parseBootstrapExpiry(session);
+    if (Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs) {
+      if (session.status !== 'expired') {
+        session.status = 'expired';
+        revokeDedicatedTrainingWorkerToken(session.worker_id);
+        changed = true;
+      }
+    }
+  });
+  if (changed) {
+    markAppStateDirty();
+  }
+};
+
+const findBootstrapSessionByPairingToken = (
+  pairingToken: string
+): TrainingWorkerBootstrapSessionRecord | null =>
+  trainingWorkerBootstrapSessions.find((session) => session.pairing_token === pairingToken) ?? null;
+
+const findBootstrapSessionById = (
+  sessionId: string
+): TrainingWorkerBootstrapSessionRecord | null =>
+  trainingWorkerBootstrapSessions.find((session) => session.id === sessionId) ?? null;
+
+const buildWorkerCallbackHealthUrls = (endpoint: string): string[] => {
+  const normalized = endpoint.trim().replace(/\/+$/, '');
+  if (!normalized) {
+    return [];
+  }
+  return [`${normalized}/api/worker/healthz`, `${normalized}/healthz`];
+};
+
+const probeWorkerCallback = async (
+  endpoint: string
+): Promise<{ ok: boolean; message: string }> => {
+  const urls = buildWorkerCallbackHealthUrls(endpoint);
+  if (urls.length === 0) {
+    return {
+      ok: false,
+      message: 'Worker endpoint is missing; callback validation cannot run.'
+    };
+  }
+
+  let lastFailureMessage = 'Worker callback validation failed.';
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(4000)
+      });
+      if (response.ok) {
+        return {
+          ok: true,
+          message: `Control plane reached worker health endpoint: ${url}`
+        };
+      }
+      lastFailureMessage = `Worker callback returned HTTP ${response.status} at ${url}`;
+    } catch (error) {
+      lastFailureMessage = `Worker callback probe failed at ${url}: ${(error as Error).message}`;
+    }
+  }
+
+  return {
+    ok: false,
+    message: lastFailureMessage
+  };
+};
+
+const normalizeWorkerReportedLoad = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, Math.min(1, parsed));
+};
+
+const getWorkerInFlightJobs = (workerId: string): number =>
+  trainingJobs.filter(
+    (job) =>
+      job.scheduled_worker_id === workerId &&
+      activeTrainingStatusesForWorkerLoad.includes(job.status)
+  ).length;
+
+const resolveWorkerEffectiveStatus = (
+  worker: TrainingWorkerNodeRecord,
+  nowMs = Date.now()
+): TrainingWorkerNodeRecord['status'] => {
+  if (worker.status !== 'online') {
+    return worker.status;
+  }
+  if (!worker.endpoint) {
+    return worker.status;
+  }
+  if (!worker.last_heartbeat_at) {
+    return 'offline';
+  }
+  const heartbeatMs = Date.parse(worker.last_heartbeat_at);
+  if (!Number.isFinite(heartbeatMs)) {
+    return 'offline';
+  }
+  return nowMs - heartbeatMs > trainingWorkerHeartbeatTtlMs ? 'offline' : 'online';
+};
+
+const computeWorkerLoadScore = (worker: TrainingWorkerNodeRecord): number => {
+  const inFlight = getWorkerInFlightJobs(worker.id);
+  const inFlightRatio = inFlight / Math.max(1, worker.max_concurrency);
+  const reported = worker.last_reported_load ?? 0;
+  return Number(Math.max(inFlightRatio, reported).toFixed(4));
+};
+
+const cleanupStaleWorkerDispatchHealth = (nowMs = Date.now()): void => {
+  for (const [workerId, health] of trainingWorkerDispatchHealthById.entries()) {
+    const lastSignalAt = Math.max(health.last_failure_at ?? 0, health.last_success_at ?? 0);
+    if (lastSignalAt <= 0 || nowMs - lastSignalAt <= trainingWorkerFailurePenaltyWindowMs) {
+      continue;
+    }
+    trainingWorkerDispatchHealthById.delete(workerId);
+  }
+};
+
+const getWorkerDispatchHealth = (workerId: string, nowMs = Date.now()): TrainingWorkerDispatchHealth => {
+  const existing = trainingWorkerDispatchHealthById.get(workerId);
+  if (!existing) {
+    return {
+      recent_failures: 0,
+      consecutive_failures: 0,
+      last_failure_at: null,
+      last_success_at: null
+    };
+  }
+
+  if (
+    existing.last_failure_at &&
+    nowMs - existing.last_failure_at > trainingWorkerFailurePenaltyWindowMs &&
+    existing.recent_failures > 0
+  ) {
+    const reset: TrainingWorkerDispatchHealth = {
+      ...existing,
+      recent_failures: 0
+    };
+    trainingWorkerDispatchHealthById.set(workerId, reset);
+    return reset;
+  }
+
+  return existing;
+};
+
+const markWorkerDispatchFailure = (workerId: string, failureAtMs = Date.now()): void => {
+  const previous = getWorkerDispatchHealth(workerId, failureAtMs);
+  const next: TrainingWorkerDispatchHealth = {
+    recent_failures: Math.min(64, previous.recent_failures + 1),
+    consecutive_failures: Math.min(64, previous.consecutive_failures + 1),
+    last_failure_at: failureAtMs,
+    last_success_at: previous.last_success_at
+  };
+  trainingWorkerDispatchHealthById.set(workerId, next);
+};
+
+const markWorkerDispatchSuccess = (workerId: string, successAtMs = Date.now()): void => {
+  const previous = getWorkerDispatchHealth(workerId, successAtMs);
+  const next: TrainingWorkerDispatchHealth = {
+    recent_failures: 0,
+    consecutive_failures: 0,
+    last_failure_at: previous.last_failure_at,
+    last_success_at: successAtMs
+  };
+  trainingWorkerDispatchHealthById.set(workerId, next);
+};
+
+const computeWorkerCapabilityAffinity = (
+  worker: TrainingWorkerNodeRecord,
+  taskType: TaskType,
+  framework: ModelFramework
+): number => {
+  const capabilities = worker.capabilities;
+  if (capabilities.length === 0) {
+    return 0;
+  }
+  let bonus = 0;
+  if (capabilities.includes(`framework:${framework}`)) {
+    bonus += 0.04;
+  }
+  if (capabilities.includes(`task:${taskType}`)) {
+    bonus += 0.04;
+  }
+  return bonus;
+};
+
+const computeWorkerHealthPenalty = (workerId: string, nowMs = Date.now()): number => {
+  const health = getWorkerDispatchHealth(workerId, nowMs);
+  if (health.recent_failures <= 0 && health.consecutive_failures <= 0) {
+    return 0;
+  }
+
+  let penalty = Math.min(
+    trainingWorkerFailurePenaltyCap,
+    health.recent_failures * trainingWorkerFailurePenaltyStep +
+      health.consecutive_failures * trainingWorkerFailurePenaltyStep * 0.5
+  );
+
+  if (
+    trainingWorkerFailureCooldownMs > 0 &&
+    health.last_failure_at &&
+    nowMs - health.last_failure_at <= trainingWorkerFailureCooldownMs
+  ) {
+    penalty += 0.5;
+  }
+
+  return Number(Math.min(trainingWorkerFailurePenaltyCap, penalty).toFixed(4));
+};
+
+const workerSupportsJob = (
+  worker: TrainingWorkerNodeRecord,
+  taskType: TaskType,
+  framework: ModelFramework
+): boolean => {
+  const capabilities = worker.capabilities;
+  if (capabilities.length === 0) {
+    return true;
+  }
+  const frameworkTag = `framework:${framework}`;
+  const taskTag = `task:${taskType}`;
+  const hasFramework =
+    capabilities.includes(frameworkTag) ||
+    !capabilities.some((capability) => capability.startsWith('framework:'));
+  const hasTask =
+    capabilities.includes(taskTag) ||
+    !capabilities.some((capability) => capability.startsWith('task:'));
+  return hasFramework && hasTask;
+};
+
+type TrainingWorkerSchedulingCandidate = {
+  worker: TrainingWorkerNodeRecord;
+  score: number;
+  load: number;
+  inFlight: number;
+  capabilityBonus: number;
+  healthPenalty: number;
+};
+
+type TrainingWorkerSchedulingSelection = {
+  execution_target: TrainingJobRecord['execution_target'];
+  worker: TrainingWorkerNodeRecord | null;
+  note: string;
+  decision: TrainingSchedulerDecision;
+};
+
+const buildTrainingSchedulerDecision = (params: {
+  trigger: string;
+  attempt: number;
+  executionTarget: TrainingJobRecord['execution_target'];
+  selected: TrainingWorkerSchedulingCandidate | null;
+  note: string;
+  fallbackReason: string | null;
+  excludedWorkerIds: string[];
+  decidedAt: string;
+}): TrainingSchedulerDecision => ({
+  policy: 'load_aware_v1',
+  trigger: params.trigger,
+  attempt: Math.max(1, params.attempt),
+  execution_target: params.executionTarget,
+  selected_worker_id: params.selected?.worker.id ?? null,
+  selected_worker_score: params.selected?.score ?? null,
+  selected_worker_load_component: params.selected?.load ?? null,
+  selected_worker_health_penalty: params.selected?.healthPenalty ?? null,
+  selected_worker_capability_bonus: params.selected?.capabilityBonus ?? null,
+  selected_worker_in_flight_jobs: params.selected?.inFlight ?? null,
+  selected_worker_max_concurrency: params.selected?.worker.max_concurrency ?? null,
+  excluded_worker_ids: params.excludedWorkerIds,
+  fallback_reason: params.fallbackReason,
+  note: params.note,
+  decided_at: params.decidedAt
+});
+
+const trainingSchedulerDecisionHistoryLimit = 24;
+
+const recordTrainingSchedulerDecision = (
+  job: TrainingJobRecord,
+  decision: TrainingSchedulerDecision
+): void => {
+  job.scheduler_decision = decision;
+  const nextHistory = [...(job.scheduler_decision_history ?? [])];
+  const previous = nextHistory.at(-1);
+  const duplicateLatest =
+    previous &&
+    previous.decided_at === decision.decided_at &&
+    previous.trigger === decision.trigger &&
+    previous.attempt === decision.attempt &&
+    previous.note === decision.note;
+  if (!duplicateLatest) {
+    nextHistory.push(decision);
+  } else {
+    nextHistory[nextHistory.length - 1] = decision;
+  }
+  if (nextHistory.length > trainingSchedulerDecisionHistoryLimit) {
+    nextHistory.splice(0, nextHistory.length - trainingSchedulerDecisionHistoryLimit);
+  }
+  job.scheduler_decision_history = nextHistory;
+};
+
+const selectTrainingWorkerForJob = (
+  taskType: TaskType,
+  framework: ModelFramework,
+  options?: {
+    excludedWorkerIds?: ReadonlySet<string>;
+    trigger?: string;
+    attempt?: number;
+    fallbackReason?: string | null;
+  }
+): TrainingWorkerSchedulingSelection => {
+  const nowMs = Date.now();
+  const decidedAt = now();
+  cleanupStaleWorkerDispatchHealth(nowMs);
+  const excludedWorkerIds = options?.excludedWorkerIds;
+  const excludedWorkerIdList = excludedWorkerIds ? Array.from(excludedWorkerIds) : [];
+  const candidates = trainingWorkerNodes
+    .filter((worker) => worker.enabled)
+    .filter((worker) => Boolean(worker.endpoint))
+    .filter((worker) => !(excludedWorkerIds?.has(worker.id) ?? false))
+    .filter((worker) => resolveWorkerEffectiveStatus(worker, nowMs) === 'online')
+    .filter((worker) => workerSupportsJob(worker, taskType, framework))
+    .filter((worker) => getWorkerInFlightJobs(worker.id) < Math.max(1, worker.max_concurrency))
+    .map((worker) => ({
+      worker,
+      load: computeWorkerLoadScore(worker),
+      inFlight: getWorkerInFlightJobs(worker.id),
+      capabilityBonus: computeWorkerCapabilityAffinity(worker, taskType, framework),
+      healthPenalty: computeWorkerHealthPenalty(worker.id, nowMs)
+    }))
+    .map((entry) => ({
+      ...entry,
+      score: Number(Math.max(0, entry.load + entry.healthPenalty - entry.capabilityBonus).toFixed(4))
+    }))
+    .sort((left, right) => {
+      if (left.score !== right.score) {
+        return left.score - right.score;
+      }
+      if (left.inFlight !== right.inFlight) {
+        return left.inFlight - right.inFlight;
+      }
+      return left.worker.id.localeCompare(right.worker.id);
+    });
+
+  const best = candidates[0];
+  if (!best) {
+    const note = 'scheduler_fallback:no_online_worker';
+    return {
+      execution_target: 'control_plane',
+      worker: null,
+      note,
+      decision: buildTrainingSchedulerDecision({
+        trigger: options?.trigger ?? 'schedule',
+        attempt: options?.attempt ?? 1,
+        executionTarget: 'control_plane',
+        selected: null,
+        note,
+        fallbackReason: options?.fallbackReason ?? 'no_online_worker',
+        excludedWorkerIds: excludedWorkerIdList,
+        decidedAt
+      })
+    };
+  }
+
+  const note =
+    `scheduler_worker:${best.worker.id};score=${best.score};load=${best.load};` +
+    `penalty=${best.healthPenalty};capability_bonus=${best.capabilityBonus};` +
+    `in_flight=${best.inFlight};max=${best.worker.max_concurrency}`;
+  return {
+    execution_target: 'worker',
+    worker: best.worker,
+    note,
+    decision: buildTrainingSchedulerDecision({
+      trigger: options?.trigger ?? 'schedule',
+      attempt: options?.attempt ?? 1,
+      executionTarget: 'worker',
+      selected: best,
+      note,
+      fallbackReason: options?.fallbackReason ?? null,
+      excludedWorkerIds: excludedWorkerIdList,
+      decidedAt
+    })
+  };
+};
+
+const resolveDispatchRetryDelayMs = (attemptIndex: number): number => {
+  if (trainingWorkerDispatchRetryBaseMs <= 0) {
+    return 0;
+  }
+  const safeAttempt = Math.max(1, attemptIndex);
+  const computed = trainingWorkerDispatchRetryBaseMs * 2 ** Math.max(0, safeAttempt - 1);
+  return Math.min(computed, 5000);
+};
 
 const findArtifactAttachmentIdByJob = (jobId: string): string | null => {
   const inMemory = trainingArtifactAttachmentByJobId.get(jobId);
@@ -3785,10 +4702,571 @@ const ensureTrainingRuntime = async (job: TrainingJobRecord): Promise<TrainingRu
   return runtime;
 };
 
+type WorkerTrainDispatchResult = {
+  execution_mode: 'simulated' | 'local_command';
+  logPreview: string;
+  logs: string[];
+  metrics: Record<string, number>;
+  metric_series?: Array<{ step: number; metrics: Record<string, number> }>;
+  artifact_payload?: Record<string, unknown>;
+  worker_run_id: string | null;
+};
+
+type WorkerInlineDatasetFile = {
+  relative_path: string;
+  encoding: 'base64';
+  byte_size: number;
+  content_base64: string;
+};
+
+type WorkerInlineDatasetPackage = {
+  format: 'inline_base64_v1';
+  source_root: string;
+  root_relative: string;
+  total_files: number;
+  total_bytes: number;
+  files: WorkerInlineDatasetFile[];
+};
+
+type WorkerReferencedDatasetPackage = {
+  format: 'reference_json_v1';
+  package_id: string;
+  download_url: string;
+  expires_at: string;
+  root_relative: string;
+  total_files: number;
+  total_bytes: number;
+};
+
+type WorkerDatasetPackageForDispatch = WorkerInlineDatasetPackage | WorkerReferencedDatasetPackage;
+
+const compactDispatchReason = (value: unknown, maxLength = 220): string => {
+  const raw =
+    value instanceof Error
+      ? value.message
+      : typeof value === 'string'
+        ? value
+        : value === null || value === undefined
+          ? ''
+          : String(value);
+  const normalized = raw.trim().replace(/\s+/g, ' ');
+  if (!normalized) {
+    return 'unknown';
+  }
+  return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
+};
+
+const collectFilesRecursively = async (rootDir: string): Promise<string[]> => {
+  const result: string[] = [];
+  const stack: string[] = [rootDir];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        result.push(fullPath);
+      }
+    }
+  }
+
+  result.sort((left, right) => left.localeCompare(right));
+  return result;
+};
+
+const collectWorkerPackageFiles = async (
+  materializedDataset: Record<string, unknown> | null
+): Promise<{
+  rootDir: string;
+  rootRelative: string;
+  files: WorkerInlineDatasetFile[];
+  totalBytes: number;
+}> => {
+  if (!materializedDataset || typeof materializedDataset !== 'object') {
+    return { rootDir: '', rootRelative: '', files: [], totalBytes: 0 };
+  }
+
+  const rootDirRaw =
+    typeof materializedDataset.root_dir === 'string' && materializedDataset.root_dir.trim()
+      ? materializedDataset.root_dir.trim()
+      : '';
+  if (!rootDirRaw) {
+    return { rootDir: '', rootRelative: '', files: [], totalBytes: 0 };
+  }
+
+  const rootDir = path.resolve(rootDirRaw);
+  let stat;
+  try {
+    stat = await fs.stat(rootDir);
+  } catch {
+    return { rootDir: '', rootRelative: '', files: [], totalBytes: 0 };
+  }
+  if (!stat.isDirectory()) {
+    return { rootDir: '', rootRelative: '', files: [], totalBytes: 0 };
+  }
+
+  const rootRelative = ['materialized-dataset', path.basename(rootDir)].join('/');
+  const files = await collectFilesRecursively(rootDir);
+  if (files.length === 0) {
+    return { rootDir, rootRelative, files: [], totalBytes: 0 };
+  }
+  if (files.length > trainingWorkerReferencePackageMaxFiles) {
+    throw new Error(
+      `dataset package file-count cap exceeded (${files.length} > ${trainingWorkerReferencePackageMaxFiles})`
+    );
+  }
+
+  let totalBytes = 0;
+  const packageFiles: WorkerInlineDatasetFile[] = [];
+  for (const fullPath of files) {
+    const relPath = path.relative(rootDir, fullPath);
+    const relPosix = relPath.split(path.sep).join('/');
+    const content = await fs.readFile(fullPath);
+    totalBytes += content.byteLength;
+    if (totalBytes > trainingWorkerReferencePackageMaxBytes) {
+      throw new Error(
+        `dataset package byte-size cap exceeded (${totalBytes} > ${trainingWorkerReferencePackageMaxBytes})`
+      );
+    }
+    packageFiles.push({
+      relative_path: relPosix,
+      encoding: 'base64',
+      byte_size: content.byteLength,
+      content_base64: content.toString('base64')
+    });
+  }
+
+  return {
+    rootDir,
+    rootRelative,
+    files: packageFiles,
+    totalBytes
+  };
+};
+
+const cleanupExpiredWorkerDatasetPackages = async (): Promise<void> => {
+  const nowMs = Date.now();
+  const expired = Array.from(trainingWorkerDatasetPackageById.values()).filter(
+    (item) => Date.parse(item.expires_at) <= nowMs
+  );
+  for (const item of expired) {
+    trainingWorkerDatasetPackageById.delete(item.id);
+    try {
+      await fs.unlink(item.file_path);
+    } catch {
+      // ignore stale file cleanup errors
+    }
+  }
+};
+
+const registerReferencedWorkerDatasetPackage = async (params: {
+  authorizedWorkerId: string;
+  rootRelative: string;
+  sourceRoot: string;
+  files: WorkerInlineDatasetFile[];
+  totalBytes: number;
+}): Promise<WorkerReferencedDatasetPackage> => {
+  if (!trainingWorkerDispatchBaseUrl) {
+    throw new Error(
+      'TRAINING_WORKER_DISPATCH_BASE_URL is required for reference dataset package dispatch mode.'
+    );
+  }
+
+  await fs.mkdir(trainingWorkerPackageStorageRoot, { recursive: true });
+  await cleanupExpiredWorkerDatasetPackages();
+
+  const packageId = nextId('twpkg');
+  const createdAt = now();
+  const expiresAt = new Date(Date.now() + trainingWorkerPackageTtlMs).toISOString();
+  const payload: WorkerInlineDatasetPackage = {
+    format: 'inline_base64_v1',
+    source_root: params.sourceRoot,
+    root_relative: params.rootRelative,
+    total_files: params.files.length,
+    total_bytes: params.totalBytes,
+    files: params.files
+  };
+  const filePath = path.join(trainingWorkerPackageStorageRoot, `${packageId}.json`);
+  await fs.writeFile(filePath, JSON.stringify(payload), 'utf8');
+
+  trainingWorkerDatasetPackageById.set(packageId, {
+    id: packageId,
+    file_path: filePath,
+    created_at: createdAt,
+    expires_at: expiresAt,
+    authorized_worker_id: params.authorizedWorkerId.trim() || null,
+    total_files: params.files.length,
+    total_bytes: params.totalBytes
+  });
+
+  return {
+    format: 'reference_json_v1',
+    package_id: packageId,
+    download_url: `${trainingWorkerDispatchBaseUrl}/api/runtime/training-workers/dataset-packages/${encodeURIComponent(packageId)}`,
+    expires_at: expiresAt,
+    root_relative: params.rootRelative,
+    total_files: params.files.length,
+    total_bytes: params.totalBytes
+  };
+};
+
+const releaseReferencedWorkerDatasetPackage = async (packageId: string): Promise<void> => {
+  if (!packageId.trim()) {
+    return;
+  }
+  const record = trainingWorkerDatasetPackageById.get(packageId.trim());
+  if (!record) {
+    return;
+  }
+  trainingWorkerDatasetPackageById.delete(record.id);
+  try {
+    await fs.unlink(record.file_path);
+  } catch {
+    // ignore best-effort cleanup failures
+  }
+};
+
+const releaseWorkerDatasetPackageForDispatch = async (
+  datasetPackage: WorkerDatasetPackageForDispatch | null
+): Promise<void> => {
+  if (!datasetPackage || datasetPackage.format !== 'reference_json_v1') {
+    return;
+  }
+  await releaseReferencedWorkerDatasetPackage(datasetPackage.package_id);
+};
+
+const buildWorkerDatasetPackageForDispatch = async (
+  materializedDataset: Record<string, unknown> | null,
+  authorizedWorkerId: string
+): Promise<WorkerDatasetPackageForDispatch | null> => {
+  const packaged = await collectWorkerPackageFiles(materializedDataset);
+  if (!packaged.rootDir || packaged.files.length === 0) {
+    return null;
+  }
+
+  if (
+    packaged.files.length <= trainingWorkerInlinePackageMaxFiles &&
+    packaged.totalBytes <= trainingWorkerInlinePackageMaxBytes
+  ) {
+    return {
+      format: 'inline_base64_v1',
+      source_root: packaged.rootDir,
+      root_relative: packaged.rootRelative,
+      total_files: packaged.files.length,
+      total_bytes: packaged.totalBytes,
+      files: packaged.files
+    };
+  }
+
+  return registerReferencedWorkerDatasetPackage({
+    authorizedWorkerId,
+    rootRelative: packaged.rootRelative,
+    sourceRoot: packaged.rootDir,
+    files: packaged.files,
+    totalBytes: packaged.totalBytes
+  });
+};
+
+const normalizeWorkerDispatchMetrics = (value: unknown): Record<string, number> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])
+    )
+  );
+};
+
+const parseWorkerTrainDispatchResult = (payload: unknown): WorkerTrainDispatchResult => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Worker response is not a JSON object.');
+  }
+  const record = payload as Record<string, unknown>;
+  const accepted = record.accepted;
+  if (accepted !== true) {
+    throw new Error(compactDispatchReason(record.error ?? record.message ?? 'worker rejected job'));
+  }
+
+  const mode = record.execution_mode === 'local_command' ? 'local_command' : 'simulated';
+  const logs = Array.isArray(record.logs)
+    ? record.logs
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .map((item) => item.trim())
+    : [];
+  const metrics = normalizeWorkerDispatchMetrics(record.metrics);
+  const metricSeries = normalizeMetricSeries(
+    Array.isArray(record.metric_series)
+      ? (record.metric_series as Array<{ step: number; metrics: Record<string, number> }>)
+      : undefined
+  );
+  const artifactPayload =
+    record.artifact_payload && typeof record.artifact_payload === 'object' && !Array.isArray(record.artifact_payload)
+      ? (record.artifact_payload as Record<string, unknown>)
+      : undefined;
+  const workerRunId =
+    typeof record.worker_run_id === 'string' && record.worker_run_id.trim()
+      ? record.worker_run_id.trim()
+      : null;
+  const logPreview =
+    typeof record.log_preview === 'string' && record.log_preview.trim()
+      ? record.log_preview.trim()
+      : logs.at(-1) ?? 'worker execution completed';
+
+  return {
+    execution_mode: mode,
+    logPreview,
+    logs,
+    metrics,
+    metric_series: metricSeries.length > 0 ? metricSeries : undefined,
+    artifact_payload: artifactPayload,
+    worker_run_id: workerRunId
+  };
+};
+
+const dispatchTrainingToWorker = async (params: {
+  worker: TrainingWorkerNodeRecord;
+  job: TrainingJobRecord;
+  runtime: TrainingRuntimeState;
+  summary: DatasetTrainingSummary;
+  materializedDataset: Record<string, unknown> | null;
+  datasetPackage: WorkerDatasetPackageForDispatch | null;
+  abortSignal?: AbortSignal;
+}): Promise<WorkerTrainDispatchResult> => {
+  const workerEndpoint = params.worker.endpoint?.trim();
+  if (!workerEndpoint) {
+    throw new Error('scheduled worker endpoint is empty');
+  }
+
+  const workerToken = resolveOutboundTrainingWorkerToken(params.worker.id);
+
+  const url = `${workerEndpoint.replace(/\/+$/, '')}/api/worker/train`;
+  const payload = {
+    job_id: params.job.id,
+    framework: params.job.framework,
+    task_type: params.job.task_type,
+    dataset_id: params.job.dataset_id,
+    dataset_version_id: params.job.dataset_version_id,
+    base_model: params.job.base_model,
+    config: params.job.config,
+    dataset_summary: params.summary,
+    materialized_dataset: params.materializedDataset,
+    dataset_package: params.datasetPackage,
+    workspace: {
+      workspace_dir: params.runtime.workspace_dir,
+      config_path: params.runtime.config_path,
+      summary_path: params.runtime.summary_path,
+      metrics_path: params.runtime.metrics_path,
+      artifact_path: params.runtime.artifact_path
+    },
+    scheduler: {
+      execution_target: params.job.execution_target,
+      scheduled_worker_id: params.job.scheduled_worker_id,
+      scheduler_note: params.job.scheduler_note,
+      scheduler_decision: params.job.scheduler_decision
+    },
+    dispatched_at: now()
+  };
+
+  const requestController = new AbortController();
+  const timeoutHandle = setTimeout(
+    () => requestController.abort('timeout'),
+    trainingWorkerDispatchTimeoutMs
+  );
+  const externalAbort = () => requestController.abort('cancelled_by_user');
+  if (params.abortSignal) {
+    if (params.abortSignal.aborted) {
+      requestController.abort('cancelled_by_user');
+    } else {
+      params.abortSignal.addEventListener('abort', externalAbort, { once: true });
+    }
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Training-Worker-Token': workerToken
+      },
+      body: JSON.stringify(payload),
+      signal: requestController.signal
+    });
+
+    let responseJson: unknown = null;
+    try {
+      responseJson = await response.json();
+    } catch {
+      throw new Error(`worker returned non-JSON response (status=${response.status})`);
+    }
+
+    if (!response.ok) {
+      const reason =
+        responseJson && typeof responseJson === 'object' && !Array.isArray(responseJson)
+          ? compactDispatchReason(
+              (responseJson as { error?: unknown; message?: unknown }).error ??
+                (responseJson as { message?: unknown }).message ??
+                `worker http status ${response.status}`
+            )
+          : `worker http status ${response.status}`;
+      throw new Error(reason);
+    }
+
+    return parseWorkerTrainDispatchResult(responseJson);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      const reason = String(requestController.signal.reason ?? '');
+      if (reason === 'cancelled_by_user') {
+        throw new TrainingCancelledError('Training run cancelled during worker dispatch.');
+      }
+      throw new Error(`worker dispatch timeout after ${trainingWorkerDispatchTimeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+    if (params.abortSignal) {
+      params.abortSignal.removeEventListener('abort', externalAbort);
+    }
+  }
+};
+
+const requestWorkerTrainingCancel = async (
+  worker: TrainingWorkerNodeRecord,
+  jobId: string
+): Promise<{ acknowledged: boolean; had_running_process: boolean; message: string }> => {
+  const endpoint = worker.endpoint?.trim();
+  if (!endpoint) {
+    return {
+      acknowledged: false,
+      had_running_process: false,
+      message: 'worker endpoint is empty'
+    };
+  }
+
+  let workerToken = '';
+  try {
+    workerToken = resolveOutboundTrainingWorkerToken(worker.id);
+  } catch (error) {
+    return {
+      acknowledged: false,
+      had_running_process: false,
+      message: compactDispatchReason(error)
+    };
+  }
+
+  const url = `${endpoint.replace(/\/+$/, '')}/api/worker/cancel`;
+  const cancelTimeoutMs = Math.min(trainingWorkerDispatchTimeoutMs, 10000);
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort('timeout'), cancelTimeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Training-Worker-Token': workerToken
+      },
+      body: JSON.stringify({ job_id: jobId }),
+      signal: controller.signal
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | { cancelled?: unknown; had_running_process?: unknown; error?: unknown; message?: unknown }
+      | null;
+    if (!response.ok) {
+      return {
+        acknowledged: false,
+        had_running_process: false,
+        message: compactDispatchReason(payload?.error ?? payload?.message ?? `worker cancel http ${response.status}`)
+      };
+    }
+
+    return {
+      acknowledged: payload?.cancelled === true,
+      had_running_process: payload?.had_running_process === true,
+      message: compactDispatchReason(payload?.message ?? 'worker cancel request accepted')
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return {
+        acknowledged: false,
+        had_running_process: false,
+        message: `worker cancel timeout after ${cancelTimeoutMs}ms`
+      };
+    }
+    return {
+      acknowledged: false,
+      had_running_process: false,
+      message: compactDispatchReason(error)
+    };
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+};
+
+const readTrainingWorkerDatasetPackageById = async (
+  packageId: string
+): Promise<TrainingWorkerDatasetPackageRecord> => {
+  await cleanupExpiredWorkerDatasetPackages();
+  const normalizedPackageId = packageId.trim();
+  if (!normalizedPackageId) {
+    throw new Error('Training worker dataset package id is required.');
+  }
+  const record = trainingWorkerDatasetPackageById.get(normalizedPackageId);
+  if (!record) {
+    throw new Error('Training worker dataset package not found or expired.');
+  }
+
+  const expiresAtMs = Date.parse(record.expires_at);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    trainingWorkerDatasetPackageById.delete(record.id);
+    try {
+      await fs.unlink(record.file_path);
+    } catch {
+      // ignore
+    }
+    throw new Error('Training worker dataset package not found or expired.');
+  }
+
+  return record;
+};
+
 const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
   const job = trainingJobs.find((item) => item.id === jobId);
   if (!job) {
     return;
+  }
+
+  if (job.execution_target === 'worker' && job.scheduled_worker_id) {
+    const assignedWorker = trainingWorkerNodes.find((worker) => worker.id === job.scheduled_worker_id);
+    const assignedAvailable =
+      assignedWorker &&
+      assignedWorker.enabled &&
+      Boolean(assignedWorker.endpoint) &&
+      resolveWorkerEffectiveStatus(assignedWorker) === 'online' &&
+      getWorkerInFlightJobs(assignedWorker.id) <= Math.max(1, assignedWorker.max_concurrency) &&
+      workerSupportsJob(assignedWorker, job.task_type, job.framework);
+    if (!assignedAvailable) {
+      const rescheduled = selectTrainingWorkerForJob(job.task_type, job.framework, {
+        trigger: 'pre_run_reschedule',
+        attempt: 1,
+        fallbackReason: 'assigned_worker_unavailable'
+      });
+      job.execution_target = rescheduled.execution_target;
+      job.scheduled_worker_id = rescheduled.worker?.id ?? null;
+      job.scheduler_note = `rescheduled_before_run:${rescheduled.note}`;
+      recordTrainingSchedulerDecision(job, rescheduled.decision);
+      job.updated_at = now();
+      markAppStateDirty();
+    }
   }
 
   const runtime = await ensureTrainingRuntime(job);
@@ -3798,6 +5276,19 @@ const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
   try {
     job.status = 'preparing';
     job.updated_at = now();
+    if (job.execution_target === 'worker' && job.scheduled_worker_id) {
+      await appendTrainingLog(
+        job,
+        runtime,
+        `Scheduler assigned worker ${job.scheduled_worker_id}. ${job.scheduler_note ?? ''}`.trim()
+      );
+    } else {
+      await appendTrainingLog(
+        job,
+        runtime,
+        `Scheduler fallback to control-plane local executor. ${job.scheduler_note ?? ''}`.trim()
+      );
+    }
     await appendTrainingLog(job, runtime, `Preparing local workspace for ${job.framework}.`);
 
     const summary = buildDatasetTrainingSummary(job.dataset_id);
@@ -3829,46 +5320,6 @@ const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
         runtime,
         `Materialized dataset prepared (${String(materializedDataset.format)}): ${JSON.stringify(materializedDataset)}`
       );
-    }
-
-    const trainer = getTrainerByFramework(job.framework);
-    let resolvedExecutionMode: TrainingJobRecord['execution_mode'] = 'unknown';
-    let trainerLogsStreamed = false;
-    const trainAccepted = await trainer.train({
-      trainingJobId: job.id,
-      datasetId: job.dataset_id,
-      taskType: job.task_type,
-      baseModel: job.base_model,
-      config: job.config,
-      workspaceDir: runtime.workspace_dir,
-      configPath: runtime.config_path,
-      summaryPath: runtime.summary_path,
-      metricsPath: runtime.metrics_path,
-      artifactPath: runtime.artifact_path,
-      onExecutionMode: (mode) => {
-        resolvedExecutionMode = mode;
-        job.execution_mode = mode;
-        job.updated_at = now();
-        markAppStateDirty();
-
-        if (mode === 'local_command' && job.status !== 'running') {
-          job.status = 'running';
-          job.updated_at = now();
-          markAppStateDirty();
-          void appendTrainingLog(job, runtime, `Running ${job.framework} local command executor.`);
-        }
-      },
-      onLog: (line) => {
-        trainerLogsStreamed = true;
-        void appendTrainingLog(job, runtime, `trainer> ${line}`);
-      }
-    });
-    job.execution_mode = trainAccepted.execution_mode ?? resolvedExecutionMode;
-    await appendTrainingLog(job, runtime, `Trainer accepted: ${trainAccepted.logPreview}`);
-    if (!trainerLogsStreamed && Array.isArray(trainAccepted.logs) && trainAccepted.logs.length > 0) {
-      for (const line of trainAccepted.logs.slice(-36)) {
-        await appendTrainingLog(job, runtime, `trainer> ${line}`);
-      }
     }
 
     const finalizeMetricsAndArtifact = async (
@@ -3930,6 +5381,223 @@ const executeTrainingLifecycle = async (jobId: string): Promise<void> => {
         `Artifacts saved to ${runtime.artifact_path}. Metrics keys: ${Object.keys(metrics).join(', ')}.`
       );
     };
+
+    let scheduledWorker =
+      job.execution_target === 'worker' && job.scheduled_worker_id
+        ? trainingWorkerNodes.find((worker) => worker.id === job.scheduled_worker_id) ?? null
+        : null;
+    const failedWorkerIds = new Set<string>();
+    let dispatchAttemptCount = 0;
+    while (scheduledWorker?.endpoint) {
+      dispatchAttemptCount += 1;
+      const dispatchAbortController = new AbortController();
+      trainingWorkerDispatchAbortByJobId.set(job.id, dispatchAbortController);
+      let datasetPackage: WorkerDatasetPackageForDispatch | null = null;
+      try {
+        await appendTrainingLog(
+          job,
+          runtime,
+          `Dispatching training execution to worker ${scheduledWorker.id} (${scheduledWorker.endpoint}).`
+        );
+        datasetPackage = await buildWorkerDatasetPackageForDispatch(materializedDataset, scheduledWorker.id);
+        if (datasetPackage) {
+          if (datasetPackage.format === 'inline_base64_v1') {
+            await appendTrainingLog(
+              job,
+              runtime,
+              `Prepared inline dataset package for worker dispatch: files=${datasetPackage.total_files}, bytes=${datasetPackage.total_bytes}.`
+            );
+          } else {
+            await appendTrainingLog(
+              job,
+              runtime,
+              `Prepared referenced dataset package for worker dispatch: package_id=${datasetPackage.package_id}, files=${datasetPackage.total_files}, bytes=${datasetPackage.total_bytes}, expires_at=${datasetPackage.expires_at}.`
+            );
+          }
+        }
+        job.status = 'running';
+        job.updated_at = now();
+        markAppStateDirty();
+
+        const workerResult = await dispatchTrainingToWorker({
+          worker: scheduledWorker,
+          job,
+          runtime,
+          summary,
+          materializedDataset,
+          datasetPackage,
+          abortSignal: dispatchAbortController.signal
+        });
+        markWorkerDispatchSuccess(scheduledWorker.id);
+        job.execution_mode = workerResult.execution_mode;
+        job.updated_at = now();
+        markAppStateDirty();
+        await appendTrainingLog(job, runtime, `Worker accepted: ${workerResult.logPreview}`);
+        if (workerResult.logs.length > 0) {
+          for (const line of workerResult.logs.slice(-48)) {
+            await appendTrainingLog(job, runtime, `worker> ${line}`);
+          }
+        }
+        if (workerResult.artifact_payload) {
+          const enrichedArtifact = {
+            ...workerResult.artifact_payload,
+            worker_id: scheduledWorker.id,
+            worker_endpoint: scheduledWorker.endpoint,
+            worker_run_id: workerResult.worker_run_id,
+            dispatched_via: 'worker_api',
+            received_at: now()
+          };
+          await fs.mkdir(path.dirname(runtime.artifact_path), { recursive: true });
+          await fs.writeFile(runtime.artifact_path, JSON.stringify(enrichedArtifact, null, 2), 'utf8');
+        }
+        job.status = 'evaluating';
+        job.updated_at = now();
+        markAppStateDirty();
+
+        const workerMetrics =
+          Object.keys(workerResult.metrics).length > 0
+            ? workerResult.metrics
+            : buildTrainingMetrics(job, summary);
+        await finalizeMetricsAndArtifact(workerMetrics, epochs, workerResult.metric_series);
+
+        job.status = 'completed';
+        job.updated_at = now();
+        markAppStateDirty();
+        await appendTrainingLog(job, runtime, `Training completed successfully (worker ${scheduledWorker.id}).`);
+        return;
+      } catch (error) {
+        if (error instanceof TrainingCancelledError || getTrainingRuntime(job.id)?.cancelled) {
+          throw new TrainingCancelledError('Training run cancelled during worker dispatch.');
+        }
+        const reason = compactDispatchReason(error);
+        failedWorkerIds.add(scheduledWorker.id);
+        markWorkerDispatchFailure(scheduledWorker.id);
+        await appendTrainingLog(job, runtime, `Worker dispatch failed (${scheduledWorker.id}): ${reason}`);
+
+        const canRetryAnotherWorker = dispatchAttemptCount < trainingWorkerDispatchMaxAttempts;
+        if (canRetryAnotherWorker) {
+          const rescheduled = selectTrainingWorkerForJob(job.task_type, job.framework, {
+            excludedWorkerIds: failedWorkerIds,
+            trigger: 'dispatch_redispatch',
+            attempt: dispatchAttemptCount + 1,
+            fallbackReason: reason
+          });
+          if (rescheduled.execution_target === 'worker' && rescheduled.worker?.endpoint) {
+            const previousWorkerId = scheduledWorker.id;
+            scheduledWorker = rescheduled.worker;
+            const retryDelayMs = resolveDispatchRetryDelayMs(dispatchAttemptCount);
+            job.execution_target = 'worker';
+            job.scheduled_worker_id = scheduledWorker.id;
+            job.scheduler_note =
+              `dispatch_rescheduled:attempt=${dispatchAttemptCount};${previousWorkerId}->${rescheduled.note};reason=${reason}`;
+            recordTrainingSchedulerDecision(job, rescheduled.decision);
+            job.updated_at = now();
+            markAppStateDirty();
+            await appendTrainingLog(
+              job,
+              runtime,
+              `Rescheduled worker dispatch from ${previousWorkerId} to ${scheduledWorker.id} (attempt ${dispatchAttemptCount + 1}/${trainingWorkerDispatchMaxAttempts}).`
+            );
+            if (retryDelayMs > 0) {
+              await appendTrainingLog(
+                job,
+                runtime,
+                `Waiting ${retryDelayMs}ms before worker redispatch attempt ${dispatchAttemptCount + 1}.`
+              );
+              await waitWithCancelCheck(job.id, runId, retryDelayMs);
+            }
+            continue;
+          }
+        }
+
+        scheduledWorker = null;
+        if (!trainingWorkerDispatchFallbackLocal) {
+          throw new Error(
+            `Worker dispatch failed and local fallback is disabled: ${reason}; attempts=${dispatchAttemptCount}; failed_workers=${Array.from(failedWorkerIds).join(',')}`
+          );
+        }
+        job.execution_target = 'control_plane';
+        job.scheduled_worker_id = null;
+        if (dispatchAttemptCount >= trainingWorkerDispatchMaxAttempts) {
+          job.scheduler_note =
+            `dispatch_fallback:max_attempts_exhausted;attempts=${dispatchAttemptCount};reason=${reason}`;
+          recordTrainingSchedulerDecision(job, buildTrainingSchedulerDecision({
+            trigger: 'dispatch_fallback',
+            attempt: dispatchAttemptCount,
+            executionTarget: 'control_plane',
+            selected: null,
+            note: job.scheduler_note,
+            fallbackReason: 'max_attempts_exhausted',
+            excludedWorkerIds: Array.from(failedWorkerIds),
+            decidedAt: now()
+          }));
+          await appendTrainingLog(
+            job,
+            runtime,
+            `Reached worker dispatch max attempts (${trainingWorkerDispatchMaxAttempts}).`
+          );
+        } else {
+          job.scheduler_note =
+            `dispatch_fallback:no_alternative_worker;attempts=${dispatchAttemptCount};reason=${reason}`;
+          recordTrainingSchedulerDecision(job, buildTrainingSchedulerDecision({
+            trigger: 'dispatch_fallback',
+            attempt: dispatchAttemptCount,
+            executionTarget: 'control_plane',
+            selected: null,
+            note: job.scheduler_note,
+            fallbackReason: 'no_alternative_worker',
+            excludedWorkerIds: Array.from(failedWorkerIds),
+            decidedAt: now()
+          }));
+        }
+        job.updated_at = now();
+        markAppStateDirty();
+        await appendTrainingLog(job, runtime, 'No alternative worker available. Fallback to control-plane local execution.');
+      } finally {
+        await releaseWorkerDatasetPackageForDispatch(datasetPackage);
+        trainingWorkerDispatchAbortByJobId.delete(job.id);
+      }
+    }
+
+    const trainer = getTrainerByFramework(job.framework);
+    let resolvedExecutionMode: TrainingJobRecord['execution_mode'] = 'unknown';
+    let trainerLogsStreamed = false;
+    const trainAccepted = await trainer.train({
+      trainingJobId: job.id,
+      datasetId: job.dataset_id,
+      taskType: job.task_type,
+      baseModel: job.base_model,
+      config: job.config,
+      workspaceDir: runtime.workspace_dir,
+      configPath: runtime.config_path,
+      summaryPath: runtime.summary_path,
+      metricsPath: runtime.metrics_path,
+      artifactPath: runtime.artifact_path,
+      onExecutionMode: (mode) => {
+        resolvedExecutionMode = mode;
+        job.execution_mode = mode;
+        job.updated_at = now();
+        markAppStateDirty();
+
+        if (mode === 'local_command' && job.status !== 'running') {
+          job.status = 'running';
+          job.updated_at = now();
+          markAppStateDirty();
+          void appendTrainingLog(job, runtime, `Running ${job.framework} local command executor.`);
+        }
+      },
+      onLog: (line) => {
+        trainerLogsStreamed = true;
+        void appendTrainingLog(job, runtime, `trainer> ${line}`);
+      }
+    });
+    job.execution_mode = trainAccepted.execution_mode ?? resolvedExecutionMode;
+    await appendTrainingLog(job, runtime, `Trainer accepted: ${trainAccepted.logPreview}`);
+    if (!trainerLogsStreamed && Array.isArray(trainAccepted.logs) && trainAccepted.logs.length > 0) {
+      for (const line of trainAccepted.logs.slice(-36)) {
+        await appendTrainingLog(job, runtime, `trainer> ${line}`);
+      }
+    }
 
     if (trainAccepted.execution_mode === 'local_command') {
       assertRuntimeActive(job.id, runId);
@@ -4022,9 +5690,17 @@ export const resumePendingTrainingJobs = (): { resumed_job_ids: string[] } => {
     }
 
     const previousStatus = job.status;
+    const scheduling = selectTrainingWorkerForJob(job.task_type, job.framework, {
+      trigger: 'resume',
+      attempt: 1
+    });
     job.status = 'queued';
+    job.execution_target = scheduling.execution_target;
+    job.scheduled_worker_id = scheduling.worker?.id ?? null;
+    job.scheduler_note = `resume:${scheduling.note}`;
+    recordTrainingSchedulerDecision(job, scheduling.decision);
     job.updated_at = now();
-    job.log_excerpt = `Recovered after API restart from ${previousStatus}. Re-queued local executor.`;
+    job.log_excerpt = `Recovered after API restart from ${previousStatus}. Re-queued with scheduler.`;
     resumedJobIds.push(job.id);
     scheduleTrainingLifecycle(job.id);
   });
@@ -5962,6 +7638,565 @@ const getVisibleTrainingJobsForUser = (user: User): TrainingJobRecord[] =>
     return user.role === 'admin' || dataset.owner_user_id === user.id;
   });
 
+const serializeTrainingWorker = (
+  worker: TrainingWorkerNodeRecord
+): TrainingWorkerNodeView => {
+  const visibleWorker = applyTrainingWorkerAuthPresentation(worker);
+  const nowMs = Date.now();
+  const effectiveStatus = resolveWorkerEffectiveStatus(visibleWorker, nowMs);
+  const inFlightJobs = getWorkerInFlightJobs(visibleWorker.id);
+  const loadScore = computeWorkerLoadScore(visibleWorker);
+  const healthPenalty = computeWorkerHealthPenalty(visibleWorker.id, nowMs);
+  const health = getWorkerDispatchHealth(visibleWorker.id, nowMs);
+  const cooldownActive =
+    trainingWorkerFailureCooldownMs > 0 &&
+    Boolean(health.last_failure_at) &&
+    nowMs - (health.last_failure_at ?? 0) <= trainingWorkerFailureCooldownMs;
+  const schedulerScore = Number(Math.max(0, loadScore + healthPenalty).toFixed(4));
+  return {
+    ...visibleWorker,
+    effective_status: effectiveStatus,
+    heartbeat_stale: visibleWorker.status === 'online' && effectiveStatus !== 'online',
+    in_flight_jobs: inFlightJobs,
+    load_score: loadScore,
+    scheduler_score: schedulerScore,
+    scheduler_load_component: loadScore,
+    scheduler_health_penalty: healthPenalty,
+    scheduler_capability_bonus: 0,
+    dispatch_recent_failures: health.recent_failures,
+    dispatch_consecutive_failures: health.consecutive_failures,
+    dispatch_last_failure_at: health.last_failure_at ? new Date(health.last_failure_at).toISOString() : null,
+    dispatch_last_success_at: health.last_success_at ? new Date(health.last_success_at).toISOString() : null,
+    dispatch_cooldown_active: cooldownActive
+  };
+};
+
+const applyBootstrapCallbackOutcome = (
+  session: TrainingWorkerBootstrapSessionRecord,
+  worker: TrainingWorkerNodeRecord | null,
+  requestedStatus: TrainingWorkerNodeRecord['status'],
+  validation: { ok: boolean; message: string },
+  endpoint: string | null
+): void => {
+  const checkedAt = now();
+  session.claimed_at = session.claimed_at ?? checkedAt;
+  session.last_seen_at = checkedAt;
+  session.callback_checked_at = checkedAt;
+  session.callback_validation_message = validation.message;
+  session.worker_endpoint_hint = endpoint ?? session.worker_endpoint_hint;
+  if (worker) {
+    session.linked_worker_id = worker.id;
+    session.worker_name = worker.name.trim() || session.worker_name;
+  }
+
+  if (!validation.ok) {
+    session.status = 'validation_failed';
+    if (worker) {
+      worker.status = 'offline';
+      worker.updated_at = checkedAt;
+    }
+    markAppStateDirty();
+    return;
+  }
+
+  if (requestedStatus === 'online') {
+    session.status = 'online';
+  } else {
+    session.status = 'awaiting_confirmation';
+    session.callback_validation_message = `Callback reachable, waiting for worker to report online status (current: ${requestedStatus}).`;
+  }
+
+  if (worker) {
+    worker.status = requestedStatus;
+    worker.updated_at = checkedAt;
+  }
+  markAppStateDirty();
+};
+
+const reconcileBootstrapSessionFromHeartbeat = async (
+  worker: TrainingWorkerNodeRecord,
+  requestedStatus: TrainingWorkerNodeRecord['status']
+): Promise<void> => {
+  cleanupExpiredBootstrapSessions();
+  const session = trainingWorkerBootstrapSessions.find(
+    (item) => item.worker_id === worker.id && item.status !== 'expired'
+  );
+  if (!session) {
+    return;
+  }
+
+  const checkedAt = now();
+  session.claimed_at = session.claimed_at ?? checkedAt;
+  session.last_seen_at = checkedAt;
+  session.linked_worker_id = worker.id;
+  session.worker_name = worker.name.trim() || session.worker_name;
+  session.worker_endpoint_hint = worker.endpoint ?? session.worker_endpoint_hint;
+
+  if (!worker.endpoint) {
+    session.status = 'awaiting_confirmation';
+    session.callback_checked_at = checkedAt;
+    session.callback_validation_message = 'Waiting for worker heartbeat to publish a callback endpoint.';
+    worker.status = 'offline';
+    worker.updated_at = checkedAt;
+    markAppStateDirty();
+    return;
+  }
+
+  const validation = await probeWorkerCallback(worker.endpoint);
+  applyBootstrapCallbackOutcome(session, worker, requestedStatus, validation, worker.endpoint);
+};
+
+export async function listTrainingWorkerBootstrapSessionsByAdmin(): Promise<
+  TrainingWorkerBootstrapSessionRecord[]
+> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can list training worker bootstrap sessions.');
+  cleanupExpiredBootstrapSessions();
+  return [...trainingWorkerBootstrapSessions]
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .map((session) => applyBootstrapSessionAuthPresentation(session));
+}
+
+export async function createTrainingWorkerBootstrapSessionByAdmin(
+  input: CreateTrainingWorkerBootstrapSessionInput
+): Promise<TrainingWorkerBootstrapSessionRecord> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can create training worker bootstrap sessions.');
+
+  cleanupExpiredBootstrapSessions();
+  const deploymentMode = normalizeWorkerDeploymentMode(input.deployment_mode);
+  const workerProfile = normalizeWorkerProfile(input.worker_profile);
+  const controlPlaneBaseUrl = normalizeControlPlaneBaseUrl(input.control_plane_base_url);
+  const maxConcurrency = normalizeWorkerConcurrency(input.max_concurrency);
+  const requestedWorkerName =
+    typeof input.worker_name === 'string' && input.worker_name.trim()
+      ? input.worker_name.trim()
+      : `${workerProfile}-worker-${randomBytes(2).toString('hex')}`;
+  const workerNameSlug = toWorkerNameSlug(requestedWorkerName);
+  const workerId = `tw-${workerNameSlug}-${randomBytes(2).toString('hex')}`;
+  const pairingToken = `vtw_${randomBytes(12).toString('hex')}`;
+  const workerRuntimeProfile = buildWorkerRuntimeProfile(workerProfile);
+  const capabilities = buildWorkerProfileCapabilities(workerProfile);
+  const dedicatedToken = issueDedicatedTrainingWorkerToken(workerId);
+
+  const created: TrainingWorkerBootstrapSessionRecord = {
+    id: nextId('twbs'),
+    status: 'bootstrap_created',
+    deployment_mode: deploymentMode,
+    worker_profile: workerProfile,
+    pairing_token: pairingToken,
+    token_preview: buildBootstrapTokenPreview(pairingToken),
+    control_plane_base_url: controlPlaneBaseUrl,
+    worker_id: workerId,
+    worker_name: requestedWorkerName,
+    worker_public_host: null,
+    worker_bind_port: 9090,
+    worker_endpoint_hint: null,
+    worker_runtime_profile: workerRuntimeProfile,
+    capabilities,
+    max_concurrency: maxConcurrency,
+    issued_auth_mode: 'dedicated',
+    issued_auth_token_preview: buildWorkerAuthTokenPreview(dedicatedToken),
+    docker_command: '',
+    script_command: '',
+    setup_url_hint: 'http://<worker-host>:9090/setup',
+    claimed_at: null,
+    last_seen_at: null,
+    callback_checked_at: null,
+    callback_validation_message: null,
+    linked_worker_id: null,
+    metadata: {
+      recommended_image: trainingWorkerRecommendedImage
+    },
+    created_at: now(),
+    expires_at: new Date(Date.now() + trainingWorkerBootstrapTtlMs).toISOString()
+  };
+
+  const { workerPublicHost, workerBindPort } = normalizeWorkerPublicHostInput(
+    (input as { worker_public_host?: unknown }).worker_public_host,
+    (input as { worker_bind_port?: unknown }).worker_bind_port
+  );
+  created.worker_public_host = workerPublicHost;
+  created.worker_bind_port = workerBindPort;
+  created.worker_endpoint_hint = buildWorkerEndpointHint(workerPublicHost, workerBindPort);
+  created.setup_url_hint = buildWorkerSetupUrlHint(workerPublicHost, workerBindPort);
+
+  const commands = buildTrainingWorkerCommands(created);
+  created.docker_command = commands.dockerCommand;
+  created.script_command = commands.scriptCommand;
+
+  trainingWorkerBootstrapSessions.unshift(created);
+  markAppStateDirty();
+  logAudit('training_worker_bootstrap_created', 'TrainingWorkerBootstrapSession', created.id, {
+    deployment_mode: created.deployment_mode,
+    worker_profile: created.worker_profile,
+    worker_id: created.worker_id,
+    auth_mode: created.issued_auth_mode
+  });
+  return applyBootstrapSessionAuthPresentation(created);
+}
+
+export async function claimTrainingWorkerBootstrapSession(
+  input: ClaimTrainingWorkerBootstrapSessionInput
+): Promise<ClaimTrainingWorkerBootstrapSessionResult> {
+  await delay(40);
+  cleanupExpiredBootstrapSessions();
+
+  const pairingToken = input.pairing_token?.trim();
+  if (!pairingToken) {
+    throw new Error('Pairing token is required.');
+  }
+
+  const session = findBootstrapSessionByPairingToken(pairingToken);
+  if (!session || session.status === 'expired') {
+    throw new Error('Pairing token is invalid or expired.');
+  }
+
+  session.status = 'pairing';
+  session.claimed_at = session.claimed_at ?? now();
+  session.last_seen_at = now();
+  const dedicatedToken = issueDedicatedTrainingWorkerToken(session.worker_id);
+  session.issued_auth_mode = 'dedicated';
+  session.issued_auth_token_preview = buildWorkerAuthTokenPreview(dedicatedToken);
+  markAppStateDirty();
+
+  return {
+    bootstrap_session: applyBootstrapSessionAuthPresentation(session),
+    config_defaults: {
+      control_plane_base_url: session.control_plane_base_url,
+      training_worker_auth_token: dedicatedToken,
+      worker_id: session.worker_id,
+      worker_name: session.worker_name,
+      worker_endpoint: session.worker_endpoint_hint ?? '',
+      worker_status: 'online',
+      worker_enabled: 'true',
+      worker_max_concurrency: String(session.max_concurrency),
+      worker_capabilities: session.capabilities.join(','),
+      heartbeat_interval_seconds: '15',
+      worker_runtime_profile: session.worker_runtime_profile,
+      worker_use_request_paths: 'false',
+      worker_command_failure_mode: 'fallback',
+      worker_disable_command: 'false'
+    }
+  };
+}
+
+export async function getTrainingWorkerBootstrapSessionStatus(
+  input: GetTrainingWorkerBootstrapSessionStatusInput
+): Promise<TrainingWorkerBootstrapSessionRecord> {
+  await delay(30);
+  cleanupExpiredBootstrapSessions();
+
+  const pairingToken = input.pairing_token?.trim();
+  if (!pairingToken) {
+    throw new Error('Pairing token is required.');
+  }
+
+  const session = findBootstrapSessionByPairingToken(pairingToken);
+  if (!session || session.status === 'expired') {
+    throw new Error('Pairing token is invalid or expired.');
+  }
+
+  return applyBootstrapSessionAuthPresentation(session);
+}
+
+export async function validateTrainingWorkerBootstrapCallbackByAdmin(
+  sessionId: string
+): Promise<TrainingWorkerBootstrapSessionRecord> {
+  await delay(40);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can validate training worker bootstrap sessions.');
+  cleanupExpiredBootstrapSessions();
+
+  const session = findBootstrapSessionById(sessionId);
+  if (!session) {
+    throw new Error('Training worker bootstrap session not found.');
+  }
+  if (session.status === 'expired') {
+    throw new Error('Pairing token is invalid or expired.');
+  }
+
+  const worker =
+    (session.linked_worker_id
+      ? trainingWorkerNodes.find((item) => item.id === session.linked_worker_id) ?? null
+      : trainingWorkerNodes.find((item) => item.id === session.worker_id) ?? null) ?? null;
+  const endpoint = worker?.endpoint ?? session.worker_endpoint_hint;
+
+  if (!endpoint) {
+    session.status = 'awaiting_confirmation';
+    session.callback_checked_at = now();
+    session.callback_validation_message =
+      'Waiting for worker callback endpoint. Start the worker and complete local /setup first.';
+    markAppStateDirty();
+    return applyBootstrapSessionAuthPresentation(session);
+  }
+
+  const requestedStatus = worker && worker.status === 'offline' ? 'online' : worker?.status ?? 'online';
+  const validation = await probeWorkerCallback(endpoint);
+  applyBootstrapCallbackOutcome(session, worker, requestedStatus, validation, endpoint);
+  return applyBootstrapSessionAuthPresentation(session);
+}
+
+export async function downloadTrainingWorkerBootstrapBundleByAdmin(
+  sessionId: string
+): Promise<{ filename: string; content: string }> {
+  await delay(30);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can download training worker bootstrap bundles.');
+  cleanupExpiredBootstrapSessions();
+
+  const session = findBootstrapSessionById(sessionId);
+  if (!session) {
+    throw new Error('Training worker bootstrap session not found.');
+  }
+
+  return buildTrainingWorkerBootstrapBundle(session);
+}
+
+export async function listTrainingWorkersByAdmin(): Promise<TrainingWorkerNodeView[]> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can list training workers.');
+  return trainingWorkerNodes
+    .map(serializeTrainingWorker)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function createTrainingWorkerByAdmin(
+  input: CreateTrainingWorkerInput
+): Promise<TrainingWorkerNodeView> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can create training workers.');
+
+  const name = (input.name ?? '').trim();
+  if (!name) {
+    throw new Error('Worker name is required.');
+  }
+
+  const endpoint = normalizeWorkerEndpoint(input.endpoint);
+  if (endpoint && trainingWorkerNodes.some((worker) => worker.endpoint === endpoint)) {
+    throw new Error('Training worker endpoint already exists.');
+  }
+
+  const created: TrainingWorkerNodeRecord = {
+    id: nextId('tw'),
+    name,
+    endpoint,
+    status: normalizeWorkerStatus(input.status),
+    enabled: input.enabled ?? true,
+    max_concurrency: normalizeWorkerConcurrency(input.max_concurrency),
+    last_heartbeat_at: null,
+    last_reported_load: null,
+    capabilities: normalizeWorkerCapabilities(input.capabilities),
+    auth_mode: 'shared',
+    auth_token_preview: null,
+    registration_source: 'admin',
+    metadata: normalizeWorkerMetadata(input.metadata),
+    created_at: now(),
+    updated_at: now()
+  };
+
+  trainingWorkerNodes.unshift(created);
+  markAppStateDirty();
+  logAudit('training_worker_created', 'TrainingWorkerNode', created.id, {
+    endpoint: created.endpoint ?? '',
+    status: created.status,
+    max_concurrency: String(created.max_concurrency)
+  });
+  return serializeTrainingWorker(created);
+}
+
+export async function updateTrainingWorkerByAdmin(
+  workerId: string,
+  input: UpdateTrainingWorkerInput
+): Promise<TrainingWorkerNodeView> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can update training workers.');
+
+  const worker = trainingWorkerNodes.find((item) => item.id === workerId);
+  if (!worker) {
+    throw new Error('Training worker not found.');
+  }
+
+  if (input.name !== undefined) {
+    const normalized = input.name.trim();
+    if (!normalized) {
+      throw new Error('Worker name cannot be empty.');
+    }
+    worker.name = normalized;
+  }
+
+  if (input.endpoint !== undefined) {
+    const endpoint = normalizeWorkerEndpoint(input.endpoint);
+    if (
+      endpoint &&
+      trainingWorkerNodes.some((item) => item.id !== worker.id && item.endpoint === endpoint)
+    ) {
+      throw new Error('Training worker endpoint already exists.');
+    }
+    worker.endpoint = endpoint;
+  }
+
+  if (input.status !== undefined) {
+    worker.status = normalizeWorkerStatus(input.status);
+  }
+  if (input.enabled !== undefined) {
+    worker.enabled = Boolean(input.enabled);
+  }
+  if (input.max_concurrency !== undefined) {
+    worker.max_concurrency = normalizeWorkerConcurrency(input.max_concurrency);
+  }
+  if (input.capabilities !== undefined) {
+    worker.capabilities = normalizeWorkerCapabilities(input.capabilities);
+  }
+  if (input.metadata !== undefined) {
+    worker.metadata = normalizeWorkerMetadata(input.metadata);
+  }
+  worker.auth_mode = resolveTrainingWorkerAuthMode(worker.id);
+  worker.auth_token_preview = resolveTrainingWorkerAuthTokenPreview(worker.id);
+
+  worker.updated_at = now();
+  markAppStateDirty();
+  logAudit('training_worker_updated', 'TrainingWorkerNode', worker.id, {
+    endpoint: worker.endpoint ?? '',
+    status: worker.status,
+    enabled: String(worker.enabled),
+    max_concurrency: String(worker.max_concurrency)
+  });
+  return serializeTrainingWorker(worker);
+}
+
+export async function removeTrainingWorkerByAdmin(workerId: string): Promise<{ removed: true }> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can remove training workers.');
+
+  const workerIndex = trainingWorkerNodes.findIndex((item) => item.id === workerId);
+  if (workerIndex < 0) {
+    throw new Error('Training worker not found.');
+  }
+
+  const inFlightJobs = getWorkerInFlightJobs(workerId);
+  if (inFlightJobs > 0) {
+    throw new Error('Cannot remove worker with in-flight training jobs.');
+  }
+
+  const [removed] = trainingWorkerNodes.splice(workerIndex, 1);
+  if (removed?.id) {
+    trainingWorkerDispatchHealthById.delete(removed.id);
+    revokeDedicatedTrainingWorkerToken(removed.id);
+  }
+  markAppStateDirty();
+  logAudit('training_worker_removed', 'TrainingWorkerNode', removed?.id ?? null, {
+    endpoint: removed?.endpoint ?? ''
+  });
+  return { removed: true };
+}
+
+export async function heartbeatTrainingWorker(
+  input: TrainingWorkerHeartbeatInput,
+  presentedToken?: string | null
+): Promise<TrainingWorkerNodeView> {
+  await delay(30);
+  const name = (input.name ?? '').trim();
+  if (!name) {
+    throw new Error('Worker name is required.');
+  }
+
+  const workerId = input.worker_id?.trim() ?? '';
+  const endpoint = normalizeWorkerEndpoint(input.endpoint);
+  assertTrainingWorkerHeartbeatToken({
+    token: presentedToken,
+    worker_id: workerId,
+    endpoint
+  });
+  const byId = workerId ? trainingWorkerNodes.find((worker) => worker.id === workerId) : null;
+  const byEndpoint = endpoint
+    ? trainingWorkerNodes.find((worker) => worker.endpoint === endpoint)
+    : null;
+  const target = byId ?? byEndpoint;
+
+  const nowAt = now();
+  if (!target) {
+    const created: TrainingWorkerNodeRecord = {
+      id: workerId || nextId('tw'),
+      name,
+      endpoint,
+      status: normalizeWorkerStatus(input.status ?? 'online'),
+      enabled: input.enabled ?? true,
+      max_concurrency: normalizeWorkerConcurrency(input.max_concurrency ?? 1),
+      last_heartbeat_at: nowAt,
+      last_reported_load: normalizeWorkerReportedLoad(input.reported_load),
+      capabilities: normalizeWorkerCapabilities(input.capabilities),
+      auth_mode: resolveTrainingWorkerAuthMode(workerId || null),
+      auth_token_preview: resolveTrainingWorkerAuthTokenPreview(workerId || null),
+      registration_source: 'heartbeat',
+      metadata: normalizeWorkerMetadata(input.metadata),
+      created_at: nowAt,
+      updated_at: nowAt
+    };
+    trainingWorkerNodes.unshift(created);
+    await reconcileBootstrapSessionFromHeartbeat(created, normalizeWorkerStatus(input.status ?? 'online'));
+    markAppStateDirty();
+    return serializeTrainingWorker(created);
+  }
+
+  target.name = name;
+  target.endpoint = endpoint;
+  target.status = normalizeWorkerStatus(input.status ?? target.status);
+  target.enabled = input.enabled ?? target.enabled;
+  target.max_concurrency = normalizeWorkerConcurrency(input.max_concurrency ?? target.max_concurrency);
+  target.last_heartbeat_at = nowAt;
+  target.last_reported_load = normalizeWorkerReportedLoad(input.reported_load);
+  target.capabilities = normalizeWorkerCapabilities(input.capabilities ?? target.capabilities);
+  target.auth_mode = resolveTrainingWorkerAuthMode(target.id);
+  target.auth_token_preview = resolveTrainingWorkerAuthTokenPreview(target.id);
+  target.metadata = normalizeWorkerMetadata(input.metadata ?? target.metadata);
+  target.updated_at = nowAt;
+  if (target.registration_source === 'seed') {
+    target.registration_source = 'heartbeat';
+  }
+  await reconcileBootstrapSessionFromHeartbeat(target, normalizeWorkerStatus(input.status ?? target.status));
+  markAppStateDirty();
+  return serializeTrainingWorker(target);
+}
+
+export async function getTrainingWorkerDatasetPackageContent(
+  packageId: string,
+  presentedToken?: string | null
+): Promise<WorkerInlineDatasetPackage> {
+  await delay(10);
+  const record = await readTrainingWorkerDatasetPackageById(packageId);
+  assertTrainingWorkerHeartbeatToken({
+    token: presentedToken,
+    worker_id: record.authorized_worker_id
+  });
+  let payload: unknown;
+  try {
+    const raw = await fs.readFile(record.file_path, 'utf8');
+    payload = JSON.parse(raw);
+  } catch {
+    throw new Error('Training worker dataset package content is unavailable.');
+  }
+
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Training worker dataset package payload is invalid.');
+  }
+  const packagePayload = payload as WorkerInlineDatasetPackage;
+  if (
+    packagePayload.format !== 'inline_base64_v1' ||
+    !Array.isArray(packagePayload.files) ||
+    typeof packagePayload.root_relative !== 'string'
+  ) {
+    throw new Error('Training worker dataset package payload is invalid.');
+  }
+  return packagePayload;
+}
+
 export async function getRuntimeMetricsRetentionSummary(): Promise<{
   max_points_per_job: number;
   max_total_rows: number;
@@ -6155,6 +8390,11 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     throw new Error(validation.warnings[0] ?? 'Dataset validation failed for selected framework.');
   }
 
+  const scheduling = selectTrainingWorkerForJob(input.task_type, input.framework, {
+    trigger: 'create',
+    attempt: 1
+  });
+
   const created: TrainingJobRecord = {
     id: nextId('tj'),
     name: input.name.trim(),
@@ -6166,11 +8406,21 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     base_model: input.base_model.trim(),
     config: input.config,
     execution_mode: 'unknown',
-    log_excerpt: 'Queued for local training execution.',
+    execution_target: scheduling.execution_target,
+    scheduled_worker_id: scheduling.worker?.id ?? null,
+    scheduler_note: scheduling.note,
+    scheduler_decision: null,
+    scheduler_decision_history: [],
+    log_excerpt:
+      scheduling.execution_target === 'worker'
+        ? 'Queued with worker scheduling.'
+        : 'Queued for control-plane local execution.',
     submitted_by: currentUser.id,
     created_at: now(),
     updated_at: now()
   };
+
+  recordTrainingSchedulerDecision(created, scheduling.decision);
 
   created.status = 'queued';
   created.updated_at = now();
@@ -6179,7 +8429,12 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
   logAudit('training_job_created', 'TrainingJob', created.id, {
     framework: created.framework,
     task_type: created.task_type,
-    dataset_version_id: created.dataset_version_id ?? ''
+    dataset_version_id: created.dataset_version_id ?? '',
+    execution_target: created.execution_target,
+    scheduled_worker_id: created.scheduled_worker_id ?? '',
+    scheduler_note: created.scheduler_note ?? '',
+    scheduler_decision_trigger: created.scheduler_decision?.trigger ?? '',
+    scheduler_decision_attempt: String(created.scheduler_decision?.attempt ?? '')
   });
 
   scheduleTrainingLifecycle(created.id);
@@ -6341,6 +8596,29 @@ export async function cancelTrainingJob(jobId: string): Promise<TrainingJobRecor
     await appendTrainingLog(job, runtime, 'Cancellation requested by user.');
   }
 
+  const dispatchAbortController = trainingWorkerDispatchAbortByJobId.get(job.id);
+  if (dispatchAbortController) {
+    dispatchAbortController.abort('cancelled_by_user');
+    trainingWorkerDispatchAbortByJobId.delete(job.id);
+    if (runtime) {
+      await appendTrainingLog(job, runtime, 'In-flight worker dispatch aborted by cancel request.');
+    }
+  }
+
+  if (job.execution_target === 'worker' && job.scheduled_worker_id) {
+    const worker = trainingWorkerNodes.find((item) => item.id === job.scheduled_worker_id) ?? null;
+    if (worker?.endpoint) {
+      const cancelResult = await requestWorkerTrainingCancel(worker, job.id);
+      if (runtime) {
+        await appendTrainingLog(
+          job,
+          runtime,
+          `Worker cancel request: acknowledged=${cancelResult.acknowledged}; had_running_process=${cancelResult.had_running_process}; message=${cancelResult.message}`
+        );
+      }
+    }
+  }
+
   job.status = 'cancelled';
   job.log_excerpt = 'Cancelled by user.';
   job.updated_at = now();
@@ -6369,10 +8647,23 @@ export async function retryTrainingJob(jobId: string): Promise<TrainingJobRecord
     runtime.cancelled = true;
     trainingRuntimeByJobId.set(job.id, runtime);
   }
+  const dispatchAbortController = trainingWorkerDispatchAbortByJobId.get(job.id);
+  if (dispatchAbortController) {
+    dispatchAbortController.abort('cancelled_by_retry');
+    trainingWorkerDispatchAbortByJobId.delete(job.id);
+  }
 
+  const scheduling = selectTrainingWorkerForJob(job.task_type, job.framework, {
+    trigger: 'retry',
+    attempt: 1
+  });
   job.status = 'queued';
   job.execution_mode = 'unknown';
-  job.log_excerpt = 'Retry requested. Re-queueing local executor.';
+  job.execution_target = scheduling.execution_target;
+  job.scheduled_worker_id = scheduling.worker?.id ?? null;
+  job.scheduler_note = `retry:${scheduling.note}`;
+  recordTrainingSchedulerDecision(job, scheduling.decision);
+  job.log_excerpt = 'Retry requested. Re-queueing with scheduler.';
   job.updated_at = now();
   logAudit('training_job_retried', 'TrainingJob', job.id);
   scheduleTrainingLifecycle(job.id);

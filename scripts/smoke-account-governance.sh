@@ -5,8 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-8808}"
-BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 START_API="${START_API:-true}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-mock-pass-admin}"
@@ -15,6 +13,23 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-account-governance] jq is required."
   exit 1
 fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[smoke-account-governance] python3 is required."
+  exit 1
+fi
+
+if [[ "${START_API}" == "true" && -z "${API_PORT:-}" ]]; then
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
+API_PORT="${API_PORT:-8808}"
+BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 
 ADMIN_COOKIE="$(mktemp)"
 USER_COOKIE="$(mktemp)"
@@ -60,6 +75,11 @@ fi
 
 if ! wait_for_health; then
   if [[ "${START_API}" == "true" ]]; then
+    if ! kill -0 "${API_PID}" >/dev/null 2>&1; then
+      echo "[smoke-account-governance] API process exited before health check (possible port conflict)."
+      cat "${API_LOG}"
+      exit 1
+    fi
     echo "[smoke-account-governance] API failed to start."
     cat "${API_LOG}"
   else

@@ -140,6 +140,7 @@ Actor: `user`
    - `evaluating`
    - `completed` (or `failed` / `cancelled`)
 5. view logs and metrics in `/training/jobs/:jobId`
+6. training detail also exposes scheduler decision history (latest snapshot plus prior reschedule/failover/fallback entries) for auditability
 
 ## 7. Flow F: Model Version Registration
 Actor: `user`
@@ -192,7 +193,50 @@ Actor: `admin`
 7. export filtered reports as JSON for release evidence
 8. decide go/no-go for intranet rollout handoff
 
-## 12. Unified UX Constraints
+## 12. Flow I: Control Plane + Dynamic Training Workers
+Actor: `admin` (control plane operator), `worker` (training node agent)
+
+1. deploy Vistral app/API on machine `A` as control plane
+2. add worker nodes (`B/C/D...`) dynamically through admin registration or worker self-heartbeat
+3. workers continuously report heartbeat with load/capacity snapshot
+4. user submits training jobs from normal workspace flow
+5. scheduler chooses target execution node by load-aware strategy:
+   - prefer `online` workers with available concurrency
+   - pick lowest normalized load score
+   - fallback to control-plane local executor when no eligible worker exists
+6. when target is `worker`, control plane sends execution request to worker endpoint (`/api/worker/train`) with the worker's dedicated auth token and job context payload; shared token remains fallback for legacy workers
+7. dispatch payload includes worker-usable dataset package metadata/files (or equivalent package reference) so worker can materialize training inputs in its own local workspace
+8. worker executes training command (or deterministic fallback path) and returns logs/metrics/metric-series/artifact summary
+9. control plane writes returned outputs back into the same training job runtime records (log excerpt, metrics timeline, artifact attachment)
+10. if worker dispatch fails and fallback policy is enabled, control plane records dispatch failure and continues with local execution path
+10a. before local fallback, control plane should attempt re-dispatch to another eligible online worker (excluding already failed nodes in this run) when available, within bounded retry attempts and short backoff intervals
+11. cancel action on a worker-running job should propagate to worker cancel endpoint and abort in-flight dispatch wait
+12. if a worker becomes offline/draining, new jobs are rerouted without restarting control plane
+13. admin can remove/reactivate workers during runtime
+
+## 12.1 Flow I1: Worker GUI Onboarding (implementing)
+Actor: `admin` (control plane operator), `worker operator`
+
+1. admin opens `Runtime > Add Worker`
+2. admin selects deployment mode (`Docker` recommended or script fallback), worker profile, optional worker public host/IP, optional bind port, and generates a short-lived pairing token
+3. system shows a copyable startup command or downloadable worker bundle with a prebuilt `/setup` URL when host/port were provided
+4. worker operator starts the worker node with one command
+5. worker local setup UI opens in `unpaired` state
+6. worker operator pastes pairing token (or equivalent pairing payload)
+7. worker exchanges token with control plane and loads default config, including any preconfigured worker endpoint hint
+8. worker detects local resources and validates:
+   - control-plane connectivity
+   - worker endpoint callback reachability
+   - writable workspace
+   - capability/runtime availability
+9. operator confirms worker name, concurrency, capabilities, and optional advanced settings
+10. worker saves config locally and runs validation
+11. worker heartbeat is accepted by control plane and triggers callback validation from control plane to worker endpoint
+12. if callback validation passes, session and worker advance to `online`; otherwise session stays `validation_failed` and worker remains unschedulable until retry succeeds
+13. worker local `/setup` page can poll control-plane bootstrap status so the operator sees the latest onboarding state without switching back to admin runtime settings
+14. worker enters normal heartbeat and training-accept mode
+
+## 13. Unified UX Constraints
 - multi-step flows must have top stepper
 - advanced params default to collapsed
 - upload files must remain visible + deletable + status-aware

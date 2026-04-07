@@ -5,8 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-8795}"
-BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
@@ -33,6 +31,23 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-conversation-actions] jq is required."
   exit 1
 fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[smoke-conversation-actions] python3 is required."
+  exit 1
+fi
+
+if [[ "${START_API}" == "true" && -z "${API_PORT:-}" ]]; then
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
+API_PORT="${API_PORT:-8795}"
+BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 
 wait_dataset_attachment_ready() {
   local dataset_id="$1"
@@ -178,6 +193,11 @@ fi
 
 if ! wait_for_health; then
   if [[ "${START_API}" == "true" ]]; then
+    if ! kill -0 "${API_PID}" >/dev/null 2>&1; then
+      echo "[smoke-conversation-actions] API process exited before health check (possible port conflict)"
+      cat "$LOG_FILE"
+      exit 1
+    fi
     echo "[smoke-conversation-actions] API failed to start"
     cat "$LOG_FILE"
   else

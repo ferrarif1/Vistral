@@ -17,5 +17,6 @@ run_step "smoke:conversation-actions"
 run_step "smoke:inference-feedback-guard"
 run_step "smoke:real-closure"
 run_step "smoke:ocr-closure"
+run_step "smoke:training-worker-dedicated-auth"
 
 echo "[smoke-core-closure] PASS"

@@ -4,8 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-API_PORT="${API_PORT:-8799}"
-BASE_URL="${BASE_URL:-http://127.0.0.1:${API_PORT}}"
+API_HOST="${API_HOST:-127.0.0.1}"
 START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
@@ -22,6 +21,23 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-demo-train-data] jq is required but not found"
   exit 1
 fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[smoke-demo-train-data] python3 is required but not found"
+  exit 1
+fi
+
+if [[ "${START_API}" == "true" && -z "${API_PORT:-}" ]]; then
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
+API_PORT="${API_PORT:-8799}"
+BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 
 if [[ ! -d "$DEMO_DIR" ]]; then
   echo "[smoke-demo-train-data] demo dir not found: ${DEMO_DIR}"
@@ -53,6 +69,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$START_API" == "true" ]]; then
+  API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
   PADDLEOCR_RUNTIME_ENDPOINT="http://127.0.0.1:9/unreachable" \
   DOCTR_RUNTIME_ENDPOINT="http://127.0.0.1:9/unreachable" \
@@ -66,6 +83,12 @@ if [[ "$START_API" == "true" ]]; then
     fi
     sleep 0.2
   done
+
+  if ! kill -0 "$API_PID" >/dev/null 2>&1; then
+    echo "[smoke-demo-train-data] API process exited before health check (possible port conflict)"
+    cat "$API_LOG"
+    exit 1
+  fi
 
   if ! curl -sS "${BASE_URL}/api/health" >/dev/null 2>&1; then
     echo "[smoke-demo-train-data] API failed to start"

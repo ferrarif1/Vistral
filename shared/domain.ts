@@ -54,6 +54,36 @@ export type TrainingJobStatus =
   | 'failed'
   | 'cancelled';
 export type TrainingExecutionMode = 'simulated' | 'local_command' | 'unknown';
+export type TrainingExecutionTarget = 'control_plane' | 'worker';
+export type TrainingWorkerStatus = 'online' | 'offline' | 'draining';
+export type TrainingWorkerAuthMode = 'shared' | 'dedicated';
+export type TrainingWorkerBootstrapStatus =
+  | 'bootstrap_created'
+  | 'pairing'
+  | 'validation_failed'
+  | 'awaiting_confirmation'
+  | 'online'
+  | 'expired';
+export type TrainingWorkerDeploymentMode = 'docker' | 'script';
+export type TrainingWorkerProfile = 'yolo' | 'paddleocr' | 'doctr' | 'mixed';
+
+export interface TrainingSchedulerDecision {
+  policy: 'load_aware_v1';
+  trigger: string;
+  attempt: number;
+  execution_target: TrainingExecutionTarget;
+  selected_worker_id: string | null;
+  selected_worker_score: number | null;
+  selected_worker_load_component: number | null;
+  selected_worker_health_penalty: number | null;
+  selected_worker_capability_bonus: number | null;
+  selected_worker_in_flight_jobs: number | null;
+  selected_worker_max_concurrency: number | null;
+  excluded_worker_ids: string[];
+  fallback_reason: string | null;
+  note: string;
+  decided_at: string;
+}
 
 export type ModelVersionStatus = 'registered' | 'deprecated';
 export type InferenceRunStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -269,10 +299,80 @@ export interface TrainingJobRecord {
   base_model: string;
   config: Record<string, string>;
   execution_mode: TrainingExecutionMode;
+  execution_target: TrainingExecutionTarget;
+  scheduled_worker_id: string | null;
+  scheduler_note: string | null;
+  scheduler_decision: TrainingSchedulerDecision | null;
+  scheduler_decision_history: TrainingSchedulerDecision[];
   log_excerpt: string;
   submitted_by: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface TrainingWorkerNodeRecord {
+  id: string;
+  name: string;
+  endpoint: string | null;
+  status: TrainingWorkerStatus;
+  enabled: boolean;
+  max_concurrency: number;
+  last_heartbeat_at: string | null;
+  last_reported_load: number | null;
+  capabilities: string[];
+  auth_mode: TrainingWorkerAuthMode;
+  auth_token_preview: string | null;
+  registration_source: 'seed' | 'admin' | 'heartbeat';
+  metadata: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrainingWorkerNodeView extends TrainingWorkerNodeRecord {
+  effective_status: TrainingWorkerStatus;
+  heartbeat_stale: boolean;
+  in_flight_jobs: number;
+  load_score: number;
+  scheduler_score: number;
+  scheduler_load_component: number;
+  scheduler_health_penalty: number;
+  scheduler_capability_bonus: number;
+  dispatch_recent_failures: number;
+  dispatch_consecutive_failures: number;
+  dispatch_last_failure_at: string | null;
+  dispatch_last_success_at: string | null;
+  dispatch_cooldown_active: boolean;
+}
+
+export interface TrainingWorkerBootstrapSessionRecord {
+  id: string;
+  status: TrainingWorkerBootstrapStatus;
+  deployment_mode: TrainingWorkerDeploymentMode;
+  worker_profile: TrainingWorkerProfile;
+  pairing_token: string;
+  token_preview: string;
+  control_plane_base_url: string;
+  worker_id: string;
+  worker_name: string;
+  worker_public_host: string | null;
+  worker_bind_port: number;
+  worker_endpoint_hint: string | null;
+  worker_runtime_profile: string;
+  capabilities: string[];
+  max_concurrency: number;
+  issued_auth_mode: TrainingWorkerAuthMode;
+  issued_auth_token_preview: string | null;
+  docker_command: string;
+  script_command: string;
+  setup_url_hint: string;
+  claimed_at: string | null;
+  last_seen_at: string | null;
+  callback_checked_at: string | null;
+  callback_validation_message: string | null;
+  linked_worker_id: string | null;
+  metadata: Record<string, string>;
+  created_at: string;
+  expires_at: string;
 }
 
 export interface TrainingMetricRecord {
@@ -490,6 +590,61 @@ export interface CreateTrainingJobInput {
   dataset_version_id: string;
   base_model: string;
   config: Record<string, string>;
+}
+
+export interface CreateTrainingWorkerInput {
+  name: string;
+  endpoint?: string | null;
+  status?: TrainingWorkerStatus;
+  enabled?: boolean;
+  max_concurrency?: number;
+  capabilities?: string[];
+  metadata?: Record<string, string>;
+}
+
+export interface UpdateTrainingWorkerInput {
+  name?: string;
+  endpoint?: string | null;
+  status?: TrainingWorkerStatus;
+  enabled?: boolean;
+  max_concurrency?: number;
+  capabilities?: string[];
+  metadata?: Record<string, string>;
+}
+
+export interface CreateTrainingWorkerBootstrapSessionInput {
+  deployment_mode: TrainingWorkerDeploymentMode;
+  worker_profile: TrainingWorkerProfile;
+  control_plane_base_url: string;
+  worker_name?: string;
+  worker_public_host?: string;
+  worker_bind_port?: number;
+  max_concurrency?: number;
+}
+
+export interface ClaimTrainingWorkerBootstrapSessionInput {
+  pairing_token: string;
+}
+
+export interface ClaimTrainingWorkerBootstrapSessionResult {
+  bootstrap_session: TrainingWorkerBootstrapSessionRecord;
+  config_defaults: Record<string, string>;
+}
+
+export interface GetTrainingWorkerBootstrapSessionStatusInput {
+  pairing_token: string;
+}
+
+export interface TrainingWorkerHeartbeatInput {
+  worker_id?: string;
+  name: string;
+  endpoint?: string | null;
+  status?: TrainingWorkerStatus;
+  enabled?: boolean;
+  max_concurrency?: number;
+  reported_load?: number | null;
+  capabilities?: string[];
+  metadata?: Record<string, string>;
 }
 
 export interface UpsertAnnotationInput {

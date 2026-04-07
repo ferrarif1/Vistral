@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useParams } from 'react-router-dom';
 import type {
   AnnotationWithReview,
   DatasetItemRecord,
@@ -12,6 +12,10 @@ import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import VirtualList from '../components/VirtualList';
+import { Badge, StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Input, Select, Textarea } from '../components/ui/Field';
+import { Card, Panel } from '../components/ui/Surface';
 import {
   filterItemsByAnnotationQueue,
   getAnnotationByItemId,
@@ -514,46 +518,43 @@ export default function DatasetDetailPage() {
     }
   };
 
-  if (!datasetId) {
-    return (
-      <div className="stack">
-        <h2>{t('Dataset Detail')}</h2>
-        <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset list page.')} />
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="stack">
-        <h2>{t('Dataset Detail')}</h2>
-        <StateBlock variant="loading" title={t('Loading Dataset')} description={t('Preparing dataset detail view.')} />
-      </div>
-    );
-  }
-
-  if (!dataset) {
-    return (
-      <div className="stack">
-        <h2>{t('Dataset Detail')}</h2>
-        <StateBlock variant="error" title={t('Dataset Not Found')} description={t('The requested dataset is unavailable.')} />
-      </div>
-    );
-  }
-
-  return (
-    <div className="stack">
-      <div className="row between gap align-center">
-        <div className="stack tight">
-          <h2>{t('Dataset Detail')}</h2>
+  const heroSection = (
+    <Card className="workspace-overview-hero">
+      <div className="workspace-overview-hero-grid">
+        <div className="workspace-overview-copy stack">
+          <small className="workspace-eyebrow">{t('Dataset Lane')}</small>
+          <h1>{t('Dataset Detail')}</h1>
           <p className="muted">
-            {dataset.name} · {t(dataset.task_type)} · {t(dataset.status)}
+            {dataset
+              ? `${dataset.name} · ${t(dataset.task_type)} · ${t(dataset.status)}`
+              : t('Inspect dataset files, annotation readiness, and version snapshots in one lane.')}
           </p>
         </div>
-        <div className="row gap align-center">
-          <button
+        <div className="workspace-overview-badges">
+          <div className="workspace-overview-badge">
+            <span>{t('Attachments')}</span>
+            <strong>{attachments.length}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Items')}</span>
+            <strong>{items.length}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Versions')}</span>
+            <strong>{versions.length}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Ready files')}</span>
+            <strong>{readyCount}</strong>
+          </div>
+        </div>
+      </div>
+      {dataset ? (
+        <div className="row gap wrap">
+          <Button
             type="button"
-            className="workspace-inline-button"
+            variant="secondary"
+            size="sm"
             onClick={() => {
               loadDetail('manual').catch((error) => {
                 setFeedback({ variant: 'error', text: (error as Error).message });
@@ -562,12 +563,47 @@ export default function DatasetDetailPage() {
             disabled={busy || refreshing}
           >
             {refreshing ? t('Refreshing...') : t('Refresh')}
-          </button>
-          <Link className="quick-link" to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}>
+          </Button>
+          <ButtonLink
+            size="sm"
+            variant="ghost"
+            to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+          >
             {t('Open Annotation Workspace')}
-          </Link>
+          </ButtonLink>
         </div>
-      </div>
+      ) : null}
+    </Card>
+  );
+
+  const renderShell = (content: ReactNode) => (
+    <div className="workspace-overview-page stack">
+      {heroSection}
+      {content}
+    </div>
+  );
+
+  if (!datasetId) {
+    return renderShell(
+      <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset list page.')} />
+    );
+  }
+
+  if (loading) {
+    return renderShell(
+      <StateBlock variant="loading" title={t('Loading Dataset')} description={t('Preparing dataset detail view.')} />
+    );
+  }
+
+  if (!dataset) {
+    return renderShell(
+      <StateBlock variant="error" title={t('Dataset Not Found')} description={t('The requested dataset is unavailable.')} />
+    );
+  }
+
+  return (
+    <div className="workspace-overview-page stack">
+      {heroSection}
 
       <StepIndicator steps={steps} current={step} />
 
@@ -579,403 +615,467 @@ export default function DatasetDetailPage() {
         />
       ) : null}
 
-      <section className="card stack">
-        <div className="row between gap align-center">
-          <div className="stack tight">
-            <h3>{t('Annotation Summary')}</h3>
+      <section className="workspace-overview-signal-grid">
+        <Card as="article" className="workspace-signal-card">
+          <div className="workspace-signal-top">
+            <h3>{t('Needs Work')}</h3>
             <small className="muted">
-              {t('Review annotation progress and jump directly into the next focused queue.')}
+              {t('Items that still require annotation or submit-review actions.')}
             </small>
           </div>
-          <Link className="quick-link" to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}>
-            {t('Open Annotation Workspace')}
-          </Link>
-        </div>
-
-        <div className="annotation-summary-grid">
-          {queuePreviewEntries.map((entry) => (
-            <article key={entry.key} className="annotation-summary-card">
-              <div className="annotation-summary-card-top">
-                <div className="stack tight">
-                  <small className="muted">{entry.label}</small>
-                  <strong className="metric">{entry.count}</strong>
-                </div>
-                <Link
-                  className="workspace-inline-button annotation-summary-action-link"
-                  to={buildAnnotationWorkspacePath(dataset.id, entry.key, entry.firstItemId)}
-                >
-                  {t('Open Queue')}
-                </Link>
-              </div>
-              <small className="muted">{entry.description}</small>
-              {entry.items.length > 0 ? (
-                <ul className="workspace-record-list compact">
-                  {entry.items.map((item) => {
-                    const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                    const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
-                    return (
-                      <li key={item.id} className="workspace-record-item compact">
-                        <div className="row between gap wrap">
-                          <strong>{itemFilename}</strong>
-                          <span className="chip">{t(itemAnnotation?.status ?? 'unannotated')}</span>
-                        </div>
-                        {itemAnnotation?.latest_review ? (
-                          <div className="row gap wrap">
-                            <span className="chip">{t('Latest Review')}: {t(itemAnnotation.latest_review.status)}</span>
-                            {itemAnnotation.latest_review.review_reason_code ? (
-                              <span className="chip">{t(itemAnnotation.latest_review.review_reason_code)}</span>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        <small className="muted">{item.id}</small>
-                        {itemAnnotation?.latest_review?.review_comment ? (
-                          <small className="muted">{itemAnnotation.latest_review.review_comment}</small>
-                        ) : null}
-                        <Link className="quick-link" to={buildAnnotationWorkspacePath(dataset.id, entry.key, item.id)}>
-                          {t('Open Item')}
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <small className="muted">{t('No items in this queue right now.')}</small>
-              )}
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <AttachmentUploader
-        title={t('Step 1. Dataset File Upload')}
-        items={attachments}
-        onUpload={uploadDatasetFile}
-        onUploadFiles={uploadDatasetFiles}
-        contentUrlBuilder={api.attachmentContentUrl}
-        onDelete={deleteAttachment}
-        emptyDescription={t('Upload images or archives. Files stay visible for this dataset context.')}
-        uploadButtonLabel={t('Upload Dataset File')}
-        disabled={busy}
-      />
-
-      <section className="card stack">
-        <h3>{t('Step 2. Train/Val/Test Split')}</h3>
-        <div className="three-col">
-          <label>
-            {t('Train Ratio')}
-            <input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
-          </label>
-          <label>
-            {t('Val Ratio')}
-            <input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
-          </label>
-          <label>
-            {t('Test Ratio')}
-            <input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
-          </label>
-        </div>
-        <button onClick={runSplit} disabled={busy || items.length === 0}>
-          {t('Apply Split')}
-        </button>
-      </section>
-
-      <section className="card stack">
-        <h3>{t('Step 3. Dataset Version')}</h3>
-        <label>
-          {t('Version Name (optional)')}
-          <input
-            value={versionName}
-            onChange={(event) => setVersionName(event.target.value)}
-            placeholder={t('for example: v2')}
-          />
-        </label>
-        <button onClick={createVersion} disabled={busy || items.length === 0}>
-          {t('Create Version Snapshot')}
-        </button>
-      </section>
-
-      <AdvancedSection
-        title={t('Annotation Import / Export')}
-        description={t('Use this section to import or export annotation files in selected format.')}
-      >
-        <section className="card stack">
-          <h4>{t('Import Annotations')}</h4>
-          <label>
-            {t('Format')}
-            <select
-              value={importFormat}
-              onChange={(event) =>
-                setImportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
-              }
-            >
-              <option value="yolo">{t('yolo')}</option>
-              <option value="coco">{t('coco')}</option>
-              <option value="labelme">{t('labelme')}</option>
-              <option value="ocr">{t('ocr')}</option>
-            </select>
-          </label>
-          <label>
-            {t('Source Attachment')}
-            <select
-              value={importAttachmentId}
-              onChange={(event) => setImportAttachmentId(event.target.value)}
-            >
-              {attachments
-                .filter((attachment) => attachment.status === 'ready')
-                .map((attachment) => (
-                  <option key={attachment.id} value={attachment.id}>
-                    {attachment.filename} ({attachment.id})
-                  </option>
-                ))}
-            </select>
-          </label>
-          <button onClick={importAnnotations} disabled={busy || !importAttachmentId}>
-            {t('Run Import')}
-          </button>
-        </section>
-
-        <section className="card stack">
-          <h4>{t('Export Annotations')}</h4>
-          <label>
-            {t('Format')}
-            <select
-              value={exportFormat}
-              onChange={(event) =>
-                setExportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
-              }
-            >
-              <option value="yolo">{t('yolo')}</option>
-              <option value="coco">{t('coco')}</option>
-              <option value="labelme">{t('labelme')}</option>
-              <option value="ocr">{t('ocr')}</option>
-            </select>
-          </label>
-          <button onClick={exportAnnotations} disabled={busy}>
-            {t('Run Export')}
-          </button>
-        </section>
-
-        <section className="card stack">
-          <h4>{t('Reference Dataset Items')}</h4>
-          <small className="muted">
-            {t('Create metadata-only items when file binary is not uploaded yet.')}
-          </small>
-          <label>
-            {t('Reference Filename')}
-            <input
-              value={referenceFilename}
-              onChange={(event) => setReferenceFilename(event.target.value)}
-              placeholder={t('for example: camera-A/frame-001.jpg')}
-            />
-          </label>
-          <div className="three-col">
-            <label>
-              {t('Item Split')}
-              <select
-                value={referenceSplit}
-                onChange={(event) =>
-                  setReferenceSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
-                }
-              >
-                <option value="unassigned">{t('unassigned')}</option>
-                <option value="train">{t('train')}</option>
-                <option value="val">{t('val')}</option>
-                <option value="test">{t('test')}</option>
-              </select>
-            </label>
-            <label>
-              {t('Item Status')}
-              <select
-                value={referenceStatus}
-                onChange={(event) =>
-                  setReferenceStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
-                }
-              >
-                <option value="ready">{t('ready')}</option>
-                <option value="processing">{t('processing')}</option>
-                <option value="uploading">{t('uploading')}</option>
-                <option value="error">{t('error')}</option>
-              </select>
-            </label>
+          <strong className="metric">{annotationSummary.needs_work}</strong>
+        </Card>
+        <Card as="article" className={`workspace-signal-card${annotationSummary.in_review > 0 ? ' attention' : ''}`}>
+          <div className="workspace-signal-top">
+            <h3>{t('in_review')}</h3>
+            <small className="muted">
+              {t('Items currently waiting for reviewer decisions.')}
+            </small>
           </div>
-          <label>
-            {t('Metadata (key=value per line, optional)')}
-            <textarea
-              value={referenceMetadataText}
-              onChange={(event) => setReferenceMetadataText(event.target.value)}
-              placeholder={t('for example: source=import_reference')}
-              rows={3}
-            />
-          </label>
-          <button onClick={createReferenceItem} disabled={busy}>
-            {t('Create Reference Item')}
-          </button>
-        </section>
-      </AdvancedSection>
+          <strong className="metric">{annotationSummary.in_review}</strong>
+        </Card>
+        <Card as="article" className={`workspace-signal-card${annotationSummary.rejected > 0 ? ' attention' : ''}`}>
+          <div className="workspace-signal-top">
+            <h3>{t('rejected')}</h3>
+            <small className="muted">
+              {t('Rejected items retain latest review context for focused rework.')}
+            </small>
+          </div>
+          <strong className="metric">{annotationSummary.rejected}</strong>
+        </Card>
+        <Card as="article" className="workspace-signal-card">
+          <div className="workspace-signal-top">
+            <h3>{t('approved')}</h3>
+            <small className="muted">
+              {t('Approved items are ready for versioning and training readiness checks.')}
+            </small>
+          </div>
+          <strong className="metric">{annotationSummary.approved}</strong>
+        </Card>
+      </section>
 
-      <section className="card stack">
-        <h3>{t('Dataset Items')}</h3>
-        <small className="muted">{t('Ready files: {count}', { count: readyCount })}</small>
-        {items.length === 0 ? (
-          <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files to generate items.')} />
-        ) : (
-          <div className="stack">
-            <section className="card stack tight">
-              <h4>{t('Item Editor')}</h4>
-              <label>
-                {t('Selected Item')}
-                <select
-                  value={selectedItemId}
-                  onChange={(event) => {
-                    const nextId = event.target.value;
-                    const next = items.find((item) => item.id === nextId);
-                    if (!next) {
-                      return;
-                    }
-                    selectItemForEditing(next);
-                  }}
-                >
-                  {items.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.id} · {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="three-col">
-                <label>
-                  {t('Item Split')}
-                  <select
-                    value={itemSplit}
-                    onChange={(event) =>
-                      setItemSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
-                    }
-                  >
-                    <option value="unassigned">{t('unassigned')}</option>
-                    <option value="train">{t('train')}</option>
-                    <option value="val">{t('val')}</option>
-                    <option value="test">{t('test')}</option>
-                  </select>
-                </label>
-                <label>
-                  {t('Item Status')}
-                  <select
-                    value={itemStatus}
-                    onChange={(event) =>
-                      setItemStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
-                    }
-                  >
-                    <option value="ready">{t('ready')}</option>
-                    <option value="processing">{t('processing')}</option>
-                    <option value="uploading">{t('uploading')}</option>
-                    <option value="error">{t('error')}</option>
-                  </select>
-                </label>
+      <section className="workspace-overview-panel-grid">
+        <div className="workspace-overview-main">
+          <Card as="section">
+            <div className="row between gap wrap align-center">
+              <div className="stack tight">
+                <h3>{t('Annotation Summary')}</h3>
+                <small className="muted">
+                  {t('Review annotation progress and jump directly into the next focused queue.')}
+                </small>
               </div>
+              <ButtonLink
+                size="sm"
+                variant="ghost"
+                to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+              >
+                {t('Open Annotation Workspace')}
+              </ButtonLink>
+            </div>
+
+            <div className="annotation-summary-grid">
+              {queuePreviewEntries.map((entry) => (
+                <Card key={entry.key} as="article" className="annotation-summary-card">
+                  <div className="annotation-summary-card-top">
+                    <div className="stack tight">
+                      <small className="muted">{entry.label}</small>
+                      <strong className="metric">{entry.count}</strong>
+                    </div>
+                    <ButtonLink
+                      size="sm"
+                      variant="secondary"
+                      className="annotation-summary-action-link"
+                      to={buildAnnotationWorkspacePath(dataset.id, entry.key, entry.firstItemId)}
+                    >
+                      {t('Open Queue')}
+                    </ButtonLink>
+                  </div>
+                  <small className="muted">{entry.description}</small>
+                  {entry.items.length > 0 ? (
+                    <ul className="workspace-record-list compact">
+                      {entry.items.map((item) => {
+                        const itemAnnotation = annotationByItemId.get(item.id) ?? null;
+                        const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
+                        return (
+                          <Panel key={item.id} as="li" className="workspace-record-item compact" tone="soft">
+                            <div className="row between gap wrap">
+                              <strong>{itemFilename}</strong>
+                              <StatusTag status={itemAnnotation?.status ?? 'draft'}>
+                                {t(itemAnnotation?.status ?? 'unannotated')}
+                              </StatusTag>
+                            </div>
+                            {itemAnnotation?.latest_review ? (
+                              <div className="row gap wrap">
+                                <Badge tone="neutral">
+                                  {t('Latest Review')}: {t(itemAnnotation.latest_review.status)}
+                                </Badge>
+                                {itemAnnotation.latest_review.review_reason_code ? (
+                                  <Badge tone="warning">
+                                    {t(itemAnnotation.latest_review.review_reason_code)}
+                                  </Badge>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            <small className="muted">{item.id}</small>
+                            {itemAnnotation?.latest_review?.review_comment ? (
+                              <small className="muted">{itemAnnotation.latest_review.review_comment}</small>
+                            ) : null}
+                            <ButtonLink
+                              size="sm"
+                              variant="ghost"
+                              to={buildAnnotationWorkspacePath(dataset.id, entry.key, item.id)}
+                            >
+                              {t('Open Item')}
+                            </ButtonLink>
+                          </Panel>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <small className="muted">{t('No items in this queue right now.')}</small>
+                  )}
+                </Card>
+              ))}
+            </div>
+          </Card>
+
+          <AttachmentUploader
+            title={t('Step 1. Dataset File Upload')}
+            items={attachments}
+            onUpload={uploadDatasetFile}
+            onUploadFiles={uploadDatasetFiles}
+            contentUrlBuilder={api.attachmentContentUrl}
+            onDelete={deleteAttachment}
+            emptyDescription={t('Upload images or archives. Files stay visible for this dataset context.')}
+            uploadButtonLabel={t('Upload Dataset File')}
+            disabled={busy}
+          />
+
+          <Card as="section">
+            <h3>{t('Dataset Items')}</h3>
+            <small className="muted">{t('Ready files: {count}', { count: readyCount })}</small>
+            {items.length === 0 ? (
+              <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files to generate items.')} />
+            ) : (
+              <div className="stack">
+                <Panel as="section" className="stack tight" tone="soft">
+                  <h4>{t('Item Editor')}</h4>
+                  <label>
+                    {t('Selected Item')}
+                    <Select
+                      value={selectedItemId}
+                      onChange={(event) => {
+                        const nextId = event.target.value;
+                        const next = items.find((item) => item.id === nextId);
+                        if (!next) {
+                          return;
+                        }
+                        selectItemForEditing(next);
+                      }}
+                    >
+                      {items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.id} · {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <div className="three-col">
+                    <label>
+                      {t('Item Split')}
+                      <Select
+                        value={itemSplit}
+                        onChange={(event) =>
+                          setItemSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
+                        }
+                      >
+                        <option value="unassigned">{t('unassigned')}</option>
+                        <option value="train">{t('train')}</option>
+                        <option value="val">{t('val')}</option>
+                        <option value="test">{t('test')}</option>
+                      </Select>
+                    </label>
+                    <label>
+                      {t('Item Status')}
+                      <Select
+                        value={itemStatus}
+                        onChange={(event) =>
+                          setItemStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
+                        }
+                      >
+                        <option value="ready">{t('ready')}</option>
+                        <option value="processing">{t('processing')}</option>
+                        <option value="uploading">{t('uploading')}</option>
+                        <option value="error">{t('error')}</option>
+                      </Select>
+                    </label>
+                  </div>
+                  <label>
+                    {t('Metadata (key=value per line, optional)')}
+                    <Textarea
+                      value={itemMetadataText}
+                      onChange={(event) => setItemMetadataText(event.target.value)}
+                      placeholder={t('for example: source=import_reference')}
+                      rows={3}
+                    />
+                  </label>
+                  <Button onClick={saveItemUpdates} disabled={busy || !selectedItemId}>
+                    {t('Save Item Updates')}
+                  </Button>
+                  <small className="muted">
+                    {selectedItem && Object.keys(selectedItem.metadata).length > 0
+                      ? t('Current metadata: {metadata}', { metadata: metadataToText(selectedItem.metadata) })
+                      : t('No metadata')}
+                  </small>
+                </Panel>
+
+                {shouldVirtualizeItemList ? (
+                  <VirtualList
+                    items={items}
+                    itemHeight={96}
+                    height={420}
+                    ariaLabel={t('Dataset Items')}
+                    listClassName="workspace-record-list"
+                    itemKey={(item) => item.id}
+                    renderItem={(item) => (
+                      <div className="workspace-record-item virtualized">
+                        <div className="stack tight">
+                          <div className="row between gap wrap">
+                            <span>{item.id}</span>
+                            <div className="row gap wrap">
+                              <Badge tone="neutral">{t(item.split)}</Badge>
+                              <StatusTag status={item.status}>{t(item.status)}</StatusTag>
+                            </div>
+                          </div>
+                          <small className="muted">
+                            {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
+                          </small>
+                          <div className="row between gap wrap">
+                            <small className="muted">
+                              {Object.keys(item.metadata).length > 0
+                                ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
+                                : t('No metadata')}
+                            </small>
+                            <Button size="sm" variant="ghost" onClick={() => selectItemForEditing(item)} disabled={busy}>
+                              {t('Edit Item')}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  />
+                ) : (
+                  <ul className="workspace-record-list">
+                    {items.map((item) => (
+                      <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
+                        <div className="stack tight">
+                          <div className="row between gap wrap">
+                            <span>{item.id}</span>
+                            <div className="row gap wrap">
+                              <Badge tone="neutral">{t(item.split)}</Badge>
+                              <StatusTag status={item.status}>{t(item.status)}</StatusTag>
+                            </div>
+                          </div>
+                          <small className="muted">
+                            {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
+                          </small>
+                          <div className="row between gap wrap">
+                            <small className="muted">
+                              {Object.keys(item.metadata).length > 0
+                                ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
+                                : t('No metadata')}
+                            </small>
+                            <Button size="sm" variant="ghost" onClick={() => selectItemForEditing(item)} disabled={busy}>
+                              {t('Edit Item')}
+                            </Button>
+                          </div>
+                        </div>
+                      </Panel>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <div className="workspace-overview-side">
+          <Card as="section">
+            <h3>{t('Step 2. Train/Val/Test Split')}</h3>
+            <small className="muted">
+              {t('Adjust split ratios and apply when the dataset item set is ready.')}
+            </small>
+            <label>
+              {t('Train Ratio')}
+              <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
+            </label>
+            <label>
+              {t('Val Ratio')}
+              <Input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
+            </label>
+            <label>
+              {t('Test Ratio')}
+              <Input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
+            </label>
+            <Button onClick={runSplit} disabled={busy || items.length === 0}>
+              {t('Apply Split')}
+            </Button>
+          </Card>
+
+          <Card as="section">
+            <h3>{t('Step 3. Dataset Version')}</h3>
+            <small className="muted">
+              {t('Create immutable snapshots before training so runs stay reproducible.')}
+            </small>
+            <label>
+              {t('Version Name (optional)')}
+              <Input
+                value={versionName}
+                onChange={(event) => setVersionName(event.target.value)}
+                placeholder={t('for example: v2')}
+              />
+            </label>
+            <Button onClick={createVersion} disabled={busy || items.length === 0}>
+              {t('Create Version Snapshot')}
+            </Button>
+          </Card>
+
+          <AdvancedSection
+            title={t('Annotation Import / Export')}
+            description={t('Use this section to import or export annotation files in selected format.')}
+          >
+            <Card as="section">
+              <h4>{t('Import Annotations')}</h4>
+              <label>
+                {t('Format')}
+                <Select
+                  value={importFormat}
+                  onChange={(event) =>
+                    setImportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
+                  }
+                >
+                  <option value="yolo">{t('yolo')}</option>
+                  <option value="coco">{t('coco')}</option>
+                  <option value="labelme">{t('labelme')}</option>
+                  <option value="ocr">{t('ocr')}</option>
+                </Select>
+              </label>
+              <label>
+                {t('Source Attachment')}
+                <Select
+                  value={importAttachmentId}
+                  onChange={(event) => setImportAttachmentId(event.target.value)}
+                >
+                  {attachments
+                    .filter((attachment) => attachment.status === 'ready')
+                    .map((attachment) => (
+                      <option key={attachment.id} value={attachment.id}>
+                        {attachment.filename} ({attachment.id})
+                      </option>
+                    ))}
+                </Select>
+              </label>
+              <Button onClick={importAnnotations} disabled={busy || !importAttachmentId}>
+                {t('Run Import')}
+              </Button>
+            </Card>
+
+            <Card as="section">
+              <h4>{t('Export Annotations')}</h4>
+              <label>
+                {t('Format')}
+                <Select
+                  value={exportFormat}
+                  onChange={(event) =>
+                    setExportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
+                  }
+                >
+                  <option value="yolo">{t('yolo')}</option>
+                  <option value="coco">{t('coco')}</option>
+                  <option value="labelme">{t('labelme')}</option>
+                  <option value="ocr">{t('ocr')}</option>
+                </Select>
+              </label>
+              <Button onClick={exportAnnotations} disabled={busy}>
+                {t('Run Export')}
+              </Button>
+            </Card>
+
+            <Card as="section">
+              <h4>{t('Reference Dataset Items')}</h4>
+              <small className="muted">
+                {t('Create metadata-only items when file binary is not uploaded yet.')}
+              </small>
+              <label>
+                {t('Reference Filename')}
+                <Input
+                  value={referenceFilename}
+                  onChange={(event) => setReferenceFilename(event.target.value)}
+                  placeholder={t('for example: camera-A/frame-001.jpg')}
+                />
+              </label>
+              <label>
+                {t('Item Split')}
+                <Select
+                  value={referenceSplit}
+                  onChange={(event) =>
+                    setReferenceSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
+                  }
+                >
+                  <option value="unassigned">{t('unassigned')}</option>
+                  <option value="train">{t('train')}</option>
+                  <option value="val">{t('val')}</option>
+                  <option value="test">{t('test')}</option>
+                </Select>
+              </label>
+              <label>
+                {t('Item Status')}
+                <Select
+                  value={referenceStatus}
+                  onChange={(event) =>
+                    setReferenceStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
+                  }
+                >
+                  <option value="ready">{t('ready')}</option>
+                  <option value="processing">{t('processing')}</option>
+                  <option value="uploading">{t('uploading')}</option>
+                  <option value="error">{t('error')}</option>
+                </Select>
+              </label>
               <label>
                 {t('Metadata (key=value per line, optional)')}
-                <textarea
-                  value={itemMetadataText}
-                  onChange={(event) => setItemMetadataText(event.target.value)}
+                <Textarea
+                  value={referenceMetadataText}
+                  onChange={(event) => setReferenceMetadataText(event.target.value)}
                   placeholder={t('for example: source=import_reference')}
                   rows={3}
                 />
               </label>
-              <button onClick={saveItemUpdates} disabled={busy || !selectedItemId}>
-                {t('Save Item Updates')}
-              </button>
-              <small className="muted">
-                {selectedItem && Object.keys(selectedItem.metadata).length > 0
-                  ? t('Current metadata: {metadata}', { metadata: metadataToText(selectedItem.metadata) })
-                  : t('No metadata')}
-              </small>
-            </section>
+              <Button onClick={createReferenceItem} disabled={busy}>
+                {t('Create Reference Item')}
+              </Button>
+            </Card>
+          </AdvancedSection>
 
-            {shouldVirtualizeItemList ? (
-              <VirtualList
-                items={items}
-                itemHeight={96}
-                height={420}
-                ariaLabel={t('Dataset Items')}
-                itemKey={(item) => item.id}
-                renderItem={(item) => (
-                  <div className="list-item virtualized">
-                    <div className="stack tight">
-                      <div className="row between gap">
-                        <span>{item.id}</span>
-                        <span className="chip">
-                          {t(item.split)} · {t(item.status)}
-                        </span>
-                      </div>
-                      <small className="muted">
-                        {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
-                      </small>
-                      <div className="row between gap">
-                        <small className="muted">
-                          {Object.keys(item.metadata).length > 0
-                            ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
-                            : t('No metadata')}
-                        </small>
-                        <button onClick={() => selectItemForEditing(item)} disabled={busy}>
-                          {t('Edit Item')}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              />
+          <Card as="section">
+            <h3>{t('Dataset Versions')}</h3>
+            {versions.length === 0 ? (
+              <StateBlock variant="empty" title={t('No Versions')} description={t('Create first version snapshot after split.')} />
             ) : (
-              <ul className="list">
-                {items.map((item) => (
-                  <li key={item.id} className="list-item">
-                    <div className="stack tight">
-                      <div className="row between gap">
-                        <span>{item.id}</span>
-                        <span className="chip">
-                          {t(item.split)} · {t(item.status)}
-                        </span>
-                      </div>
-                      <small className="muted">
-                        {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
-                      </small>
-                      <div className="row between gap">
-                        <small className="muted">
-                          {Object.keys(item.metadata).length > 0
-                            ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
-                            : t('No metadata')}
-                        </small>
-                        <button onClick={() => selectItemForEditing(item)} disabled={busy}>
-                          {t('Edit Item')}
-                        </button>
-                      </div>
+              <ul className="workspace-record-list compact">
+                {versions.map((version) => (
+                  <Panel key={version.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
+                    <strong>{version.version_name}</strong>
+                    <div className="row gap wrap">
+                      <Badge tone="neutral">{t('Items')}: {version.item_count}</Badge>
+                      <Badge tone="info">{t('Coverage')}: {version.annotation_coverage}</Badge>
                     </div>
-                  </li>
+                  </Panel>
                 ))}
               </ul>
             )}
-          </div>
-        )}
-      </section>
-
-      <section className="card stack">
-        <h3>{t('Dataset Versions')}</h3>
-        {versions.length === 0 ? (
-          <StateBlock variant="empty" title={t('No Versions')} description={t('Create first version snapshot after split.')} />
-        ) : (
-          <ul className="list">
-            {versions.map((version) => (
-              <li key={version.id} className="list-item stack tight">
-                <strong>{version.version_name}</strong>
-                <small className="muted">
-                  {t('Items {count} · Coverage {coverage}', {
-                    count: version.item_count,
-                    coverage: version.annotation_coverage
-                  })}
-                </small>
-              </li>
-            ))}
-          </ul>
-        )}
+          </Card>
+        </div>
       </section>
     </div>
   );

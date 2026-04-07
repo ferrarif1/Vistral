@@ -4,10 +4,39 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-API_PORT="${API_PORT:-8798}"
-RUNTIME_MOCK_PORT="${RUNTIME_MOCK_PORT:-9393}"
+API_HOST="${API_HOST:-127.0.0.1}"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[smoke-runtime-success] jq is required."
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[smoke-runtime-success] python3 is required."
+  exit 1
+fi
+
+if [[ -z "${API_PORT:-}" ]]; then
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
+if [[ -z "${RUNTIME_MOCK_PORT:-}" ]]; then
+  RUNTIME_MOCK_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
 RUNTIME_ENDPOINT="http://127.0.0.1:${RUNTIME_MOCK_PORT}/predict"
-BASE_URL="http://127.0.0.1:${API_PORT}"
+BASE_URL="http://${API_HOST}:${API_PORT}"
 
 COOKIE_FILE="$(mktemp)"
 API_LOG="$(mktemp)"
@@ -65,12 +94,19 @@ for _ in $(seq 1 40); do
   sleep 0.1
 done
 
+if ! kill -0 "$RUNTIME_PID" >/dev/null 2>&1; then
+  echo "[smoke-runtime-success] Runtime mock process exited before health check (possible port conflict)"
+  cat "$RUNTIME_LOG"
+  exit 1
+fi
+
 if ! curl -sS "http://127.0.0.1:${RUNTIME_MOCK_PORT}/health" >/dev/null 2>&1; then
   echo "[smoke-runtime-success] Runtime mock server failed to start"
   cat "$RUNTIME_LOG"
   exit 1
 fi
 
+API_HOST="${API_HOST}" \
 API_PORT="${API_PORT}" \
 PADDLEOCR_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
 DOCTR_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
@@ -84,6 +120,12 @@ for _ in $(seq 1 40); do
   fi
   sleep 0.1
 done
+
+if ! kill -0 "$API_PID" >/dev/null 2>&1; then
+  echo "[smoke-runtime-success] API process exited before health check (possible port conflict)"
+  cat "$API_LOG"
+  exit 1
+fi
 
 if ! curl -sS "${BASE_URL}/api/health" >/dev/null 2>&1; then
   echo "[smoke-runtime-success] API failed to start"

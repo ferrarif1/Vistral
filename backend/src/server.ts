@@ -348,6 +348,12 @@ const withUserDirect = async (
   }
 };
 
+const readTrainingWorkerToken = (req: IncomingMessage): string | null => {
+  const incomingHeader = req.headers['x-training-worker-token'];
+  const incomingToken = Array.isArray(incomingHeader) ? incomingHeader[0] : incomingHeader;
+  return incomingToken?.trim() || null;
+};
+
 const server = createServer(async (req, res) => {
   try {
     if (!req.url || !req.method) {
@@ -519,6 +525,105 @@ const server = createServer(async (req, res) => {
       } catch (error) {
         return sendError(res, error);
       }
+    }
+
+    if (path === '/api/admin/training-workers') {
+      if (req.method === 'GET') {
+        return withUser(req, res, () => handlers.listTrainingWorkersByAdmin());
+      }
+
+      if (req.method === 'POST') {
+        const body = (await readBody(req)) as {
+          name: string;
+          endpoint?: string | null;
+          status?: 'online' | 'offline' | 'draining';
+          enabled?: boolean;
+          max_concurrency?: number;
+          capabilities?: string[];
+          metadata?: Record<string, string>;
+        };
+        return withUserMutation(req, res, () => handlers.createTrainingWorkerByAdmin(body));
+      }
+
+      return methodNotAllowed(res);
+    }
+
+    if (path === '/api/admin/training-workers/bootstrap-sessions') {
+      if (req.method === 'GET') {
+        return withUser(req, res, () => handlers.listTrainingWorkerBootstrapSessionsByAdmin());
+      }
+
+      if (req.method === 'POST') {
+        const body = (await readBody(req)) as {
+          deployment_mode: 'docker' | 'script';
+          worker_profile: 'yolo' | 'paddleocr' | 'doctr' | 'mixed';
+          control_plane_base_url: string;
+          worker_name?: string;
+          worker_public_host?: string;
+          worker_bind_port?: number;
+          max_concurrency?: number;
+        };
+        return withUserMutation(req, res, () =>
+          handlers.createTrainingWorkerBootstrapSessionByAdmin(body)
+        );
+      }
+
+      return methodNotAllowed(res);
+    }
+
+    const adminTrainingWorkerBootstrapValidateMatch = path.match(
+      /^\/api\/admin\/training-workers\/bootstrap-sessions\/([^/]+)\/validate-callback$/
+    );
+    if (adminTrainingWorkerBootstrapValidateMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const sessionId = decodeURIComponent(adminTrainingWorkerBootstrapValidateMatch[1] ?? '');
+      return withUserMutation(req, res, () =>
+        handlers.validateTrainingWorkerBootstrapCallbackByAdmin(sessionId)
+      );
+    }
+
+    const adminTrainingWorkerBootstrapBundleMatch = path.match(
+      /^\/api\/admin\/training-workers\/bootstrap-sessions\/([^/]+)\/bundle$/
+    );
+    if (adminTrainingWorkerBootstrapBundleMatch) {
+      if (req.method !== 'GET') {
+        return methodNotAllowed(res);
+      }
+      const sessionId = decodeURIComponent(adminTrainingWorkerBootstrapBundleMatch[1] ?? '');
+      return withUserDirect(req, res, async () => {
+        const payload = await handlers.downloadTrainingWorkerBootstrapBundleByAdmin(sessionId);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/x-sh; charset=utf-8');
+        const safeFilename = toSafeAttachmentFilename(payload.filename);
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(payload.filename)}`
+        );
+        res.end(payload.content);
+      });
+    }
+
+    const adminTrainingWorkerDetailMatch = path.match(/^\/api\/admin\/training-workers\/([^/]+)$/);
+    if (adminTrainingWorkerDetailMatch) {
+      const workerId = decodeURIComponent(adminTrainingWorkerDetailMatch[1] ?? '');
+      if (req.method === 'PATCH') {
+        const body = (await readBody(req)) as {
+          name?: string;
+          endpoint?: string | null;
+          status?: 'online' | 'offline' | 'draining';
+          enabled?: boolean;
+          max_concurrency?: number;
+          capabilities?: string[];
+          metadata?: Record<string, string>;
+        };
+        return withUserMutation(req, res, () => handlers.updateTrainingWorkerByAdmin(workerId, body));
+      }
+      if (req.method === 'DELETE') {
+        return withUserMutation(req, res, () => handlers.removeTrainingWorkerByAdmin(workerId));
+      }
+      return methodNotAllowed(res);
     }
 
     if (path === '/api/models' && req.method === 'GET') {
@@ -1100,6 +1205,57 @@ const server = createServer(async (req, res) => {
           dataset_id: body.dataset_id,
           reason: body.reason
         })
+      );
+    }
+
+    if (path === '/api/runtime/training-workers/heartbeat') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const body = (await readBody(req)) as {
+        worker_id?: string;
+        name: string;
+        endpoint?: string | null;
+        status?: 'online' | 'offline' | 'draining';
+        enabled?: boolean;
+        max_concurrency?: number;
+        reported_load?: number | null;
+        capabilities?: string[];
+        metadata?: Record<string, string>;
+      };
+      return withHandler(res, () => handlers.heartbeatTrainingWorker(body, readTrainingWorkerToken(req)));
+    }
+
+    if (path === '/api/runtime/training-workers/bootstrap-sessions/claim') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const body = (await readBody(req)) as {
+        pairing_token: string;
+      };
+      return withHandler(res, () => handlers.claimTrainingWorkerBootstrapSession(body));
+    }
+
+    if (path === '/api/runtime/training-workers/bootstrap-sessions/status') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const body = (await readBody(req)) as {
+        pairing_token: string;
+      };
+      return withHandler(res, () => handlers.getTrainingWorkerBootstrapSessionStatus(body));
+    }
+
+    const workerDatasetPackageMatch = path.match(
+      /^\/api\/runtime\/training-workers\/dataset-packages\/([^/]+)$/
+    );
+    if (workerDatasetPackageMatch) {
+      if (req.method !== 'GET') {
+        return methodNotAllowed(res);
+      }
+      const packageId = decodeURIComponent(workerDatasetPackageMatch[1] ?? '');
+      return withHandler(res, () =>
+        handlers.getTrainingWorkerDatasetPackageContent(packageId, readTrainingWorkerToken(req))
       );
     }
 

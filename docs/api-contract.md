@@ -734,6 +734,14 @@ Query:
 - `framework`
 - `status`
 
+Response notes:
+- each job item includes scheduler metadata fields:
+  - `execution_target`
+  - `scheduled_worker_id`
+  - `scheduler_note`
+  - `scheduler_decision` (nullable structured decision snapshot)
+  - `scheduler_decision_history` (ordered structured decision timeline)
+
 ### POST /training/jobs
 Create training job.
 
@@ -783,6 +791,12 @@ Server behavior (current):
 - for OCR frameworks, bundled `paddleocr/doctr` train runners can perform dependency-backed OCR probe execution (sampled manifest inference for metric bootstrap) when dependencies are available; when unavailable, artifact manifest keeps `mode=template` and `fallback_reason`
 - OCR local runners may also emit additional OCR-shaped metric keys in `metrics.json` / artifact summary (for example `norm_edit_distance`, `word_accuracy`) alongside the canonical visible metrics, without changing the job detail response envelope
 - `job.execution_mode` is returned explicitly (`simulated` | `local_command` | `unknown`)
+- scheduler stores control-plane assignment metadata:
+  - `job.execution_target` (`control_plane` | `worker`)
+  - `job.scheduled_worker_id` (nullable)
+  - `job.scheduler_note` (nullable; load snapshot/fallback reason)
+  - `job.scheduler_decision` (nullable structured snapshot, including trigger/attempt/score/fallback/excluded-workers/decided-at)
+  - `job.scheduler_decision_history` (ordered list of structured scheduler snapshots across create/resume/retry/reschedule/failover/fallback)
 
 ### GET /training/jobs/{id}
 Get training job detail including:
@@ -791,6 +805,8 @@ Get training job detail including:
 - `logs` (runtime log lines)
 - `artifact_attachment_id` (if generated)
 - `workspace_dir` (local executor workspace)
+- `job.scheduler_decision` for latest persisted scheduling transition snapshot
+- `job.scheduler_decision_history` for full persisted scheduling timeline
 - `artifact_summary` (parsed runtime artifact manifest preview when available), fields include:
   - `runner`
   - `mode` (for example `real`, `real_probe`, `template`)
@@ -988,7 +1004,385 @@ Response:
 }
 ```
 
-## 17. Unified Inference Output Schema
+## 17. Training Worker Control Plane Endpoints
+
+### GET /admin/training-workers
+List training worker nodes visible to admin.
+
+Rules:
+- admin only
+- response includes heartbeat/load/capacity plus scheduler-derived in-flight counters
+- response also includes scheduler score breakdown for observability:
+  - `scheduler_score` (lower is preferred)
+  - `scheduler_load_component`
+  - `scheduler_health_penalty`
+  - `scheduler_capability_bonus`
+  - `dispatch_recent_failures`
+  - `dispatch_consecutive_failures`
+  - `dispatch_last_failure_at`
+  - `dispatch_last_success_at`
+  - `dispatch_cooldown_active`
+
+### GET /admin/training-workers/bootstrap-sessions
+List pending or recent worker bootstrap sessions visible to admin.
+
+Rules:
+- admin only
+- response is ordered by newest first
+- bootstrap sessions are short-lived operator onboarding records and may include `expired` state
+
+Response item shape:
+```json
+{
+  "id": "twbs-501",
+  "status": "bootstrap_created",
+  "deployment_mode": "docker",
+  "worker_profile": "yolo",
+  "pairing_token": "vtw_8d9d6e...",
+  "token_preview": "vtw_8d9d...e812",
+  "control_plane_base_url": "http://10.0.0.10:8080",
+  "worker_id": "tw-yolo-b7d9",
+  "worker_name": "yolo-worker-b",
+  "worker_public_host": "10.0.0.22",
+  "worker_bind_port": 9090,
+  "worker_endpoint_hint": "http://10.0.0.22:9090",
+  "worker_runtime_profile": "yolo",
+  "capabilities": ["framework:yolo", "task:detection"],
+  "max_concurrency": 1,
+  "issued_auth_mode": "dedicated",
+  "issued_auth_token_preview": "vtwa_92fa...7bc1",
+  "docker_command": "docker run ...",
+  "script_command": "WORKER_BOOTSTRAP_TOKEN=... bash training-worker/scripts/run-worker-node.sh",
+  "setup_url_hint": "http://10.0.0.22:9090/setup",
+  "claimed_at": null,
+  "last_seen_at": null,
+  "callback_checked_at": null,
+  "callback_validation_message": null,
+  "linked_worker_id": null,
+  "metadata": {
+    "recommended_image": "vistral-training-worker:local"
+  },
+  "created_at": "2026-04-07T08:00:00.000Z",
+  "expires_at": "2026-04-07T08:20:00.000Z"
+}
+```
+
+### POST /admin/training-workers/bootstrap-sessions
+Create a short-lived worker bootstrap session from admin runtime settings.
+
+Request:
+```json
+{
+  "deployment_mode": "docker",
+  "worker_profile": "yolo",
+  "control_plane_base_url": "http://10.0.0.10:8080",
+  "worker_name": "yolo-worker-b",
+  "worker_public_host": "10.0.0.22",
+  "worker_bind_port": 9090,
+  "max_concurrency": 1
+}
+```
+
+Rules:
+- admin only
+- `deployment_mode` must be `docker` or `script`
+- `worker_profile` must be `yolo`, `paddleocr`, `doctr`, or `mixed`
+- `worker_public_host` is optional but recommended for cross-machine workers so the generated worker endpoint / `/setup` URL are immediately usable
+- `worker_bind_port` is optional and defaults to `9090`
+- control plane returns copyable startup templates plus a short-lived pairing token
+- bootstrap-created workers now prefer a dedicated per-worker auth token behind the pairing exchange; operators should not need to manually paste the long-lived control-plane shared token
+
+### GET /admin/training-workers/bootstrap-sessions/{id}/bundle
+Download a worker bootstrap bundle script for operator handoff.
+
+Rules:
+- admin only
+- returns a downloadable shell script attachment
+- bundle includes the current pairing token, selected deployment mode startup command, and next-step `/setup` guidance
+- bundle is intended for trusted operator delivery inside the same infrastructure boundary
+
+### POST /admin/training-workers
+Create a training worker node manually from admin control plane.
+
+Request:
+```json
+{
+  "name": "gpu-worker-b",
+  "endpoint": "http://10.10.0.22:9090",
+  "max_concurrency": 2,
+  "enabled": true,
+  "capabilities": ["framework:yolo", "task:detection"],
+  "metadata": {
+    "ip": "10.10.0.22",
+    "zone": "rack-b"
+  }
+}
+```
+
+### PATCH /admin/training-workers/{id}
+Update worker mutable fields.
+
+Supported fields:
+- `name`
+- `endpoint`
+- `status` (`online` | `offline` | `draining`)
+- `enabled`
+- `max_concurrency`
+- `capabilities`
+- `metadata`
+
+### DELETE /admin/training-workers/{id}
+Remove worker node from scheduling pool.
+
+Rules:
+- admin only
+- worker with active in-flight jobs cannot be removed
+
+### POST /runtime/training-workers/bootstrap-sessions/claim
+Worker-local setup service exchanges a short-lived pairing token for resolved worker config defaults.
+
+Request:
+```json
+{
+  "pairing_token": "vtw_8d9d6e..."
+}
+```
+
+Response:
+```json
+{
+  "bootstrap_session": {
+    "id": "twbs-501",
+    "status": "pairing",
+    "worker_id": "tw-yolo-b7d9",
+    "worker_name": "yolo-worker-b"
+  },
+  "config_defaults": {
+    "control_plane_base_url": "http://10.0.0.10:8080",
+    "training_worker_auth_token": "vtwa_worker_specific_secret",
+    "worker_id": "tw-yolo-b7d9",
+    "worker_name": "yolo-worker-b",
+    "worker_endpoint": "http://10.0.0.22:9090",
+    "worker_status": "online",
+    "worker_enabled": "true",
+    "worker_max_concurrency": "1",
+    "worker_capabilities": "framework:yolo,task:detection",
+    "worker_runtime_profile": "yolo"
+  }
+}
+```
+
+Rules:
+- intended for worker-local onboarding service, not end-user browsers
+- token must be unexpired
+- successful claim moves bootstrap session from `bootstrap_created` to `pairing`
+- response may already include preconfigured `worker_endpoint` defaults when admin supplied `worker_public_host` / `worker_bind_port`
+- response may still require worker-local UI to collect writable run-root and other machine-local values before final apply
+
+### POST /runtime/training-workers/bootstrap-sessions/status
+Worker-local setup service checks the latest control-plane status for a short-lived bootstrap session.
+
+Request:
+```json
+{
+  "pairing_token": "vtw_8d9d6e..."
+}
+```
+
+Response:
+```json
+{
+  "id": "twbs-501",
+  "status": "awaiting_confirmation",
+  "worker_id": "tw-yolo-b7d9",
+  "worker_name": "yolo-worker-b",
+  "worker_endpoint_hint": "http://10.0.0.22:9090",
+  "callback_validation_message": "Waiting for worker heartbeat to publish a callback endpoint.",
+  "last_seen_at": "2026-04-07T08:03:00.000Z",
+  "callback_checked_at": "2026-04-07T08:03:00.000Z"
+}
+```
+
+Rules:
+- intended for worker-local onboarding service, not end-user browsers
+- token must be unexpired
+- endpoint is read-only and does not change bootstrap session state by itself
+- worker-local setup UIs can poll this endpoint after `claim` / `apply` to show whether the worker really reached `online`, is still `awaiting_confirmation`, or is stuck in `validation_failed`
+
+### POST /admin/training-workers/bootstrap-sessions/{id}/validate-callback
+Retry callback validation from control plane to the linked worker endpoint.
+
+Rules:
+- admin only
+- session must exist and must already know either `linked_worker_id` or `worker_endpoint_hint`
+- success advances session to `online`
+- failure keeps session in `validation_failed` and the linked worker out of schedulable `online` state
+
+### POST /runtime/training-workers/heartbeat
+Worker self-reports heartbeat and load to control plane.
+
+Auth:
+- header `X-Training-Worker-Token`
+- accepted credentials:
+  - dedicated per-worker token issued during bootstrap pairing
+  - control-plane shared fallback token from `TRAINING_WORKER_SHARED_TOKEN` for legacy/manual workers
+
+Request:
+```json
+{
+  "worker_id": "tw-22",
+  "name": "gpu-worker-b",
+  "endpoint": "http://10.10.0.22:9090",
+  "status": "online",
+  "enabled": true,
+  "max_concurrency": 2,
+  "reported_load": 0.35,
+  "capabilities": ["framework:yolo", "task:detection"],
+  "metadata": {
+    "ip": "10.10.0.22"
+  }
+}
+```
+
+Behavior:
+- updates existing worker by `worker_id` or auto-registers new worker when not found
+- heartbeat stale timeout uses `TRAINING_WORKER_HEARTBEAT_TTL_MS`
+- scheduler treats stale worker as unavailable
+- when heartbeat matches an active bootstrap session `worker_id`, control plane should run callback validation against worker health endpoint before advancing session/worker to `online`
+
+### GET /runtime/training-workers/dataset-packages/{package_id}
+Internal control-plane endpoint for worker dataset package download.
+
+Auth:
+- header `X-Training-Worker-Token`
+- accepts the scheduled worker's dedicated token; shared token remains valid as compatibility fallback
+
+Response:
+- standard success envelope whose `data` is an `inline_base64_v1` dataset package payload
+- package must be within TTL; expired or unknown package ids return error
+
+### Worker execution contract (control-plane -> worker service)
+This is the worker-machine service contract used when a job is scheduled to `execution_target=worker`.
+It is not a public end-user API under Vistral control-plane `/api`; it is an internal node-to-node contract.
+
+Endpoint (worker side):
+- `POST {worker.endpoint}/api/worker/train`
+
+Auth:
+- header `X-Training-Worker-Token`
+- control plane should prefer the scheduled worker's dedicated token; shared token remains valid as compatibility fallback
+
+Request payload (minimum):
+```json
+{
+  "job_id": "tj-1201",
+  "framework": "yolo",
+  "task_type": "detection",
+  "dataset_id": "d-2",
+  "dataset_version_id": "dv-2",
+  "base_model": "yolo11n",
+  "config": {
+    "epochs": "30",
+    "batch_size": "16"
+  },
+  "dataset_summary": {
+    "total_items": 120
+  },
+  "dataset_package": {
+    "format": "reference_json_v1",
+    "package_id": "twpkg-501",
+    "download_url": "http://10.0.0.10:8080/api/runtime/training-workers/dataset-packages/twpkg-501",
+    "expires_at": "2026-04-07T10:22:33.100Z",
+    "root_relative": "materialized-dataset/yolo",
+    "total_files": 12,
+    "total_bytes": 1048576
+  }
+}
+```
+
+`dataset_package` supports:
+- `inline_base64_v1`: embeds files directly via `files[]` with base64 payload
+- `reference_json_v1`: includes `package_id`, `download_url`, and TTL metadata; worker must fetch inline package json from control plane using worker token
+
+Scheduler context note:
+- control plane may include `scheduler` object for observability (`execution_target`, `scheduled_worker_id`, `scheduler_note`, `scheduler_decision`)
+- worker can treat this as read-only metadata and does not need to mutate scheduler fields
+
+Path compatibility note:
+- worker may receive optional `workspace` path hints from control plane
+- for cross-machine deployment, worker should default to local workspace root and ignore foreign absolute paths unless explicitly configured to trust request paths
+- when `dataset_package` is present, worker should reconstruct files under local workspace and rewrite any materialized dataset path references to local paths
+- when `download_url` is relative, worker should resolve it against `CONTROL_PLANE_BASE_URL`
+
+Response payload (minimum):
+```json
+{
+  "accepted": true,
+  "execution_mode": "local_command",
+  "log_preview": "yolo worker command finished",
+  "logs": ["..."],
+  "metrics": {
+    "map": 0.71,
+    "precision": 0.78,
+    "recall": 0.69
+  },
+  "metric_series": [
+    { "step": 1, "metrics": { "map": 0.42 } },
+    { "step": 2, "metrics": { "map": 0.48 } }
+  ],
+  "artifact_payload": {
+    "runner": "worker-local-runner",
+    "mode": "template"
+  }
+}
+```
+
+Worker cancellation endpoint (worker side):
+- `POST {worker.endpoint}/api/worker/cancel`
+
+Request:
+```json
+{
+  "job_id": "tj-1201"
+}
+```
+
+Behavior:
+- worker should stop running process for `job_id` when active
+- control plane may call this endpoint when user requests cancel on a worker-running job
+- response should include whether there was an active process at cancel time
+
+Control-plane behavior:
+- success: persist returned logs/metrics/artifact summary into job runtime outputs
+- dispatch failure: control plane may reselect another eligible online worker and retry dispatch within the same run
+- retry policy is bounded by scheduler runtime settings (`TRAINING_WORKER_DISPATCH_MAX_ATTEMPTS`, `TRAINING_WORKER_DISPATCH_RETRY_BASE_MS`), then fallback/terminal behavior applies
+- scheduler candidate scoring may apply recent dispatch-failure penalty/cooldown (`TRAINING_WORKER_FAILURE_PENALTY_WINDOW_MS`, `TRAINING_WORKER_FAILURE_COOLDOWN_MS`) before selecting next worker
+- failure: if fallback policy is enabled, switch to control-plane local execution and append dispatch-failure reason into scheduler/log context
+
+### Worker local setup endpoints
+Worker service also exposes local onboarding/setup endpoints for operator-driven GUI configuration.
+
+Endpoints (worker side):
+- `GET {worker.endpoint}/setup`
+- `GET {worker.endpoint}/api/local/setup/state`
+- `POST {worker.endpoint}/api/local/setup/detect`
+- `POST {worker.endpoint}/api/local/setup/pair`
+- `POST {worker.endpoint}/api/local/setup/validate`
+- `POST {worker.endpoint}/api/local/setup/apply`
+
+Notes:
+- these endpoints are intended for local/operator setup use on the worker machine
+- common setup path:
+  - start worker node in setup mode
+  - open `/setup`
+  - paste pairing token or use the token injected by startup command
+  - let worker-local service claim config defaults from control plane
+  - fill/confirm worker identity + callback endpoint
+  - validate
+  - apply
+- `apply` persists worker config into local env file and updates in-process config; when worker is supervised by `run-worker-node.sh`, heartbeat can start automatically after config becomes valid
+
+## 18. Unified Inference Output Schema
 Used by `/inference/runs*` and adapter predict APIs.
 
 ```json
@@ -1025,7 +1419,7 @@ Used by `/inference/runs*` and adapter predict APIs.
 }
 ```
 
-## 18. Adapter Interface Contract (Runtime)
+## 19. Adapter Interface Contract (Runtime)
 Platform adapter implementations for PaddleOCR/docTR/YOLO must expose:
 - `validate_dataset()`
 - `train()`
@@ -1036,7 +1430,7 @@ Platform adapter implementations for PaddleOCR/docTR/YOLO must expose:
 
 Adapter-specific internals are hidden behind this contract.
 
-## 19. Error Codes
+## 20. Error Codes
 - `AUTHENTICATION_REQUIRED`
 - `INSUFFICIENT_PERMISSIONS`
 - `CSRF_VALIDATION_FAILED`
@@ -1059,6 +1453,6 @@ Implementation note:
 - backend uses message-pattern classification first (for permission/not-found/state errors), implemented in shared error normalizer
 - explicit message mapping is kept as fallback for edge cases
 
-## 20. Versioning Strategy
+## 21. Versioning Strategy
 - API path versioning is planned (`/v1`) for production.
 - Current prototype uses stable `/api` routes; breaking changes must be documented in `PLANS.md` and migration notes.

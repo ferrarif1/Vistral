@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
+import { Button } from './ui/Button';
+import { Input } from './ui/Field';
+import { Card } from './ui/Surface';
 
 export interface AnnotationBox {
   id: string;
@@ -342,7 +345,7 @@ export default function AnnotationCanvas({
     interaction?.type === 'drawing' ? normalizeRect(interaction.start, interaction.current) : null;
 
   return (
-    <section className="card stack">
+    <Card as="section">
       <div className="row between gap align-center">
         <h3>{t(title)}</h3>
         <span className="muted">{t('Drag to create box. Click box to edit.')}</span>
@@ -393,10 +396,11 @@ export default function AnnotationCanvas({
             {selectedBoxId === box.id ? (
               <>
                 {(['nw', 'ne', 'sw', 'se'] as ResizeHandle[]).map((handle) => (
-                  <button
+                  <Button
                     key={handle}
                     type="button"
                     className={`annotation-canvas-handle ${handle}`}
+                    unstyled
                     onMouseDown={(event) => {
                       if (disabled) {
                         return;
@@ -438,19 +442,19 @@ export default function AnnotationCanvas({
       </div>
 
       <div className="row gap wrap">
-        <button onClick={removeSelected} disabled={disabled || !selectedBoxId}>
+        <Button variant="secondary" size="sm" onClick={removeSelected} disabled={disabled || !selectedBoxId}>
           {t('Delete Selected Box')}
-        </button>
-        <button onClick={clearAll} disabled={disabled || boxes.length === 0}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={clearAll} disabled={disabled || boxes.length === 0}>
           {t('Clear All Boxes')}
-        </button>
+        </Button>
       </div>
 
       {selectedBox ? (
         <div className="annotation-box-editor">
           <label>
             {t('Label')}
-            <input
+            <Input
               value={selectedBox.label}
               onChange={(event) => updateSelected({ label: event.target.value })}
               disabled={disabled}
@@ -458,7 +462,7 @@ export default function AnnotationCanvas({
           </label>
           <label>
             X
-            <input
+            <Input
               value={selectedBox.x}
               onChange={(event) => updateSelected({ x: Number(event.target.value) || 0 })}
               disabled={disabled}
@@ -466,7 +470,7 @@ export default function AnnotationCanvas({
           </label>
           <label>
             Y
-            <input
+            <Input
               value={selectedBox.y}
               onChange={(event) => updateSelected({ y: Number(event.target.value) || 0 })}
               disabled={disabled}
@@ -474,7 +478,7 @@ export default function AnnotationCanvas({
           </label>
           <label>
             {t('Width')}
-            <input
+            <Input
               value={selectedBox.width}
               onChange={(event) => updateSelected({ width: Number(event.target.value) || 0 })}
               disabled={disabled}
@@ -482,7 +486,7 @@ export default function AnnotationCanvas({
           </label>
           <label>
             {t('Height')}
-            <input
+            <Input
               value={selectedBox.height}
               onChange={(event) => updateSelected({ height: Number(event.target.value) || 0 })}
               disabled={disabled}
@@ -492,6 +496,6 @@ export default function AnnotationCanvas({
       ) : (
         <small className="muted">{t('No box selected.')}</small>
       )}
-    </section>
+    </Card>
   );
 }

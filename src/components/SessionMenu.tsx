@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { User } from '../../shared/domain';
 import { useI18n, type AppLanguage } from '../i18n/I18nProvider';
+import { Button, ButtonLink } from './ui/Button';
 
 interface SessionMenuItem {
   label: string;
@@ -76,9 +76,10 @@ export default function SessionMenu({
 
   return (
     <div ref={rootRef} className={`session-menu variant-${variant}`}>
-      <button
+      <Button
         ref={triggerRef}
         type="button"
+        unstyled
         className={`session-menu-trigger variant-${variant}${open ? ' open' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -100,7 +101,7 @@ export default function SessionMenu({
             </span>
           </>
         )}
-      </button>
+      </Button>
 
       {open ? (
         <div
@@ -124,20 +125,24 @@ export default function SessionMenu({
             <div className="session-menu-language" role="group" aria-label={t('Language')}>
               <small className="muted">{t('Language')}</small>
               <div className="session-menu-language-options">
-                <button
+                <Button
                   type="button"
+                  variant={languageControl.value === 'zh-CN' ? 'secondary' : 'ghost'}
+                  size="sm"
                   className={`session-menu-language-option${languageControl.value === 'zh-CN' ? ' active' : ''}`}
                   onClick={() => languageControl.onChange('zh-CN')}
                 >
                   {t('Chinese')}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant={languageControl.value === 'en-US' ? 'secondary' : 'ghost'}
+                  size="sm"
                   className={`session-menu-language-option${languageControl.value === 'en-US' ? ' active' : ''}`}
                   onClick={() => languageControl.onChange('en-US')}
                 >
                   {t('English')}
-                </button>
+                </Button>
               </div>
             </div>
           ) : null}
@@ -145,19 +150,23 @@ export default function SessionMenu({
           <div className="session-menu-list">
             {items.map((item, index) =>
               item.to ? (
-                <Link
+                <ButtonLink
                   key={`${item.to}-${index}`}
                   to={item.to}
+                  variant={item.tone === 'danger' ? 'danger' : 'secondary'}
+                  size={variant === 'pill' ? 'sm' : 'md'}
                   className={`session-menu-item${item.tone === 'danger' ? ' danger' : ''}`}
                   role="menuitem"
                   onClick={closeMenu}
                 >
                   {item.label}
-                </Link>
+                </ButtonLink>
               ) : (
-                <button
+                <Button
                   key={`${item.label}-${index}`}
                   type="button"
+                  variant={item.tone === 'danger' ? 'danger' : 'secondary'}
+                  size={variant === 'pill' ? 'sm' : 'md'}
                   className={`session-menu-item${item.tone === 'danger' ? ' danger' : ''}`}
                   role="menuitem"
                   onClick={() => {
@@ -166,7 +175,7 @@ export default function SessionMenu({
                   }}
                 >
                   {item.label}
-                </button>
+                </Button>
               )
             )}
           </div>

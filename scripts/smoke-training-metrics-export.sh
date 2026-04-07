@@ -3,7 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-8787}"
+if [[ -z "${API_PORT:-}" ]]; then
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
 BASE_URL="http://${API_HOST}:${API_PORT}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -47,6 +56,12 @@ for _ in {1..100}; do
   fi
   sleep 0.2
 done
+
+if ! kill -0 "${API_PID}" >/dev/null 2>&1; then
+  echo "[smoke-training-metrics-export] API process exited before health check (possible port conflict)."
+  cat "${API_LOG}"
+  exit 1
+fi
 
 if ! curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then
   echo "[smoke-training-metrics-export] API failed to start."

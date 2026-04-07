@@ -242,6 +242,11 @@ Attributes:
 - `base_model`
 - `config` (JSON)
 - `execution_mode` (`simulated` | `local_command` | `unknown`)
+- `execution_target` (`control_plane` | `worker`)
+- `scheduled_worker_id` (nullable FK `TrainingWorkerNode`)
+- `scheduler_note` (nullable string; scheduling decision and optional dispatch/fallback reason)
+- `scheduler_decision` (nullable JSON snapshot; structured scheduler decision trace)
+- `scheduler_decision_history` (JSON array; ordered scheduler decision timeline, latest snapshot included)
 - `log_excerpt` (nullable)
 - `submitted_by` (FK User)
 - `created_at`, `updated_at`
@@ -270,8 +275,98 @@ Runtime notes (current implementation):
 - when `VISTRAL_RUNNER_ENABLE_REAL=1`, bundled OCR local train runners may run dependency-backed OCR probe execution on materialized manifest samples (`mode=real_probe`) and otherwise stay in template mode with explicit `fallback_reason`
 - `execution_mode` is explicitly persisted per training job (no longer inferred only from logs)
 - training detail API also exposes parsed artifact runtime summary (mode/fallback/model path hints) for UI observability
+- when `execution_target=worker` and worker endpoint is reachable, control plane can dispatch training to worker endpoint and ingest returned logs/metrics/artifact summary into existing job runtime records
+- worker dispatch payload can include either:
+  - inline dataset package (`inline_base64_v1`) bounded by inline size/file caps
+  - reference package metadata (`reference_json_v1`) that points to control-plane package download endpoint with TTL
+- worker reconstructs training inputs under its local workspace without relying on control-plane absolute paths
+- if worker dispatch fails and fallback policy is enabled, runtime falls back to control-plane local execution and records reason in `scheduler_note` and logs
+- before local fallback, runtime can reselect another eligible worker and retry dispatch; scheduler transitions/retry reasons are recorded in `scheduler_note` and logs
+- worker re-dispatch uses bounded retry policy (`TRAINING_WORKER_DISPATCH_MAX_ATTEMPTS`, `TRAINING_WORKER_DISPATCH_RETRY_BASE_MS`) to avoid unbounded retry loops
+- worker selection score also includes recent dispatch-failure penalty/cooldown (`TRAINING_WORKER_FAILURE_PENALTY_WINDOW_MS`, `TRAINING_WORKER_FAILURE_COOLDOWN_MS`, `TRAINING_WORKER_FAILURE_PENALTY_STEP`, `TRAINING_WORKER_FAILURE_PENALTY_CAP`) so unstable nodes are deprioritized
+- when a worker-running job is cancelled, control plane should attempt worker-side cancellation and stop waiting on in-flight dispatch request
+- scheduler decision trace is persisted on each scheduling transition (`create`, `resume`, `retry`, pre-run reschedule, dispatch failover/fallback) with fields:
+  - `trigger` (transition source)
+  - `attempt` (dispatch/scheduling attempt index)
+  - `execution_target`
+  - `selected_worker_id`
+  - score components (`selected_worker_score`, `selected_worker_load_component`, `selected_worker_health_penalty`, `selected_worker_capability_bonus`)
+  - capacity snapshot (`selected_worker_in_flight_jobs`, `selected_worker_max_concurrency`)
+  - `excluded_worker_ids`
+  - `fallback_reason`
+  - `note`
+  - `decided_at`
+- `scheduler_decision` always reflects the latest entry in `scheduler_decision_history` for convenient reads/backward compatibility
 
-### 4.13 TrainingMetric
+### 4.13 TrainingWorkerNode
+Attributes:
+- `id` (PK)
+- `name`
+- `endpoint` (nullable URL; worker callback/dispatch endpoint)
+- `status` (`online` | `offline` | `draining`)
+- `enabled` (bool)
+- `max_concurrency` (int > 0)
+- `last_heartbeat_at` (nullable timestamp)
+- `last_reported_load` (nullable float 0..1)
+- `capabilities` (JSON: task/framework support tags)
+- `auth_mode` (`shared` | `dedicated`) for exposed control-plane observability
+- `auth_token_preview` (nullable masked token preview for operator confirmation; never the full secret)
+- `registration_source` (`seed` | `admin` | `heartbeat`)
+- `metadata` (JSON)
+- `created_at`, `updated_at`
+
+Rules:
+- workers can be added/removed dynamically by admin or worker self-registration heartbeat
+- control plane keeps worker auth secret server-side only; exposed records can include `auth_mode` and `auth_token_preview`, but never return the raw token
+- scheduler prefers `online && enabled` workers and computes normalized load from:
+  - worker-reported load (`last_reported_load`)
+  - current in-flight jobs assigned to that worker
+- when no eligible worker exists, scheduler falls back to control-plane local execution
+- worker heartbeat is considered stale after TTL and stale workers are treated as offline for scheduling
+- runtime worker list responses can include scheduler observability fields (computed, non-persistent):
+  - score components (`scheduler_score`, `scheduler_load_component`, `scheduler_health_penalty`, `scheduler_capability_bonus`)
+  - dispatch health snapshot (`dispatch_recent_failures`, `dispatch_consecutive_failures`, `dispatch_last_failure_at`, `dispatch_last_success_at`, `dispatch_cooldown_active`)
+
+### 4.13A TrainingWorkerBootstrapSession
+Ephemeral onboarding session used by admin-side `Add Worker` flow and worker-local GUI pairing.
+
+Attributes:
+- `id` (PK)
+- `status` (`bootstrap_created` | `pairing` | `validation_failed` | `awaiting_confirmation` | `online` | `expired`)
+- `deployment_mode` (`docker` | `script`)
+- `worker_profile` (`yolo` | `paddleocr` | `doctr` | `mixed`)
+- `pairing_token` (single-use or short-lived secret)
+- `control_plane_base_url` (URL)
+- `worker_id`
+- `worker_name`
+- `worker_public_host` (nullable hostname / IP / domain hint chosen by admin)
+- `worker_bind_port` (int > 0, default `9090`)
+- `worker_endpoint_hint` (nullable URL)
+- `worker_runtime_profile`
+- `capabilities` (JSON: framework/task tags)
+- `max_concurrency` (int > 0)
+- `issued_auth_mode` (`shared` | `dedicated`)
+- `issued_auth_token_preview` (nullable masked preview)
+- `claimed_at` (nullable timestamp)
+- `last_seen_at` (nullable timestamp)
+- `callback_checked_at` (nullable timestamp)
+- `callback_validation_message` (nullable string)
+- `linked_worker_id` (nullable FK `TrainingWorkerNode`)
+- `metadata` (JSON)
+- `created_at`
+- `expires_at`
+
+Rules:
+- bootstrap sessions are operator-facing onboarding helpers, not normal schedulable workers
+- bootstrap sessions stay short-lived and can expire without affecting already-online workers
+- admin can optionally preconfigure `worker_public_host` + `worker_bind_port` so generated Docker/script startup commands and `/setup` URL hints already match the target machine topology
+- worker-local pairing exchanges `pairing_token` for resolved worker config, including control-plane URL and the issued worker auth secret
+- normal bootstrap-created workers should prefer per-worker dedicated auth; control-plane shared token remains as a backward-compatible fallback for legacy/manual workers
+- once the claimed worker heartbeat is accepted, control plane should validate worker callback reachability before session advances to `online`
+- callback validation failure should keep the linked worker out of scheduling eligibility until a later heartbeat or explicit retry passes
+- current implementation persists bootstrap sessions into local app-state storage so restart does not lose active pairing context
+
+### 4.14 TrainingMetric
 Attributes:
 - `id` (PK)
 - `training_job_id` (FK TrainingJob)
@@ -280,7 +375,7 @@ Attributes:
 - `step` (int)
 - `recorded_at`
 
-### 4.14 ModelVersion
+### 4.15 ModelVersion
 Attributes:
 - `id` (PK)
 - `model_id` (FK Model)
@@ -298,7 +393,7 @@ Runtime rule (current implementation):
 - when a completed training job is registered, `artifact_attachment_id` is bound to the generated training artifact attachment (local file-backed).
 - training artifact attachment is a manifest-style file by default; when a real framework export exists, the manifest records `primary_model_path` so inference can resolve the actual weight file for that version.
 
-### 4.15 InferenceRun
+### 4.16 InferenceRun
 Attributes:
 - `id` (PK)
 - `model_version_id` (FK ModelVersion)

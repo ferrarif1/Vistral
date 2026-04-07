@@ -9,6 +9,10 @@ import { useI18n } from '../i18n/I18nProvider';
 import AdvancedSection from './AdvancedSection';
 import StateBlock from './StateBlock';
 import StatusBadge from './StatusBadge';
+import { Badge } from './ui/Badge';
+import { Button } from './ui/Button';
+import { HiddenFileInput, Input } from './ui/Field';
+import { Card, Panel } from './ui/Surface';
 
 interface AttachmentUploaderProps {
   title: string;
@@ -139,21 +143,19 @@ export default function AttachmentUploader({
   const isDisabled = pending || disabled;
 
   return (
-    <section className="card stack">
+    <Card as="section">
       <div className="row gap between">
         <h3>{title}</h3>
-        <span className="muted">{t('Visible in current context')}</span>
+        <Badge tone="neutral">{t('Visible in current context')}</Badge>
       </div>
 
       <div className="row gap">
-        <button type="button" onClick={openFilePicker} disabled={isDisabled || !onUploadFiles}>
+        <Button type="button" variant="secondary" onClick={openFilePicker} disabled={isDisabled || !onUploadFiles}>
           {pending ? t('Working...') : t('Upload photos and files')}
-        </button>
-        <input
+        </Button>
+        <HiddenFileInput
           ref={fileInputRef}
-          type="file"
           multiple
-          className="chat-hidden-file-input"
           onChange={uploadSelectedFiles}
           disabled={isDisabled || !onUploadFiles}
         />
@@ -171,15 +173,15 @@ export default function AttachmentUploader({
         defaultOpen={!onUploadFiles}
       >
         <div className="row gap">
-          <input
+          <Input
             value={filename}
             placeholder={t('Enter file name, for example: sample-image.jpg')}
             onChange={(event) => setFilename(event.target.value)}
             disabled={isDisabled}
           />
-          <button onClick={upload} disabled={isDisabled}>
+          <Button onClick={upload} disabled={isDisabled}>
             {pending ? t('Working...') : finalUploadButtonLabel}
-          </button>
+          </Button>
         </div>
       </AdvancedSection>
 
@@ -188,9 +190,9 @@ export default function AttachmentUploader({
       {items.length === 0 ? (
         <StateBlock variant="empty" title={t('No Files Yet')} description={emptyDescription} />
       ) : (
-        <ul className="list">
+        <ul className="workspace-record-list">
           {items.map((item) => (
-            <li key={item.id} className="list-item stack attachment-uploader-item">
+            <Panel key={item.id} as="li" className="workspace-record-item stack attachment-uploader-item" tone="soft">
               <div className="row between gap">
                 <div className="stack tight">
                   <strong>{item.filename}</strong>
@@ -199,13 +201,13 @@ export default function AttachmentUploader({
                 <div className="row gap">
                   <StatusBadge status={item.status} />
                   {item.status === 'ready' && contentUrlBuilder ? (
-                    <button onClick={() => openAttachment(item.id)} disabled={isDisabled}>
+                    <Button variant="ghost" size="sm" onClick={() => openAttachment(item.id)} disabled={isDisabled}>
                       {t('Open')}
-                    </button>
+                    </Button>
                   ) : null}
-                  <button onClick={() => remove(item.id)} disabled={isDisabled}>
+                  <Button variant="ghost" size="sm" onClick={() => remove(item.id)} disabled={isDisabled}>
                     {t('Delete')}
-                  </button>
+                  </Button>
                 </div>
               </div>
               {item.status === 'ready' && contentUrlBuilder && isImageFile(item.filename) ? (
@@ -239,10 +241,10 @@ export default function AttachmentUploader({
                   </div>
                 </a>
               ) : null}
-            </li>
+            </Panel>
           ))}
         </ul>
       )}
-    </section>
+    </Card>
   );
 }

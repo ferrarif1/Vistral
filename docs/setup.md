@@ -41,6 +41,15 @@ npm run docker:healthcheck
 npm run docker:verify:full
 ```
 
+Worker-machine deployment/install assets are centralized in:
+- `training-worker/README.md`
+- `training-worker/.env.worker.example`
+- `training-worker/scripts/install-deps.sh`
+- `training-worker/scripts/worker-heartbeat.sh`
+- `training-worker/scripts/worker-train-api.py`
+- `training-worker/scripts/run-worker-node.sh`
+- recommended for cross-machine deployment: keep worker `WORKER_USE_REQUEST_PATHS=false` so worker uses local `WORKER_RUN_ROOT`
+
 ## 5) Optional source-mode maintenance
 This mode is kept only for internal repository debugging and Codex maintenance. It is not the primary product run path.
 
@@ -55,6 +64,7 @@ Useful deployment helpers:
 ```bash
 npm run docker:healthcheck
 npm run docker:verify:full
+npm run data:cleanup-test
 npm run smoke:account-governance
 npm run smoke:admin:verification-reports
 npm run smoke:conversation-actions
@@ -74,6 +84,9 @@ npm run smoke:runtime-metrics-retention
 npm run smoke:training-metrics-export
 npm run smoke:training-metrics-export-csv
 npm run smoke:dataset-export-roundtrip
+npm run smoke:training-worker-scheduler
+npm run smoke:training-worker-dispatch
+npm run smoke:training-worker-cancel
 npm run smoke:admin:verification-retention
 npm run smoke:verify-report-retention-e2e
 ```
@@ -114,6 +127,12 @@ Persistence-related env vars (prototype):
 - `VISTRAL_YOLO_MODEL_PATH`
 - `VISTRAL_PADDLEOCR_LANG` / `VISTRAL_PADDLEOCR_USE_GPU`
 - `VISTRAL_DOCTR_DET_ARCH` / `VISTRAL_DOCTR_RECO_ARCH`
+- `TRAINING_WORKER_AUTH_TOKEN` (preferred for `/api/runtime/training-workers/heartbeat`; shared fallback remains optional)
+- `TRAINING_WORKER_HEARTBEAT_TTL_MS` (default `45000`, stale heartbeat threshold for scheduling)
+- `TRAINING_WORKER_DISPATCH_TIMEOUT_MS` (default `1800000`, control-plane -> worker train dispatch timeout)
+- `TRAINING_WORKER_DISPATCH_FALLBACK_LOCAL` (default `1`, allow local fallback when worker dispatch fails)
+- `TRAINING_WORKER_INLINE_PACKAGE_MAX_FILES` (default `800`, max file count for inline dataset package sent to worker)
+- `TRAINING_WORKER_INLINE_PACKAGE_MAX_BYTES` (default `41943040`, max total bytes for inline dataset package sent to worker)
 - local command templates are available under `scripts/local-runners/`
 - placeholder examples: `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 

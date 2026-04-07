@@ -74,3 +74,35 @@ Runtime options for verify script:
 - Frontend only calls relative `/api/*`, so intranet domain replacement is straightforward.
 - User authentication is username/password based.
 - nginx proxy allows request bodies up to `128m` for multipart attachment upload flows.
+
+## Training Worker Machines (B/C/D...)
+Control plane remains this Docker stack on machine `A`.  
+Worker-machine deployment/install assets are centralized in:
+
+- `training-worker/README.md`
+- `training-worker/.env.worker.example`
+- `training-worker/scripts/install-deps.sh`
+- `training-worker/scripts/worker-heartbeat.sh`
+- `training-worker/scripts/worker-train-api.py`
+- `training-worker/scripts/run-worker-node.sh`
+
+Worker heartbeat contract:
+- endpoint: `POST /api/runtime/training-workers/heartbeat`
+- header: `X-Training-Worker-Token` (prefer per-worker `TRAINING_WORKER_AUTH_TOKEN`; shared fallback remains supported)
+
+Worker Docker-first startup:
+- worker Docker image: `docker/Dockerfile.worker`
+- worker compose example: `training-worker/docker-compose.worker.yml`
+- admin can generate one-time pairing commands from `Runtime > Add Worker`
+- setup UI entry after container start: `http://<worker-host>:9090/setup`
+- when config is incomplete, worker stays in setup mode and waits for GUI/CLI config instead of failing immediately
+
+Worker training dispatch contract:
+- endpoint: `POST {worker.endpoint}/api/worker/train`
+- header: `X-Training-Worker-Token`
+- control-plane fallback controls:
+  - `TRAINING_WORKER_DISPATCH_TIMEOUT_MS`
+  - `TRAINING_WORKER_DISPATCH_FALLBACK_LOCAL`
+
+Planned GUI onboarding design reference:
+- `docs/training-worker-onboarding.md`

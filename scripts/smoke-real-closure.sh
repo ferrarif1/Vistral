@@ -3,6 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_HOST="${API_HOST:-127.0.0.1}"
+if [[ "${START_API:-true}" == "true" && -z "${API_PORT:-}" ]]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[smoke-real-closure] python3 is required when auto-selecting API_PORT."
+    exit 1
+  fi
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
 API_PORT="${API_PORT:-8787}"
 BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 START_API="${START_API:-true}"
@@ -77,6 +91,12 @@ for _ in {1..80}; do
   fi
   sleep 0.2
 done
+
+if [[ "${START_API}" == "true" ]] && ! kill -0 "${API_PID}" >/dev/null 2>&1; then
+  echo "[smoke-real-closure] API process exited before health check (possible port conflict)."
+  cat "${API_LOG}"
+  exit 1
+fi
 
 if ! curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then
   if [[ "${START_API}" == "true" ]]; then

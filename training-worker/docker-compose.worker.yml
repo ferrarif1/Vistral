@@ -1,0 +1,32 @@
+services:
+  vistral-training-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-docker.m.daocloud.io/library/python:3.11-slim}
+    image: ${VISTRAL_WORKER_IMAGE:-vistral-training-worker:local}
+    container_name: ${WORKER_CONTAINER_NAME:-vistral-training-worker}
+    environment:
+      WORKER_ENV_FILE: /worker-state/.env.worker
+      WORKER_RUN_ROOT: /worker-state/runs
+      WORKER_BIND_HOST: 0.0.0.0
+      WORKER_BIND_PORT: ${WORKER_BIND_PORT:-9090}
+      WORKER_RUN_DOCTOR_ON_START: ${WORKER_RUN_DOCTOR_ON_START:-true}
+      CONTROL_PLANE_BASE_URL: ${CONTROL_PLANE_BASE_URL:-}
+      TRAINING_WORKER_AUTH_TOKEN: ${TRAINING_WORKER_AUTH_TOKEN:-}
+      TRAINING_WORKER_SHARED_TOKEN: ${TRAINING_WORKER_SHARED_TOKEN:-}
+      WORKER_ID: ${WORKER_ID:-}
+      WORKER_NAME: ${WORKER_NAME:-}
+      WORKER_ENDPOINT: ${WORKER_ENDPOINT:-}
+      WORKER_CAPABILITIES: ${WORKER_CAPABILITIES:-}
+      WORKER_MAX_CONCURRENCY: ${WORKER_MAX_CONCURRENCY:-}
+      WORKER_RUNTIME_PROFILE: ${WORKER_RUNTIME_PROFILE:-base}
+    ports:
+      - "${WORKER_BIND_PORT:-9090}:${WORKER_BIND_PORT:-9090}"
+    volumes:
+      - vistral-worker-state:/worker-state
+    restart: unless-stopped
+
+volumes:
+  vistral-worker-state:

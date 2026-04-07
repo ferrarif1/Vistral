@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import type { User } from '../../shared/domain';
+import Sidebar from '../components/layout/Sidebar';
 import SessionMenu from '../components/SessionMenu';
+import TopBar from '../components/layout/TopBar';
+import { ButtonLink } from '../components/ui/Button';
+import useCompactViewport from '../hooks/useCompactViewport';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { AUTH_UPDATED_EVENT, emitAuthUpdated } from '../services/authSession';
@@ -32,8 +36,6 @@ const appNavGroupKeys: AppNavGroupKey[] = [
   'settings'
 ];
 const defaultCollapsedNavGroups: AppNavGroupKey[] = ['governance', 'settings'];
-const compactViewportMaxWidth = 960;
-
 const readAppSidebarCollapsedFromStorage = (): boolean => {
   try {
     return localStorage.getItem(appSidebarCollapsedStorageKey) === 'true';
@@ -80,9 +82,6 @@ const writeCollapsedNavGroupsToStorage = (groupKeys: AppNavGroupKey[]) => {
   }
 };
 
-const detectCompactViewport = (): boolean =>
-  typeof window !== 'undefined' ? window.innerWidth <= compactViewportMaxWidth : false;
-
 const getInitials = (username?: string): string => {
   if (!username) {
     return 'U';
@@ -112,7 +111,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [collapsedNavGroups, setCollapsedNavGroups] = useState<AppNavGroupKey[]>(() =>
     readCollapsedNavGroupsFromStorage()
   );
-  const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() => detectCompactViewport());
+  const isCompactViewport = useCompactViewport(960);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isConversationWorkspace = location.pathname === '/workspace/chat';
 
@@ -136,18 +135,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     writeCollapsedNavGroupsToStorage(collapsedNavGroups);
   }, [collapsedNavGroups]);
-
-  useEffect(() => {
-    const syncViewport = () => {
-      setIsCompactViewport(detectCompactViewport());
-    };
-
-    syncViewport();
-    window.addEventListener('resize', syncViewport);
-    return () => {
-      window.removeEventListener('resize', syncViewport);
-    };
-  }, []);
 
   useEffect(() => {
     if (!isCompactViewport) {
@@ -215,13 +202,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
         key: 'workspaces',
         label: t('Workspaces'),
         items: [
-          {
-            to: '/',
-            label: t('Dual Entry'),
-            shortLabel: 'H',
-            matchPrefixes: ['/'],
-            end: true
-          },
           {
             to: '/workspace/chat',
             label: t('Conversation Workspace'),
@@ -333,13 +313,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const railItems = useMemo<AppNavItem[]>(
     () => [
       {
-        to: '/',
-        label: t('Dual Entry'),
-        shortLabel: 'H',
-        matchPrefixes: ['/'],
-        end: true
-      },
-      {
         to: '/workspace/chat',
         label: t('Conversation Workspace'),
         shortLabel: 'AI',
@@ -440,7 +413,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       return { section: t('Workspaces'), label: t('Login') };
     }
 
-    return { section: t('Workspaces'), label: t('Dual Entry') };
+    return { section: t('Workspaces'), label: t('Conversation Workspace') };
   }, [location.pathname, t]);
 
   const toggleNavGroup = useCallback((groupKey: AppNavGroupKey) => {
@@ -484,90 +457,116 @@ export default function AppShell({ children }: { children: ReactNode }) {
         />
       ) : null}
 
-      <header className="topbar">
-        <div className="topbar-leading">
-          <button
-            type="button"
-            className="app-sidebar-toggle"
-            onClick={toggleSidebar}
-            aria-label={sidebarToggleLabel}
-            title={sidebarToggleLabel}
-          >
-            {sidebarToggleToken}
-          </button>
-          <Link to="/" className="topbar-brand-chip">
-            Vistral
-          </Link>
-          <div className="topbar-page-context">
-            <small className="muted">{activeContext.section}</small>
-            <strong>{activeContext.label}</strong>
-          </div>
-        </div>
-
-        <nav className="topbar-actions row gap wrap">
-          <label className="language-switch-inline">
-            <span>{t('Language')}</span>
-            <select
-              value={language}
-              onChange={(event) => setLanguage(event.target.value as 'zh-CN' | 'en-US')}
-            >
-              <option value="zh-CN">{t('Chinese')}</option>
-              <option value="en-US">{t('English')}</option>
-            </select>
-          </label>
-          {!currentUser ? (
-            <div className="topbar-auth-links">
-              <NavLink to="/auth/login">{t('Login')}</NavLink>
-            </div>
-          ) : null}
-          {currentUser && isCompactViewport ? (
-            <SessionMenu currentUser={currentUser} items={sessionMenuItems} />
-          ) : null}
-        </nav>
-      </header>
-
-      <aside className="sidebar" aria-hidden={isCompactViewport && !mobileSidebarOpen}>
-        <div className="sidebar-content">
-          <div className="sidebar-brand-row">
-            <Link to="/" className="sidebar-brand-link" onClick={closeMobileSidebar}>
-              <span className="sidebar-brand-mark" aria-hidden="true">
-                V
-              </span>
-              <div className="stack tight">
-                <strong>{t('Vistral Prototype')}</strong>
-                <small className="muted">{activeContext.section}</small>
-              </div>
-            </Link>
+      <TopBar
+        className="topbar"
+        leading={
+          <div className="topbar-leading">
             <button
               type="button"
-              className="sidebar-inline-toggle"
+              className="app-sidebar-toggle"
               onClick={toggleSidebar}
               aria-label={sidebarToggleLabel}
               title={sidebarToggleLabel}
             >
               {sidebarToggleToken}
             </button>
+            <Link to="/workspace/chat" className="topbar-brand-link" aria-label={t('Go to home')}>
+              Vistral
+            </Link>
+            <div className="topbar-page-context">
+              <small className="muted">{activeContext.section}</small>
+              <strong>{activeContext.label}</strong>
+            </div>
           </div>
+        }
+        actions={
+          <nav className="topbar-actions row gap wrap">
+            {!currentUser && isCompactViewport ? (
+              <div className="topbar-auth-links">
+                <ButtonLink to="/auth/login" variant="ghost" size="sm" className="topbar-login-link">
+                  {t('Login')}
+                </ButtonLink>
+              </div>
+            ) : null}
+            {currentUser && isCompactViewport ? (
+              <SessionMenu
+                currentUser={currentUser}
+                items={sessionMenuItems}
+                languageControl={{
+                  value: language,
+                  onChange: (nextLanguage) => setLanguage(nextLanguage)
+                }}
+              />
+            ) : null}
+          </nav>
+        }
+      />
 
-          <div className="sidebar-workspace-switch">
+      <Sidebar className="sidebar" ariaHidden={isCompactViewport && !mobileSidebarOpen} rail={
+        <div className="sidebar-collapsed-rail">
+          <button
+            type="button"
+            className="sidebar-rail-btn sidebar-rail-control"
+            onClick={toggleSidebar}
+            aria-label={t('Expand sidebar')}
+            title={t('Expand sidebar')}
+          >
+            &gt;
+          </button>
+
+          {railItems.map((item) => (
             <NavLink
-              to="/workspace/chat"
-              className={({ isActive }) =>
-                isActive ? 'sidebar-workspace-pill active' : 'sidebar-workspace-pill'
-              }
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={matchesRailItem(location.pathname, item) ? 'sidebar-rail-btn active' : 'sidebar-rail-btn'}
               onClick={closeMobileSidebar}
+              aria-label={item.label}
+              title={item.label}
             >
-              {t('Conversation Workspace')}
+              {item.shortLabel}
             </NavLink>
-            <NavLink
-              to="/workspace/console"
-              className={({ isActive }) =>
-                isActive ? 'sidebar-workspace-pill active' : 'sidebar-workspace-pill'
-              }
-              onClick={closeMobileSidebar}
-            >
-              {t('Professional Console')}
-            </NavLink>
+          ))}
+
+          <div className="sidebar-rail-footer">
+            {currentUser ? (
+              <SessionMenu
+                currentUser={currentUser}
+                items={sessionMenuItems}
+                align="start"
+                direction="up"
+                variant="rail"
+                languageControl={{
+                  value: language,
+                  onChange: (nextLanguage) => setLanguage(nextLanguage)
+                }}
+              />
+            ) : (
+              <ButtonLink
+                to="/auth/login"
+                variant="ghost"
+                size="icon"
+                className="sidebar-rail-avatar-link"
+                title={t('Login')}
+                aria-label={t('Login')}
+              >
+                {getInitials()}
+              </ButtonLink>
+            )}
+          </div>
+        </div>
+      }>
+        <div className="sidebar-content">
+          <div className="sidebar-brand-row">
+            <Link to="/workspace/chat" className="sidebar-brand-link" onClick={closeMobileSidebar}>
+              <span className="sidebar-brand-mark" aria-hidden="true">
+                V
+              </span>
+              <div className="stack tight">
+                <strong>Vistral</strong>
+                <small className="muted">{t('AI-native workspace')}</small>
+              </div>
+            </Link>
           </div>
 
           <nav className="sidebar-nav" aria-label={t('Navigation')}>
@@ -629,6 +628,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 align="start"
                 direction="up"
                 variant="sidebar"
+                languageControl={{
+                  value: language,
+                  onChange: (nextLanguage) => setLanguage(nextLanguage)
+                }}
               />
             ) : (
               <div className="sidebar-session-card guest">
@@ -640,55 +643,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   </div>
                 </div>
                 <div className="sidebar-session-actions">
-                  <NavLink to="/auth/login">{t('Login')}</NavLink>
+                  <ButtonLink to="/auth/login" variant="ghost" size="sm" className="sidebar-guest-login-link">
+                    {t('Login')}
+                  </ButtonLink>
                 </div>
               </div>
             )}
           </div>
         </div>
-
-        <div className="sidebar-collapsed-rail">
-          <button
-            type="button"
-            className="sidebar-rail-btn sidebar-rail-control"
-            onClick={toggleSidebar}
-            aria-label={t('Expand sidebar')}
-            title={t('Expand sidebar')}
-          >
-            &gt;
-          </button>
-
-          {railItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={matchesRailItem(location.pathname, item) ? 'sidebar-rail-btn active' : 'sidebar-rail-btn'}
-              onClick={closeMobileSidebar}
-              aria-label={item.label}
-              title={item.label}
-            >
-              {item.shortLabel}
-            </NavLink>
-          ))}
-
-          <div className="sidebar-rail-footer">
-            {currentUser ? (
-              <SessionMenu
-                currentUser={currentUser}
-                items={sessionMenuItems}
-                align="start"
-                direction="up"
-                variant="rail"
-              />
-            ) : (
-              <div className="sidebar-rail-avatar" title={t('guest')}>
-                {getInitials()}
-              </div>
-            )}
-          </div>
-        </div>
-      </aside>
+      </Sidebar>
 
       <main className="main">{children}</main>
     </div>

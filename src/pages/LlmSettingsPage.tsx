@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { LlmConfig, LlmConfigView } from '../../shared/domain';
+import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import SettingsTabs from '../components/settings/SettingsTabs';
+import { StatusTag } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { Checkbox, Input } from '../components/ui/Field';
+import { Card, Panel } from '../components/ui/Surface';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import {
@@ -243,7 +248,7 @@ export default function LlmSettingsPage() {
     <div className="workspace-overview-page stack">
       <SettingsTabs />
 
-      <section className="card workspace-overview-hero">
+      <Card className="workspace-overview-hero">
         <div className="workspace-overview-hero-grid">
           <div className="workspace-overview-copy stack">
             <small className="workspace-eyebrow">{t('LLM Control Plane')}</small>
@@ -267,7 +272,7 @@ export default function LlmSettingsPage() {
             </div>
           </div>
         </div>
-      </section>
+      </Card>
 
       {loading ? (
         <StateBlock variant="loading" title={t('Loading Settings')} description={t('Fetching current LLM settings.')} />
@@ -282,38 +287,38 @@ export default function LlmSettingsPage() {
       ) : null}
 
       <section className="workspace-overview-signal-grid">
-        <article className="card stack workspace-signal-card">
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Saved mode')}</h3>
             <small className="muted">{t('Saved conversation mode toggle from the encrypted local config.')}</small>
           </div>
           <strong className="metric">{savedEnabled ? t('enabled') : t('disabled')}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Stored key')}</h3>
             <small className="muted">{t('Whether an encrypted key is already stored for reuse.')}</small>
           </div>
           <strong className="metric">{hasApiKey ? t('Ready') : t('N/A')}</strong>
-        </article>
-        <article className={`card stack workspace-signal-card${hasUnsavedChanges ? ' attention' : ''}`}>
+        </Card>
+        <Card className={`stack workspace-signal-card${hasUnsavedChanges ? ' attention' : ''}`}>
           <div className="workspace-signal-top">
             <h3>{t('Unsaved edits')}</h3>
             <small className="muted">{t('Form changes that still need save or discard.')}</small>
           </div>
           <strong className="metric">{hasUnsavedChanges ? t('Yes') : t('No')}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Preset shortcuts')}</h3>
             <small className="muted">{t('Preset models available for one-click selection.')}</small>
           </div>
           <strong className="metric">{CHATANYWHERE_MODEL_PRESETS.length}</strong>
-        </article>
+        </Card>
       </section>
 
       <section className="workspace-overview-panel-grid">
-        <article className="card stack workspace-overview-main">
+        <Card className="stack workspace-overview-main">
           <div className="workspace-section-header">
             <div className="stack tight">
               <h3>{t('Editing Lane')}</h3>
@@ -326,11 +331,11 @@ export default function LlmSettingsPage() {
           <div className="workspace-form-grid">
             <label className="workspace-form-span-2">
               {t('Provider')}
-              <input value="chatanywhere (OpenAI compatible)" disabled />
+              <Input value="chatanywhere (OpenAI compatible)" disabled />
             </label>
             <label className="workspace-form-span-2">
               {t('Base URL')}
-              <input
+              <Input
                 value={form.base_url}
                 onChange={(event) => update('base_url', event.target.value)}
                 placeholder="https://api.chatanywhere.tech/v1"
@@ -338,7 +343,7 @@ export default function LlmSettingsPage() {
             </label>
             <label className="workspace-form-span-2">
               {t('API Key')}
-              <input
+              <Input
                 type="password"
                 value={form.api_key}
                 onChange={(event) => update('api_key', event.target.value)}
@@ -347,7 +352,7 @@ export default function LlmSettingsPage() {
             </label>
             <label>
               {t('Model')}
-              <input
+              <Input
                 value={form.model}
                 onChange={(event) => update('model', event.target.value)}
                 placeholder="gpt-3.5-turbo"
@@ -355,7 +360,7 @@ export default function LlmSettingsPage() {
             </label>
             <label>
               {t('Temperature (0-2)')}
-              <input
+              <Input
                 type="number"
                 value={form.temperature}
                 min={0}
@@ -365,8 +370,7 @@ export default function LlmSettingsPage() {
               />
             </label>
             <label className="workspace-form-span-2 row gap align-center workspace-checkbox-row">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={form.enabled}
                 onChange={(event) => update('enabled', event.target.checked)}
               />
@@ -374,9 +378,13 @@ export default function LlmSettingsPage() {
             </label>
           </div>
 
-          <small className="muted">{t('Provider is fixed to OpenAI-compatible mode in this prototype.')}</small>
-          <small className="muted">{t('Leave API Key blank to keep the saved key when editing or testing.')}</small>
-          <small className="muted">{keyHandlingText}</small>
+          <Panel className="workspace-record-item compact" tone="soft">
+            <div className="stack tight">
+              <small className="muted">{t('Provider is fixed to OpenAI-compatible mode in this prototype.')}</small>
+              <small className="muted">{t('Leave API Key blank to keep the saved key when editing or testing.')}</small>
+              <small className="muted">{keyHandlingText}</small>
+            </div>
+          </Panel>
 
           <div className="stack tight">
             <strong>{t('Preset shortcuts')}</strong>
@@ -385,38 +393,47 @@ export default function LlmSettingsPage() {
             </small>
           </div>
 
-          <div className="row gap wrap">
-            <button type="button" className="workspace-inline-button" onClick={applyChatAnywherePreset} disabled={busy}>
+          <div className="workspace-action-grid">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={applyChatAnywherePreset}
+              disabled={busy}
+              block
+            >
               {t('Apply ChatAnywhere Preset')}
-            </button>
+            </Button>
             {CHATANYWHERE_MODEL_PRESETS.map((item) => (
-              <button
+              <Button
                 key={item}
                 type="button"
-                className="workspace-inline-button"
+                variant="secondary"
+                size="sm"
                 onClick={() => applyRecommendedModel(item)}
                 disabled={busy}
+                block
               >
                 {t('Use {model}', { model: item })}
-              </button>
+              </Button>
             ))}
           </div>
 
           <div className="workspace-button-stack">
-            <button type="button" onClick={save} disabled={busy}>
+            <Button type="button" onClick={save} disabled={busy} block>
               {t('Save')}
-            </button>
-            <button type="button" onClick={testConnection} disabled={busy}>
+            </Button>
+            <Button type="button" variant="secondary" onClick={testConnection} disabled={busy} block>
               {testing ? t('Testing...') : t('Test Connection')}
-            </button>
-            <button type="button" className="workspace-inline-button" onClick={clear} disabled={busy}>
+            </Button>
+            <Button type="button" variant="danger" onClick={clear} disabled={busy} block>
               {t('Clear')}
-            </button>
+            </Button>
           </div>
-        </article>
+        </Card>
 
         <div className="workspace-overview-side">
-          <article className="card stack">
+          <Card className="stack">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Saved snapshot')}</h3>
@@ -424,30 +441,32 @@ export default function LlmSettingsPage() {
                   {t('Masked saved values remain visible so you can tell what will be reused.')}
                 </small>
               </div>
-              <div className="row gap wrap">
-                <button
-                  type="button"
-                  className="workspace-inline-button"
-                  onClick={reloadSavedConfig}
-                  disabled={refreshing || loading}
-                >
-                  {refreshing ? t('Loading') : t('Reload saved settings')}
-                </button>
-                {hasTypedApiKey ? (
-                  <button type="button" className="workspace-inline-button" onClick={discardTypedApiKey} disabled={busy}>
-                    {t('Discard typed key')}
-                  </button>
-                ) : null}
-              </div>
+            </div>
+
+            <div className="workspace-button-stack">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={reloadSavedConfig}
+                disabled={refreshing || loading}
+              >
+                {refreshing ? t('Loading') : t('Reload saved settings')}
+              </Button>
+              {hasTypedApiKey ? (
+                <Button type="button" variant="secondary" size="sm" onClick={discardTypedApiKey} disabled={busy}>
+                  {t('Discard typed key')}
+                </Button>
+              ) : null}
             </div>
 
             <ul className="workspace-record-list compact">
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Saved mode')}</strong>
-                  <span className={`workspace-status-pill ${statusVariant}`}>
+                  <StatusTag status={statusVariant}>
                     {savedEnabled ? t('enabled') : t('disabled')}
-                  </span>
+                  </StatusTag>
                 </div>
                 <small className="muted">
                   {t('Base URL')}: {savedBaseUrl}
@@ -456,16 +475,16 @@ export default function LlmSettingsPage() {
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Stored key')}</strong>
-                  <span className={`workspace-status-pill ${keyVariant}`}>
+                  <StatusTag status={keyVariant}>
                     {hasApiKey ? t('Ready') : t('not set')}
-                  </span>
+                  </StatusTag>
                 </div>
                 <small className="muted">{t('Stored key: {key}', { key: apiKeyMasked })}</small>
               </li>
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Model')}</strong>
-                  <span className="chip">{savedModel}</span>
+                  <StatusTag status="info">{savedModel}</StatusTag>
                 </div>
                 <small className="muted">
                   {t('Temperature')}: {savedTemperature}
@@ -474,25 +493,21 @@ export default function LlmSettingsPage() {
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Unsaved edits')}</strong>
-                  <span className={`workspace-status-pill ${unsavedVariant}`}>
+                  <StatusTag status={unsavedVariant}>
                     {hasUnsavedChanges ? t('Yes') : t('No')}
-                  </span>
+                  </StatusTag>
                 </div>
                 <small className="muted">
                   {hasUnsavedChanges ? t('Unsaved edits are pending.') : t('No unsaved edits.')}
                 </small>
               </li>
             </ul>
-          </article>
+          </Card>
 
-          <article className="card stack">
-            <div className="stack tight">
-              <h3>{t('Connection guidance')}</h3>
-              <small className="muted">
-                {t('Use connection advice and safety reminders before switching providers or models.')}
-              </small>
-            </div>
-
+          <AdvancedSection
+            title={t('Connection guidance')}
+            description={t('Open troubleshooting and security guidance only when needed.')}
+          >
             {connectionAdvice ? (
               <StateBlock variant="success" title={t('Troubleshooting')} description={connectionAdvice} />
             ) : (
@@ -507,7 +522,7 @@ export default function LlmSettingsPage() {
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
                   <strong>{t('Stored key reuse')}</strong>
-                  <span className="chip">{hasTypedApiKey ? t('No') : t('Yes')}</span>
+                  <StatusTag status="info">{hasTypedApiKey ? t('No') : t('Yes')}</StatusTag>
                 </div>
                 <small className="muted">{keyHandlingText}</small>
               </li>
@@ -519,7 +534,7 @@ export default function LlmSettingsPage() {
                 'Security note: rotate your key if it was ever exposed in public channels and keep `LLM_CONFIG_SECRET` private.'
               )}
             </small>
-          </article>
+          </AdvancedSection>
         </div>
       </section>
     </div>

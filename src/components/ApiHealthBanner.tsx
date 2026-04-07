@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button } from './ui/Button';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -42,38 +43,44 @@ export default function ApiHealthBanner() {
   const [detail, setDetail] = useState('');
   const [checking, setChecking] = useState(false);
 
-  const checkHealth = useCallback(async () => {
-    setChecking(true);
+  const applyHealthState = useCallback((nextState: ApiHealthState, nextDetail: string) => {
+    setState((previous) => (previous === nextState ? previous : nextState));
+    setDetail((previous) => (previous === nextDetail ? previous : nextDetail));
+  }, []);
+
+  const checkHealth = useCallback(async (showChecking = false) => {
+    if (showChecking) {
+      setChecking(true);
+    }
+
     try {
       const response = await api.health();
       if (response.status === 'ok') {
-        setState('healthy');
-        setDetail('');
+        applyHealthState('healthy', '');
       } else {
-        setState('degraded');
-        setDetail(t('Unexpected API health payload.'));
+        applyHealthState('degraded', t('Unexpected API health payload.'));
       }
     } catch (error) {
-      setState('degraded');
-      setDetail(parseHealthErrorDetail(error));
+      applyHealthState('degraded', parseHealthErrorDetail(error));
     } finally {
-      setChecking(false);
+      if (showChecking) {
+        setChecking(false);
+      }
     }
-  }, [t]);
+  }, [applyHealthState, t]);
 
   useEffect(() => {
-    checkHealth().catch(() => {
+    checkHealth(false).catch(() => {
       // surfaced via local status
     });
 
     const onOnline = () => {
-      checkHealth().catch(() => {
+      checkHealth(false).catch(() => {
         // surfaced via local status
       });
     };
     const onOffline = () => {
-      setState('degraded');
-      setDetail(t('Browser is offline.'));
+      applyHealthState('degraded', t('Browser is offline.'));
     };
 
     window.addEventListener('online', onOnline);
@@ -82,11 +89,11 @@ export default function ApiHealthBanner() {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
-  }, [checkHealth, t]);
+  }, [applyHealthState, checkHealth, t]);
 
   useBackgroundPolling(
     () => {
-      checkHealth().catch(() => {
+      checkHealth(false).catch(() => {
         // surfaced via local status
       });
     },
@@ -131,18 +138,20 @@ export default function ApiHealthBanner() {
           ) : null}
           {statusDetail ? <small className="muted">{statusDetail}</small> : null}
         </div>
-        <button
+        <Button
           type="button"
-          className="small-btn api-health-banner-retry"
+          variant="secondary"
+          size="sm"
+          className="api-health-banner-retry"
           onClick={() => {
-            checkHealth().catch(() => {
+            checkHealth(true).catch(() => {
               // surfaced via local status
             });
           }}
           disabled={checking}
         >
           {checking ? t('Checking...') : t('Retry')}
-        </button>
+        </Button>
       </div>
     </div>
   );

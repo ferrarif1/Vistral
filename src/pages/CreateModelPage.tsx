@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { FileAttachment, ModelRecord } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
+import { StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
+import { Card, Panel } from '../components/ui/Surface';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 const backgroundRefreshIntervalMs = 5000;
+const modelTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
 
 const buildModelFilesSignature = (modelId: string | null, files: FileAttachment[]): string =>
   JSON.stringify({
@@ -243,7 +247,7 @@ export default function CreateModelPage() {
   const renderStage = () => {
     if (step === 0) {
       return (
-        <section className="card stack">
+        <Card className="stack">
           <div className="stack tight">
             <h3>{stepTitles[step]}</h3>
             <small className="muted">{stepDescriptions[step]}</small>
@@ -251,15 +255,15 @@ export default function CreateModelPage() {
           <div className="workspace-form-grid">
             <label className="workspace-form-span-2">
               {t('Model Name')}
-              <input value={name} onChange={(event) => setName(event.target.value)} />
+              <Input value={name} onChange={(event) => setName(event.target.value)} />
             </label>
             <label className="workspace-form-span-2">
               {t('Description')}
-              <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+              <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
             </label>
             <label>
               {t('Model Type')}
-              <select
+              <Select
                 value={modelType}
                 onChange={(event) =>
                   setModelType(
@@ -267,26 +271,26 @@ export default function CreateModelPage() {
                   )
                 }
               >
-                <option value="ocr">{t('ocr')}</option>
-                <option value="classification">{t('classification')}</option>
-                <option value="detection">{t('detection')}</option>
-                <option value="segmentation">{t('segmentation')}</option>
-                <option value="obb">{t('obb')}</option>
-              </select>
+                {modelTypeOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {t(option)}
+                  </option>
+                ))}
+              </Select>
             </label>
             <label>
               {t('Visibility')}
-              <select
+              <Select
                 value={visibility}
                 onChange={(event) => setVisibility(event.target.value as 'private' | 'workspace' | 'public')}
               >
                 <option value="private">{t('private')}</option>
                 <option value="workspace">{t('workspace')}</option>
                 <option value="public">{t('public')}</option>
-              </select>
+              </Select>
             </label>
           </div>
-        </section>
+        </Card>
       );
     }
 
@@ -309,7 +313,7 @@ export default function CreateModelPage() {
     if (step === 2) {
       return (
         <section className="stack">
-          <section className="card stack">
+          <Card className="stack">
             <div className="stack tight">
               <h3>{stepTitles[step]}</h3>
               <small className="muted">{stepDescriptions[step]}</small>
@@ -317,18 +321,17 @@ export default function CreateModelPage() {
             <div className="workspace-form-grid">
               <label>
                 {t('Learning Rate')}
-                <input value={learningRate} onChange={(event) => setLearningRate(event.target.value)} />
+                <Input value={learningRate} onChange={(event) => setLearningRate(event.target.value)} />
               </label>
               <label>
                 {t('Batch Size')}
-                <input value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
+                <Input value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
               </label>
             </div>
-          </section>
+          </Card>
           <AdvancedSection>
             <label className="row gap align-center workspace-checkbox-row">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={enableEarlyStop}
                 onChange={(event) => setEnableEarlyStop(event.target.checked)}
               />
@@ -336,11 +339,11 @@ export default function CreateModelPage() {
             </label>
             <label>
               {t('Warmup Ratio')}
-              <input defaultValue="0.1" />
+              <Input defaultValue="0.1" />
             </label>
             <label>
               {t('Weight Decay')}
-              <input defaultValue="0.0001" />
+              <Input defaultValue="0.0001" />
             </label>
           </AdvancedSection>
         </section>
@@ -348,7 +351,7 @@ export default function CreateModelPage() {
     }
 
     return (
-      <section className="card stack">
+      <Card className="stack">
         <div className="stack tight">
           <h3>{stepTitles[step]}</h3>
           <small className="muted">{stepDescriptions[step]}</small>
@@ -358,14 +361,14 @@ export default function CreateModelPage() {
             <li className="workspace-record-item compact">
               <div className="row between gap wrap">
                 <strong>{draftModel.name}</strong>
-                <span className={`workspace-status-pill ${draftModel.status}`}>{t(draftModel.status)}</span>
+                <StatusTag status={draftModel.status}>{t(draftModel.status)}</StatusTag>
               </div>
               <small className="muted">{draftModel.description}</small>
             </li>
             <li className="workspace-record-item compact">
               <div className="row between gap wrap">
                 <strong>{t('Visibility')}</strong>
-                <span className="chip">{t(draftModel.visibility)}</span>
+                <StatusTag status="info">{t(draftModel.visibility)}</StatusTag>
               </div>
               <small className="muted">
                 {t('Model Type')}: {t(draftModel.model_type)}
@@ -374,7 +377,7 @@ export default function CreateModelPage() {
             <li className="workspace-record-item compact">
               <div className="row between gap wrap">
                 <strong>{t('Ready model files')}</strong>
-                <span className="chip">{readyFileCount}</span>
+                <StatusTag status="info">{readyFileCount}</StatusTag>
               </div>
               <small className="muted">
                 {t('Parameters')}: {t('learning rate')} {learningRate}, {t('batch size')} {batchSize}, {t('early stop')}{' '}
@@ -389,13 +392,13 @@ export default function CreateModelPage() {
             description={t('Go back to metadata step and create draft first.')}
           />
         )}
-      </section>
+      </Card>
     );
   };
 
   return (
     <div className="workspace-overview-page stack">
-      <section className="card workspace-overview-hero">
+      <Card className="workspace-overview-hero">
         <div className="workspace-overview-hero-grid">
           <div className="workspace-overview-copy stack">
             <small className="workspace-eyebrow">{t('Model Draft Studio')}</small>
@@ -421,7 +424,7 @@ export default function CreateModelPage() {
             </div>
           </div>
         </div>
-      </section>
+      </Card>
 
       {feedback ? (
         <StateBlock
@@ -432,34 +435,34 @@ export default function CreateModelPage() {
       ) : null}
 
       <section className="workspace-overview-signal-grid">
-        <article className="card stack workspace-signal-card">
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Draft shell')}</h3>
             <small className="muted">{t('Metadata shell for the model record.')}</small>
           </div>
           <strong className="metric">{draftModel ? 1 : 0}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Ready model files')}</h3>
             <small className="muted">{t('Artifacts already ready for review and approval flow.')}</small>
           </div>
           <strong className="metric">{readyFileCount}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card className="stack workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Visibility')}</h3>
             <small className="muted">{t('Current exposure setting for this draft.')}</small>
           </div>
           <strong className="metric">{t(draftModel?.visibility ?? visibility)}</strong>
-        </article>
-        <article className={`card stack workspace-signal-card${step === steps.length - 1 && readyFileCount > 0 ? '' : ' attention'}`}>
+        </Card>
+        <Card className={`stack workspace-signal-card${step === steps.length - 1 && readyFileCount > 0 ? '' : ' attention'}`}>
           <div className="workspace-signal-top">
             <h3>{t('Submission readiness')}</h3>
             <small className="muted">{t('The final review step is where approval submission becomes available.')}</small>
           </div>
           <strong className="metric">{step === steps.length - 1 && readyFileCount > 0 ? t('Ready') : t('draft')}</strong>
-        </article>
+        </Card>
       </section>
 
       <section className="workspace-overview-panel-grid">
@@ -469,7 +472,7 @@ export default function CreateModelPage() {
         </div>
 
         <div className="workspace-overview-side">
-          <article className="card stack">
+          <Card className="stack">
             <div className="stack tight">
               <h3>{t('Current draft')}</h3>
               <small className="muted">{stepDescriptions[step]}</small>
@@ -479,7 +482,7 @@ export default function CreateModelPage() {
                 <li className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{draftModel.name}</strong>
-                    <span className={`workspace-status-pill ${draftModel.status}`}>{t(draftModel.status)}</span>
+                    <StatusTag status={draftModel.status}>{t(draftModel.status)}</StatusTag>
                   </div>
                   <small className="muted">
                     {t('Model Type')}: {t(draftModel.model_type)}
@@ -488,7 +491,7 @@ export default function CreateModelPage() {
                 <li className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{t('Visibility')}</strong>
-                    <span className="chip">{t(draftModel.visibility)}</span>
+                    <StatusTag status="info">{t(draftModel.visibility)}</StatusTag>
                   </div>
                   <small className="muted">{draftModel.id}</small>
                 </li>
@@ -500,9 +503,9 @@ export default function CreateModelPage() {
                 description={t('Create the metadata shell first, then upload model artifacts in the next step.')}
               />
             )}
-          </article>
+          </Card>
 
-          <article className="card stack">
+          <Card className="stack">
             <div className="stack tight">
               <h3>{t('Submission checklist')}</h3>
               <small className="muted">{t('Keep the approval path visible while you finish the wizard.')}</small>
@@ -512,39 +515,39 @@ export default function CreateModelPage() {
                 <li key={item.label} className="workspace-record-item compact">
                   <div className="row between gap wrap">
                     <strong>{item.label}</strong>
-                    <span className={`workspace-status-pill ${item.done ? 'ready' : 'draft'}`}>
+                    <StatusTag status={item.done ? 'ready' : 'draft'}>
                       {item.done ? t('Ready') : t('draft')}
-                    </span>
+                    </StatusTag>
                   </div>
                   <small className="muted">{item.hint}</small>
                 </li>
               ))}
             </ul>
-          </article>
+          </Card>
 
-          <article className="card stack">
+          <Panel className="stack">
             <div className="stack tight">
               <h3>{t('Review links')}</h3>
               <small className="muted">{t('Track draft progress and approval results from the model workspace.')}</small>
             </div>
             <div className="workspace-button-stack">
-              <button type="button" className="workspace-inline-button" onClick={previousStep} disabled={step === 0 || loading}>
+              <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || loading} block>
                 {t('Back')}
-              </button>
-              <button type="button" className="workspace-inline-button" onClick={nextStep} disabled={step === steps.length - 1 || loading}>
+              </Button>
+              <Button type="button" variant="secondary" onClick={nextStep} disabled={step === steps.length - 1 || loading} block>
                 {t('Next')}
-              </button>
-              <button type="button" onClick={submitApproval} disabled={step !== steps.length - 1 || loading}>
+              </Button>
+              <Button type="button" onClick={submitApproval} disabled={step !== steps.length - 1 || loading} block>
                 {loading ? t('Submitting...') : t('Submit Approval')}
-              </button>
-              <Link to="/models/my-models" className="workspace-inline-link">
+              </Button>
+              <ButtonLink to="/models/my-models" variant="secondary" block>
                 {t('Manage My Models')}
-              </Link>
-              <Link to="/models/versions" className="workspace-inline-link">
+              </ButtonLink>
+              <ButtonLink to="/models/versions" variant="secondary" block>
                 {t('Open Model Versions')}
-              </Link>
+              </ButtonLink>
             </div>
-          </article>
+          </Panel>
         </div>
       </section>
     </div>

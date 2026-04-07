@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { ApprovalRequest, FileAttachment, ModelRecord, User } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import { StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Card, Panel } from '../components/ui/Surface';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -19,54 +22,209 @@ interface ConsoleActionGroup {
   links: Array<{ to: string; label: string }>;
 }
 
+const backgroundRefreshIntervalMs = 6000;
+type LoadMode = 'initial' | 'manual' | 'background';
+
+const formatTimestamp = (iso: string): string => {
+  const value = Date.parse(iso);
+  if (Number.isNaN(value)) {
+    return iso;
+  }
+
+  return new Date(value).toLocaleString();
+};
+
+const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
+  JSON.stringify({
+    user: {
+      id: snapshot.user.id,
+      role: snapshot.user.role,
+      updated_at: snapshot.user.updated_at
+    },
+    visibleModels: snapshot.visibleModels
+      .map((model) => ({
+        id: model.id,
+        status: model.status,
+        updated_at: model.updated_at
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    myModels: snapshot.myModels
+      .map((model) => ({
+        id: model.id,
+        status: model.status,
+        updated_at: model.updated_at
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    conversationAttachments: snapshot.conversationAttachments
+      .map((attachment) => ({
+        id: attachment.id,
+        status: attachment.status,
+        updated_at: attachment.updated_at
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    approvals: snapshot.approvals
+      .map((approval) => ({
+        id: approval.id,
+        status: approval.status,
+        requested_at: approval.requested_at
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id))
+  });
+
 export default function ProfessionalConsolePage() {
   const { t, roleLabel } = useI18n();
   const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const snapshotSignatureRef = useRef('');
 
-  useEffect(() => {
-    setLoading(true);
+  const load = useCallback(async (mode: LoadMode = 'initial') => {
+    if (mode === 'initial') {
+      setLoading(true);
+    }
 
-    Promise.all([
-      api.me(),
-      api.listModels(),
-      api.listMyModels(),
-      api.listConversationAttachments(),
-      api.listApprovalRequests()
-    ])
-      .then(([user, visibleModels, myModels, conversationAttachments, approvals]) => {
-        setSnapshot({ user, visibleModels, myModels, conversationAttachments, approvals });
-        setError('');
-      })
-      .catch((loadError) => setError((loadError as Error).message))
-      .finally(() => setLoading(false));
+    if (mode === 'manual') {
+      setRefreshing(true);
+    }
+
+    setError('');
+
+    try {
+      const user = await api.me();
+      const [visibleModels, myModels, conversationAttachments, approvals] = await Promise.all([
+        api.listModels(),
+        api.listMyModels(),
+        api.listConversationAttachments(),
+        user.role === 'admin' ? api.listApprovalRequests() : Promise.resolve([])
+      ]);
+
+      const nextSnapshot = {
+        user,
+        visibleModels,
+        myModels,
+        conversationAttachments,
+        approvals
+      };
+      const nextSignature = buildConsoleSnapshotSignature(nextSnapshot);
+      if (snapshotSignatureRef.current !== nextSignature) {
+        snapshotSignatureRef.current = nextSignature;
+        setSnapshot(nextSnapshot);
+      }
+    } catch (loadError) {
+      setError((loadError as Error).message);
+    } finally {
+      if (mode === 'initial') {
+        setLoading(false);
+      }
+
+      if (mode === 'manual') {
+        setRefreshing(false);
+      }
+    }
   }, []);
 
-  if (loading) {
-    return (
-      <div className="stack">
-        <h2>{t('Professional Console')}</h2>
-        <StateBlock variant="loading" title={t('Loading Console')} description={t('Building operational snapshot.')} />
+  useEffect(() => {
+    load('initial').catch(() => {
+      // handled by local state
+    });
+  }, [load]);
+
+  const hasTransientConsoleState = Boolean(
+    snapshot?.conversationAttachments.some(
+      (attachment) => attachment.status === 'uploading' || attachment.status === 'processing'
+    ) || snapshot?.approvals.some((approval) => approval.status === 'pending')
+  );
+
+  useBackgroundPolling(
+    () => {
+      load('background').catch(() => {
+        // no-op
+      });
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled: hasTransientConsoleState
+    }
+  );
+
+  const pendingReviews = snapshot?.approvals.filter((approval) => approval.status === 'pending').length ?? 0;
+  const processingAttachments =
+    snapshot?.conversationAttachments.filter(
+      (attachment) => attachment.status === 'uploading' || attachment.status === 'processing'
+    ).length ?? 0;
+
+  const heroSection = (
+    <Card className="workspace-overview-hero">
+      <div className="workspace-overview-hero-grid">
+        <div className="workspace-overview-copy stack">
+          <small className="workspace-eyebrow">{t('Control Center')}</small>
+          <div className="workspace-section-header">
+            <div className="stack tight">
+              <h1>{t('Professional Console')}</h1>
+              <p className="muted">
+                {snapshot
+                  ? t('Role: {role}. This panel provides a professional control-plane entry for structured model operations.', {
+                      role: roleLabel(snapshot.user.role)
+                    })
+                  : t('Role-aware operational snapshot for structured model operations.')}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                load('manual').catch(() => {
+                  // handled by local state
+                });
+              }}
+              disabled={loading || refreshing}
+            >
+              {refreshing ? t('Refreshing...') : t('Refresh')}
+            </Button>
+          </div>
+        </div>
+        <div className="workspace-overview-badges">
+          <div className="workspace-overview-badge">
+            <span>{t('Role overview')}</span>
+            <strong>{snapshot ? roleLabel(snapshot.user.role) : t('Pending')}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Pending reviews')}</span>
+            <strong>{pendingReviews}</strong>
+          </div>
+          <div className="workspace-overview-badge">
+            <span>{t('Processing attachments')}</span>
+            <strong>{processingAttachments}</strong>
+          </div>
+        </div>
       </div>
+    </Card>
+  );
+
+  const renderPageShell = (content: ReactNode) => (
+    <div className="workspace-overview-page stack">
+      {heroSection}
+      {content}
+    </div>
+  );
+
+  if (loading) {
+    return renderPageShell(
+      <StateBlock variant="loading" title={t('Loading Console')} description={t('Building operational snapshot.')} />
     );
   }
 
   if (error) {
-    return (
-      <div className="stack">
-        <h2>{t('Professional Console')}</h2>
-        <StateBlock variant="error" title={t('Console Load Failed')} description={error} />
-      </div>
+    return renderPageShell(
+      <StateBlock variant="error" title={t('Console Load Failed')} description={error} />
     );
   }
 
   if (!snapshot) {
-    return (
-      <div className="stack">
-        <h2>{t('Professional Console')}</h2>
-        <StateBlock variant="empty" title={t('No Snapshot')} description={t('No console data available.')} />
-      </div>
+    return renderPageShell(
+      <StateBlock variant="empty" title={t('No Snapshot')} description={t('No console data available.')} />
     );
   }
 
@@ -79,6 +237,9 @@ export default function ProfessionalConsolePage() {
     (model) => model.status === 'approved' || model.status === 'published'
   ).length;
   const queuePreview = (pendingApprovals.length > 0 ? pendingApprovals : snapshot.approvals).slice(0, 4);
+  const queueCta = snapshot.user.role === 'admin'
+    ? { to: '/admin/models/pending', label: t('Open Queue') }
+    : { to: '/models/my-models', label: t('Open My Models') };
 
   const actionGroups: ConsoleActionGroup[] = [
     {
@@ -107,8 +268,11 @@ export default function ProfessionalConsolePage() {
         { to: '/training/jobs', label: t('Open Training Jobs') },
         { to: '/inference/validate', label: t('Validate Inference') }
       ]
-    },
-    {
+    }
+  ];
+
+  if (snapshot.user.role === 'admin') {
+    actionGroups.push({
       title: t('Admin & Audit'),
       description: t('Review approvals, audit trails, and release evidence from one lane.'),
       links: [
@@ -116,95 +280,82 @@ export default function ProfessionalConsolePage() {
         { to: '/admin/audit', label: t('View Audit Logs') },
         { to: '/admin/verification-reports', label: t('View Verification Reports') }
       ]
-    }
-  ];
+    });
+  }
 
-  return (
-    <div className="console-page stack">
-      <section className="console-hero card">
-        <div className="console-hero-grid">
-          <div className="console-hero-copy stack">
-            <small className="console-eyebrow">{t('Control Center')}</small>
-            <h1>{t('Professional Console')}</h1>
-            <p className="muted">
-              {t('Role: {role}. This panel provides a professional control-plane entry for structured model operations.', {
-                role: roleLabel(snapshot.user.role)
-              })}
-            </p>
-          </div>
-          <div className="console-hero-badges">
-            <div className="console-hero-badge">
-              <span>{t('Role overview')}</span>
-              <strong>{roleLabel(snapshot.user.role)}</strong>
-            </div>
-            <div className="console-hero-badge">
-              <span>{t('Pending reviews')}</span>
-              <strong>{pendingApprovals.length}</strong>
-            </div>
-            <div className="console-hero-badge">
-              <span>{t('Pending conversations')}</span>
-              <strong>{processingFiles}</strong>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="console-signal-grid">
-        <article className="card stack console-signal-card">
-          <div className="console-signal-top">
+  return renderPageShell(
+    <>
+      <section className="workspace-overview-signal-grid">
+        <Card as="article" className="workspace-signal-card">
+          <div className="workspace-signal-top">
             <h3>{t('Visibility')}</h3>
             <small className="muted">{t('Models currently visible to this account.')}</small>
           </div>
           <strong className="metric">{snapshot.visibleModels.length}</strong>
-          <small className="console-metric-caption">
+          <small className="muted">
             {t('Ready models')}: {readyVisibleModels}
           </small>
-        </article>
+        </Card>
 
-        <article className="card stack console-signal-card">
-          <div className="console-signal-top">
+        <Card as="article" className="workspace-signal-card">
+          <div className="workspace-signal-top">
             <h3>{t('My Models')}</h3>
             <small className="muted">{t('Ownership-scoped model inventory.')}</small>
           </div>
           <strong className="metric">{snapshot.myModels.length}</strong>
-          <small className="console-metric-caption">
+          <small className="muted">
             {t('Pending Model Approvals')}: {pendingModels}
           </small>
-        </article>
+        </Card>
 
-        <article className={`card stack console-signal-card${pendingApprovals.length > 0 ? ' attention' : ''}`}>
-          <div className="console-signal-top">
+        <Card as="article" className={`workspace-signal-card${pendingApprovals.length > 0 ? ' attention' : ''}`}>
+          <div className="workspace-signal-top">
             <h3>{t('Pending Model Approvals')}</h3>
             <small className="muted">{t('Models waiting for admin review.')}</small>
           </div>
           <strong className="metric">{pendingApprovals.length}</strong>
-          <small className="console-metric-caption">
+          <small className="muted">
             {t('Pending approvals visible in queue: {count}.', { count: pendingApprovals.length })}
           </small>
-        </article>
+        </Card>
 
-        <article className={`card stack console-signal-card${processingFiles > 0 ? ' attention soft' : ''}`}>
-          <div className="console-signal-top">
+        <Card as="article" className={`workspace-signal-card${processingFiles > 0 ? ' attention' : ''}`}>
+          <div className="workspace-signal-top">
             <h3>{t('File Processing')}</h3>
             <small className="muted">{t('Conversation attachments still in uploading/processing state.')}</small>
           </div>
           <strong className="metric">{processingFiles}</strong>
-          <small className="console-metric-caption">
+          <small className="muted">
             {processingFiles > 0 ? t('Continue in Chat') : t('No pending chat files')}
           </small>
-        </article>
+        </Card>
       </section>
 
-      <section className="console-panel-grid">
-        <article className="card stack console-panel-card">
-          <div className="console-section-header">
+      <section className="workspace-overview-panel-grid">
+        <Card as="article" className="workspace-overview-main">
+          <div className="workspace-section-header">
             <div className="stack tight">
               <h3>{t('Priority Queue')}</h3>
               <small className="muted">{t('Items needing attention now.')}</small>
             </div>
-            <Link to="/admin/models/pending" className="console-inline-link">
-              {t('Open Queue')}
-            </Link>
+            <div className="row gap wrap">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  load('manual').catch(() => {
+                    // handled by local state
+                  });
+                }}
+                disabled={loading || refreshing}
+              >
+                {refreshing ? t('Refreshing...') : t('Refresh')}
+              </Button>
+              <ButtonLink to={queueCta.to} variant="secondary" size="sm">
+                {queueCta.label}
+              </ButtonLink>
+            </div>
           </div>
 
           {queuePreview.length === 0 ? (
@@ -214,66 +365,76 @@ export default function ProfessionalConsolePage() {
               description={t('All queued approvals are already resolved.')}
             />
           ) : (
-            <ul className="console-queue-list">
+            <ul className="workspace-record-list compact">
               {queuePreview.map((approval: ApprovalRequest) => (
-                <li key={approval.id} className="console-queue-item">
-                  <div className="stack tight">
-                    <strong>{approval.id}</strong>
-                    <small className="muted">{t('Model: {modelId}', { modelId: approval.model_id })}</small>
+                <Panel key={approval.id} as="li" className="workspace-record-item compact" tone="soft">
+                  <div className="workspace-record-item-top">
+                    <div className="workspace-record-summary stack tight">
+                      <strong>{approval.id}</strong>
+                      <small className="muted">{t('Model: {modelId}', { modelId: approval.model_id })}</small>
+                      <small className="muted">
+                        {t('Requested')}: {formatTimestamp(approval.requested_at)}
+                      </small>
+                    </div>
+                    <div className="workspace-record-actions">
+                      <StatusTag status={approval.status}>{t(approval.status)}</StatusTag>
+                      <ButtonLink to={queueCta.to} variant="ghost" size="sm">
+                        {t('Open Queue')}
+                      </ButtonLink>
+                    </div>
                   </div>
-                  <span className={`console-status-pill ${approval.status}`}>{approval.status}</span>
-                </li>
+                </Panel>
               ))}
             </ul>
           )}
-        </article>
+        </Card>
 
-        <div className="console-side-stack">
-          <article className="card stack console-panel-card">
+        <div className="workspace-overview-side">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Conversation carryover')}</h3>
               <small className="muted">
                 {t('Files still processing in chat context can be revisited from the conversation workspace.')}
               </small>
             </div>
-            <strong className="console-side-metric">{processingFiles}</strong>
+            <strong className="workspace-side-metric">{processingFiles}</strong>
             <small className="muted">
               {processingFiles > 0
                 ? t('Continue attachment-driven work from chat when operational files are still processing.')
                 : t('No chat files are currently processing.')}
             </small>
-            <Link to="/workspace/chat" className="console-inline-link">
+            <ButtonLink to="/workspace/chat" variant="secondary">
               {t('Continue in Chat')}
-            </Link>
-          </article>
+            </ButtonLink>
+          </Card>
 
-          <article className="card stack console-panel-card">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Quick Actions')}</h3>
               <small className="muted">
                 {t('Use grouped action lanes instead of scanning a long mixed link list.')}
               </small>
             </div>
-            <div className="console-action-grid">
+            <div className="workspace-action-grid">
               {actionGroups.map((group) => (
-                <section key={group.title} className="console-action-group">
+                <Panel key={group.title} as="section" className="stack" tone="soft">
                   <div className="stack tight">
                     <strong>{group.title}</strong>
                     <small className="muted">{group.description}</small>
                   </div>
-                  <div className="console-action-group-links">
+                  <div className="workspace-button-stack">
                     {group.links.map((link) => (
-                      <Link key={link.to} to={link.to} className="console-action-link">
+                      <ButtonLink key={link.to} to={link.to} variant="secondary" size="sm" block>
                         {link.label}
-                      </Link>
+                      </ButtonLink>
                     ))}
                   </div>
-                </section>
+                </Panel>
               ))}
             </div>
-          </article>
+          </Card>
         </div>
       </section>
-    </div>
+    </>
   );
 }

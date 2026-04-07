@@ -1,0 +1,292 @@
+.annotation-canvas-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background:
+    linear-gradient(45deg, var(--viz-detect-pattern) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--viz-detect-pattern) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--viz-detect-pattern) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--viz-detect-pattern) 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+  max-width: 100%;
+  user-select: none;
+}
+
+.annotation-canvas-bg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--viz-detect);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.annotation-canvas-box {
+  position: absolute;
+  border: 2px solid var(--viz-detect);
+  background: var(--viz-detect-overlay);
+  border-radius: var(--radius-xs);
+  padding: 0;
+  width: auto;
+  color: var(--viz-detect);
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  cursor: move;
+}
+
+.annotation-canvas-box span {
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--color-surface-alpha-82);
+  border-bottom-right-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
+}
+
+.annotation-canvas-box.selected {
+  border-color: var(--viz-info);
+  background: var(--viz-info-overlay);
+}
+
+.annotation-canvas-box.preview {
+  pointer-events: none;
+  border-style: dashed;
+  border-color: var(--viz-info);
+  background: var(--color-info-alpha-14);
+}
+
+.annotation-canvas-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--viz-info);
+  background: var(--color-surface);
+  color: transparent;
+  padding: 0;
+}
+
+.annotation-canvas-handle.nw {
+  left: -8px;
+  top: -8px;
+  cursor: nwse-resize;
+}
+
+.annotation-canvas-handle.ne {
+  right: -8px;
+  top: -8px;
+  cursor: nesw-resize;
+}
+
+.annotation-canvas-handle.sw {
+  left: -8px;
+  bottom: -8px;
+  cursor: nesw-resize;
+}
+
+.annotation-canvas-handle.se {
+  right: -8px;
+  bottom: -8px;
+  cursor: nwse-resize;
+}
+
+.annotation-box-editor {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.polygon-canvas-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background:
+    linear-gradient(45deg, var(--viz-warning-pattern) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--viz-warning-pattern) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--viz-warning-pattern) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--viz-warning-pattern) 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+  max-width: 100%;
+  user-select: none;
+}
+
+.polygon-canvas-bg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--viz-warning);
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+.polygon-canvas-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.polygon-canvas-shape {
+  fill: var(--viz-warning-overlay);
+  stroke: var(--viz-warning);
+  stroke-width: 2;
+  cursor: pointer;
+}
+
+.polygon-canvas-shape.selected {
+  fill: var(--viz-info-overlay);
+  stroke: var(--viz-info);
+  stroke-width: 2.5;
+}
+
+.polygon-canvas-handle {
+  fill: var(--color-surface);
+  stroke: var(--viz-info);
+  stroke-width: 2;
+  cursor: move;
+}
+
+.polygon-canvas-draft {
+  fill: none;
+  stroke: var(--viz-warning);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.polygon-canvas-draft-point {
+  fill: var(--viz-warning);
+  stroke: var(--color-warning-soft);
+  stroke-width: 1.5;
+}
+
+.polygon-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.prediction-stage {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(45deg, var(--viz-info-pattern) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--viz-info-pattern) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--viz-info-pattern) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--viz-info-pattern) 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+  width: min(100%, 760px);
+  max-width: 100%;
+  margin-inline: auto;
+  aspect-ratio: 16 / 9;
+}
+
+.prediction-stage-bg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--viz-info);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.prediction-stage-bg.hidden {
+  opacity: 0;
+}
+
+.prediction-stage-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.prediction-box {
+  position: absolute;
+  border: 2px solid var(--viz-info);
+  background: var(--viz-info-overlay);
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+}
+
+.prediction-box.rotated {
+  transform-origin: center;
+}
+
+.prediction-box span {
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--color-surface-alpha-85);
+  border-bottom-right-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prediction-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.prediction-polygon {
+  fill: var(--viz-warning-overlay);
+  stroke: var(--viz-warning);
+  stroke-width: 2;
+}
+
+.prediction-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (max-width: 768px) {
+  .annotation-box-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .polygon-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .prediction-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .prediction-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -25,6 +25,10 @@ import type {
   ModelRecord,
   ModelVersionRecord,
   TrainingJobRecord,
+  TrainingExecutionTarget,
+  TrainingSchedulerDecision,
+  TrainingWorkerBootstrapSessionRecord,
+  TrainingWorkerNodeRecord,
   TrainingMetricRecord,
   TrainingExecutionMode,
   User
@@ -58,6 +62,9 @@ interface AppStatePayload {
   annotationReviews: AnnotationReviewRecord[];
   datasetVersions: DatasetVersionRecord[];
   trainingJobs: TrainingJobRecord[];
+  trainingWorkerNodes: TrainingWorkerNodeRecord[];
+  trainingWorkerBootstrapSessions: TrainingWorkerBootstrapSessionRecord[];
+  trainingWorkerAuthTokensByWorkerId: Record<string, string>;
   trainingMetrics: TrainingMetricRecord[];
   modelVersions: ModelVersionRecord[];
   inferenceRuns: InferenceRunRecord[];
@@ -367,6 +374,11 @@ export const trainingJobs: TrainingJobRecord[] = [
       learning_rate: '0.001'
     },
     execution_mode: 'simulated',
+    execution_target: 'control_plane',
+    scheduled_worker_id: null,
+    scheduler_note: 'seed_default_local',
+    scheduler_decision: null,
+    scheduler_decision_history: [],
     log_excerpt: 'Training completed with stable CER improvement.',
     submitted_by: 'u-1',
     created_at: now(),
@@ -387,6 +399,11 @@ export const trainingJobs: TrainingJobRecord[] = [
       learning_rate: '0.0005'
     },
     execution_mode: 'simulated',
+    execution_target: 'control_plane',
+    scheduled_worker_id: null,
+    scheduler_note: 'seed_default_local',
+    scheduler_decision: null,
+    scheduler_decision_history: [],
     log_excerpt: 'Epoch 12/80, improving recall.',
     submitted_by: 'u-1',
     created_at: now(),
@@ -420,6 +437,31 @@ export const trainingMetrics: TrainingMetricRecord[] = [
     recorded_at: now()
   }
 ];
+
+export const trainingWorkerNodes: TrainingWorkerNodeRecord[] = [
+  {
+    id: 'tw-1',
+    name: 'control-plane-local',
+    endpoint: null,
+    status: 'online',
+    enabled: true,
+    max_concurrency: 1,
+    last_heartbeat_at: null,
+    last_reported_load: null,
+    capabilities: ['framework:yolo', 'framework:paddleocr', 'framework:doctr'],
+    auth_mode: 'shared',
+    auth_token_preview: null,
+    registration_source: 'seed',
+    metadata: {
+      role: 'control_plane_fallback'
+    },
+    created_at: now(),
+    updated_at: now()
+  }
+];
+
+export const trainingWorkerBootstrapSessions: TrainingWorkerBootstrapSessionRecord[] = [];
+export const trainingWorkerAuthTokensByWorkerId: Record<string, string> = {};
 
 export const modelVersions: ModelVersionRecord[] = [
   {
@@ -514,10 +556,283 @@ const normalizeTrainingExecutionMode = (
   return 'unknown';
 };
 
-const normalizeTrainingJob = (entry: TrainingJobRecord): TrainingJobRecord => ({
-  ...entry,
-  execution_mode: normalizeTrainingExecutionMode(entry.execution_mode)
-});
+const normalizeTrainingExecutionTarget = (
+  value: unknown
+): TrainingExecutionTarget => {
+  if (value === 'control_plane' || value === 'worker') {
+    return value;
+  }
+  return 'control_plane';
+};
+
+const normalizeTrainingSchedulerDecision = (
+  value: unknown
+): TrainingSchedulerDecision | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Partial<TrainingSchedulerDecision>;
+  if (entry.policy !== 'load_aware_v1') {
+    return null;
+  }
+  return {
+    policy: 'load_aware_v1',
+    trigger: typeof entry.trigger === 'string' && entry.trigger.trim() ? entry.trigger : 'unknown',
+    attempt:
+      typeof entry.attempt === 'number' && Number.isFinite(entry.attempt) && entry.attempt > 0
+        ? Math.round(entry.attempt)
+        : 1,
+    execution_target: normalizeTrainingExecutionTarget(entry.execution_target),
+    selected_worker_id:
+      typeof entry.selected_worker_id === 'string' && entry.selected_worker_id.trim()
+        ? entry.selected_worker_id
+        : null,
+    selected_worker_score:
+      typeof entry.selected_worker_score === 'number' && Number.isFinite(entry.selected_worker_score)
+        ? entry.selected_worker_score
+        : null,
+    selected_worker_load_component:
+      typeof entry.selected_worker_load_component === 'number' &&
+      Number.isFinite(entry.selected_worker_load_component)
+        ? entry.selected_worker_load_component
+        : null,
+    selected_worker_health_penalty:
+      typeof entry.selected_worker_health_penalty === 'number' &&
+      Number.isFinite(entry.selected_worker_health_penalty)
+        ? entry.selected_worker_health_penalty
+        : null,
+    selected_worker_capability_bonus:
+      typeof entry.selected_worker_capability_bonus === 'number' &&
+      Number.isFinite(entry.selected_worker_capability_bonus)
+        ? entry.selected_worker_capability_bonus
+        : null,
+    selected_worker_in_flight_jobs:
+      typeof entry.selected_worker_in_flight_jobs === 'number' &&
+      Number.isFinite(entry.selected_worker_in_flight_jobs)
+        ? Math.max(0, Math.round(entry.selected_worker_in_flight_jobs))
+        : null,
+    selected_worker_max_concurrency:
+      typeof entry.selected_worker_max_concurrency === 'number' &&
+      Number.isFinite(entry.selected_worker_max_concurrency)
+        ? Math.max(1, Math.round(entry.selected_worker_max_concurrency))
+        : null,
+    excluded_worker_ids: Array.isArray(entry.excluded_worker_ids)
+      ? entry.excluded_worker_ids
+          .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+      : [],
+    fallback_reason:
+      typeof entry.fallback_reason === 'string' && entry.fallback_reason.trim()
+        ? entry.fallback_reason
+        : null,
+    note: typeof entry.note === 'string' && entry.note.trim() ? entry.note : 'scheduler_note_unavailable',
+    decided_at:
+      typeof entry.decided_at === 'string' && entry.decided_at.trim()
+        ? entry.decided_at
+        : now()
+  };
+};
+
+const normalizeTrainingSchedulerDecisionHistory = (
+  history: unknown,
+  latest: TrainingSchedulerDecision | null
+): TrainingSchedulerDecision[] => {
+  const normalized = Array.isArray(history)
+    ? history
+        .map((entry) => normalizeTrainingSchedulerDecision(entry))
+        .filter((entry): entry is TrainingSchedulerDecision => Boolean(entry))
+    : [];
+
+  if (normalized.length === 0 && latest) {
+    return [latest];
+  }
+
+  if (
+    latest &&
+    !normalized.some(
+      (entry) =>
+        entry.decided_at === latest.decided_at &&
+        entry.trigger === latest.trigger &&
+        entry.attempt === latest.attempt &&
+        entry.note === latest.note
+    )
+  ) {
+    normalized.push(latest);
+  }
+
+  return normalized
+    .slice()
+    .sort((left, right) => Date.parse(left.decided_at) - Date.parse(right.decided_at));
+};
+
+const normalizeTrainingJob = (entry: TrainingJobRecord): TrainingJobRecord => {
+  const schedulerDecision = normalizeTrainingSchedulerDecision(entry.scheduler_decision);
+  return {
+    ...entry,
+    execution_mode: normalizeTrainingExecutionMode(entry.execution_mode),
+    execution_target: normalizeTrainingExecutionTarget(entry.execution_target),
+    scheduled_worker_id:
+      typeof entry.scheduled_worker_id === 'string' && entry.scheduled_worker_id.trim()
+        ? entry.scheduled_worker_id
+        : null,
+    scheduler_note:
+      typeof entry.scheduler_note === 'string' && entry.scheduler_note.trim()
+        ? entry.scheduler_note
+        : null,
+    scheduler_decision: schedulerDecision,
+    scheduler_decision_history: normalizeTrainingSchedulerDecisionHistory(
+      entry.scheduler_decision_history,
+      schedulerDecision
+    )
+  };
+};
+
+const normalizeTrainingWorkerNode = (
+  entry: TrainingWorkerNodeRecord
+): TrainingWorkerNodeRecord => {
+  const status: TrainingWorkerNodeRecord['status'] =
+    entry.status === 'online' || entry.status === 'draining' ? entry.status : 'offline';
+  const maxConcurrencyRaw = Number(entry.max_concurrency);
+  const maxConcurrency = Number.isFinite(maxConcurrencyRaw)
+    ? Math.min(64, Math.max(1, Math.round(maxConcurrencyRaw)))
+    : 1;
+  const normalizedLoad =
+    typeof entry.last_reported_load === 'number' && Number.isFinite(entry.last_reported_load)
+      ? Math.max(0, Math.min(1, entry.last_reported_load))
+      : null;
+
+  return {
+    ...entry,
+    name: (entry.name ?? '').trim() || 'worker-node',
+    endpoint:
+      typeof entry.endpoint === 'string' && entry.endpoint.trim() ? entry.endpoint.trim() : null,
+    status,
+    enabled: Boolean(entry.enabled),
+    max_concurrency: maxConcurrency,
+    last_heartbeat_at:
+      typeof entry.last_heartbeat_at === 'string' && entry.last_heartbeat_at.trim()
+        ? entry.last_heartbeat_at
+        : null,
+    last_reported_load: normalizedLoad,
+    capabilities: Array.isArray(entry.capabilities)
+      ? entry.capabilities
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          .map((value) => value.trim())
+      : [],
+    auth_mode: entry.auth_mode === 'dedicated' ? 'dedicated' : 'shared',
+    auth_token_preview:
+      typeof entry.auth_token_preview === 'string' && entry.auth_token_preview.trim()
+        ? entry.auth_token_preview.trim()
+        : null,
+    metadata:
+      entry.metadata && typeof entry.metadata === 'object' && !Array.isArray(entry.metadata)
+        ? Object.fromEntries(
+            Object.entries(entry.metadata).map(([key, value]) => [String(key), String(value)])
+          )
+        : {},
+    registration_source:
+      entry.registration_source === 'admin' || entry.registration_source === 'heartbeat'
+        ? entry.registration_source
+        : 'seed'
+  };
+};
+
+const normalizeTrainingWorkerBootstrapSession = (
+  entry: TrainingWorkerBootstrapSessionRecord
+): TrainingWorkerBootstrapSessionRecord => {
+  const status = (
+    entry.status === 'pairing' ||
+    entry.status === 'validation_failed' ||
+    entry.status === 'awaiting_confirmation' ||
+    entry.status === 'online' ||
+    entry.status === 'expired'
+      ? entry.status
+      : 'bootstrap_created'
+  );
+  const deploymentMode = entry.deployment_mode === 'script' ? 'script' : 'docker';
+  const workerProfile =
+    entry.worker_profile === 'paddleocr' ||
+    entry.worker_profile === 'doctr' ||
+    entry.worker_profile === 'mixed'
+      ? entry.worker_profile
+      : 'yolo';
+  const maxConcurrencyRaw = Number(entry.max_concurrency);
+  const maxConcurrency = Number.isFinite(maxConcurrencyRaw)
+    ? Math.min(64, Math.max(1, Math.round(maxConcurrencyRaw)))
+    : 1;
+  const workerBindPortRaw = Number((entry as { worker_bind_port?: unknown }).worker_bind_port);
+  const workerBindPort = Number.isFinite(workerBindPortRaw)
+    ? Math.min(65535, Math.max(1, Math.round(workerBindPortRaw)))
+    : 9090;
+
+  return {
+    ...entry,
+    status,
+    deployment_mode: deploymentMode,
+    worker_profile: workerProfile,
+    pairing_token: typeof entry.pairing_token === 'string' ? entry.pairing_token.trim() : '',
+    token_preview: typeof entry.token_preview === 'string' ? entry.token_preview.trim() : '',
+    control_plane_base_url:
+      typeof entry.control_plane_base_url === 'string' ? entry.control_plane_base_url.trim() : '',
+    worker_id: typeof entry.worker_id === 'string' ? entry.worker_id.trim() : '',
+    worker_name: typeof entry.worker_name === 'string' ? entry.worker_name.trim() || 'worker-node' : 'worker-node',
+    worker_public_host:
+      typeof (entry as { worker_public_host?: unknown }).worker_public_host === 'string' &&
+      (entry as { worker_public_host?: string }).worker_public_host?.trim()
+        ? (entry as { worker_public_host: string }).worker_public_host.trim()
+        : null,
+    worker_bind_port: workerBindPort,
+    worker_endpoint_hint:
+      typeof entry.worker_endpoint_hint === 'string' && entry.worker_endpoint_hint.trim()
+        ? entry.worker_endpoint_hint.trim()
+        : null,
+    worker_runtime_profile:
+      typeof entry.worker_runtime_profile === 'string' && entry.worker_runtime_profile.trim()
+        ? entry.worker_runtime_profile.trim()
+        : 'base',
+    capabilities: Array.isArray(entry.capabilities)
+      ? entry.capabilities
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          .map((value) => value.trim())
+      : [],
+    max_concurrency: maxConcurrency,
+    issued_auth_mode: entry.issued_auth_mode === 'shared' ? 'shared' : 'dedicated',
+    issued_auth_token_preview:
+      typeof entry.issued_auth_token_preview === 'string' && entry.issued_auth_token_preview.trim()
+        ? entry.issued_auth_token_preview.trim()
+        : null,
+    docker_command: typeof entry.docker_command === 'string' ? entry.docker_command : '',
+    script_command: typeof entry.script_command === 'string' ? entry.script_command : '',
+    setup_url_hint:
+      typeof entry.setup_url_hint === 'string' && entry.setup_url_hint.trim()
+        ? entry.setup_url_hint.trim()
+        : 'http://<worker-host>:9090/setup',
+    claimed_at:
+      typeof entry.claimed_at === 'string' && entry.claimed_at.trim() ? entry.claimed_at : null,
+    last_seen_at:
+      typeof entry.last_seen_at === 'string' && entry.last_seen_at.trim() ? entry.last_seen_at : null,
+    callback_checked_at:
+      typeof entry.callback_checked_at === 'string' && entry.callback_checked_at.trim()
+        ? entry.callback_checked_at
+        : null,
+    callback_validation_message:
+      typeof entry.callback_validation_message === 'string' && entry.callback_validation_message.trim()
+        ? entry.callback_validation_message.trim()
+        : null,
+    linked_worker_id:
+      typeof entry.linked_worker_id === 'string' && entry.linked_worker_id.trim()
+        ? entry.linked_worker_id.trim()
+        : null,
+    metadata:
+      entry.metadata && typeof entry.metadata === 'object' && !Array.isArray(entry.metadata)
+        ? Object.fromEntries(
+            Object.entries(entry.metadata).map(([key, value]) => [String(key), String(value)])
+          )
+        : {},
+    created_at: typeof entry.created_at === 'string' ? entry.created_at : now(),
+    expires_at: typeof entry.expires_at === 'string' ? entry.expires_at : now()
+  };
+};
 
 const normalizeInferenceRun = (entry: InferenceRunRecord): InferenceRunRecord => ({
   ...entry,
@@ -574,7 +889,32 @@ const sanitizeAppStatePayload = (
   const sourceModels = Array.isArray(payload.models) ? payload.models : [];
   const sourceDatasets = Array.isArray(payload.datasets) ? payload.datasets : [];
   const sourceDatasetVersions = Array.isArray(payload.datasetVersions) ? payload.datasetVersions : [];
-  const sourceTrainingJobs = Array.isArray(payload.trainingJobs) ? payload.trainingJobs : [];
+  const sourceTrainingJobs = Array.isArray(payload.trainingJobs)
+    ? payload.trainingJobs.map(normalizeTrainingJob)
+    : [];
+  const sourceTrainingWorkerNodes = Array.isArray(payload.trainingWorkerNodes)
+    ? payload.trainingWorkerNodes.map(normalizeTrainingWorkerNode)
+    : [];
+  const sourceTrainingWorkerBootstrapSessions = Array.isArray(payload.trainingWorkerBootstrapSessions)
+    ? payload.trainingWorkerBootstrapSessions.map(normalizeTrainingWorkerBootstrapSession)
+    : [];
+  const sourceTrainingWorkerAuthTokensByWorkerId =
+    payload.trainingWorkerAuthTokensByWorkerId &&
+    typeof payload.trainingWorkerAuthTokensByWorkerId === 'object' &&
+    !Array.isArray(payload.trainingWorkerAuthTokensByWorkerId)
+      ? Object.fromEntries(
+          Object.entries(payload.trainingWorkerAuthTokensByWorkerId)
+            .filter(
+              ([key, value]) =>
+                typeof key === 'string' &&
+                key.trim().length > 0 &&
+                typeof value === 'string' &&
+                value.trim().length > 0
+            )
+            .map(([key, value]) => [key.trim(), value.trim()])
+        )
+      : {};
+  const keptTrainingWorkerIds = new Set(sourceTrainingWorkerNodes.map((worker) => worker.id));
   const sourceModelVersions = Array.isArray(payload.modelVersions) ? payload.modelVersions : [];
   const sourceConversations = Array.isArray(payload.conversations) ? payload.conversations : [];
   const sourceInferenceRuns = Array.isArray(payload.inferenceRuns) ? payload.inferenceRuns : [];
@@ -712,6 +1052,8 @@ const sanitizeAppStatePayload = (
     ...keptDatasetIds,
     ...keptDatasetVersionIds,
     ...keptTrainingJobIds,
+    ...keptTrainingWorkerIds,
+    ...sourceTrainingWorkerBootstrapSessions.map((session) => session.id),
     ...keptModelVersionIds,
     ...keptConversationIds,
     ...keptInferenceRunIds,
@@ -732,6 +1074,9 @@ const sanitizeAppStatePayload = (
     datasets: keptDatasets,
     datasetVersions: keptDatasetVersions,
     trainingJobs: keptTrainingJobs,
+    trainingWorkerNodes: sourceTrainingWorkerNodes,
+    trainingWorkerBootstrapSessions: sourceTrainingWorkerBootstrapSessions,
+    trainingWorkerAuthTokensByWorkerId: sourceTrainingWorkerAuthTokensByWorkerId,
     modelVersions: normalizedModelVersions,
     conversations: keptConversations,
     inferenceRuns: keptInferenceRuns,
@@ -760,6 +1105,18 @@ const sanitizeAppStatePayload = (
     keptDatasets.length !== sourceDatasets.length ||
     keptDatasetVersions.length !== sourceDatasetVersions.length ||
     keptTrainingJobs.length !== sourceTrainingJobs.length ||
+    sourceTrainingWorkerNodes.length !==
+      (Array.isArray(payload.trainingWorkerNodes) ? payload.trainingWorkerNodes.length : 0) ||
+    sourceTrainingWorkerBootstrapSessions.length !==
+      (Array.isArray(payload.trainingWorkerBootstrapSessions)
+        ? payload.trainingWorkerBootstrapSessions.length
+        : 0) ||
+    Object.keys(sourceTrainingWorkerAuthTokensByWorkerId).length !==
+      (payload.trainingWorkerAuthTokensByWorkerId &&
+      typeof payload.trainingWorkerAuthTokensByWorkerId === 'object' &&
+      !Array.isArray(payload.trainingWorkerAuthTokensByWorkerId)
+        ? Object.keys(payload.trainingWorkerAuthTokensByWorkerId).length
+        : 0) ||
     keptModelVersions.length !== sourceModelVersions.length ||
     keptConversations.length !== sourceConversations.length ||
     keptInferenceRuns.length !== sourceInferenceRuns.length ||
@@ -797,6 +1154,11 @@ const buildAppStatePayload = (): AppStatePayload => ({
   annotationReviews: [...annotationReviews],
   datasetVersions: [...datasetVersions],
   trainingJobs: trainingJobs.map(normalizeTrainingJob),
+  trainingWorkerNodes: trainingWorkerNodes.map(normalizeTrainingWorkerNode),
+  trainingWorkerBootstrapSessions: trainingWorkerBootstrapSessions.map(
+    normalizeTrainingWorkerBootstrapSession
+  ),
+  trainingWorkerAuthTokensByWorkerId: { ...trainingWorkerAuthTokensByWorkerId },
   trainingMetrics: [...trainingMetrics],
   modelVersions: [...modelVersions],
   inferenceRuns: inferenceRuns.map(normalizeInferenceRun),
@@ -855,6 +1217,29 @@ export const loadPersistedAppState = async (): Promise<void> => {
     }
     if (Array.isArray(state.trainingJobs)) {
       replaceArray(trainingJobs, state.trainingJobs.map(normalizeTrainingJob));
+    }
+    if (Array.isArray(state.trainingWorkerNodes)) {
+      replaceArray(trainingWorkerNodes, state.trainingWorkerNodes.map(normalizeTrainingWorkerNode));
+    }
+    if (Array.isArray(state.trainingWorkerBootstrapSessions)) {
+      replaceArray(
+        trainingWorkerBootstrapSessions,
+        state.trainingWorkerBootstrapSessions.map(normalizeTrainingWorkerBootstrapSession)
+      );
+    }
+    Object.keys(trainingWorkerAuthTokensByWorkerId).forEach((key) => {
+      delete trainingWorkerAuthTokensByWorkerId[key];
+    });
+    if (
+      state.trainingWorkerAuthTokensByWorkerId &&
+      typeof state.trainingWorkerAuthTokensByWorkerId === 'object' &&
+      !Array.isArray(state.trainingWorkerAuthTokensByWorkerId)
+    ) {
+      Object.entries(state.trainingWorkerAuthTokensByWorkerId).forEach(([key, value]) => {
+        if (typeof key === 'string' && key.trim() && typeof value === 'string' && value.trim()) {
+          trainingWorkerAuthTokensByWorkerId[key.trim()] = value.trim();
+        }
+      });
     }
     if (Array.isArray(state.trainingMetrics)) {
       replaceArray(trainingMetrics, state.trainingMetrics);

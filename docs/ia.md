@@ -17,9 +17,8 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.2 Entry
 - `/`
-  - Dual work entry:
-    - AI-native conversation workspace
-    - professional console
+  - redirects to `/workspace/chat`
+  - professional console remains directly accessible via `/workspace/console` and shared navigation
 
 ### 3.3 Conversation Workspace
 - `/workspace/chat`
@@ -89,7 +88,7 @@ Define executable route and page structure for the AI-native conversation worksp
   - dataset step binds an explicit dataset-version snapshot, not an implicit latest dataset state
   - selected dataset-version readiness summary stays visible before launch (dataset status, split summary, annotation coverage, train-split availability)
 - `/training/jobs/:jobId`
-  - detail: status, logs, metrics
+  - detail: status, logs, metrics, scheduler decision snapshot + history timeline
 
 ### 3.8 Inference Validation Domain
 - `/inference/validate`
@@ -191,6 +190,15 @@ Define executable route and page structure for the AI-native conversation worksp
 - advanced template section collapsed by default
 - page keeps diagnostics, execution summary, and template guidance in one shared overview layout
 - execution summary also surfaces the latest framework-specific metric keys sampled from recent completed training jobs without requiring a separate detail-page jump
+  - admin runtime tab also hosts training-worker control plane blocks:
+  - worker registry list (`online/offline/draining`, heartbeat freshness, load score, concurrency)
+  - worker scheduler score breakdown view (`scheduler_score`, load component, health penalty, capability bonus, recent dispatch failures/cooldown)
+  - guided `Add Worker` onboarding wizard with deployment mode selector (`Docker` recommended / script fallback)
+  - `Add Worker` wizard can optionally prefill worker public host / IP and bind port so generated startup commands and `/setup` URL hints are immediately usable on remote nodes
+  - pairing-token generation plus downloadable/copyable worker startup templates
+  - pending worker onboarding list with validation state (`bootstrap_created`, `pairing`, `validation_failed`, `awaiting_confirmation`, `online`)
+  - add/edit/remove worker actions
+  - scheduler policy hints (load-aware assignment and fallback conditions)
 
 ### 5.9 Admin Verification Reports
 - support filtering by status, base URL, and keyword

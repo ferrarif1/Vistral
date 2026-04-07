@@ -29,6 +29,7 @@ const isNotFoundMessage = (message: string): boolean => {
   const normalized = normalizeMessage(message);
   return (
     includesAny(normalized, [' not found']) ||
+    includesAny(normalized, ['bootstrap session not found']) ||
     includesAny(normalized, ['does not belong to this dataset'])
   );
 };
@@ -70,7 +71,16 @@ const isValidationMessage = (message: string): boolean => {
     'cannot disable your own account',
     'cannot disable the last active admin account',
     'invalid json body',
-    'invalid framework query'
+    'invalid framework query',
+    'worker name is required',
+    'worker name cannot be empty',
+    'cannot remove worker with in-flight training jobs',
+    'training worker endpoint already exists',
+    'control plane base url is required',
+    'control plane base url must be a full http(s) url',
+    'control plane base url must use http or https',
+    'pairing token is required',
+    'pairing token is invalid or expired'
   ]);
 };
 
@@ -105,6 +115,17 @@ export const normalizeApiError = (error: unknown): NormalizedApiError => {
     return {
       status: 403,
       code: 'CSRF_VALIDATION_FAILED',
+      message
+    };
+  }
+
+  if (
+    message === 'Training worker token is invalid.' ||
+    message === 'Training worker token is not configured.'
+  ) {
+    return {
+      status: 403,
+      code: 'INSUFFICIENT_PERMISSIONS',
       message
     };
   }

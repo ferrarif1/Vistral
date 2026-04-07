@@ -3,7 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-8787}"
+if [[ -z "${API_PORT:-}" ]]; then
+  API_PORT="$(
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
+fi
 BASE_URL="http://${API_HOST}:${API_PORT}"
 BUSINESS_USERNAME="${BUSINESS_USERNAME:-alice}"
 BUSINESS_PASSWORD="${BUSINESS_PASSWORD:-mock-pass}"
@@ -12,6 +21,10 @@ ADMIN_PASSWORD="${ADMIN_PASSWORD:-mock-pass-admin}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-verify-report-retention-e2e] jq is required."
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[smoke-verify-report-retention-e2e] python3 is required."
   exit 1
 fi
 
@@ -49,6 +62,12 @@ for _ in {1..120}; do
   fi
   sleep 0.2
 done
+
+if ! kill -0 "${API_PID}" >/dev/null 2>&1; then
+  echo "[smoke-verify-report-retention-e2e] API process exited before health check (possible port conflict)."
+  cat "${API_LOG}"
+  exit 1
+fi
 
 if ! curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then
   echo "[smoke-verify-report-retention-e2e] API failed to start."

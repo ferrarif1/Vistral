@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import VirtualList from '../components/VirtualList';
+import { Badge, StatusTag } from '../components/ui/Badge';
+import { Button, ButtonLink } from '../components/ui/Button';
+import { Input, Select } from '../components/ui/Field';
+import { Card, Panel } from '../components/ui/Surface';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+
+const versionsVirtualizationThreshold = 14;
+const versionsVirtualRowHeight = 186;
+const versionsVirtualViewportHeight = 640;
+const backgroundRefreshIntervalMs = 6000;
+type LoadMode = 'initial' | 'manual' | 'background';
 
 const formatTimestamp = (iso: string): string => {
   const value = Date.parse(iso);
@@ -14,6 +25,46 @@ const formatTimestamp = (iso: string): string => {
   return new Date(value).toLocaleString();
 };
 
+const buildVersionSignature = (items: ModelVersionRecord[]): string =>
+  JSON.stringify(
+    [...items]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((item) => ({
+        id: item.id,
+        model_id: item.model_id,
+        status: item.status,
+        version_name: item.version_name,
+        created_at: item.created_at,
+        training_job_id: item.training_job_id,
+        artifact_attachment_id: item.artifact_attachment_id
+      }))
+  );
+
+const buildModelSignature = (items: ModelRecord[]): string =>
+  JSON.stringify(
+    [...items]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        model_type: item.model_type,
+        status: item.status,
+        updated_at: item.updated_at
+      }))
+  );
+
+const buildJobSignature = (items: TrainingJobRecord[]): string =>
+  JSON.stringify(
+    [...items]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((item) => ({
+        id: item.id,
+        status: item.status,
+        framework: item.framework,
+        updated_at: item.updated_at
+      }))
+  );
+
 export default function ModelVersionsPage() {
   const { t } = useI18n();
   const [versions, setVersions] = useState<ModelVersionRecord[]>([]);
@@ -23,12 +74,22 @@ export default function ModelVersionsPage() {
   const [jobId, setJobId] = useState('');
   const [versionName, setVersionName] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const versionsSignatureRef = useRef('');
+  const modelsSignatureRef = useRef('');
+  const jobsSignatureRef = useRef('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (mode: LoadMode = 'initial') => {
+    if (mode === 'initial') {
+      setLoading(true);
+    }
+
+    if (mode === 'manual') {
+      setRefreshing(true);
+    }
     try {
       const [versionResult, modelResult, jobResult] = await Promise.all([
         api.listModelVersions(),
@@ -44,24 +105,61 @@ export default function ModelVersionsPage() {
           return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
         });
 
-      setVersions(versionResult);
-      setModels(modelResult);
-      setJobs(jobResult);
+      const nextVersionSignature = buildVersionSignature(versionResult);
+      if (versionsSignatureRef.current !== nextVersionSignature) {
+        versionsSignatureRef.current = nextVersionSignature;
+        setVersions(versionResult);
+      }
+
+      const nextModelSignature = buildModelSignature(modelResult);
+      if (modelsSignatureRef.current !== nextModelSignature) {
+        modelsSignatureRef.current = nextModelSignature;
+        setModels(modelResult);
+      }
+
+      const nextJobSignature = buildJobSignature(jobResult);
+      if (jobsSignatureRef.current !== nextJobSignature) {
+        jobsSignatureRef.current = nextJobSignature;
+        setJobs(jobResult);
+      }
       setModelId((prev) => (prev && modelResult.some((model) => model.id === prev) ? prev : modelResult[0]?.id || ''));
       setJobId((prev) => (prev && completed.some((job) => job.id === prev) ? prev : completed[0]?.id || ''));
       setError('');
     } catch (loadError) {
       setError((loadError as Error).message);
     } finally {
-      setLoading(false);
+      if (mode === 'initial') {
+        setLoading(false);
+      }
+
+      if (mode === 'manual') {
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    load().catch(() => {
+    load('initial').catch(() => {
       // no-op
     });
   }, [load]);
+
+  const hasTransientJobState = useMemo(
+    () => jobs.some((job) => ['queued', 'preparing', 'running', 'evaluating'].includes(job.status)),
+    [jobs]
+  );
+
+  useBackgroundPolling(
+    () => {
+      load('background').catch(() => {
+        // no-op
+      });
+    },
+    {
+      intervalMs: backgroundRefreshIntervalMs,
+      enabled: hasTransientJobState
+    }
+  );
 
   const completedJobs = useMemo(
     () =>
@@ -119,7 +217,7 @@ export default function ModelVersionsPage() {
 
       setSuccess(t('Model version {versionId} registered.', { versionId: created.id }));
       setVersionName('');
-      await load();
+      await load('manual');
     } catch (registerError) {
       setError((registerError as Error).message);
     } finally {
@@ -128,10 +226,11 @@ export default function ModelVersionsPage() {
   };
 
   const registrationBlocked = models.length === 0 || completedJobs.length === 0;
+  const shouldVirtualizeVersions = sortedVersions.length > versionsVirtualizationThreshold;
 
   return (
     <div className="workspace-overview-page stack">
-      <section className="card workspace-overview-hero">
+      <Card className="workspace-overview-hero">
         <div className="workspace-overview-hero-grid">
           <div className="workspace-overview-copy stack">
             <small className="workspace-eyebrow">{t('Version Registry')}</small>
@@ -153,13 +252,13 @@ export default function ModelVersionsPage() {
             </div>
           </div>
         </div>
-      </section>
+      </Card>
 
       {error ? <StateBlock variant="error" title={t('Action Failed')} description={error} /> : null}
       {success ? <StateBlock variant="success" title={t('Action Completed')} description={success} /> : null}
 
       <section className="workspace-overview-signal-grid">
-        <article className="card stack workspace-signal-card">
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Registered versions')}</h3>
             <small className="muted">
@@ -167,8 +266,8 @@ export default function ModelVersionsPage() {
             </small>
           </div>
           <strong className="metric">{summary.registered}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Jobs ready to register')}</h3>
             <small className="muted">
@@ -176,8 +275,8 @@ export default function ModelVersionsPage() {
             </small>
           </div>
           <strong className="metric">{summary.registerableJobs}</strong>
-        </article>
-        <article className="card stack workspace-signal-card">
+        </Card>
+        <Card as="article" className="workspace-signal-card">
           <div className="workspace-signal-top">
             <h3>{t('Artifacts linked')}</h3>
             <small className="muted">
@@ -185,18 +284,18 @@ export default function ModelVersionsPage() {
             </small>
           </div>
           <strong className="metric">{summary.linkedArtifacts}</strong>
-        </article>
-        <article className={`card stack workspace-signal-card${summary.deprecated > 0 ? ' attention' : ''}`}>
+        </Card>
+        <Card as="article" className={`workspace-signal-card${summary.deprecated > 0 ? ' attention' : ''}`}>
           <div className="workspace-signal-top">
             <h3>{t('Deprecated count')}</h3>
             <small className="muted">{t('Versions marked deprecated but kept for traceability.')}</small>
           </div>
           <strong className="metric">{summary.deprecated}</strong>
-        </article>
+        </Card>
       </section>
 
       <section className="workspace-overview-panel-grid">
-        <article className="card stack workspace-overview-main">
+        <Card as="article" className="workspace-overview-main">
           <div className="workspace-section-header">
             <div className="stack tight">
               <h3>{t('Version Inventory')}</h3>
@@ -204,18 +303,19 @@ export default function ModelVersionsPage() {
                 {t('Review registered outputs, linked metrics, and training provenance in one place.')}
               </small>
             </div>
-            <button
+            <Button
               type="button"
-              className="workspace-inline-button"
+              variant="secondary"
+              size="sm"
               onClick={() => {
-                load().catch(() => {
+                load('manual').catch(() => {
                   // no-op
                 });
               }}
-              disabled={loading}
+              disabled={loading || refreshing}
             >
-              {loading ? t('Loading') : t('Refresh')}
-            </button>
+              {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
+            </Button>
           </div>
 
           {loading ? (
@@ -226,16 +326,23 @@ export default function ModelVersionsPage() {
               title={t('No Versions')}
               description={t('Latest registered versions will appear here after the first successful registration.')}
             />
-          ) : (
-            <ul className="workspace-record-list">
-              {sortedVersions.map((version) => {
+          ) : shouldVirtualizeVersions ? (
+            <VirtualList
+              items={sortedVersions}
+              itemHeight={versionsVirtualRowHeight}
+              height={versionsVirtualViewportHeight}
+              itemKey={(version) => version.id}
+              listClassName="workspace-record-list"
+              rowClassName="workspace-record-row"
+              ariaLabel={t('Version Inventory')}
+              renderItem={(version) => {
                 const linkedModel = modelsById.get(version.model_id);
                 const metricsSummary = Object.entries(version.metrics_summary)
                   .map(([key, value]) => `${key}=${value}`)
                   .join(', ');
 
                 return (
-                  <li key={version.id} className="workspace-record-item">
+                  <Panel className="workspace-record-item virtualized" tone="soft">
                     <div className="workspace-record-item-top">
                       <div className="workspace-record-summary stack tight">
                         <strong>{version.version_name}</strong>
@@ -245,37 +352,86 @@ export default function ModelVersionsPage() {
                         </small>
                       </div>
                       <div className="workspace-record-actions">
-                        <span className={`workspace-status-pill ${version.status}`}>{t(version.status)}</span>
+                        <StatusTag status={version.status}>{t(version.status)}</StatusTag>
                         {version.training_job_id ? (
-                          <Link className="workspace-inline-link" to={`/training/jobs/${version.training_job_id}`}>
+                          <ButtonLink to={`/training/jobs/${version.training_job_id}`} variant="secondary" size="sm">
                             {t('Open Job')}
-                          </Link>
+                          </ButtonLink>
                         ) : null}
                       </div>
                     </div>
-                    <p>{metricsSummary ? `${t('metrics')}: ${metricsSummary}` : t('Metrics summary unavailable.')}</p>
+                    <p className="line-clamp-2">
+                      {metricsSummary ? `${t('metrics')}: ${metricsSummary}` : t('Metrics summary unavailable.')}
+                    </p>
                     <div className="row gap wrap">
-                      <span className="chip">
+                      <Badge tone="neutral">
                         {t('model')}: {linkedModel?.name ?? version.model_id}
-                      </span>
-                      <span className="chip">
+                      </Badge>
+                      <Badge tone="info">
                         {t('job')}: {version.training_job_id ?? t('manual')}
-                      </span>
-                      <span className="chip">
+                      </Badge>
+                      <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
                         {version.artifact_attachment_id
                           ? `${t('artifact')}: ${version.artifact_attachment_id}`
                           : t('No artifact yet')}
-                      </span>
+                      </Badge>
                     </div>
-                  </li>
+                  </Panel>
+                );
+              }}
+            />
+          ) : (
+            <ul className="workspace-record-list">
+              {sortedVersions.map((version) => {
+                const linkedModel = modelsById.get(version.model_id);
+                const metricsSummary = Object.entries(version.metrics_summary)
+                  .map(([key, value]) => `${key}=${value}`)
+                  .join(', ');
+
+                return (
+                  <Panel key={version.id} as="li" className="workspace-record-item" tone="soft">
+                    <div className="workspace-record-item-top">
+                      <div className="workspace-record-summary stack tight">
+                        <strong>{version.version_name}</strong>
+                        <small className="muted">
+                          {linkedModel?.name ?? version.model_id} · {t(version.task_type)} · {t(version.framework)} · {t('Created')}:{' '}
+                          {formatTimestamp(version.created_at)}
+                        </small>
+                      </div>
+                      <div className="workspace-record-actions">
+                        <StatusTag status={version.status}>{t(version.status)}</StatusTag>
+                        {version.training_job_id ? (
+                          <ButtonLink to={`/training/jobs/${version.training_job_id}`} variant="secondary" size="sm">
+                            {t('Open Job')}
+                          </ButtonLink>
+                        ) : null}
+                      </div>
+                    </div>
+                    <p className="line-clamp-2">
+                      {metricsSummary ? `${t('metrics')}: ${metricsSummary}` : t('Metrics summary unavailable.')}
+                    </p>
+                    <div className="row gap wrap">
+                      <Badge tone="neutral">
+                        {t('model')}: {linkedModel?.name ?? version.model_id}
+                      </Badge>
+                      <Badge tone="info">
+                        {t('job')}: {version.training_job_id ?? t('manual')}
+                      </Badge>
+                      <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
+                        {version.artifact_attachment_id
+                          ? `${t('artifact')}: ${version.artifact_attachment_id}`
+                          : t('No artifact yet')}
+                      </Badge>
+                    </div>
+                  </Panel>
                 );
               })}
             </ul>
           )}
-        </article>
+        </Card>
 
         <div className="workspace-overview-side">
-          <article className="card stack">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Registration Lane')}</h3>
               <small className="muted">
@@ -298,27 +454,27 @@ export default function ModelVersionsPage() {
                 <div className="workspace-form-grid">
                   <label>
                     {t('Model')}
-                    <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
+                    <Select value={modelId} onChange={(event) => setModelId(event.target.value)}>
                       {models.map((model) => (
                         <option key={model.id} value={model.id}>
                           {model.name} ({t(model.model_type)})
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                   <label>
                     {t('Completed Training Job')}
-                    <select value={jobId} onChange={(event) => setJobId(event.target.value)}>
+                    <Select value={jobId} onChange={(event) => setJobId(event.target.value)}>
                       {completedJobs.map((job) => (
                         <option key={job.id} value={job.id}>
                           {job.name} ({t(job.framework)})
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                   <label className="workspace-form-span-2">
                     {t('Version Name')}
-                    <input
+                    <Input
                       value={versionName}
                       onChange={(event) => setVersionName(event.target.value)}
                       placeholder={t('for example: v2026.04.02')}
@@ -326,14 +482,14 @@ export default function ModelVersionsPage() {
                   </label>
                 </div>
 
-                <button type="button" onClick={registerVersion} disabled={submitting}>
+                <Button type="button" onClick={registerVersion} disabled={submitting}>
                   {submitting ? t('Registering...') : t('Register Model Version')}
-                </button>
+                </Button>
               </>
             )}
-          </article>
+          </Card>
 
-          <article className="card stack">
+          <Card as="article">
             <div className="stack tight">
               <h3>{t('Ready sources')}</h3>
               <small className="muted">
@@ -342,39 +498,41 @@ export default function ModelVersionsPage() {
             </div>
 
             <ul className="workspace-record-list compact">
-              <li className="workspace-record-item compact">
+              <Panel as="li" className="workspace-record-item compact" tone="soft">
                 <div className="row between gap wrap">
                   <strong>{t('Available models')}</strong>
-                  <span className="chip">{summary.availableModels}</span>
+                  <Badge tone="neutral">{summary.availableModels}</Badge>
                 </div>
                 <small className="muted">
                   {summary.availableModels > 0
                     ? t('Manage the model side of version registration from your owned inventory.')
                     : t('Create or import a model draft first.')}
                 </small>
-              </li>
-              <li className="workspace-record-item compact">
+              </Panel>
+              <Panel as="li" className="workspace-record-item compact" tone="soft">
                 <div className="row between gap wrap">
                   <strong>{t('Completed jobs')}</strong>
-                  <span className="chip">{summary.registerableJobs}</span>
+                  <Badge tone={summary.registerableJobs > 0 ? 'success' : 'warning'}>
+                    {summary.registerableJobs}
+                  </Badge>
                 </div>
                 <small className="muted">
                   {summary.registerableJobs > 0
                     ? t('Finished runs stay visible for version registration and follow-up review.')
                     : t('Complete a training job first, then return here to register a version.')}
                 </small>
-              </li>
+              </Panel>
             </ul>
 
-            <div className="stack tight">
-              <Link to="/models/my-models" className="workspace-inline-link">
+            <div className="workspace-button-stack">
+              <ButtonLink to="/models/my-models" variant="secondary" size="sm">
                 {t('Manage My Models')}
-              </Link>
-              <Link to="/training/jobs" className="workspace-inline-link">
+              </ButtonLink>
+              <ButtonLink to="/training/jobs" variant="secondary" size="sm">
                 {t('Open Training Jobs')}
-              </Link>
+              </ButtonLink>
             </div>
-          </article>
+          </Card>
         </div>
       </section>
     </div>

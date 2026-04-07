@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import StateBlock from './StateBlock';
+import { Button } from './ui/Button';
+import { Input } from './ui/Field';
+import { Card } from './ui/Surface';
 
 export interface PolygonAnnotation {
   id: string;
@@ -228,7 +231,7 @@ export default function PolygonCanvas({
   const draftPolylinePoints = draftPoints.map((point) => `${point.x},${point.y}`).join(' ');
 
   return (
-    <section className="card stack">
+    <Card as="section">
       <div className="row between gap align-center">
         <h3>{t(title)}</h3>
         <span className="muted">{t('Click to add points, then complete polygon. Drag vertices to adjust.')}</span>
@@ -300,29 +303,29 @@ export default function PolygonCanvas({
       </div>
 
       <div className="row gap wrap">
-        <button onClick={completePolygon} disabled={disabled || draftPoints.length < 3}>
+        <Button onClick={completePolygon} variant="secondary" size="sm" disabled={disabled || draftPoints.length < 3}>
           {t('Complete Polygon')}
-        </button>
-        <button onClick={clearDraft} disabled={disabled || draftPoints.length === 0}>
+        </Button>
+        <Button onClick={clearDraft} variant="ghost" size="sm" disabled={disabled || draftPoints.length === 0}>
           {t('Clear Draft Points')}
-        </button>
-        <button onClick={removeSelected} disabled={disabled || !selectedPolygonId}>
+        </Button>
+        <Button onClick={removeSelected} variant="secondary" size="sm" disabled={disabled || !selectedPolygonId}>
           {t('Delete Selected Polygon')}
-        </button>
-        <button onClick={clearAll} disabled={disabled || polygons.length === 0}>
+        </Button>
+        <Button onClick={clearAll} variant="ghost" size="sm" disabled={disabled || polygons.length === 0}>
           {t('Clear All Polygons')}
-        </button>
+        </Button>
       </div>
 
       <div className="polygon-meta-grid">
         <label>
           {t('New Polygon Label')}
-          <input value={draftLabel} onChange={(event) => setDraftLabel(event.target.value)} disabled={disabled} />
+          <Input value={draftLabel} onChange={(event) => setDraftLabel(event.target.value)} disabled={disabled} />
         </label>
 
         <label>
           {t('Selected Polygon Label')}
-          <input
+          <Input
             value={selectedPolygon?.label ?? ''}
             onChange={(event) => updateSelectedPolygon({ label: event.target.value })}
             disabled={disabled || !selectedPolygon}
@@ -332,6 +335,6 @@ export default function PolygonCanvas({
       </div>
 
       {error ? <StateBlock variant="error" title={t('Polygon Error')} description={error} /> : null}
-    </section>
+    </Card>
   );
 }

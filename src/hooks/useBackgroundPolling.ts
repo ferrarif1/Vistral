@@ -5,6 +5,7 @@ interface UseBackgroundPollingOptions {
   enabled?: boolean;
   pauseWhenHidden?: boolean;
   runOnVisible?: boolean;
+  allowConcurrent?: boolean;
 }
 
 export default function useBackgroundPolling(
@@ -13,7 +14,8 @@ export default function useBackgroundPolling(
     intervalMs,
     enabled = true,
     pauseWhenHidden = true,
-    runOnVisible = true
+    runOnVisible = true,
+    allowConcurrent = false
   }: UseBackgroundPollingOptions
 ) {
   const callbackRef = useRef(callback);
@@ -28,12 +30,28 @@ export default function useBackgroundPolling(
     }
 
     let timer: number | null = null;
+    let inFlight = false;
 
     const clearTimer = () => {
       if (timer !== null) {
         window.clearInterval(timer);
         timer = null;
       }
+    };
+
+    const runCallback = () => {
+      if (!allowConcurrent && inFlight) {
+        return;
+      }
+
+      inFlight = true;
+      Promise.resolve(callbackRef.current())
+        .catch(() => {
+          // Individual callers own error presentation.
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     };
 
     const startTimer = () => {
@@ -44,7 +62,7 @@ export default function useBackgroundPolling(
       }
 
       timer = window.setInterval(() => {
-        void callbackRef.current();
+        runCallback();
       }, intervalMs);
     };
 
@@ -61,7 +79,7 @@ export default function useBackgroundPolling(
       }
 
       if (runOnVisible) {
-        void callbackRef.current();
+        runCallback();
       }
       startTimer();
     };
@@ -71,5 +89,5 @@ export default function useBackgroundPolling(
       clearTimer();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [enabled, intervalMs, pauseWhenHidden, runOnVisible]);
+  }, [allowConcurrent, enabled, intervalMs, pauseWhenHidden, runOnVisible]);
 }
