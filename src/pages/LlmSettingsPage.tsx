@@ -7,6 +7,13 @@ import { StatusTag } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Checkbox, Input } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSectionHeader,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import {
@@ -245,34 +252,19 @@ export default function LlmSettingsPage() {
   const unsavedVariant = hasUnsavedChanges ? 'error' : 'ready';
 
   return (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       <SettingsTabs />
 
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('LLM Control Plane')}</small>
-            <h1>{t('LLM Settings (Bring Your Own Key)')}</h1>
-            <p className="muted">
-              {t('Manage provider credentials, saved key reuse, and live connection checks from one page.')}
-            </p>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Saved mode')}</span>
-              <strong>{savedEnabled ? t('enabled') : t('disabled')}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Stored key')}</span>
-              <strong>{hasApiKey ? apiKeyMasked : t('not set')}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Unsaved edits')}</span>
-              <strong>{hasUnsavedChanges ? t('Yes') : t('No')}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
+      <WorkspaceHero
+        eyebrow={t('LLM Control Plane')}
+        title={t('LLM Settings (Bring Your Own Key)')}
+        description={t('Manage provider credentials, saved key reuse, and live connection checks from one page.')}
+        stats={[
+          { label: t('Saved mode'), value: savedEnabled ? t('enabled') : t('disabled') },
+          { label: t('Stored key'), value: hasApiKey ? apiKeyMasked : t('not set') },
+          { label: t('Unsaved edits'), value: hasUnsavedChanges ? t('Yes') : t('No') }
+        ]}
+      />
 
       {loading ? (
         <StateBlock variant="loading" title={t('Loading Settings')} description={t('Fetching current LLM settings.')} />
@@ -286,47 +278,39 @@ export default function LlmSettingsPage() {
         />
       ) : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Saved mode')}</h3>
-            <small className="muted">{t('Saved conversation mode toggle from the encrypted local config.')}</small>
-          </div>
-          <strong className="metric">{savedEnabled ? t('enabled') : t('disabled')}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Stored key')}</h3>
-            <small className="muted">{t('Whether an encrypted key is already stored for reuse.')}</small>
-          </div>
-          <strong className="metric">{hasApiKey ? t('Ready') : t('N/A')}</strong>
-        </Card>
-        <Card className={`stack workspace-signal-card${hasUnsavedChanges ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('Unsaved edits')}</h3>
-            <small className="muted">{t('Form changes that still need save or discard.')}</small>
-          </div>
-          <strong className="metric">{hasUnsavedChanges ? t('Yes') : t('No')}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Preset shortcuts')}</h3>
-            <small className="muted">{t('Preset models available for one-click selection.')}</small>
-          </div>
-          <strong className="metric">{CHATANYWHERE_MODEL_PRESETS.length}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Saved mode'),
+            description: t('Saved conversation mode toggle from the encrypted local config.'),
+            value: savedEnabled ? t('enabled') : t('disabled')
+          },
+          {
+            title: t('Stored key'),
+            description: t('Whether an encrypted key is already stored for reuse.'),
+            value: hasApiKey ? t('Ready') : t('N/A')
+          },
+          {
+            title: t('Unsaved edits'),
+            description: t('Form changes that still need save or discard.'),
+            value: hasUnsavedChanges ? t('Yes') : t('No'),
+            tone: hasUnsavedChanges ? 'attention' : 'default'
+          },
+          {
+            title: t('Preset shortcuts'),
+            description: t('Preset models available for one-click selection.'),
+            value: CHATANYWHERE_MODEL_PRESETS.length
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <Card className="stack workspace-overview-main">
-          <div className="workspace-section-header">
-            <div className="stack tight">
-              <h3>{t('Editing Lane')}</h3>
-              <small className="muted">
-                {t('Update endpoint, key, model, and temperature in one focused form.')}
-              </small>
-            </div>
-          </div>
+      <WorkspaceSplit
+        main={
+          <Card className="stack">
+            <WorkspaceSectionHeader
+              title={t('Editing Lane')}
+              description={t('Update endpoint, key, model, and temperature in one focused form.')}
+            />
 
           <div className="workspace-form-grid">
             <label className="workspace-form-span-2">
@@ -419,29 +403,26 @@ export default function LlmSettingsPage() {
             ))}
           </div>
 
-          <div className="workspace-button-stack">
-            <Button type="button" onClick={save} disabled={busy} block>
-              {t('Save')}
-            </Button>
-            <Button type="button" variant="secondary" onClick={testConnection} disabled={busy} block>
-              {testing ? t('Testing...') : t('Test Connection')}
-            </Button>
-            <Button type="button" variant="danger" onClick={clear} disabled={busy} block>
-              {t('Clear')}
-            </Button>
-          </div>
-        </Card>
-
-        <div className="workspace-overview-side">
-          <Card className="stack">
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h3>{t('Saved snapshot')}</h3>
-                <small className="muted">
-                  {t('Masked saved values remain visible so you can tell what will be reused.')}
-                </small>
-              </div>
+            <div className="workspace-button-stack">
+              <Button type="button" onClick={save} disabled={busy} block>
+                {t('Save')}
+              </Button>
+              <Button type="button" variant="secondary" onClick={testConnection} disabled={busy} block>
+                {testing ? t('Testing...') : t('Test Connection')}
+              </Button>
+              <Button type="button" variant="danger" onClick={clear} disabled={busy} block>
+                {t('Clear')}
+              </Button>
             </div>
+          </Card>
+        }
+        side={
+          <>
+            <Card className="stack">
+              <WorkspaceSectionHeader
+                title={t('Saved snapshot')}
+                description={t('Masked saved values remain visible so you can tell what will be reused.')}
+              />
 
             <div className="workspace-button-stack">
               <Button
@@ -504,39 +485,40 @@ export default function LlmSettingsPage() {
             </ul>
           </Card>
 
-          <AdvancedSection
-            title={t('Connection guidance')}
-            description={t('Open troubleshooting and security guidance only when needed.')}
-          >
-            {connectionAdvice ? (
-              <StateBlock variant="success" title={t('Troubleshooting')} description={connectionAdvice} />
-            ) : (
-              <StateBlock
-                variant="empty"
-                title={t('No live troubleshooting advice right now.')}
-                description={t('Try a connection test after changing base URL, key, or model.')}
-              />
-            )}
-
-            <ul className="workspace-record-list compact">
-              <li className="workspace-record-item compact">
-                <div className="row between gap wrap">
-                  <strong>{t('Stored key reuse')}</strong>
-                  <StatusTag status="info">{hasTypedApiKey ? t('No') : t('Yes')}</StatusTag>
-                </div>
-                <small className="muted">{keyHandlingText}</small>
-              </li>
-            </ul>
-
-            <small className="muted">{t('Free key may have per-day quota and per-IP limits.')}</small>
-            <small className="muted">
-              {t(
-                'Security note: rotate your key if it was ever exposed in public channels and keep `LLM_CONFIG_SECRET` private.'
+            <AdvancedSection
+              title={t('Connection guidance')}
+              description={t('Open troubleshooting and security guidance only when needed.')}
+            >
+              {connectionAdvice ? (
+                <StateBlock variant="success" title={t('Troubleshooting')} description={connectionAdvice} />
+              ) : (
+                <StateBlock
+                  variant="empty"
+                  title={t('No live troubleshooting advice right now.')}
+                  description={t('Try a connection test after changing base URL, key, or model.')}
+                />
               )}
-            </small>
-          </AdvancedSection>
-        </div>
-      </section>
-    </div>
+
+              <ul className="workspace-record-list compact">
+                <li className="workspace-record-item compact">
+                  <div className="row between gap wrap">
+                    <strong>{t('Stored key reuse')}</strong>
+                    <StatusTag status="info">{hasTypedApiKey ? t('No') : t('Yes')}</StatusTag>
+                  </div>
+                  <small className="muted">{keyHandlingText}</small>
+                </li>
+              </ul>
+
+              <small className="muted">{t('Free key may have per-day quota and per-IP limits.')}</small>
+              <small className="muted">
+                {t(
+                  'Security note: rotate your key if it was ever exposed in public channels and keep `LLM_CONFIG_SECRET` private.'
+                )}
+              </small>
+            </AdvancedSection>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

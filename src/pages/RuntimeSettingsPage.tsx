@@ -19,6 +19,12 @@ import { Input, Select } from '../components/ui/Field';
 import { Drawer } from '../components/ui/Overlay';
 import ProgressStepper from '../components/ui/ProgressStepper';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -536,109 +542,95 @@ export default function RuntimeSettingsPage() {
   };
 
   const heroSection = (
-    <Card className="workspace-overview-hero">
-      <div className="workspace-overview-hero-grid">
-        <div className="workspace-overview-copy stack">
-          <small className="workspace-eyebrow">{t('Runtime Control Plane')}</small>
-          <div className="workspace-section-header">
-            <div className="stack tight">
-              <h1>{t('Runtime Settings')}</h1>
-              <p className="muted">
-                {t('Keep framework diagnostics, execution summaries, and integration templates in one operational lane.')}
-              </p>
-            </div>
-            <div className="row gap wrap align-center">
-              <StatusTag status={checking ? 'running' : 'ready'}>
-                {checking ? t('Checking...') : t('Ready')}
-              </StatusTag>
-              <Button type="button" variant="secondary" onClick={() => setWorkerOnboardingOpen(true)}>
-                {t('Add Worker')}
-              </Button>
-            </div>
-          </div>
+    <WorkspaceHero
+      eyebrow={t('Runtime Control Plane')}
+      title={t('Runtime Settings')}
+      description={t('Keep framework diagnostics, execution summaries, and integration templates in one operational lane.')}
+      actions={
+        <div className="row gap wrap align-center">
+          <StatusTag status={checking ? 'running' : 'ready'}>
+            {checking ? t('Checking...') : t('Ready')}
+          </StatusTag>
+          <Button type="button" variant="secondary" onClick={() => setWorkerOnboardingOpen(true)}>
+            {t('Add Worker')}
+          </Button>
         </div>
-        <div className="workspace-overview-badges">
-          <div className="workspace-overview-badge">
-            <span>{t('Reachable frameworks')}</span>
-            <strong>{reachableCount}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Unreachable frameworks')}</span>
-            <strong>{unreachableCount}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Not Configured')}</span>
-            <strong>{notConfiguredCount}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Template focus')}</span>
-            <strong>{t(templateFramework)}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Online workers')}</span>
-            <strong>{workersLoading ? t('...') : onlineWorkerCount}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Pending pairing')}</span>
-            <strong>{bootstrapSessionsLoading ? t('...') : pendingBootstrapCount}</strong>
-          </div>
-        </div>
-      </div>
-    </Card>
+      }
+      stats={[
+        {
+          label: t('Reachable frameworks'),
+          value: reachableCount
+        },
+        {
+          label: t('Unreachable frameworks'),
+          value: unreachableCount
+        },
+        {
+          label: t('Not Configured'),
+          value: notConfiguredCount
+        },
+        {
+          label: t('Template focus'),
+          value: t(templateFramework)
+        },
+        {
+          label: t('Online workers'),
+          value: workersLoading ? t('...') : onlineWorkerCount
+        },
+        {
+          label: t('Pending pairing'),
+          value: bootstrapSessionsLoading ? t('...') : pendingBootstrapCount
+        }
+      ]}
+    />
   );
 
   if (loading) {
     return (
-      <div className="workspace-overview-page stack">
+      <WorkspacePage>
         <SettingsTabs />
         {heroSection}
         <StateBlock variant="loading" title={t('Loading Runtime Status')} description={t('Checking framework endpoints.')} />
-      </div>
+      </WorkspacePage>
     );
   }
 
   return (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       <SettingsTabs />
       {heroSection}
 
       {error ? <StateBlock variant="error" title={t('Runtime Check Failed')} description={error} /> : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Reachable frameworks')}</h3>
-            <small className="muted">{t('Frameworks that currently answer health and predict probes.')}</small>
-          </div>
-          <strong className="metric">{reachableCount}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${unreachableCount > 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('Unreachable frameworks')}</h3>
-            <small className="muted">{t('Frameworks that failed connectivity validation and need follow-up.')}</small>
-          </div>
-          <strong className="metric">{unreachableCount}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Not Configured')}</h3>
-            <small className="muted">{t('Frameworks still missing endpoint configuration.')}</small>
-          </div>
-          <strong className="metric">{notConfiguredCount}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Training metric retention')}</h3>
-            <small className="muted">{t('Metric retention visibility for recent training telemetry.')}</small>
-          </div>
-          <strong className="metric">
-            {summaryLoading ? t('Loading') : metricsRetentionSummary ? metricsRetentionSummary.current_total_rows : t('N/A')}
-          </strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Reachable frameworks'),
+            description: t('Frameworks that currently answer health and predict probes.'),
+            value: reachableCount
+          },
+          {
+            title: t('Unreachable frameworks'),
+            description: t('Frameworks that failed connectivity validation and need follow-up.'),
+            value: unreachableCount,
+            tone: unreachableCount > 0 ? 'attention' : 'default'
+          },
+          {
+            title: t('Not Configured'),
+            description: t('Frameworks still missing endpoint configuration.'),
+            value: notConfiguredCount
+          },
+          {
+            title: t('Training metric retention'),
+            description: t('Metric retention visibility for recent training telemetry.'),
+            value: summaryLoading ? t('Loading') : metricsRetentionSummary ? metricsRetentionSummary.current_total_rows : t('N/A')
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <div className="workspace-overview-main">
+      <WorkspaceSplit
+        main={
+          <div>
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
@@ -791,9 +783,10 @@ export default function RuntimeSettingsPage() {
               <pre className="code-block">{JSON.stringify(sampleOutputByFramework[templateFramework], null, 2)}</pre>
             </Card>
           </AdvancedSection>
-        </div>
-
-        <div className="workspace-overview-side">
+          </div>
+        }
+        side={
+          <div>
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
@@ -1209,8 +1202,9 @@ export default function RuntimeSettingsPage() {
               </ul>
             )}
           </Card>
-        </div>
-      </section>
+          </div>
+        }
+      />
 
       <Drawer
         open={workerOnboardingOpen}
@@ -1555,6 +1549,6 @@ export default function RuntimeSettingsPage() {
           )}
         </div>
       </Drawer>
-    </div>
+    </WorkspacePage>
   );
 }

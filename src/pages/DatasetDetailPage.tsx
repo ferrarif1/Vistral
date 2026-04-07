@@ -17,6 +17,13 @@ import { Button, ButtonLink } from '../components/ui/Button';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSectionHeader,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
+import {
   filterItemsByAnnotationQueue,
   getAnnotationByItemId,
   summarizeAnnotationQueues,
@@ -519,68 +526,54 @@ export default function DatasetDetailPage() {
   };
 
   const heroSection = (
-    <Card className="workspace-overview-hero">
-      <div className="workspace-overview-hero-grid">
-        <div className="workspace-overview-copy stack">
-          <small className="workspace-eyebrow">{t('Dataset Lane')}</small>
-          <h1>{t('Dataset Detail')}</h1>
-          <p className="muted">
-            {dataset
-              ? `${dataset.name} · ${t(dataset.task_type)} · ${t(dataset.status)}`
-              : t('Inspect dataset files, annotation readiness, and version snapshots in one lane.')}
-          </p>
-        </div>
-        <div className="workspace-overview-badges">
-          <div className="workspace-overview-badge">
-            <span>{t('Attachments')}</span>
-            <strong>{attachments.length}</strong>
+    <WorkspaceHero
+      eyebrow={t('Dataset Lane')}
+      title={t('Dataset Detail')}
+      description={
+        dataset
+          ? `${dataset.name} · ${t(dataset.task_type)} · ${t(dataset.status)}`
+          : t('Inspect dataset files, annotation readiness, and version snapshots in one lane.')
+      }
+      actions={
+        dataset ? (
+          <div className="row gap wrap">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                loadDetail('manual').catch((error) => {
+                  setFeedback({ variant: 'error', text: (error as Error).message });
+                });
+              }}
+              disabled={busy || refreshing}
+            >
+              {refreshing ? t('Refreshing...') : t('Refresh')}
+            </Button>
+            <ButtonLink
+              size="sm"
+              variant="ghost"
+              to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+            >
+              {t('Open Annotation Workspace')}
+            </ButtonLink>
           </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Items')}</span>
-            <strong>{items.length}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Versions')}</span>
-            <strong>{versions.length}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Ready files')}</span>
-            <strong>{readyCount}</strong>
-          </div>
-        </div>
-      </div>
-      {dataset ? (
-        <div className="row gap wrap">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              loadDetail('manual').catch((error) => {
-                setFeedback({ variant: 'error', text: (error as Error).message });
-              });
-            }}
-            disabled={busy || refreshing}
-          >
-            {refreshing ? t('Refreshing...') : t('Refresh')}
-          </Button>
-          <ButtonLink
-            size="sm"
-            variant="ghost"
-            to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
-          >
-            {t('Open Annotation Workspace')}
-          </ButtonLink>
-        </div>
-      ) : null}
-    </Card>
+        ) : null
+      }
+      stats={[
+        { label: t('Attachments'), value: attachments.length },
+        { label: t('Items'), value: items.length },
+        { label: t('Versions'), value: versions.length },
+        { label: t('Ready files'), value: readyCount }
+      ]}
+    />
   );
 
   const renderShell = (content: ReactNode) => (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       {heroSection}
       {content}
-    </div>
+    </WorkspacePage>
   );
 
   if (!datasetId) {
@@ -602,7 +595,7 @@ export default function DatasetDetailPage() {
   }
 
   return (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       {heroSection}
 
       <StepIndicator steps={steps} current={step} />
@@ -615,63 +608,50 @@ export default function DatasetDetailPage() {
         />
       ) : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Needs Work')}</h3>
-            <small className="muted">
-              {t('Items that still require annotation or submit-review actions.')}
-            </small>
-          </div>
-          <strong className="metric">{annotationSummary.needs_work}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${annotationSummary.in_review > 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('in_review')}</h3>
-            <small className="muted">
-              {t('Items currently waiting for reviewer decisions.')}
-            </small>
-          </div>
-          <strong className="metric">{annotationSummary.in_review}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${annotationSummary.rejected > 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('rejected')}</h3>
-            <small className="muted">
-              {t('Rejected items retain latest review context for focused rework.')}
-            </small>
-          </div>
-          <strong className="metric">{annotationSummary.rejected}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('approved')}</h3>
-            <small className="muted">
-              {t('Approved items are ready for versioning and training readiness checks.')}
-            </small>
-          </div>
-          <strong className="metric">{annotationSummary.approved}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Needs Work'),
+            description: t('Items that still require annotation or submit-review actions.'),
+            value: annotationSummary.needs_work
+          },
+          {
+            title: t('in_review'),
+            description: t('Items currently waiting for reviewer decisions.'),
+            value: annotationSummary.in_review,
+            tone: annotationSummary.in_review > 0 ? 'attention' : 'default'
+          },
+          {
+            title: t('rejected'),
+            description: t('Rejected items retain latest review context for focused rework.'),
+            value: annotationSummary.rejected,
+            tone: annotationSummary.rejected > 0 ? 'attention' : 'default'
+          },
+          {
+            title: t('approved'),
+            description: t('Approved items are ready for versioning and training readiness checks.'),
+            value: annotationSummary.approved
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <div className="workspace-overview-main">
+      <WorkspaceSplit
+        main={
+          <>
           <Card as="section">
-            <div className="row between gap wrap align-center">
-              <div className="stack tight">
-                <h3>{t('Annotation Summary')}</h3>
-                <small className="muted">
-                  {t('Review annotation progress and jump directly into the next focused queue.')}
-                </small>
-              </div>
-              <ButtonLink
-                size="sm"
-                variant="ghost"
-                to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
-              >
-                {t('Open Annotation Workspace')}
-              </ButtonLink>
-            </div>
+            <WorkspaceSectionHeader
+              title={t('Annotation Summary')}
+              description={t('Review annotation progress and jump directly into the next focused queue.')}
+              actions={
+                <ButtonLink
+                  size="sm"
+                  variant="ghost"
+                  to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+                >
+                  {t('Open Annotation Workspace')}
+                </ButtonLink>
+              }
+            />
 
             <div className="annotation-summary-grid">
               {queuePreviewEntries.map((entry) => (
@@ -897,9 +877,10 @@ export default function DatasetDetailPage() {
               </div>
             )}
           </Card>
-        </div>
-
-        <div className="workspace-overview-side">
+          </>
+        }
+        side={
+          <>
           <Card as="section">
             <h3>{t('Step 2. Train/Val/Test Split')}</h3>
             <small className="muted">
@@ -1075,8 +1056,9 @@ export default function DatasetDetailPage() {
               </ul>
             )}
           </Card>
-        </div>
-      </section>
-    </div>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

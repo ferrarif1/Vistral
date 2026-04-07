@@ -1,119 +1,135 @@
 :root {
   --font-family-sans:
-    'IBM Plex Sans',
+    'NotionInter',
+    'Inter',
     'PingFang SC',
     'Noto Sans SC',
+    -apple-system,
+    BlinkMacSystemFont,
     'Segoe UI',
-    'Helvetica Neue',
+    Helvetica,
+    Arial,
     sans-serif;
 
-  --font-size-micro: 11px;
-  --font-size-small: 12px;
-  --font-size-body: 14px;
-  --font-size-h3: 20px;
-  --font-size-h2: 28px;
-  --font-size-h1: 34px;
-  --font-size-display: 40px;
+  --font-size-micro: 12px;
+  --font-size-small: 14px;
+  --font-size-body: 16px;
+  --font-size-h3: 22px;
+  --font-size-h2: 26px;
+  --font-size-h1: 40px;
+  --font-size-display: 54px;
 
-  --line-height-micro: 1.35;
-  --line-height-small: 1.45;
-  --line-height-body: 1.6;
-  --line-height-heading: 1.1;
+  --line-height-micro: 1.33;
+  --line-height-small: 1.43;
+  --line-height-body: 1.5;
+  --line-height-heading: 1.08;
 
+  --space-0: 2px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
-  --space-12: 48px;
-  --space-16: 64px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+  --space-10: 64px;
+  --space-12: 80px;
+  --space-16: 96px;
 
-  --radius-xs: 8px;
-  --radius-sm: 12px;
-  --radius-md: 16px;
-  --radius-lg: 20px;
+  --radius-xs: 4px;
+  --radius-sm: 4px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --radius-xl: 24px;
-  --radius-pill: 999px;
+  --radius-pill: 9999px;
 
-  --shadow-1: 0 10px 30px rgba(20, 28, 23, 0.06);
-  --shadow-2: 0 24px 60px rgba(20, 28, 23, 0.12);
-  --shadow-3: 0 18px 44px rgba(15, 20, 18, 0.16);
-  --shadow-primary-soft: 0 10px 24px rgba(34, 79, 60, 0.12);
-  --shadow-primary-strong: 0 14px 28px rgba(34, 79, 60, 0.18);
-  --shadow-primary-active: 0 10px 24px rgba(34, 79, 60, 0.16);
-  --shadow-neutral-soft: 0 10px 24px rgba(29, 42, 35, 0.08);
-  --shadow-neutral-mid: 0 12px 24px rgba(29, 42, 35, 0.08);
-  --shadow-floating-xl: 0 24px 48px rgba(22, 36, 29, 0.16);
-  --shadow-chat-bubble: 0 8px 18px rgba(18, 24, 20, 0.04);
-  --shadow-selected-soft: 0 14px 32px rgba(35, 103, 68, 0.08);
-  --shadow-mobile-panel: 20px 0 40px rgba(26, 38, 31, 0.16);
-  --shadow-mobile-chat-panel: 20px 0 40px rgba(22, 26, 37, 0.18);
+  --shadow-1:
+    rgba(0, 0, 0, 0.04) 0px 4px 18px,
+    rgba(0, 0, 0, 0.027) 0px 2.025px 7.84688px,
+    rgba(0, 0, 0, 0.02) 0px 0.8px 2.925px,
+    rgba(0, 0, 0, 0.01) 0px 0.175px 1.04062px;
+  --shadow-2:
+    rgba(0, 0, 0, 0.01) 0px 1px 3px,
+    rgba(0, 0, 0, 0.02) 0px 3px 7px,
+    rgba(0, 0, 0, 0.02) 0px 7px 15px,
+    rgba(0, 0, 0, 0.04) 0px 14px 28px,
+    rgba(0, 0, 0, 0.05) 0px 23px 52px;
+  --shadow-3: var(--shadow-2);
+  --shadow-primary-soft: 0 0 0 3px rgba(9, 127, 232, 0.12);
+  --shadow-primary-strong: 0 0 0 4px rgba(9, 127, 232, 0.18);
+  --shadow-primary-active: 0 0 0 3px rgba(9, 127, 232, 0.14);
+  --shadow-neutral-soft: var(--shadow-1);
+  --shadow-neutral-mid: var(--shadow-1);
+  --shadow-floating-xl: var(--shadow-2);
+  --shadow-chat-bubble: rgba(0, 0, 0, 0.025) 0px 1px 2px;
+  --shadow-selected-soft: 0 0 0 2px rgba(9, 127, 232, 0.08);
+  --shadow-mobile-panel: rgba(0, 0, 0, 0.04) 0px 18px 42px;
+  --shadow-mobile-chat-panel: rgba(0, 0, 0, 0.05) 0px 18px 42px;
 
   --color-surface-alpha-94: rgba(255, 255, 255, 0.94);
   --color-surface-alpha-85: rgba(255, 255, 255, 0.85);
   --color-surface-alpha-82: rgba(255, 255, 255, 0.82);
-  --color-canvas-alpha-88: rgba(244, 246, 242, 0.88);
-  --color-canvas-alpha-82: rgba(244, 246, 242, 0.82);
-  --color-canvas-alpha-30: rgba(244, 246, 242, 0.3);
-  --color-success-alpha-16: rgba(35, 103, 68, 0.16);
-  --color-success-alpha-08: rgba(35, 103, 68, 0.08);
-  --color-success-alpha-06: rgba(35, 103, 68, 0.06);
-  --color-info-alpha-18: rgba(47, 89, 126, 0.18);
-  --color-info-alpha-14: rgba(47, 89, 126, 0.14);
-  --color-info-alpha-06: rgba(47, 89, 126, 0.06);
-  --color-warning-alpha-18: rgba(134, 98, 23, 0.18);
-  --color-warning-alpha-08: rgba(134, 98, 23, 0.08);
+  --color-canvas-alpha-88: rgba(246, 245, 244, 0.88);
+  --color-canvas-alpha-82: rgba(246, 245, 244, 0.82);
+  --color-canvas-alpha-30: rgba(246, 245, 244, 0.3);
+  --color-neutral-soft-bg: rgba(0, 0, 0, 0.05);
+  --color-neutral-soft-bg-hover: rgba(0, 0, 0, 0.07);
+  --color-success-alpha-16: rgba(26, 174, 57, 0.16);
+  --color-success-alpha-08: rgba(26, 174, 57, 0.08);
+  --color-success-alpha-06: rgba(26, 174, 57, 0.06);
+  --color-info-alpha-18: rgba(9, 127, 232, 0.18);
+  --color-info-alpha-14: rgba(9, 127, 232, 0.14);
+  --color-info-alpha-06: rgba(9, 127, 232, 0.06);
+  --color-warning-alpha-18: rgba(221, 91, 0, 0.18);
+  --color-warning-alpha-08: rgba(221, 91, 0, 0.08);
 
-  --color-canvas: #f4f6f2;
-  --color-canvas-muted: #eef2ec;
+  --color-canvas: #ffffff;
+  --color-canvas-muted: #f6f5f4;
   --color-surface: #ffffff;
-  --color-surface-soft: #f8faf7;
-  --color-surface-subtle: #eef2ee;
-  --color-surface-raised: #fbfcfa;
-  --color-border: #d7ddd7;
-  --color-border-strong: #c7d0c6;
-  --color-text: #17211b;
+  --color-surface-soft: #faf9f8;
+  --color-surface-subtle: #f6f5f4;
+  --color-surface-raised: #ffffff;
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-border-strong: rgba(0, 0, 0, 0.14);
+  --color-text: rgba(0, 0, 0, 0.95);
   --color-text-inverse: #ffffff;
-  --color-text-muted: #5f6d63;
-  --color-text-subtle: #7a857d;
-  --color-primary: #2f6b52;
-  --color-primary-strong: #224f3c;
-  --color-primary-soft: #dfece5;
-  --color-primary-soft-strong: #cde1d7;
-  --color-chart-1: #2f6b52;
-  --color-chart-2: #3f7d62;
-  --color-chart-3: #4f8f72;
-  --color-chart-4: #5fa082;
-  --color-chart-5: #6fb292;
-  --color-chart-6: #80c3a3;
-  --color-info-soft: #eef4fb;
-  --color-info-border: #c7d7e7;
-  --color-info-text: #2f597e;
-  --color-success-soft: #ecf7ef;
-  --color-success-border: #bfdcc7;
-  --color-success-text: #236744;
-  --color-warning-soft: #fff8eb;
-  --color-warning-border: #e4d2a1;
-  --color-warning-text: #866217;
-  --color-danger-soft: #fff1f1;
-  --color-danger-border: #ebcbcb;
-  --color-danger-text: #9a3b3b;
-  --color-overlay: rgba(15, 20, 18, 0.28);
-  --color-focus-ring: rgba(47, 107, 82, 0.18);
+  --color-text-muted: #615d59;
+  --color-text-subtle: #a39e98;
+  --color-primary: #0075de;
+  --color-primary-strong: #005bab;
+  --color-primary-soft: #f2f9ff;
+  --color-primary-soft-strong: #d7ebff;
+  --color-chart-1: #0075de;
+  --color-chart-2: #2f88df;
+  --color-chart-3: #62aef0;
+  --color-chart-4: #9bc7f3;
+  --color-chart-5: #cbdff3;
+  --color-chart-6: #615d59;
+  --color-info-soft: #f2f9ff;
+  --color-info-border: #cde2fb;
+  --color-info-text: #097fe8;
+  --color-success-soft: #edf8f1;
+  --color-success-border: #c9e7d0;
+  --color-success-text: #1aae39;
+  --color-warning-soft: #fff4eb;
+  --color-warning-border: #f0caa8;
+  --color-warning-text: #dd5b00;
+  --color-danger-soft: #fff3f2;
+  --color-danger-border: #efcecb;
+  --color-danger-text: #c1443c;
+  --color-overlay: rgba(17, 17, 17, 0.18);
+  --color-focus-ring: rgba(9, 127, 232, 0.18);
 
-  --layout-max-width: 1140px;
-  --layout-page-width: 980px;
-  --layout-sidebar-width: 292px;
-  --layout-sidebar-collapsed-width: 88px;
+  --layout-max-width: 1200px;
+  --layout-page-width: 1040px;
+  --layout-sidebar-width: 272px;
+  --layout-sidebar-collapsed-width: 82px;
   --layout-chat-sidebar-width: 280px;
-  --layout-chat-sidebar-collapsed-width: 82px;
-  --layout-topbar-height: 68px;
-  --layout-control-height: 40px;
+  --layout-chat-sidebar-collapsed-width: 76px;
+  --layout-topbar-height: 64px;
+  --layout-control-height: 38px;
   --layout-control-height-sm: 32px;
 
   --transition-fast: 0.16s ease;
-  --transition-base: 0.2s ease;
+  --transition-base: 0.22s ease;
 }

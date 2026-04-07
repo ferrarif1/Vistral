@@ -7,6 +7,12 @@ import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -326,34 +332,54 @@ export default function AccountSettingsPage() {
   }, [filteredUsers.length]);
 
   return (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       <SettingsTabs />
 
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('Account')}</small>
-            <h1>{t('Account Settings')}</h1>
-            <p className="muted">
-              {t('Manage password access and admin-only account provisioning from one place.')}
-            </p>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Current user')}</span>
-              <strong>{currentUser?.username ?? t('guest')}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Role')}</span>
-              <strong>{currentUser ? roleLabel(currentUser.role) : t('User')}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Managed accounts')}</span>
-              <strong>{managedAccountCount}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
+      <WorkspaceHero
+        eyebrow={t('Account')}
+        title={t('Account Settings')}
+        description={t('Manage password access and admin-only account provisioning from one place.')}
+        stats={[
+          {
+            label: t('Current user'),
+            value: currentUser?.username ?? t('guest')
+          },
+          {
+            label: t('Role'),
+            value: currentUser ? roleLabel(currentUser.role) : t('User')
+          },
+          {
+            label: t('Managed accounts'),
+            value: managedAccountCount
+          }
+        ]}
+      />
+
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Managed accounts'),
+            description: t('Accounts visible in this settings surface under the current role scope.'),
+            value: managedAccountCount
+          },
+          {
+            title: t('Admin accounts'),
+            description: t('Provisioned admins currently visible to governance tools.'),
+            value: directorySummary.admins
+          },
+          {
+            title: t('Active accounts'),
+            description: t('Accounts that can still open authenticated sessions.'),
+            value: directorySummary.activeAccounts
+          },
+          {
+            title: t('Disabled accounts'),
+            description: t('Accounts with access paused and retained reason history.'),
+            value: directorySummary.disabledAccounts,
+            tone: directorySummary.disabledAccounts > 0 ? 'attention' : 'default'
+          }
+        ]}
+      />
 
       {loadError && !authRequired ? (
         <StateBlock variant="error" title={t('Load Failed')} description={loadError} />
@@ -375,8 +401,9 @@ export default function AccountSettingsPage() {
       ) : null}
 
       {!authRequired ? (
-        <section className="workspace-overview-panel-grid">
-          <Card className="workspace-overview-main">
+        <WorkspaceSplit
+          main={
+            <Card>
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Change Password')}</h3>
@@ -471,9 +498,10 @@ export default function AccountSettingsPage() {
                 description={passwordStatus.text}
               />
             ) : null}
-          </Card>
-
-          <div className="workspace-overview-side">
+            </Card>
+          }
+          side={
+            <div>
             <Card>
               <div className="stack tight">
                 <h3>{t('Current account')}</h3>
@@ -576,13 +604,15 @@ export default function AccountSettingsPage() {
                 />
               ) : null}
             </Card>
-          </div>
-        </section>
+            </div>
+          }
+        />
       ) : null}
 
       {!authRequired && currentUser?.role === 'admin' ? (
-        <section className="workspace-overview-panel-grid">
-          <Card className="workspace-overview-main">
+        <WorkspaceSplit
+          main={
+            <Card>
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Account Directory')}</h3>
@@ -821,9 +851,10 @@ export default function AccountSettingsPage() {
                 </Button>
               </div>
             ) : null}
-          </Card>
-
-          <div className="workspace-overview-side">
+            </Card>
+          }
+          side={
+            <div>
             <Card>
               <div className="stack tight">
                 <h3>{t('Directory filters')}</h3>
@@ -912,9 +943,10 @@ export default function AccountSettingsPage() {
                 </Badge>
               </div>
             </Card>
-          </div>
-        </section>
+            </div>
+          }
+        />
       ) : null}
-    </div>
+    </WorkspacePage>
   );
 }

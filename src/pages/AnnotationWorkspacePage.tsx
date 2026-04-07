@@ -19,6 +19,13 @@ import { Button, ButtonLink } from '../components/ui/Button';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSectionHeader,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
+import {
   annotationQueueFilters,
   annotationStatusSortWeight,
   getAnnotationByItemId,
@@ -988,64 +995,53 @@ export default function AnnotationWorkspacePage() {
   };
 
   const heroSection = (
-    <Card className="workspace-overview-hero">
-      <div className="workspace-overview-hero-grid">
-        <div className="workspace-overview-copy stack">
-          <small className="workspace-eyebrow">{t('Annotation Lane')}</small>
-          <h1>{t('Annotation Workspace')}</h1>
-          <small className="muted">
-            {dataset
-              ? `${dataset.name} · ${t('task')} ${t(dataset.task_type)}`
-              : t('Review queue status, annotate items, and complete approvals in one flow.')}
-          </small>
-        </div>
-        <div className="workspace-overview-badges">
-          <div className="workspace-overview-badge">
-            <span>{t('Items')}</span>
-            <strong>{items.length}</strong>
+    <WorkspaceHero
+      eyebrow={t('Annotation Lane')}
+      title={t('Annotation Workspace')}
+      description={
+        dataset
+          ? `${dataset.name} · ${t('task')} ${t(dataset.task_type)}`
+          : t('Review queue status, annotate items, and complete approvals in one flow.')
+      }
+      actions={
+        dataset ? (
+          <div className="row gap wrap">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                load('manual').catch((error) => {
+                  setFeedback({ variant: 'error', text: (error as Error).message });
+                });
+              }}
+              disabled={busy || refreshing}
+            >
+              {refreshing ? t('Refreshing...') : t('Refresh')}
+            </Button>
+            <ButtonLink to={`/datasets/${dataset.id}`} variant="ghost" size="sm">
+              {t('Back to Dataset Detail')}
+            </ButtonLink>
           </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Visible')}</span>
-            <strong>{filteredItems.length}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Models')}</span>
-            <strong>{modelVersions.length}</strong>
-          </div>
-          <div className="workspace-overview-badge">
-            <span>{t('Queue')}</span>
-            <strong>{queueFilter === 'all' ? t('All') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}</strong>
-          </div>
-        </div>
-      </div>
-      {dataset ? (
-        <div className="row gap wrap">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              load('manual').catch((error) => {
-                setFeedback({ variant: 'error', text: (error as Error).message });
-              });
-            }}
-            disabled={busy || refreshing}
-          >
-            {refreshing ? t('Refreshing...') : t('Refresh')}
-          </Button>
-          <ButtonLink to={`/datasets/${dataset.id}`} variant="ghost" size="sm">
-            {t('Back to Dataset Detail')}
-          </ButtonLink>
-        </div>
-      ) : null}
-    </Card>
+        ) : null
+      }
+      stats={[
+        { label: t('Items'), value: items.length },
+        { label: t('Visible'), value: filteredItems.length },
+        { label: t('Models'), value: modelVersions.length },
+        {
+          label: t('Queue'),
+          value: queueFilter === 'all' ? t('All') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)
+        }
+      ]}
+    />
   );
 
   const renderShell = (content: ReactNode) => (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       {heroSection}
       {content}
-    </div>
+    </WorkspacePage>
   );
 
   if (!datasetId) {
@@ -1067,7 +1063,7 @@ export default function AnnotationWorkspacePage() {
   }
 
   return (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       {heroSection}
 
       <StepIndicator steps={steps} current={currentStep} />
@@ -1086,72 +1082,66 @@ export default function AnnotationWorkspacePage() {
         />
       ) : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Needs Work')}</h3>
-            <small className="muted">{t('Items still awaiting annotation or submit-review actions.')}</small>
-          </div>
-          <strong className="metric">{annotationSummary.needs_work}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${annotationSummary.in_review > 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('in_review')}</h3>
-            <small className="muted">{t('Items currently in reviewer lane.')}</small>
-          </div>
-          <strong className="metric">{annotationSummary.in_review}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${annotationSummary.rejected > 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('rejected')}</h3>
-            <small className="muted">{t('Rejected items that should be moved back to rework flow.')}</small>
-          </div>
-          <strong className="metric">{annotationSummary.rejected}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('approved')}</h3>
-            <small className="muted">{t('Approved items are ready for downstream versioning and training.')}</small>
-          </div>
-          <strong className="metric">{annotationSummary.approved}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Needs Work'),
+            description: t('Items still awaiting annotation or submit-review actions.'),
+            value: annotationSummary.needs_work
+          },
+          {
+            title: t('in_review'),
+            description: t('Items currently in reviewer lane.'),
+            value: annotationSummary.in_review,
+            tone: annotationSummary.in_review > 0 ? 'attention' : 'default'
+          },
+          {
+            title: t('rejected'),
+            description: t('Rejected items that should be moved back to rework flow.'),
+            value: annotationSummary.rejected,
+            tone: annotationSummary.rejected > 0 ? 'attention' : 'default'
+          },
+          {
+            title: t('approved'),
+            description: t('Approved items are ready for downstream versioning and training.'),
+            value: annotationSummary.approved
+          }
+        ]}
+      />
 
       <Card as="section">
-        <div className="row between gap wrap align-center">
-          <div className="stack tight">
-            <h3>{t('Annotation Queue')}</h3>
-            <small className="muted">
-              {t('Visible items {visible} / {total}', {
-                visible: filteredItems.length,
-                total: items.length
-              })}
-            </small>
-          </div>
-          <div className="row gap wrap align-center annotation-queue-controls">
-            <label className="annotation-toolbar-field">
-              {t('Model Version')}
-              <Select
-                value={selectedModelVersionId}
-                onChange={(event) => setSelectedModelVersionId(event.target.value)}
+        <WorkspaceSectionHeader
+          title={t('Annotation Queue')}
+          description={t('Visible items {visible} / {total}', {
+            visible: filteredItems.length,
+            total: items.length
+          })}
+          actions={
+            <div className="row gap wrap align-center annotation-queue-controls">
+              <label className="annotation-toolbar-field">
+                {t('Model Version')}
+                <Select
+                  value={selectedModelVersionId}
+                  onChange={(event) => setSelectedModelVersionId(event.target.value)}
+                >
+                  {modelVersions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.version_name} ({t(version.framework)})
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <Button
+                onClick={runPreAnnotation}
+                variant="secondary"
+                size="sm"
+                disabled={busy || items.length === 0 || modelVersions.length === 0}
               >
-                {modelVersions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.version_name} ({t(version.framework)})
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <Button
-              onClick={runPreAnnotation}
-              variant="secondary"
-              size="sm"
-              disabled={busy || items.length === 0 || modelVersions.length === 0}
-            >
-              {t('Run Pre-Annotation')}
-            </Button>
-          </div>
-        </div>
+                {t('Run Pre-Annotation')}
+              </Button>
+            </div>
+          }
+        />
         <div className="annotation-filter-row">
           {annotationQueueFilters.map((filter) => {
             const count =
@@ -1351,8 +1341,9 @@ export default function AnnotationWorkspacePage() {
         }
       </Card>
 
-      <section className="workspace-overview-panel-grid">
-        <div className="workspace-overview-main">
+      <WorkspaceSplit
+        main={
+          <>
           <section className="stack">
             <Suspense
               fallback={
@@ -1487,9 +1478,10 @@ export default function AnnotationWorkspacePage() {
               </div>
             )}
           </Card>
-        </div>
-
-        <div className="workspace-overview-side">
+          </>
+        }
+        side={
+          <>
           <Card as="section">
             <div className="stack tight">
               <h3>{t('Queue Focus')}</h3>
@@ -1652,8 +1644,9 @@ export default function AnnotationWorkspacePage() {
               </Button>
             ) : null}
           </Card>
-        </div>
-      </section>
-    </div>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

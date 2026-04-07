@@ -13,6 +13,13 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSectionHeader,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -401,70 +408,48 @@ export default function InferenceValidationPage() {
   };
 
   const heroSection = (
-    <>
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('Validation Lane')}</small>
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h1>{t('Inference Validation')}</h1>
-                <p className="muted">
-                  {t('Run validation, inspect normalized output, and route failure samples back into dataset workflows.')}
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  loadAll('manual').catch((error) => {
-                    setFeedback({ variant: 'error', text: (error as Error).message });
-                  });
-                }}
-                disabled={busy || refreshing}
-              >
-                {refreshing ? t('Refreshing...') : t('Refresh')}
-              </Button>
-            </div>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Ready inputs')}</span>
-              <strong>{readyAttachmentCount}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Model versions')}</span>
-              <strong>{versions.length}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Recorded runs')}</span>
-              <strong>{runs.length}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Feedback sent')}</span>
-              <strong>{feedbackRunCount}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      <StepIndicator steps={steps} current={step} />
-    </>
+    <WorkspaceHero
+      eyebrow={t('Validation Lane')}
+      title={t('Inference Validation')}
+      description={t('Run validation, inspect normalized output, and route failure samples back into dataset workflows.')}
+      actions={
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            loadAll('manual').catch((error) => {
+              setFeedback({ variant: 'error', text: (error as Error).message });
+            });
+          }}
+          disabled={busy || refreshing}
+        >
+          {refreshing ? t('Refreshing...') : t('Refresh')}
+        </Button>
+      }
+      stats={[
+        { label: t('Ready inputs'), value: readyAttachmentCount },
+        { label: t('Model versions'), value: versions.length },
+        { label: t('Recorded runs'), value: runs.length },
+        { label: t('Feedback sent'), value: feedbackRunCount }
+      ]}
+    />
   );
 
   if (loading) {
     return (
-      <div className="workspace-overview-page stack">
+      <WorkspacePage>
         {heroSection}
+        <StepIndicator steps={steps} current={step} />
         <StateBlock variant="loading" title={t('Loading Validation Workspace')} description={t('Preparing resources.')} />
-      </div>
+      </WorkspacePage>
     );
   }
 
   return (
-    <div className="workspace-overview-page stack">
+    <WorkspacePage>
       {heroSection}
+      <StepIndicator steps={steps} current={step} />
 
       {feedback ? (
         <StateBlock
@@ -474,39 +459,35 @@ export default function InferenceValidationPage() {
         />
       ) : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Ready inputs')}</h3>
-            <small className="muted">{t('Attachments that can be selected immediately for validation runs.')}</small>
-          </div>
-          <strong className="metric">{readyAttachmentCount}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Model versions')}</h3>
-            <small className="muted">{t('Registered versions available for validation in the current workspace.')}</small>
-          </div>
-          <strong className="metric">{versions.length}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Datasets')}</h3>
-            <small className="muted">{t('Target datasets available for failure-sample feedback routing.')}</small>
-          </div>
-          <strong className="metric">{datasets.length}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${reachableRuntimeCount === 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('Reachable runtimes')}</h3>
-            <small className="muted">{t('Framework bridges currently reachable from the validation workspace.')}</small>
-          </div>
-          <strong className="metric">{runtimeChecks.length === 0 && runtimeLoading ? t('Checking...') : reachableRuntimeCount}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Ready inputs'),
+            description: t('Attachments that can be selected immediately for validation runs.'),
+            value: readyAttachmentCount
+          },
+          {
+            title: t('Model versions'),
+            description: t('Registered versions available for validation in the current workspace.'),
+            value: versions.length
+          },
+          {
+            title: t('Datasets'),
+            description: t('Target datasets available for failure-sample feedback routing.'),
+            value: datasets.length
+          },
+          {
+            title: t('Reachable runtimes'),
+            description: t('Framework bridges currently reachable from the validation workspace.'),
+            value: runtimeChecks.length === 0 && runtimeLoading ? t('Checking...') : reachableRuntimeCount,
+            tone: reachableRuntimeCount === 0 ? 'attention' : 'default'
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <div className="workspace-overview-main">
+      <WorkspaceSplit
+        main={
+          <>
           <AttachmentUploader
             title={t('Inference Inputs')}
             items={attachments}
@@ -519,15 +500,11 @@ export default function InferenceValidationPage() {
             disabled={busy}
           />
 
-          <Card as="article">
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h3>{t('Run Inference')}</h3>
-                <small className="muted">
-                  {t('Pick one registered version and one ready attachment, then execute a validation run.')}
-                </small>
-              </div>
-            </div>
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Run Inference')}
+                description={t('Pick one registered version and one ready attachment, then execute a validation run.')}
+              />
 
             {versions.length === 0 ? (
               <StateBlock
@@ -582,15 +559,11 @@ export default function InferenceValidationPage() {
             </div>
           </Card>
 
-          <Card as="article">
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h3>{t('Latest Inference Output')}</h3>
-                <small className="muted">
-                  {t('Review runtime source, preview image, normalized output, and raw payload from the selected run.')}
-                </small>
-              </div>
-            </div>
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Latest Inference Output')}
+                description={t('Review runtime source, preview image, normalized output, and raw payload from the selected run.')}
+              />
 
             {!selectedRun ? (
               <StateBlock variant="empty" title={t('No Runs Yet')} description={t('Run inference to inspect outputs.')} />
@@ -653,22 +626,21 @@ export default function InferenceValidationPage() {
                 </details>
               </>
             )}
-          </Card>
-        </div>
-
-        <div className="workspace-overview-side">
-          <Card as="article">
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h3>{t('Runtime Connectivity')}</h3>
-                <small className="muted">
-                  {t('Refresh framework diagnostics on demand without interrupting the validation lane.')}
-                </small>
-              </div>
-              <Button type="button" variant="secondary" size="sm" onClick={loadRuntimeConnectivity} disabled={runtimeLoading || busy}>
-                {runtimeLoading ? t('Checking...') : t('Refresh Runtime Status')}
-              </Button>
-            </div>
+            </Card>
+          </>
+        }
+        side={
+          <>
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Runtime Connectivity')}
+                description={t('Refresh framework diagnostics on demand without interrupting the validation lane.')}
+                actions={
+                  <Button type="button" variant="secondary" size="sm" onClick={loadRuntimeConnectivity} disabled={runtimeLoading || busy}>
+                    {runtimeLoading ? t('Checking...') : t('Refresh Runtime Status')}
+                  </Button>
+                }
+              />
             {runtimeError ? (
               <StateBlock variant="error" title={t('Runtime Check Failed')} description={runtimeError} />
             ) : null}
@@ -708,17 +680,13 @@ export default function InferenceValidationPage() {
                 );
               })}
             </ul>
-          </Card>
+            </Card>
 
-          <Card as="article">
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h3>{t('Feedback to Dataset')}</h3>
-                <small className="muted">
-                  {t('Push the selected failure sample back into a dataset so the next training loop can absorb it.')}
-                </small>
-              </div>
-            </div>
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Feedback to Dataset')}
+                description={t('Push the selected failure sample back into a dataset so the next training loop can absorb it.')}
+              />
 
             {datasets.length === 0 ? (
               <StateBlock
@@ -772,9 +740,10 @@ export default function InferenceValidationPage() {
                 {t('Send to Dataset')}
               </Button>
             </div>
-          </Card>
-        </div>
-      </section>
-    </div>
+            </Card>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

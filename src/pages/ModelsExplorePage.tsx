@@ -5,6 +5,13 @@ import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSectionHeader,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -73,97 +80,68 @@ export default function ModelsExplorePage() {
   const shouldVirtualizeModels = sortedModels.length > modelsVirtualizationThreshold;
 
   return (
-    <div className="workspace-overview-page stack">
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('Model Catalog')}</small>
-            <h1>{t('Models Explore')}</h1>
-            <p className="muted">
-              {t('Scan shared and approved models before jumping into training or inference.')}
-            </p>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Visible catalog')}</span>
-              <strong>{summary.total}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Ready for use')}</span>
-              <strong>{summary.ready}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Shared access')}</span>
-              <strong>{summary.sharedCount}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
+    <WorkspacePage>
+      <WorkspaceHero
+        eyebrow={t('Model Catalog')}
+        title={t('Models Explore')}
+        description={t('Scan shared and approved models before jumping into training or inference.')}
+        stats={[
+          { label: t('Visible catalog'), value: summary.total },
+          { label: t('Ready for use'), value: summary.ready },
+          { label: t('Shared access'), value: summary.sharedCount }
+        ]}
+      />
 
       {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Visible catalog')}</h3>
-            <small className="muted">
-              {t('Models visible right now across public and workspace scopes.')}
-            </small>
-          </div>
-          <strong className="metric">{summary.total}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Ready for use')}</h3>
-            <small className="muted">
-              {t('Approved or published models that are ready for downstream use.')}
-            </small>
-          </div>
-          <strong className="metric">{summary.ready}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${summary.pending > 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('Pending review')}</h3>
-            <small className="muted">
-              {t('Models still waiting for governance review or publication.')}
-            </small>
-          </div>
-          <strong className="metric">{summary.pending}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Public reach')}</h3>
-            <small className="muted">
-              {t('Models visible across broader workspace sharing settings.')}
-            </small>
-          </div>
-          <strong className="metric">{summary.publicCount}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Visible catalog'),
+            description: t('Models visible right now across public and workspace scopes.'),
+            value: summary.total
+          },
+          {
+            title: t('Ready for use'),
+            description: t('Approved or published models that are ready for downstream use.'),
+            value: summary.ready
+          },
+          {
+            title: t('Pending review'),
+            description: t('Models still waiting for governance review or publication.'),
+            value: summary.pending,
+            tone: summary.pending > 0 ? 'attention' : 'default'
+          },
+          {
+            title: t('Public reach'),
+            description: t('Models visible across broader workspace sharing settings.'),
+            value: summary.publicCount
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <Card as="article" className="workspace-overview-main">
-          <div className="workspace-section-header">
-            <div className="stack tight">
-              <h3>{t('Visible Model Inventory')}</h3>
-              <small className="muted">
-                {t('Browse the currently visible catalog, then jump into your own models or version registration.')}
-              </small>
-            </div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                load().catch(() => {
-                  // no-op
-                });
-              }}
-              disabled={loading}
-            >
-              {loading ? t('Loading') : t('Refresh')}
-            </Button>
-          </div>
+      <WorkspaceSplit
+        main={
+          <Card as="article">
+            <WorkspaceSectionHeader
+              title={t('Visible Model Inventory')}
+              description={t('Browse the currently visible catalog, then jump into your own models or version registration.')}
+              actions={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    load().catch(() => {
+                      // no-op
+                    });
+                  }}
+                  disabled={loading}
+                >
+                  {loading ? t('Loading') : t('Refresh')}
+                </Button>
+              }
+            />
 
           {loading ? (
             <StateBlock variant="loading" title={t('Loading Models')} description={t('Fetching model catalog.')} />
@@ -241,10 +219,11 @@ export default function ModelsExplorePage() {
               ))}
             </ul>
           )}
-        </Card>
-
-        <div className="workspace-overview-side">
-          <Card as="article">
+          </Card>
+        }
+        side={
+          <>
+            <Card as="article">
             <div className="stack tight">
               <h3>{t('Next actions')}</h3>
               <small className="muted">
@@ -262,9 +241,9 @@ export default function ModelsExplorePage() {
                 {t('Review versions')}
               </ButtonLink>
             </div>
-          </Card>
+            </Card>
 
-          <Card as="article">
+            <Card as="article">
             <div className="stack tight">
               <h3>{t('Catalog mix')}</h3>
               <small className="muted">
@@ -296,9 +275,10 @@ export default function ModelsExplorePage() {
                 </small>
               </Panel>
             </ul>
-          </Card>
-        </div>
-      </section>
-    </div>
+            </Card>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

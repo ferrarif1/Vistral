@@ -8,6 +8,12 @@ import { StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -397,34 +403,26 @@ export default function CreateModelPage() {
   };
 
   return (
-    <div className="workspace-overview-page stack">
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('Model Draft Studio')}</small>
-            <h1>{t('Create Model')}</h1>
-            <p className="muted">
-              {t('Move from metadata shell to approval-ready artifact package with a calmer guided flow.')}
-            </p>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Current step')}</span>
-              <strong>
-                {step + 1}/{steps.length}
-              </strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Ready model files')}</span>
-              <strong>{readyFileCount}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Draft status')}</span>
-              <strong>{draftStatusLabel}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
+    <WorkspacePage>
+      <WorkspaceHero
+        eyebrow={t('Model Draft Studio')}
+        title={t('Create Model')}
+        description={t('Move from metadata shell to approval-ready artifact package with a calmer guided flow.')}
+        stats={[
+          {
+            label: t('Current step'),
+            value: `${step + 1}/${steps.length}`
+          },
+          {
+            label: t('Ready model files'),
+            value: readyFileCount
+          },
+          {
+            label: t('Draft status'),
+            value: draftStatusLabel
+          }
+        ]}
+      />
 
       {feedback ? (
         <StateBlock
@@ -434,122 +432,120 @@ export default function CreateModelPage() {
         />
       ) : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Draft shell')}</h3>
-            <small className="muted">{t('Metadata shell for the model record.')}</small>
-          </div>
-          <strong className="metric">{draftModel ? 1 : 0}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Ready model files')}</h3>
-            <small className="muted">{t('Artifacts already ready for review and approval flow.')}</small>
-          </div>
-          <strong className="metric">{readyFileCount}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Visibility')}</h3>
-            <small className="muted">{t('Current exposure setting for this draft.')}</small>
-          </div>
-          <strong className="metric">{t(draftModel?.visibility ?? visibility)}</strong>
-        </Card>
-        <Card className={`stack workspace-signal-card${step === steps.length - 1 && readyFileCount > 0 ? '' : ' attention'}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('Submission readiness')}</h3>
-            <small className="muted">{t('The final review step is where approval submission becomes available.')}</small>
-          </div>
-          <strong className="metric">{step === steps.length - 1 && readyFileCount > 0 ? t('Ready') : t('draft')}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Draft shell'),
+            description: t('Metadata shell for the model record.'),
+            value: draftModel ? 1 : 0
+          },
+          {
+            title: t('Ready model files'),
+            description: t('Artifacts already ready for review and approval flow.'),
+            value: readyFileCount
+          },
+          {
+            title: t('Visibility'),
+            description: t('Current exposure setting for this draft.'),
+            value: t(draftModel?.visibility ?? visibility)
+          },
+          {
+            title: t('Submission readiness'),
+            description: t('The final review step is where approval submission becomes available.'),
+            value: step === steps.length - 1 && readyFileCount > 0 ? t('Ready') : t('draft'),
+            tone: step === steps.length - 1 && readyFileCount > 0 ? 'default' : 'attention'
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <div className="workspace-overview-main">
-          <StepIndicator steps={steps} current={step} />
-          {renderStage()}
-        </div>
+      <WorkspaceSplit
+        main={
+          <div className="stack">
+            <StepIndicator steps={steps} current={step} />
+            {renderStage()}
+          </div>
+        }
+        side={
+          <>
+            <Card className="stack">
+              <div className="stack tight">
+                <h3>{t('Current draft')}</h3>
+                <small className="muted">{stepDescriptions[step]}</small>
+              </div>
+              {draftModel ? (
+                <ul className="workspace-record-list compact">
+                  <li className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{draftModel.name}</strong>
+                      <StatusTag status={draftModel.status}>{t(draftModel.status)}</StatusTag>
+                    </div>
+                    <small className="muted">
+                      {t('Model Type')}: {t(draftModel.model_type)}
+                    </small>
+                  </li>
+                  <li className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{t('Visibility')}</strong>
+                      <StatusTag status="info">{t(draftModel.visibility)}</StatusTag>
+                    </div>
+                    <small className="muted">{draftModel.id}</small>
+                  </li>
+                </ul>
+              ) : (
+                <StateBlock
+                  variant="empty"
+                  title={t('No draft yet.')}
+                  description={t('Create the metadata shell first, then upload model artifacts in the next step.')}
+                />
+              )}
+            </Card>
 
-        <div className="workspace-overview-side">
-          <Card className="stack">
-            <div className="stack tight">
-              <h3>{t('Current draft')}</h3>
-              <small className="muted">{stepDescriptions[step]}</small>
-            </div>
-            {draftModel ? (
+            <Card className="stack">
+              <div className="stack tight">
+                <h3>{t('Submission checklist')}</h3>
+                <small className="muted">{t('Keep the approval path visible while you finish the wizard.')}</small>
+              </div>
               <ul className="workspace-record-list compact">
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{draftModel.name}</strong>
-                    <StatusTag status={draftModel.status}>{t(draftModel.status)}</StatusTag>
-                  </div>
-                  <small className="muted">
-                    {t('Model Type')}: {t(draftModel.model_type)}
-                  </small>
-                </li>
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('Visibility')}</strong>
-                    <StatusTag status="info">{t(draftModel.visibility)}</StatusTag>
-                  </div>
-                  <small className="muted">{draftModel.id}</small>
-                </li>
+                {checklist.map((item) => (
+                  <li key={item.label} className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{item.label}</strong>
+                      <StatusTag status={item.done ? 'ready' : 'draft'}>
+                        {item.done ? t('Ready') : t('draft')}
+                      </StatusTag>
+                    </div>
+                    <small className="muted">{item.hint}</small>
+                  </li>
+                ))}
               </ul>
-            ) : (
-              <StateBlock
-                variant="empty"
-                title={t('No draft yet.')}
-                description={t('Create the metadata shell first, then upload model artifacts in the next step.')}
-              />
-            )}
-          </Card>
+            </Card>
 
-          <Card className="stack">
-            <div className="stack tight">
-              <h3>{t('Submission checklist')}</h3>
-              <small className="muted">{t('Keep the approval path visible while you finish the wizard.')}</small>
-            </div>
-            <ul className="workspace-record-list compact">
-              {checklist.map((item) => (
-                <li key={item.label} className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{item.label}</strong>
-                    <StatusTag status={item.done ? 'ready' : 'draft'}>
-                      {item.done ? t('Ready') : t('draft')}
-                    </StatusTag>
-                  </div>
-                  <small className="muted">{item.hint}</small>
-                </li>
-              ))}
-            </ul>
-          </Card>
-
-          <Panel className="stack">
-            <div className="stack tight">
-              <h3>{t('Review links')}</h3>
-              <small className="muted">{t('Track draft progress and approval results from the model workspace.')}</small>
-            </div>
-            <div className="workspace-button-stack">
-              <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || loading} block>
-                {t('Back')}
-              </Button>
-              <Button type="button" variant="secondary" onClick={nextStep} disabled={step === steps.length - 1 || loading} block>
-                {t('Next')}
-              </Button>
-              <Button type="button" onClick={submitApproval} disabled={step !== steps.length - 1 || loading} block>
-                {loading ? t('Submitting...') : t('Submit Approval')}
-              </Button>
-              <ButtonLink to="/models/my-models" variant="secondary" block>
-                {t('Manage My Models')}
-              </ButtonLink>
-              <ButtonLink to="/models/versions" variant="secondary" block>
-                {t('Open Model Versions')}
-              </ButtonLink>
-            </div>
-          </Panel>
-        </div>
-      </section>
-    </div>
+            <Panel className="stack">
+              <div className="stack tight">
+                <h3>{t('Review links')}</h3>
+                <small className="muted">{t('Track draft progress and approval results from the model workspace.')}</small>
+              </div>
+              <div className="workspace-button-stack">
+                <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || loading} block>
+                  {t('Back')}
+                </Button>
+                <Button type="button" variant="secondary" onClick={nextStep} disabled={step === steps.length - 1 || loading} block>
+                  {t('Next')}
+                </Button>
+                <Button type="button" onClick={submitApproval} disabled={step !== steps.length - 1 || loading} block>
+                  {loading ? t('Submitting...') : t('Submit Approval')}
+                </Button>
+                <ButtonLink to="/models/my-models" variant="secondary" block>
+                  {t('Manage My Models')}
+                </ButtonLink>
+                <ButtonLink to="/models/versions" variant="secondary" block>
+                  {t('Open Model Versions')}
+                </ButtonLink>
+              </div>
+            </Panel>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

@@ -8,6 +8,12 @@ import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -589,32 +595,26 @@ export default function CreateTrainingJobPage() {
   };
 
   return (
-    <div className="workspace-overview-page stack">
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('Training Job Builder')}</small>
-            <h1>{t('Create Training Job')}</h1>
-            <p className="muted">{t('Build a training run from requirement draft to launch-ready configuration.')}</p>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Current step')}</span>
-              <strong>
-                {step + 1}/{steps.length}
-              </strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Matching datasets')}</span>
-              <strong>{filteredDatasets.length}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Draft assist')}</span>
-              <strong>{taskDraft ? 1 : 0}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
+    <WorkspacePage>
+      <WorkspaceHero
+        eyebrow={t('Training Job Builder')}
+        title={t('Create Training Job')}
+        description={t('Build a training run from requirement draft to launch-ready configuration.')}
+        stats={[
+          {
+            label: t('Current step'),
+            value: `${step + 1}/${steps.length}`
+          },
+          {
+            label: t('Matching datasets'),
+            value: filteredDatasets.length
+          },
+          {
+            label: t('Draft assist'),
+            value: taskDraft ? 1 : 0
+          }
+        ]}
+      />
 
       {loading ? (
         <StateBlock variant="loading" title={t('Preparing')} description={t('Loading dataset options.')} />
@@ -628,161 +628,160 @@ export default function CreateTrainingJobPage() {
         />
       ) : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Matching datasets')}</h3>
-            <small className="muted">{t('Datasets currently compatible with the selected task type.')}</small>
-          </div>
-          <strong className="metric">{filteredDatasets.length}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Ready Datasets')}</h3>
-            <small className="muted">{t('Ready datasets available for immediate training launch.')}</small>
-          </div>
-          <strong className="metric">{readyMatchingDatasets}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Framework')}</h3>
-            <small className="muted">{t('Current framework family selected for the run.')}</small>
-          </div>
-          <strong className="metric">{t(framework)}</strong>
-        </Card>
-        <Card className={`stack workspace-signal-card${taskDraft ? '' : ' attention'}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('Draft assist')}</h3>
-            <small className="muted">{t('Optional requirement parsing that can pre-fill task choices.')}</small>
-          </div>
-          <strong className="metric">{taskDraft ? t('Ready') : t('N/A')}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Matching datasets'),
+            description: t('Datasets currently compatible with the selected task type.'),
+            value: filteredDatasets.length
+          },
+          {
+            title: t('Ready Datasets'),
+            description: t('Ready datasets available for immediate training launch.'),
+            value: readyMatchingDatasets
+          },
+          {
+            title: t('Framework'),
+            description: t('Current framework family selected for the run.'),
+            value: t(framework)
+          },
+          {
+            title: t('Draft assist'),
+            description: t('Optional requirement parsing that can pre-fill task choices.'),
+            value: taskDraft ? t('Ready') : t('N/A'),
+            tone: taskDraft ? 'default' : 'attention'
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <div className="workspace-overview-main">
-          <StepIndicator steps={steps} current={step} />
-          {renderStage()}
-        </div>
+      <WorkspaceSplit
+        main={
+          <div className="stack">
+            <StepIndicator steps={steps} current={step} />
+            {renderStage()}
+          </div>
+        }
+        side={
+          <>
+            <Card className="stack">
+              <div className="stack tight">
+                <h3>{t('Requirement to Task Draft')}</h3>
+                <small className="muted">
+                  {t('Turn a natural-language requirement into a suggested task, framework, labels, and metrics.')}
+                </small>
+              </div>
+              <label>
+                {t('Requirement Description')}
+                <Textarea
+                  value={requirementDescription}
+                  onChange={(event) => setRequirementDescription(event.target.value)}
+                  rows={4}
+                  placeholder={t('Example: detect train body defects or read train serial number')}
+                />
+              </label>
+              <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
+                {drafting ? t('Generating...') : t('Generate Task Draft')}
+              </Button>
+              {taskDraft ? (
+                <ul className="workspace-record-list compact">
+                  <li className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{t('Task Type')}</strong>
+                      <StatusTag status="info">{t(taskDraft.task_type)}</StatusTag>
+                    </div>
+                    <small className="muted">
+                      {t('Framework')}: {t(taskDraft.recommended_framework)} · {t('annotation')}:{' '}
+                      {draftAnnotationType || t('N/A')}
+                    </small>
+                  </li>
+                  <li className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{t('labels')}</strong>
+                      <StatusTag status="info">{taskDraft.label_hints.length}</StatusTag>
+                    </div>
+                    <small className="muted">{taskDraft.label_hints.join(', ') || t('N/A')}</small>
+                  </li>
+                  <li className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{t('dataset suggestions')}</strong>
+                      <StatusTag status="info">{taskDraft.dataset_suggestions.length}</StatusTag>
+                    </div>
+                    <small className="muted">{taskDraft.dataset_suggestions.join('；') || t('N/A')}</small>
+                  </li>
+                  <li className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{t('rationale')}</strong>
+                      <StatusTag status="info">{taskDraft.source}</StatusTag>
+                    </div>
+                    <small className="muted">{taskDraft.rationale}</small>
+                  </li>
+                </ul>
+              ) : (
+                <StateBlock
+                  variant="empty"
+                  title={t('No requirement draft yet.')}
+                  description={t('Use the assist card to convert a free-form requirement into a structured training starting point.')}
+                />
+              )}
+            </Card>
 
-        <div className="workspace-overview-side">
-          <Card className="stack">
-            <div className="stack tight">
-              <h3>{t('Requirement to Task Draft')}</h3>
-              <small className="muted">
-                {t('Turn a natural-language requirement into a suggested task, framework, labels, and metrics.')}
-              </small>
-            </div>
-            <label>
-              {t('Requirement Description')}
-              <Textarea
-                value={requirementDescription}
-                onChange={(event) => setRequirementDescription(event.target.value)}
-                rows={4}
-                placeholder={t('Example: detect train body defects or read train serial number')}
-              />
-            </label>
-            <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
-              {drafting ? t('Generating...') : t('Generate Task Draft')}
-            </Button>
-            {taskDraft ? (
+            <Card className="stack">
+              <div className="stack tight">
+                <h3>{t('Current run plan')}</h3>
+                <small className="muted">{stepDescriptions[step]}</small>
+              </div>
               <ul className="workspace-record-list compact">
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('Task Type')}</strong>
-                    <StatusTag status="info">{t(taskDraft.task_type)}</StatusTag>
-                  </div>
-                  <small className="muted">
-                    {t('Framework')}: {t(taskDraft.recommended_framework)} · {t('annotation')}: {draftAnnotationType || t('N/A')}
-                  </small>
-                </li>
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('labels')}</strong>
-                    <StatusTag status="info">{taskDraft.label_hints.length}</StatusTag>
-                  </div>
-                  <small className="muted">{taskDraft.label_hints.join(', ') || t('N/A')}</small>
-                </li>
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('dataset suggestions')}</strong>
-                    <StatusTag status="info">{taskDraft.dataset_suggestions.length}</StatusTag>
-                  </div>
-                  <small className="muted">{taskDraft.dataset_suggestions.join('；') || t('N/A')}</small>
-                </li>
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('rationale')}</strong>
-                    <StatusTag status="info">{taskDraft.source}</StatusTag>
-                  </div>
-                  <small className="muted">{taskDraft.rationale}</small>
-                </li>
+                {runChecklist.map((item) => (
+                  <li key={item.label} className="workspace-record-item compact">
+                    <div className="row between gap wrap">
+                      <strong>{item.label}</strong>
+                      <StatusTag status={item.done ? 'ready' : 'draft'}>
+                        {item.done ? t('Ready') : t('draft')}
+                      </StatusTag>
+                    </div>
+                    <small className="muted">{item.hint}</small>
+                  </li>
+                ))}
               </ul>
-            ) : (
-              <StateBlock
-                variant="empty"
-                title={t('No requirement draft yet.')}
-                description={t('Use the assist card to convert a free-form requirement into a structured training starting point.')}
-              />
-            )}
-          </Card>
+            </Card>
 
-          <Card className="stack">
-            <div className="stack tight">
-              <h3>{t('Current run plan')}</h3>
-              <small className="muted">{stepDescriptions[step]}</small>
-            </div>
-            <ul className="workspace-record-list compact">
-              {runChecklist.map((item) => (
-                <li key={item.label} className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{item.label}</strong>
-                    <StatusTag status={item.done ? 'ready' : 'draft'}>
-                      {item.done ? t('Ready') : t('draft')}
-                    </StatusTag>
-                  </div>
-                  <small className="muted">{item.hint}</small>
-                </li>
-              ))}
-            </ul>
-          </Card>
-
-          <Panel className="stack">
-            <div className="stack tight">
-              <h3>{t('Launch lane')}</h3>
-              <small className="muted">{t('Keep the main training actions and supporting routes close together.')}</small>
-            </div>
-            <div className="workspace-button-stack">
-              <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || submitting} block>
-                {t('Back')}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={nextStep}
-                disabled={step === steps.length - 1 || submitting || loading}
-                block
-              >
-                {t('Next')}
-              </Button>
-              <Button
-                type="button"
-                onClick={submit}
-                disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !launchReady}
-                block
-              >
-                {submitting ? t('Submitting...') : t('Create Training Job')}
-              </Button>
-              <ButtonLink to="/datasets" variant="secondary" block>
-                {t('Manage Datasets')}
-              </ButtonLink>
-              <ButtonLink to="/training/jobs" variant="secondary" block>
-                {t('Open Training Jobs')}
-              </ButtonLink>
-            </div>
-          </Panel>
-        </div>
-      </section>
-    </div>
+            <Panel className="stack">
+              <div className="stack tight">
+                <h3>{t('Launch lane')}</h3>
+                <small className="muted">{t('Keep the main training actions and supporting routes close together.')}</small>
+              </div>
+              <div className="workspace-button-stack">
+                <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || submitting} block>
+                  {t('Back')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={nextStep}
+                  disabled={step === steps.length - 1 || submitting || loading}
+                  block
+                >
+                  {t('Next')}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={submit}
+                  disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !launchReady}
+                  block
+                >
+                  {submitting ? t('Submitting...') : t('Create Training Job')}
+                </Button>
+                <ButtonLink to="/datasets" variant="secondary" block>
+                  {t('Manage Datasets')}
+                </ButtonLink>
+                <ButtonLink to="/training/jobs" variant="secondary" block>
+                  {t('Open Training Jobs')}
+                </ButtonLink>
+              </div>
+            </Panel>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

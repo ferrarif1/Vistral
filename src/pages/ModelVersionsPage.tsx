@@ -6,6 +6,13 @@ import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSectionHeader,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -229,94 +236,69 @@ export default function ModelVersionsPage() {
   const shouldVirtualizeVersions = sortedVersions.length > versionsVirtualizationThreshold;
 
   return (
-    <div className="workspace-overview-page stack">
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('Version Registry')}</small>
-            <h1>{t('Model Versions')}</h1>
-            <p className="muted">{t('Register versions and keep training outputs traceable.')}</p>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Total')}</span>
-              <strong>{summary.total}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Jobs ready to register')}</span>
-              <strong>{summary.registerableJobs}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Artifacts linked')}</span>
-              <strong>{summary.linkedArtifacts}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
+    <WorkspacePage>
+      <WorkspaceHero
+        eyebrow={t('Version Registry')}
+        title={t('Model Versions')}
+        description={t('Register versions and keep training outputs traceable.')}
+        stats={[
+          { label: t('Total'), value: summary.total },
+          { label: t('Jobs ready to register'), value: summary.registerableJobs },
+          { label: t('Artifacts linked'), value: summary.linkedArtifacts }
+        ]}
+      />
 
       {error ? <StateBlock variant="error" title={t('Action Failed')} description={error} /> : null}
       {success ? <StateBlock variant="success" title={t('Action Completed')} description={success} /> : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Registered versions')}</h3>
-            <small className="muted">
-              {t('Versions already available for inference or deployment follow-up.')}
-            </small>
-          </div>
-          <strong className="metric">{summary.registered}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Jobs ready to register')}</h3>
-            <small className="muted">
-              {t('Completed training jobs that can be turned into model versions.')}
-            </small>
-          </div>
-          <strong className="metric">{summary.registerableJobs}</strong>
-        </Card>
-        <Card as="article" className="workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Artifacts linked')}</h3>
-            <small className="muted">
-              {t('Versions with stored artifact attachment references.')}
-            </small>
-          </div>
-          <strong className="metric">{summary.linkedArtifacts}</strong>
-        </Card>
-        <Card as="article" className={`workspace-signal-card${summary.deprecated > 0 ? ' attention' : ''}`}>
-          <div className="workspace-signal-top">
-            <h3>{t('Deprecated count')}</h3>
-            <small className="muted">{t('Versions marked deprecated but kept for traceability.')}</small>
-          </div>
-          <strong className="metric">{summary.deprecated}</strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Registered versions'),
+            description: t('Versions already available for inference or deployment follow-up.'),
+            value: summary.registered
+          },
+          {
+            title: t('Jobs ready to register'),
+            description: t('Completed training jobs that can be turned into model versions.'),
+            value: summary.registerableJobs
+          },
+          {
+            title: t('Artifacts linked'),
+            description: t('Versions with stored artifact attachment references.'),
+            value: summary.linkedArtifacts
+          },
+          {
+            title: t('Deprecated count'),
+            description: t('Versions marked deprecated but kept for traceability.'),
+            value: summary.deprecated,
+            tone: summary.deprecated > 0 ? 'attention' : 'default'
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <Card as="article" className="workspace-overview-main">
-          <div className="workspace-section-header">
-            <div className="stack tight">
-              <h3>{t('Version Inventory')}</h3>
-              <small className="muted">
-                {t('Review registered outputs, linked metrics, and training provenance in one place.')}
-              </small>
-            </div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                load('manual').catch(() => {
-                  // no-op
-                });
-              }}
-              disabled={loading || refreshing}
-            >
-              {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
-            </Button>
-          </div>
+      <WorkspaceSplit
+        main={
+          <Card as="article">
+            <WorkspaceSectionHeader
+              title={t('Version Inventory')}
+              description={t('Review registered outputs, linked metrics, and training provenance in one place.')}
+              actions={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    load('manual').catch(() => {
+                      // no-op
+                    });
+                  }}
+                  disabled={loading || refreshing}
+                >
+                  {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
+              }
+            />
 
           {loading ? (
             <StateBlock variant="loading" title={t('Loading Versions')} description={t('Fetching model version list.')} />
@@ -428,10 +410,11 @@ export default function ModelVersionsPage() {
               })}
             </ul>
           )}
-        </Card>
-
-        <div className="workspace-overview-side">
-          <Card as="article">
+          </Card>
+        }
+        side={
+          <>
+            <Card as="article">
             <div className="stack tight">
               <h3>{t('Registration Lane')}</h3>
               <small className="muted">
@@ -487,54 +470,55 @@ export default function ModelVersionsPage() {
                 </Button>
               </>
             )}
-          </Card>
+            </Card>
 
-          <Card as="article">
-            <div className="stack tight">
-              <h3>{t('Ready sources')}</h3>
-              <small className="muted">
-                {t('Pick from completed training outputs and keep artifact-linked versions organized.')}
-              </small>
-            </div>
-
-            <ul className="workspace-record-list compact">
-              <Panel as="li" className="workspace-record-item compact" tone="soft">
-                <div className="row between gap wrap">
-                  <strong>{t('Available models')}</strong>
-                  <Badge tone="neutral">{summary.availableModels}</Badge>
-                </div>
+            <Card as="article">
+              <div className="stack tight">
+                <h3>{t('Ready sources')}</h3>
                 <small className="muted">
-                  {summary.availableModels > 0
-                    ? t('Manage the model side of version registration from your owned inventory.')
-                    : t('Create or import a model draft first.')}
+                  {t('Pick from completed training outputs and keep artifact-linked versions organized.')}
                 </small>
-              </Panel>
-              <Panel as="li" className="workspace-record-item compact" tone="soft">
-                <div className="row between gap wrap">
-                  <strong>{t('Completed jobs')}</strong>
-                  <Badge tone={summary.registerableJobs > 0 ? 'success' : 'warning'}>
-                    {summary.registerableJobs}
-                  </Badge>
-                </div>
-                <small className="muted">
-                  {summary.registerableJobs > 0
-                    ? t('Finished runs stay visible for version registration and follow-up review.')
-                    : t('Complete a training job first, then return here to register a version.')}
-                </small>
-              </Panel>
-            </ul>
+              </div>
 
-            <div className="workspace-button-stack">
-              <ButtonLink to="/models/my-models" variant="secondary" size="sm">
-                {t('Manage My Models')}
-              </ButtonLink>
-              <ButtonLink to="/training/jobs" variant="secondary" size="sm">
-                {t('Open Training Jobs')}
-              </ButtonLink>
-            </div>
-          </Card>
-        </div>
-      </section>
-    </div>
+              <ul className="workspace-record-list compact">
+                <Panel as="li" className="workspace-record-item compact" tone="soft">
+                  <div className="row between gap wrap">
+                    <strong>{t('Available models')}</strong>
+                    <Badge tone="neutral">{summary.availableModels}</Badge>
+                  </div>
+                  <small className="muted">
+                    {summary.availableModels > 0
+                      ? t('Manage the model side of version registration from your owned inventory.')
+                      : t('Create or import a model draft first.')}
+                  </small>
+                </Panel>
+                <Panel as="li" className="workspace-record-item compact" tone="soft">
+                  <div className="row between gap wrap">
+                    <strong>{t('Completed jobs')}</strong>
+                    <Badge tone={summary.registerableJobs > 0 ? 'success' : 'warning'}>
+                      {summary.registerableJobs}
+                    </Badge>
+                  </div>
+                  <small className="muted">
+                    {summary.registerableJobs > 0
+                      ? t('Finished runs stay visible for version registration and follow-up review.')
+                      : t('Complete a training job first, then return here to register a version.')}
+                  </small>
+                </Panel>
+              </ul>
+
+              <div className="workspace-button-stack">
+                <ButtonLink to="/models/my-models" variant="secondary" size="sm">
+                  {t('Manage My Models')}
+                </ButtonLink>
+                <ButtonLink to="/training/jobs" variant="secondary" size="sm">
+                  {t('Open Training Jobs')}
+                </ButtonLink>
+              </div>
+            </Card>
+          </>
+        }
+      />
+    </WorkspacePage>
   );
 }

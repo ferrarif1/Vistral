@@ -6,6 +6,13 @@ import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import {
+  WorkspaceHero,
+  WorkspaceMetricGrid,
+  WorkspacePage,
+  WorkspaceSectionHeader,
+  WorkspaceSplit
+} from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
@@ -148,188 +155,173 @@ export default function DatasetsPage() {
   const shouldVirtualizeDatasets = sortedDatasets.length > datasetVirtualizationThreshold;
 
   return (
-    <div className="workspace-overview-page stack">
-      <Card className="workspace-overview-hero">
-        <div className="workspace-overview-hero-grid">
-          <div className="workspace-overview-copy stack">
-            <small className="workspace-eyebrow">{t('Dataset Hub')}</small>
-            <h1>{t('Datasets')}</h1>
-            <p className="muted">{t('Create and manage dataset assets for OCR and detection workflows.')}</p>
-          </div>
-          <div className="workspace-overview-badges">
-            <div className="workspace-overview-badge">
-              <span>{t('Total')}</span>
-              <strong>{summary.total}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Ready Datasets')}</span>
-              <strong>{summary.ready}</strong>
-            </div>
-            <div className="workspace-overview-badge">
-              <span>{t('Datasets by task')}</span>
-              <strong>
-                {summary.ocr} {t('ocr')} / {summary.detection} {t('detection')}
-              </strong>
-            </div>
-          </div>
-        </div>
-      </Card>
+    <WorkspacePage>
+      <WorkspaceHero
+        eyebrow={t('Dataset Hub')}
+        title={t('Datasets')}
+        description={t('Create and manage dataset assets for OCR and detection workflows.')}
+        stats={[
+          {
+            label: t('Total'),
+            value: summary.total
+          },
+          {
+            label: t('Ready Datasets'),
+            value: summary.ready
+          },
+          {
+            label: t('Datasets by task'),
+            value: `${summary.ocr} ${t('ocr')} / ${summary.detection} ${t('detection')}`
+          }
+        ]}
+      />
 
       {error ? <StateBlock variant="error" title={t('Dataset Action Failed')} description={error} /> : null}
       {success ? <StateBlock variant="success" title={t('Completed')} description={success} /> : null}
 
-      <section className="workspace-overview-signal-grid">
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Total')}</h3>
-            <small className="muted">{t('All dataset shells currently visible to this account.')}</small>
-          </div>
-          <strong className="metric">{summary.total}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Ready')}</h3>
-            <small className="muted">{t('Datasets already prepared for downstream steps.')}</small>
-          </div>
-          <strong className="metric">{summary.ready}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('draft')}</h3>
-            <small className="muted">{t('Draft dataset containers still waiting for more structure.')}</small>
-          </div>
-          <strong className="metric">{summary.draft}</strong>
-        </Card>
-        <Card className="stack workspace-signal-card">
-          <div className="workspace-signal-top">
-            <h3>{t('Task Type')}</h3>
-            <small className="muted">{t('OCR and detection remain the main operational paths here.')}</small>
-          </div>
-          <strong className="metric">
-            {summary.ocr + summary.detection}
-          </strong>
-        </Card>
-      </section>
+      <WorkspaceMetricGrid
+        items={[
+          {
+            title: t('Total'),
+            description: t('All dataset shells currently visible to this account.'),
+            value: summary.total
+          },
+          {
+            title: t('Ready'),
+            description: t('Datasets already prepared for downstream steps.'),
+            value: summary.ready
+          },
+          {
+            title: t('draft'),
+            description: t('Draft dataset containers still waiting for more structure.'),
+            value: summary.draft
+          },
+          {
+            title: t('Task Type'),
+            description: t('OCR and detection remain the main operational paths here.'),
+            value: summary.ocr + summary.detection
+          }
+        ]}
+      />
 
-      <section className="workspace-overview-panel-grid">
-        <Card className="stack workspace-overview-main">
-          <div className="workspace-section-header">
-            <div className="stack tight">
-              <h3>{t('Dataset Inventory')}</h3>
-              <small className="muted">
-                {t('Open the dataset detail page to upload files, create splits, and version the asset.')}
-              </small>
-            </div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                load('manual').catch(() => {
-                  // no-op
-                });
-              }}
-              disabled={loading || refreshing}
-            >
-              {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
-            </Button>
-          </div>
-
-          {loading ? (
-            <StateBlock variant="loading" title={t('Loading Datasets')} description={t('Fetching dataset list.')} />
-          ) : sortedDatasets.length === 0 ? (
-            <StateBlock variant="empty" title={t('No Datasets')} description={t('Create your first dataset to begin.')} />
-          ) : shouldVirtualizeDatasets ? (
-            <VirtualList
-              items={sortedDatasets}
-              itemHeight={datasetVirtualRowHeight}
-              height={datasetVirtualViewportHeight}
-              itemKey={(dataset) => dataset.id}
-              listClassName="workspace-record-list"
-              rowClassName="workspace-record-row"
-              ariaLabel={t('Dataset Inventory')}
-              renderItem={(dataset) => {
-                const classPreview = getClassPreview(dataset.label_schema.classes);
-                return (
-                  <div className="workspace-record-item virtualized">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{dataset.name}</strong>
-                        <small className="muted">
-                          {t(dataset.task_type)} · {t(dataset.status)} · {t('Last updated')}:{' '}
-                          {formatTimestamp(dataset.updated_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
-                        <ButtonLink variant="secondary" size="sm" to={`/datasets/${dataset.id}`}>
-                          {t('Open Detail')}
-                        </ButtonLink>
-                      </div>
-                    </div>
-                    <p className="line-clamp-2">{dataset.description}</p>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">{t(dataset.task_type)}</Badge>
-                      <Badge tone="info">
-                        {t('Classes')}: {dataset.label_schema.classes.length}
-                      </Badge>
-                      {classPreview.visible.map((label) => (
-                        <Badge key={`${dataset.id}-${label}`} tone="neutral">
-                          {label}
-                        </Badge>
-                      ))}
-                      {classPreview.hiddenCount > 0 ? (
-                        <Badge tone="neutral">+{classPreview.hiddenCount}</Badge>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              }}
+      <WorkspaceSplit
+        main={
+          <Card className="stack">
+            <WorkspaceSectionHeader
+              title={t('Dataset Inventory')}
+              description={t('Open the dataset detail page to upload files, create splits, and version the asset.')}
+              actions={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    load('manual').catch(() => {
+                      // no-op
+                    });
+                  }}
+                  disabled={loading || refreshing}
+                >
+                  {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
+              }
             />
-          ) : (
-            <ul className="workspace-record-list">
-              {sortedDatasets.map((dataset) => {
-                const classPreview = getClassPreview(dataset.label_schema.classes);
-                return (
-                  <li key={dataset.id} className="workspace-record-item">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{dataset.name}</strong>
-                        <small className="muted">
-                          {t(dataset.task_type)} · {t(dataset.status)} · {t('Last updated')}:{' '}
-                          {formatTimestamp(dataset.updated_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
-                        <ButtonLink variant="secondary" size="sm" to={`/datasets/${dataset.id}`}>
-                          {t('Open Detail')}
-                        </ButtonLink>
-                      </div>
-                    </div>
-                    <p className="line-clamp-2">{dataset.description}</p>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">{t(dataset.task_type)}</Badge>
-                      <Badge tone="info">
-                        {t('Classes')}: {dataset.label_schema.classes.length}
-                      </Badge>
-                      {classPreview.visible.map((label) => (
-                        <Badge key={`${dataset.id}-${label}`} tone="neutral">
-                          {label}
-                        </Badge>
-                      ))}
-                      {classPreview.hiddenCount > 0 ? (
-                        <Badge tone="neutral">+{classPreview.hiddenCount}</Badge>
-                      ) : null}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Card>
 
-        <div className="workspace-overview-side">
+            {loading ? (
+              <StateBlock variant="loading" title={t('Loading Datasets')} description={t('Fetching dataset list.')} />
+            ) : sortedDatasets.length === 0 ? (
+              <StateBlock variant="empty" title={t('No Datasets')} description={t('Create your first dataset to begin.')} />
+            ) : shouldVirtualizeDatasets ? (
+              <VirtualList
+                items={sortedDatasets}
+                itemHeight={datasetVirtualRowHeight}
+                height={datasetVirtualViewportHeight}
+                itemKey={(dataset) => dataset.id}
+                listClassName="workspace-record-list"
+                rowClassName="workspace-record-row"
+                ariaLabel={t('Dataset Inventory')}
+                renderItem={(dataset) => {
+                  const classPreview = getClassPreview(dataset.label_schema.classes);
+                  return (
+                    <div className="workspace-record-item virtualized">
+                      <div className="workspace-record-item-top">
+                        <div className="workspace-record-summary stack tight">
+                          <strong>{dataset.name}</strong>
+                          <small className="muted">
+                            {t(dataset.task_type)} · {t(dataset.status)} · {t('Last updated')}:{' '}
+                            {formatTimestamp(dataset.updated_at)}
+                          </small>
+                        </div>
+                        <div className="workspace-record-actions">
+                          <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
+                          <ButtonLink variant="secondary" size="sm" to={`/datasets/${dataset.id}`}>
+                            {t('Open Detail')}
+                          </ButtonLink>
+                        </div>
+                      </div>
+                      <p className="line-clamp-2">{dataset.description}</p>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t(dataset.task_type)}</Badge>
+                        <Badge tone="info">
+                          {t('Classes')}: {dataset.label_schema.classes.length}
+                        </Badge>
+                        {classPreview.visible.map((label) => (
+                          <Badge key={`${dataset.id}-${label}`} tone="neutral">
+                            {label}
+                          </Badge>
+                        ))}
+                        {classPreview.hiddenCount > 0 ? (
+                          <Badge tone="neutral">+{classPreview.hiddenCount}</Badge>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                }}
+              />
+            ) : (
+              <ul className="workspace-record-list">
+                {sortedDatasets.map((dataset) => {
+                  const classPreview = getClassPreview(dataset.label_schema.classes);
+                  return (
+                    <li key={dataset.id} className="workspace-record-item">
+                      <div className="workspace-record-item-top">
+                        <div className="workspace-record-summary stack tight">
+                          <strong>{dataset.name}</strong>
+                          <small className="muted">
+                            {t(dataset.task_type)} · {t(dataset.status)} · {t('Last updated')}:{' '}
+                            {formatTimestamp(dataset.updated_at)}
+                          </small>
+                        </div>
+                        <div className="workspace-record-actions">
+                          <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
+                          <ButtonLink variant="secondary" size="sm" to={`/datasets/${dataset.id}`}>
+                            {t('Open Detail')}
+                          </ButtonLink>
+                        </div>
+                      </div>
+                      <p className="line-clamp-2">{dataset.description}</p>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t(dataset.task_type)}</Badge>
+                        <Badge tone="info">
+                          {t('Classes')}: {dataset.label_schema.classes.length}
+                        </Badge>
+                        {classPreview.visible.map((label) => (
+                          <Badge key={`${dataset.id}-${label}`} tone="neutral">
+                            {label}
+                          </Badge>
+                        ))}
+                        {classPreview.hiddenCount > 0 ? (
+                          <Badge tone="neutral">+{classPreview.hiddenCount}</Badge>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
+        }
+        side={
           <Panel className="stack">
             <div className="stack tight">
               <h3>{t('Create Dataset')}</h3>
@@ -382,8 +374,8 @@ export default function DatasetsPage() {
               {submitting ? t('Creating...') : t('Create Dataset')}
             </Button>
           </Panel>
-        </div>
-      </section>
-    </div>
+        }
+      />
+    </WorkspacePage>
   );
 }
