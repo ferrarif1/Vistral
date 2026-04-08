@@ -626,6 +626,15 @@ const server = createServer(async (req, res) => {
       return methodNotAllowed(res);
     }
 
+    const adminModelDetailMatch = path.match(/^\/api\/admin\/models\/([^/]+)$/);
+    if (adminModelDetailMatch) {
+      const modelId = decodeURIComponent(adminModelDetailMatch[1] ?? '');
+      if (req.method === 'DELETE') {
+        return withUserMutation(req, res, () => handlers.removeModelByAdmin(modelId));
+      }
+      return methodNotAllowed(res);
+    }
+
     if (path === '/api/models' && req.method === 'GET') {
       return withUser(req, res, () => handlers.listModels());
     }

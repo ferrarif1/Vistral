@@ -150,8 +150,15 @@
 - `POST /models` 创建（需 ownership/capability 校验）
 - `GET /models/{id}` 详情
 - `PUT /models/{id}` 更新（仅 owner/authorized/admin）
-- `DELETE /models/{id}` 弃用（仅 owner/authorized/admin）
+- `DELETE /admin/models/{id}` 管理员删除符合条件的模型
 - `POST /models/{id}/publish` 提交发布（进入审批）
+
+`DELETE /admin/models/{id}` 规则：
+- 仅 `admin`
+- 基座/基础模型目录中的整理模型属于受保护记录，不允许删除
+- 若目标模型仍被任一 `ModelVersion` 或 `Conversation` 引用，则必须阻止删除
+- 删除成功后，还需一并清理模型作用域附件与关联审批请求
+- 删除成功必须写入审计日志
 
 ## 管理接口补充
 - `GET /audit/logs`：审计日志（仅 admin）
@@ -318,7 +325,15 @@
   - 推荐 `multipart/form-data`（字段名 `file`）
   - 说明：
     - 单文件建议控制在约 `120 MB` 以内，避免代理/请求体大小限制触发 `413`
-- `GET /files/{id}/content`：获取 ready 附件的二进制内容（原始流，不走 JSON envelope）
+- `GET /files/{id}/content`：获取 ready 附件的二进制内容（原始流，不走 JSON envelope，按资源可读范围授权）
+  - 读取规则：
+    - 管理员始终可读
+    - 附件所有者可读
+    - 非所有者在具备所绑定资源访问权限时可读：
+      - 数据集附件：有该数据集访问权限即可
+      - 模型附件：有该模型访问权限即可
+      - 会话附件：有该会话访问权限即可
+      - 推理附件：有其关联推理运行/模型版本访问权限即可
 - `DELETE /files/{id}`：删除附件（所有者范围内）
 
 附件状态：

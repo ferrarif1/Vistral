@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
+  isCuratedFoundationModelName,
   isFixtureAttachmentFilename,
   isFixtureModelVersionRecord
 } from '../../shared/catalogFixtures';
@@ -1789,6 +1790,39 @@ const assertConversationAccess = (conversationId: string, user: User): Conversat
   }
 
   return conversation;
+};
+
+const assertAttachmentReadAccess = (attachment: FileAttachment, user: User): void => {
+  if (user.role === 'admin' || attachment.owner_user_id === user.id) {
+    return;
+  }
+
+  if (attachment.attached_to_type === 'Dataset' && attachment.attached_to_id) {
+    assertDatasetAccess(attachment.attached_to_id, user);
+    return;
+  }
+
+  if (attachment.attached_to_type === 'Model' && attachment.attached_to_id) {
+    assertModelAccess(attachment.attached_to_id, user);
+    return;
+  }
+
+  if (attachment.attached_to_type === 'Conversation' && attachment.attached_to_id) {
+    assertConversationAccess(attachment.attached_to_id, user);
+    return;
+  }
+
+  if (attachment.attached_to_type === 'InferenceRun' && attachment.attached_to_id) {
+    const run = inferenceRuns.find((item) => item.id === attachment.attached_to_id);
+    if (!run) {
+      throw new Error('Inference run for attachment not found.');
+    }
+
+    assertModelVersionAccess(run.model_version_id, user);
+    return;
+  }
+
+  throw new Error('No permission to access this attachment.');
 };
 
 const logAudit = (
@@ -6294,6 +6328,74 @@ export async function createModelDraft(input: CreateModelDraftInput): Promise<Mo
   return created;
 }
 
+export async function removeModelByAdmin(modelId: string): Promise<{ removed: true }> {
+  await delay(120);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can delete models.');
+
+  const modelIndex = models.findIndex((item) => item.id === modelId);
+  if (modelIndex < 0) {
+    throw new Error('Model not found.');
+  }
+
+  const model = models[modelIndex];
+  if (!model) {
+    throw new Error('Model not found.');
+  }
+
+  if (isCuratedFoundationModelName(model.name)) {
+    throw new Error('Protected foundation models cannot be deleted.');
+  }
+
+  const dependentModelVersionCount = modelVersions.filter((version) => version.model_id === model.id).length;
+  if (dependentModelVersionCount > 0) {
+    throw new Error('Model cannot be deleted while model versions still exist.');
+  }
+
+  const dependentConversationCount = conversations.filter((conversation) => conversation.model_id === model.id).length;
+  if (dependentConversationCount > 0) {
+    throw new Error('Model cannot be deleted while conversations still exist.');
+  }
+
+  let removedAttachmentCount = 0;
+  for (let attachmentIndex = attachments.length - 1; attachmentIndex >= 0; attachmentIndex -= 1) {
+    const attachment = attachments[attachmentIndex];
+    if (
+      !attachment ||
+      attachment.attached_to_type !== 'Model' ||
+      attachment.attached_to_id !== model.id
+    ) {
+      continue;
+    }
+
+    attachments.splice(attachmentIndex, 1);
+    await removeStoredAttachmentBinary(attachment);
+    removedAttachmentCount += 1;
+  }
+
+  let removedApprovalCount = 0;
+  for (let approvalIndex = approvalRequests.length - 1; approvalIndex >= 0; approvalIndex -= 1) {
+    if (approvalRequests[approvalIndex]?.model_id !== model.id) {
+      continue;
+    }
+
+    approvalRequests.splice(approvalIndex, 1);
+    removedApprovalCount += 1;
+  }
+
+  models.splice(modelIndex, 1);
+  logAudit('model_deleted_by_admin', 'Model', model.id, {
+    model_name: model.name,
+    owner_user_id: model.owner_user_id,
+    model_type: model.model_type,
+    visibility: model.visibility,
+    removed_attachment_count: String(removedAttachmentCount),
+    removed_approval_count: String(removedApprovalCount)
+  });
+
+  return { removed: true };
+}
+
 export async function listConversationAttachments(): Promise<FileAttachment[]> {
   await delay(120);
   const currentUser = findCurrentUser();
@@ -6552,9 +6654,7 @@ export async function getAttachmentContent(
     throw new Error('Attachment not found.');
   }
 
-  if (!(currentUser.role === 'admin' || attachment.owner_user_id === currentUser.id)) {
-    throw new Error('No permission to access this attachment.');
-  }
+  assertAttachmentReadAccess(attachment, currentUser);
 
   if (attachment.status !== 'ready') {
     throw new Error('Attachment content not found.');

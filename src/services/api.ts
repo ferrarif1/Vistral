@@ -349,6 +349,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input)
     }),
+  removeModelByAdmin: (modelId: string) =>
+    request<{ removed: true }>(`/api/admin/models/${encodeURIComponent(modelId)}`, {
+      method: 'DELETE'
+    }),
 
   listConversationAttachments: async () =>
     filterVisibleAttachments(await request<FileAttachment[]>('/api/files/conversation')),

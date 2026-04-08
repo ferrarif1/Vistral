@@ -121,6 +121,10 @@ const zhCN: Record<string, string> = {
   'Operate model lifecycle with a control-plane view: pipeline status, approvals, and key model operations in one place.':
     '通过控制台视角管理模型生命周期：流水线状态、审批和关键操作集中在一个入口。',
   'Operational snapshot': '运行快照',
+  'Workspace overview': '工作区概览',
+  'Keep approvals, recent model work, and next actions in one place.':
+    '把审批、最近模型工作和下一步操作集中在一个地方。',
+  'Loading overview': '正在加载概览',
   'Approval queue visibility': '审批队列可见',
   'Quick jump to model workflows': '快速跳转模型流程',
   'Open Professional Console': '打开专业控制台',
@@ -157,6 +161,16 @@ const zhCN: Record<string, string> = {
     '先浏览当前可见目录，再切换到我的模型或版本注册。',
   'No visible models yet.': '当前还没有可见模型。',
   'Visible models will appear here after creation or approval.': '模型创建或审批完成后会显示在这里。',
+  'Delete model': '删除模型',
+  'Delete model {modelName}?': '删除模型 {modelName}？',
+  'Deleted model {modelName}.': '已删除模型 {modelName}。',
+  'Protected foundation model': '受保护基座模型',
+  'This curated base model stays available as a training foundation.':
+    '该整理后的基座模型会继续保留为训练基础，不提供删除。',
+  'This permanently removes the model record, model-scoped files, and related approval requests.':
+    '该操作会永久删除模型记录、模型作用域文件以及关联审批请求。',
+  'Deletion is blocked if model versions or conversations still reference this model.':
+    '如果仍有模型版本或会话引用该模型，删除会被阻止。',
   'No description provided.': '暂无描述。',
   'Next actions': '下一步动作',
   'Move from exploration to ownership, creation, or version follow-up without losing context.':
@@ -238,6 +252,8 @@ const zhCN: Record<string, string> = {
   'Create your first training job.': '请创建你的第一个训练任务。',
   'Open Detail': '打开详情',
   'Launch next experiment': '发起下一次实验',
+  'Worker execution': 'Worker 执行',
+  'Local execution': '本地执行',
   'Worker lane': 'Worker 通道',
   'Control-plane lane': '控制平面通道',
   'Version bound': '已绑定版本',
@@ -284,34 +300,107 @@ const zhCN: Record<string, string> = {
   'Create your first dataset to begin.': '请先创建第一个数据集。',
   'Approved in admin queue page.': '已在管理员审批队列页通过。',
   'Approval {approvalId} approved.': '审批 {approvalId} 已通过。',
+  'Unavailable model record': '模型记录暂不可用',
   'Mock quality review failed.': 'Mock 质量审核未通过。',
   'Rejected in admin queue page.': '已在管理员审批队列页拒绝。',
   'Approval {approvalId} rejected.': '审批 {approvalId} 已拒绝。',
+  'Model record is not currently available in the catalog.': '模型记录当前未出现在可见目录中。',
   Loading: '加载中',
   'Fetching approval queue.': '获取审批队列中。',
   'Permission Denied': '权限不足',
   'Only admin role can access approval operations.': '仅管理员可访问审批操作。',
   'Admin Approval Queue': '管理审批队列',
   'Review and process pending model approval requests.': '审核并处理待审批模型请求。',
+  'Active reviewer': '当前审核人',
   'Action Failed': '操作失败',
   'Action Completed': '操作完成',
+  'Pending requests': '待处理请求数',
+  'Requests currently waiting for admin approval decisions.': '当前仍在等待管理员决策的审批请求数量。',
+  'Requesters in queue': '队列中的申请人',
+  'Unique users represented in the active pending queue.': '当前待处理队列中涉及的唯一申请人数。',
+  'Oldest pending': '最早待处理',
+  'Oldest approval request currently waiting for action.': '当前仍在等待处理的最早审批请求时间。',
+  'Pending queue': '待处理队列',
+  'Review requests in chronological order and keep governance decisions traceable.':
+    '按时间顺序处理请求，并让治理决策保持可追踪。',
+  'Refresh queue': '刷新队列',
   'No Pending Requests': '暂无待处理请求',
   'All model submissions have been processed.': '所有模型提交流程已处理完成。',
   'Load More Requests': '加载更多请求',
   'Requested by: {requestedBy}': '申请人：{requestedBy}',
+  Requester: '申请人',
+  'Requester unavailable': '申请人记录暂不可用',
+  'Model request': '模型审批请求',
+  'This request is waiting for an approval decision before the model can move forward.':
+    '该请求仍在等待审批决定，模型在此之前不会继续推进。',
+  'Approved request for {modelName}.': '已通过 {modelName} 的审批请求。',
+  'Rejected request for {modelName}.': '已拒绝 {modelName} 的审批请求。',
+  'Review guidance': '审核提示',
+  'Approvals should include clear notes and rejections should stay actionable for follow-up.':
+    '通过时应写清说明，拒绝时应保持后续可执行性。',
+  'Queue policy': '队列策略',
+  'Prioritize older pending requests first to keep review latency predictable.':
+    '优先处理更早的待处理请求，让审核时延更稳定可预期。',
+  'Governance actions': '治理动作',
+  'Open adjacent admin surfaces without leaving the queue context.':
+    '无需离开当前队列上下文，也能直接打开相关管理页面。',
+  'Open audit logs': '打开审计日志',
+  'Open verification reports': '打开验收报告',
   Approve: '通过',
   Reject: '拒绝',
   'Approve & Next': '通过并处理下一条',
   'Reject & Next': '拒绝并处理下一条',
   'Fetching latest audit logs.': '获取最新审计日志中。',
   'Admin Audit Logs': '管理审计日志',
+  'Governance Trail': '治理轨迹',
   'Only admin can view audit logs.': '仅管理员可查看审计日志。',
   'No Logs Yet': '暂无日志',
   'Load earlier logs': '加载更早日志',
   'No audit events recorded yet.': '尚无审计事件记录。',
   'Recent governance and critical workflow events.': '最近治理与关键流程事件。',
+  'Review policy-sensitive events across model, dataset, and training workflows.':
+    '查看模型、数据集与训练流程中的关键治理事件。',
+  'Total records': '总记录数',
+  'User triggered': '用户触发',
+  'System events': '系统事件',
+  'Entity types': '资源类型数',
+  'All governance events currently retained in the visible log window.':
+    '当前可见日志窗口中保留的全部治理事件。',
+  'Events initiated by authenticated users instead of backend automation.':
+    '由已登录用户发起、而非后台自动触发的事件。',
+  'Background jobs, policy hooks, and other platform-generated actions.':
+    '由后台任务、策略钩子和平台自动流程触发的事件。',
+  'Distinct workflow resource types represented in the current audit sample.':
+    '当前审计样本中涉及的不同流程资源类型。',
+  'Recent audit timeline': '近期审计时间线',
+  'Newest records first so governance follow-up stays easy to trace.':
+    '按最新优先展示，便于持续追踪治理跟进。',
+  'Top entity types': '高频资源类型',
+  'The most frequently touched resources in the current audit view.':
+    '当前审计视图中最常被触达的资源类型。',
+  'No entities yet': '暂无资源类型',
+  'Entity mix will appear after audit records are available.':
+    '有审计记录后，这里会显示资源分布。',
+  'Records currently mapped to this entity type.': '当前映射到该资源类型的记录数。',
+  'Jump from audit review into the next governance surface without losing context.':
+    '无需离开审计上下文，也能直接跳转到下一步治理页面。',
+  'User event': '用户事件',
+  'System event': '系统事件',
+  'Unknown account': '未知账号',
+  'Target record attached': '已关联目标记录',
+  'No target record': '无目标记录',
+  'Metadata fields: {count}': '元数据字段：{count}',
+  'No metadata fields': '无元数据字段',
+  'View raw context': '查看原始上下文',
+  'Actor: {actor}': '操作者：{actor}',
+  'Recorded by background automation.': '该记录由后台自动流程生成。',
+  'Target type: {value}': '目标类型：{value}',
+  'Action key: {value}': '动作键：{value}',
+  'Actor ID: {id}': '操作者 ID：{id}',
+  'Target ID: {id}': '目标 ID：{id}',
   'Loading Console': '加载控制台中',
   'Building operational snapshot.': '正在构建运行快照。',
+  'Preparing workspace overview.': '正在整理工作区概览。',
   'Console Load Failed': '控制台加载失败',
   'No Snapshot': '暂无快照',
   'No console data available.': '暂无控制台数据。',
@@ -363,6 +452,8 @@ const zhCN: Record<string, string> = {
   'Open the core execution surfaces for datasets, training, and inference validation.':
     '打开数据集、训练和推理验证这些核心执行页面。',
   'Admin & Audit': '管理与审计',
+  'Review approvals, audit trails, and release evidence from one place.':
+    '在同一个地方查看审批、审计轨迹和发布验收凭据。',
   'Review approvals, audit trails, and release evidence from one lane.':
     '在同一条工作线中查看审批、审计轨迹和发布验收凭据。',
   'Use grouped action lanes instead of scanning a long mixed link list.':
@@ -387,6 +478,11 @@ const zhCN: Record<string, string> = {
   'Current user': '当前用户',
   Role: '角色',
   'Managed accounts': '已管理账号数',
+  'Accounts visible in this settings surface under the current role scope.':
+    '当前角色范围下，在此设置页可见的账号数量。',
+  'Provisioned admins currently visible to governance tools.': '当前治理工具可见的管理员账号数量。',
+  'Accounts that can still open authenticated sessions.': '当前仍可发起登录会话的账号数量。',
+  'Accounts with access paused and retained reason history.': '当前访问已暂停且保留原因记录的账号数量。',
   'Login to manage account settings': '登录后管理账户设置',
   'Sign in to change password or access admin account provisioning.':
     '登录后即可修改密码，管理员还可开通新账号。',
@@ -429,6 +525,17 @@ const zhCN: Record<string, string> = {
   'No accounts match current filters.': '当前筛选条件下没有匹配账号。',
   'Try another keyword or reset the role filter.': '请更换关键词，或重置角色筛选。',
   'Load More Users': '加载更多用户',
+  'Directory filters': '目录筛选',
+  'Use quick search first, then open advanced filters when triage scope narrows.':
+    '先用快速搜索缩小范围，再按需要展开高级筛选。',
+  'Advanced directory filters': '高级目录筛选',
+  'Role and status constraints for focused account governance review.':
+    '通过角色与状态约束，聚焦当前账户治理审查范围。',
+  'Refresh Directory': '刷新目录',
+  'Directory summary': '目录概览',
+  'Quick account mix and current filter visibility in one panel.':
+    '在一个面板中查看账号构成和当前筛选后的可见情况。',
+  Matched: '匹配结果',
   'Current session': '当前会话账号',
   'Active accounts': '激活账号',
   'Disabled accounts': '已停用账号',
@@ -469,6 +576,20 @@ const zhCN: Record<string, string> = {
     '管理员创建账号后，会显示在这里。',
   'Need access for the first time? Ask an administrator to provision your account.':
     '如果是首次使用，请联系管理员为你开通账号。',
+  'Access mode': '访问方式',
+  'Username + password': '用户名 + 密码',
+  'Public registration': '公开注册',
+  'Account creation is not exposed from this page in the current product phase.':
+    '当前产品阶段不会在这个页面开放账号注册入口。',
+  Disabled: '已关闭',
+  'New accounts are opened by administrators from authenticated settings.':
+    '新账号由管理员在登录后的设置页中开通。',
+  'Sign in with a provisioned account': '使用已开通账号登录',
+  'Your saved chat history, settings, and governed actions return after sign-in.':
+    '登录后会恢复你的聊天历史、设置，以及受治理保护的工作流操作。',
+  'What you unlock after sign-in': '登录后可继续的内容',
+  'Conversation history, workspace settings, dataset actions, and training flows all resume from the same account context.':
+    '聊天历史、工作区设置、数据集操作和训练流程都会在同一账号上下文中继续。',
   'Pending approvals visible in queue: {count}.': '当前队列可见待审批数：{count}。',
   Username: '用户名',
   Password: '密码',
@@ -627,6 +748,9 @@ const zhCN: Record<string, string> = {
   'Draft status': '草稿状态',
   'Current draft': '当前草稿',
   'No draft yet.': '当前还没有草稿。',
+  'Draft created. Continue with model file upload.': '草稿已创建，请继续上传模型文件。',
+  'Approval request submitted. Model status is now pending approval.':
+    '审批请求已提交，模型状态现为待审批。',
   'Submission checklist': '提交流程清单',
   'Keep the approval path visible while you finish the wizard.': '在完成向导的过程中，持续保持审批路径可见。',
   'Review links': '跟进入口',
@@ -750,6 +874,8 @@ const zhCN: Record<string, string> = {
   'Sample feedback sent to dataset.': '样本反馈已发送到数据集。',
   'Feedback target dataset task type must match inference task type.':
     '反馈目标数据集的任务类型必须与当前推理任务类型一致。',
+  'Recent run': '最近一次运行',
+  'Selected dataset record unavailable': '所选数据集记录暂不可用',
   'No Matching Datasets': '无匹配数据集',
   'Create a dataset with task type {taskType} before sending feedback from this run.':
     '请先创建任务类型为 {taskType} 的数据集，再回流该推理样本。',
@@ -763,8 +889,11 @@ const zhCN: Record<string, string> = {
   'Verify runtime bridge connectivity for PaddleOCR, docTR, and YOLO directly in the platform.':
     '在平台内直接验证 PaddleOCR、docTR、YOLO 的 Runtime 桥接连通性。',
   'Runtime Control Plane': 'Runtime 控制台',
+  'Runtime overview': 'Runtime 总览',
   'Keep framework diagnostics, execution summaries, and integration templates in one operational lane.':
     '把框架诊断、执行摘要和接入模板收拢在同一条操作线上。',
+  'Check framework connections, worker availability, and recent execution signals from one place.':
+    '在一个页面里查看框架连接、Worker 可用性，以及最近执行信号。',
   'Reachable frameworks': '可达框架',
   'Unreachable frameworks': '不可达框架',
   Pending: '待处理',
@@ -774,19 +903,26 @@ const zhCN: Record<string, string> = {
   'Frameworks that failed connectivity validation and need follow-up.':
     '连通性校验失败、需要后续处理的框架数量。',
   'Frameworks still missing endpoint configuration.': '仍缺少端点配置的框架数量。',
+  'How much recent training telemetry is currently retained.': '当前保留了多少近期训练遥测数据。',
   'Metric retention visibility for recent training telemetry.':
     '近期训练遥测数据的指标保留可视情况。',
   'Loading Runtime Status': '加载 Runtime 状态中',
   'Checking framework endpoints.': '检查框架端点中。',
   'Framework diagnostics': '框架诊断',
+  'Framework connections': '框架连接',
   'Review live runtime bridge state for each framework and keep configuration gaps obvious.':
     '查看每个框架的实时 Runtime 桥接状态，并让配置缺口保持清晰可见。',
+  'Review whether each framework is reachable and whether setup is complete.':
+    '查看每个框架是否可达，以及接入是否完整。',
   'Runtime controls': 'Runtime 控制区',
   'Filter the diagnostics surface and rerun selected checks without leaving the page.':
     '无需离开当前页面，就能筛选诊断视图并重新执行选定检查。',
   'Execution watch': '执行观察',
+  'Recent activity': '近期活动',
   'Recent inference and training execution signals stay visible here.':
     '近期推理和训练执行信号会持续显示在这里。',
+  'Recent inference and training summaries stay visible here.':
+    '近期推理与训练摘要会持续显示在这里。',
   'Framework': '框架',
   all: '全部',
   reachable: '可达',
@@ -875,6 +1011,13 @@ const zhCN: Record<string, string> = {
   'Online workers': '在线 Worker',
   'Pending pairing': '待配对',
   'Worker onboarding': 'Worker 配对',
+  'Worker setup': 'Worker 设置',
+  'Create one-time setup sessions and help operators finish worker connection locally.':
+    '创建一次性设置会话，并帮助操作者在本地完成 Worker 连接。',
+  'Worker availability': 'Worker 可用性',
+  'Review worker capacity, health, and readiness before sending new jobs.':
+    '在分发新任务前，查看 Worker 容量、健康度与就绪情况。',
+  'Recent training job': '近期训练任务',
   'Add Worker': '添加 Worker',
   Close: '关闭',
   'Generate one-time pairing commands, then finish worker setup from the local /setup page.':
@@ -1032,16 +1175,25 @@ const zhCN: Record<string, string> = {
   'LLM Control Plane': 'LLM 控制台',
   'Manage provider credentials, saved key reuse, and live connection checks from one page.':
     '在同一页面管理提供商凭据、已保存密钥复用和实时连接检查。',
+  Mode: '模式',
   'Saved mode': '已保存模式',
   'Stored key': '已保存密钥',
+  'Pending changes': '待处理改动',
   Yes: '是',
   No: '否',
+  'Connect one OpenAI-compatible provider for the chat workspace.':
+    '为对话工作区接入一个 OpenAI 兼容提供商。',
+  'Whether chat currently uses the saved provider settings.': '当前对话是否正在使用已保存的提供商设置。',
   'Saved conversation mode toggle from the encrypted local config.':
     '来自本地加密配置的对话启用状态。',
+  'Whether a key is already saved for reuse.': '当前是否已有可复用的已保存密钥。',
   'Whether an encrypted key is already stored for reuse.': '当前是否已有可复用的加密密钥。',
+  'Any change here will stay local until you save or clear it.': '这里的改动会先保留在当前页面，直到你保存或清除。',
   'Form changes that still need save or discard.': '当前表单改动是否仍需保存或丢弃。',
   'Unsaved edits': '未保存修改',
+  'Quick presets': '快捷预设',
   'Preset shortcuts': '预设快捷项',
+  'Number of one-click presets available for faster setup.': '可用于快速填充配置的一键预设数量。',
   'Preset models available for one-click selection.': '可一键选择的预设模型数量。',
   'Apply ChatAnywhere Preset': '套用 ChatAnywhere 预设',
   'ChatAnywhere preset applied.': '已套用 ChatAnywhere 预设。',
@@ -1058,6 +1210,8 @@ const zhCN: Record<string, string> = {
   'Current saved configuration': '当前已保存配置',
   'Saved values shown here update only after Save or Reload.':
     '这里展示的是已保存值，只有点击保存或重新加载后才会更新。',
+  Configuration: '配置',
+  'Update endpoint, key, model, and temperature in one place.': '在同一处更新端点、密钥、模型与温度参数。',
   'Editing Lane': '编辑区',
   'Update endpoint, key, model, and temperature in one focused form.':
     '在同一个聚焦表单里更新端点、密钥、模型与温度参数。',
@@ -1066,12 +1220,19 @@ const zhCN: Record<string, string> = {
   'Editing form': '编辑中的配置',
   'Use a preset button to move faster while keeping the underlying form editable.':
     '使用预设按钮快速调整，同时保留底层表单可继续编辑。',
+  'Saved settings': '已保存设置',
+  'Saved values stay visible here so you know what will be reused.':
+    '已保存的值会持续显示在这里，方便判断哪些配置会被复用。',
   'Saved snapshot': '已保存快照',
   'Masked saved values remain visible so you can tell what will be reused.':
     '已保存的掩码值会持续可见，方便判断哪些配置会被复用。',
+  'Connection notes': '连接说明',
+  'Open troubleshooting and security reminders only when needed.': '仅在需要时展开排障与安全提醒。',
   'Connection guidance': '连接指引',
   'Use connection advice and safety reminders before switching providers or models.':
     '切换提供商或模型前，可先查看连接建议和安全提醒。',
+  'No connection advice right now.': '当前没有新的连接建议。',
+  'Run a test after changing the endpoint, key, or model.': '修改端点、密钥或模型后，建议先执行一次测试。',
   'No live troubleshooting advice right now.': '当前没有即时排查建议。',
   'Try a connection test after changing base URL, key, or model.':
     '修改基础 URL、密钥或模型后，建议先执行一次连接测试。',
@@ -1079,22 +1240,31 @@ const zhCN: Record<string, string> = {
   'Reload saved settings': '重新加载已保存设置',
   'Discard typed key': '丢弃本次输入的 key',
   Provider: '提供商',
+  'Provider currently uses OpenAI-compatible mode.': '当前提供商使用 OpenAI 兼容模式。',
   'Provider is fixed to OpenAI-compatible mode in this prototype.':
     '当前原型中提供商固定为 OpenAI 兼容模式。',
   'Base URL': '基础 URL',
   'API Key': 'API 密钥',
+  'Masked key reminder: {key}': '密钥掩码提示：{key}',
   'Stored key: {key}': '已存储密钥：{key}',
+  'Leave API Key blank to keep using the saved key.': '保持 API Key 为空即可继续使用已保存密钥。',
   'Leave API Key blank to keep the saved key when editing or testing.':
     '编辑或测试时若保持 API Key 为空，将继续使用已保存密钥。',
   'Key handling': '密钥处理方式',
+  'No key saved yet. Add one once to finish setup.': '当前还没有已保存密钥，先添加一次即可完成设置。',
   'No saved key yet. Input API key once to start managed editing.':
     '当前还没有已保存密钥，请先输入一次 API key，之后才能顺畅管理和编辑。',
+  'A newly entered key will be used for this test and saved if you click Save.':
+    '新输入的 key 会优先用于本次测试；如果点击保存，它也会成为新的已保存密钥。',
   'Blank API Key means save/test will keep using the saved key.':
     'API Key 留空时，保存和测试都会继续使用当前已保存密钥。',
   'Typed API Key will replace the saved key on save and be used for connection test.':
     '当前输入的新 API Key 会在保存时替换旧密钥，并优先用于本次连接测试。',
+  'Pending changes are waiting to be saved.': '当前改动尚未保存。',
+  'No pending changes.': '当前没有待处理改动。',
   'Unsaved edits are pending.': '当前有未保存修改。',
   'No unsaved edits.': '当前没有未保存修改。',
+  'Typed key removed. Saved key will be reused again.': '已移除本次输入的 key，将重新复用已保存密钥。',
   'Typed API key discarded. Saved key handling restored.':
     '已丢弃本次输入的 API key，恢复为使用已保存密钥的模式。',
   'Temperature (0-2)': '温度参数（0-2）',
@@ -1120,12 +1290,15 @@ const zhCN: Record<string, string> = {
   'Base URL and model are required.': '基础 URL 与模型为必填项。',
   'Enable mode requires an API key. Please input key at least once.':
     '启用模式需要 API key，请至少输入一次。',
+  'Settings saved. Stored key reminder: {key}.': '设置已保存。当前密钥提示：{key}。',
+  'Saved settings cleared.': '已清除已保存设置。',
   'Configuration saved to encrypted local storage. Current key: {key}.':
     '配置已保存到加密本地存储。当前密钥：{key}。',
   'Configuration cleared from encrypted local storage.':
     '配置已从加密本地存储中清除。',
   'Connection test requires API key input for this test run.': '连接测试需要在本次输入 API key。',
   'Connection test requires API key input or a saved key.': '连接测试需要输入 API key，或先使用已保存密钥。',
+  'Saved settings reloaded.': '已重新加载已保存设置。',
   'Reloaded saved LLM settings.': '已重新加载保存的 LLM 设置。',
   'Connection succeeded. Preview: {preview}': '连接成功。预览：{preview}',
   'Connection failed: {message}': '连接失败：{message}',
@@ -1177,6 +1350,7 @@ const zhCN: Record<string, string> = {
   'Training job name is required.': '训练任务名称不能为空。',
   'Please select a dataset.': '请选择数据集。',
   'Training job {jobId} created.': '训练任务 {jobId} 已创建。',
+  'Training job created. Opening the detail page.': '训练任务已创建，正在打开详情页。',
   'Training Job Builder': '训练任务构建器',
   'Build a training run from requirement draft to launch-ready configuration.':
     '从需求草稿一路构建到可启动的训练配置。',
@@ -1255,7 +1429,10 @@ const zhCN: Record<string, string> = {
   Created: '创建时间',
   'Open Job': '打开任务',
   'Metrics summary unavailable.': '当前没有可展示的指标摘要。',
+  'Training job record unavailable': '训练任务记录暂不可用',
   'No artifact yet': '尚未关联产物',
+  'Artifact linked and ready for downstream use.': '产物已关联，可继续进入下游使用。',
+  'Artifact is still pending or unavailable for this version.': '该版本的产物仍在等待生成，或当前不可用。',
   'Registration Lane': '注册操作区',
   'Keep version registration visible while reviewing completed runs.': '在查看已完成运行结果时，持续保留版本注册入口。',
   'No owned models available.': '当前没有可用于注册的自有模型。',
@@ -1289,6 +1466,9 @@ const zhCN: Record<string, string> = {
   'Model version {versionId} registered.': '模型版本 {versionId} 已注册。',
   'Dataset Lane': '数据集工作区',
   'Dataset Detail': '数据集详情',
+  'Attached file unavailable': '附件文件暂不可用',
+  'Inspect dataset files, annotation readiness, and version snapshots in one place.':
+    '在同一页面检查数据集文件、标注就绪情况与版本快照。',
   'Inspect dataset files, annotation readiness, and version snapshots in one lane.':
     '在同一页面检查数据集文件、标注就绪情况与版本快照。',
   Items: '条目数',
@@ -1391,13 +1571,17 @@ const zhCN: Record<string, string> = {
   'Job is currently {status}. You can retry from detail page.': '任务当前状态为 {status}，可在详情页重试。',
   'Training Completed': '训练完成',
   'Job reached completed state.': '任务已达到 completed 状态。',
+  'Run summary': '运行摘要',
   'Runtime Status': '运行状态',
   'Training Detail': '训练详情',
   'Review status, logs, and metrics for the selected training run.':
     '查看所选训练任务的状态、日志与指标。',
+  'Track readiness, metrics, worker delivery, and artifact handoff for this training run.':
+    '在这里跟踪这次训练的就绪状态、指标、Worker 交付情况与产物承接。',
   Draft: '草稿',
   Queued: '已排队',
   Evaluating: '评估中',
+  'Version snapshot': '版本快照',
   'Run status': '运行状态',
   'Current lifecycle stage for this training job.': '当前训练任务所处的生命周期阶段。',
   Logs: '日志',
@@ -1408,21 +1592,35 @@ const zhCN: Record<string, string> = {
   'Artifact not generated yet.': '产物尚未生成。',
   'Base model': '基模型',
   'Execution mode': '执行模式',
+  'Execution target': '执行路径',
+  'Dataset, launch state, and handoff readiness for this run.': '查看本次运行的数据集、启动状态与产物承接准备情况。',
+  'Dataset, runtime, and artifact status for this run.': '查看本次运行的数据集、执行状态与产物情况。',
   'Execution metadata and artifact status for this run.': '查看本次运行的执行元数据与产物状态。',
   'Scheduler decision': '调度决策',
+  'Scheduler score breakdown': '调度评分拆解',
   Trigger: '触发源',
   Attempt: '尝试次数',
   Target: '执行目标',
   'Selected worker': '选中 Worker',
+  'Worker assigned': '已分配 Worker',
+  'Awaiting worker assignment': '等待 Worker 分配',
+  'Local fallback': '本地兜底执行',
   Score: '评分',
   Load: '负载',
   Penalty: '惩罚',
   'Capability bonus': '能力加分',
   'In flight': '执行中',
   'Excluded workers': '排除 Worker',
+  'Excluded worker count: {count}': '排除 Worker 数：{count}',
   'Scheduler history': '调度历史',
+  'Scheduler update not available yet.': '当前还没有可用的调度更新。',
   'Scheduler decision snapshot not available yet.': '当前还没有可用的调度决策快照。',
   Workspace: '工作目录',
+  'Technical context': '技术上下文',
+  'Storage paths and raw scheduler identifiers stay here when you need them.':
+    '当你需要时，可在这里查看存储路径和原始调度标识。',
+  'Worker ID: {id}': 'Worker ID：{id}',
+  'Excluded worker IDs: {ids}': '排除的 Worker ID：{ids}',
   Runner: 'Runner',
   'Runner mode': 'Runner 模式',
   'Training performed': '是否执行训练',
@@ -1431,6 +1629,8 @@ const zhCN: Record<string, string> = {
   'Artifact metrics': '产物指标',
   'Artifact generated at': '产物生成时间',
   'Fallback reason': '降级原因',
+  'Dataset snapshot is already locked for this run.': '该任务已锁定数据集快照，可按当前版本继续追踪。',
+  'Run is still preparing its version snapshot.': '这次运行仍在准备它的版本快照。',
   yes: '是',
   no: '否',
   Metrics: '指标',
@@ -1457,6 +1657,7 @@ const zhCN: Record<string, string> = {
   'Training Logs': '训练日志',
   'Latest execution logs are shown here with optional backfill for earlier lines.':
     '这里展示最新执行日志，并可按需回填更早的日志。',
+  'Latest log summary': '最新日志摘要',
   'Logs will appear after local executor starts.': '本地执行器启动后，这里会显示日志。',
   'Run actions': '运行操作',
   'Primary controls for this run are grouped here to keep the detail surface quiet.':
@@ -1466,9 +1667,11 @@ const zhCN: Record<string, string> = {
     '可下载时间线指标，或继续跳转到相邻训练页面。',
   'Back to jobs list': '返回任务列表',
   'Open model versions': '打开模型版本',
+  'Execution summary': '执行摘要',
   'Execution snapshot': '执行快照',
   'Compact view of launch, runtime, and artifact status for quick triage.':
     '用紧凑视图汇总启动、运行与产物状态，方便快速排查。',
+  'Open dataset': '打开数据集',
   Retry: '重试',
   'Training job cancelled.': '训练任务已取消。',
   'Training job retried.': '训练任务已重试。',
@@ -1515,6 +1718,7 @@ const zhCN: Record<string, string> = {
   'All items': '全部条目',
   'Open from dataset detail page.': '请从数据集详情页进入。',
   'No dataset item selected': '未选择数据集条目',
+  'File unavailable': '文件暂不可用',
   'Select Item': '选择条目',
   Annotate: '标注',
   'Editing Locked': '编辑已锁定',
@@ -1545,6 +1749,7 @@ const zhCN: Record<string, string> = {
   'Undo Last Change': '撤销上一步',
   'Save In Progress': '保存为进行中',
   'Mark Annotated': '标记为已标注',
+  'Annotation saved as {status}.': '标注已保存为 {status}。',
   'Submit Review': '提交审核',
   'No Annotation': '无标注',
   'Create or update annotation first.': '请先创建或更新标注。',

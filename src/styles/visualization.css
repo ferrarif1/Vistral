@@ -28,6 +28,19 @@
   pointer-events: none;
 }
 
+.annotation-canvas-bg.hidden {
+  opacity: 0;
+}
+
+.annotation-canvas-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
+}
+
 .annotation-canvas-box {
   position: absolute;
   border: 2px solid var(--viz-detect);
@@ -133,6 +146,19 @@
   color: var(--viz-warning);
   opacity: 0.88;
   pointer-events: none;
+}
+
+.polygon-canvas-bg.hidden {
+  opacity: 0;
+}
+
+.polygon-canvas-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
 }
 
 .polygon-canvas-svg {

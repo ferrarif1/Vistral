@@ -1687,6 +1687,13 @@ export default function ConversationPage() {
   const historyLongPressTimerRef = useRef<number | null>(null);
   const historyLongPressTriggeredRef = useRef(false);
 
+  useEffect(() => {
+    document.body.classList.add('workspace-immersive-lock');
+    return () => {
+      document.body.classList.remove('workspace-immersive-lock');
+    };
+  }, []);
+
   const refreshLlmConfig = useCallback(async () => {
     const config = await api.getLlmConfig();
     setLlmView(config);
@@ -1877,8 +1884,10 @@ export default function ConversationPage() {
     }
 
     textarea.style.height = '0px';
-    const nextHeight = Math.max(44, Math.min(textarea.scrollHeight, 180));
+    const nextScrollHeight = textarea.scrollHeight;
+    const nextHeight = Math.max(44, Math.min(nextScrollHeight, 180));
     textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = nextScrollHeight > 180 ? 'auto' : 'hidden';
   }, [input]);
 
   const attachmentById = useMemo(

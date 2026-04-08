@@ -44,7 +44,7 @@ Attachment states:
 ## 2.1 Flow A1: Shared Navigation Shell (implemented)
 Actor: `user` / `admin`
 
-1. open any non-chat route (for example `/workspace/console`, `/datasets`, `/training/jobs`)
+1. open any shared-shell route (for example `/datasets`, `/training/jobs`, `/models/explore`)
 2. use the grouped left sidebar to jump between workspaces, build/run flows, governance pages, and the single top-level settings entry
 3. desktop left sidebars keep a fixed viewport height, while nav/content blocks scroll internally instead of stretching the page shell
 4. optionally collapse lower-priority desktop navigation groups to keep the left panel focused on the current work lane
@@ -52,6 +52,9 @@ Actor: `user` / `admin`
 6. on mobile, open the navigation drawer from the header and dismiss it by tapping the overlay or close action
 7. on desktop, open the shared account menu from the sidebar footer or compact rail avatar to reach settings or logout without leaving the current work lane; compact/mobile layouts may still use the header as fallback
 8. continue the current task without losing active route context or footer controls such as language/session status
+
+Note:
+- `/workspace/console` is now an immersive workspace route (same shell model as `/workspace/chat`) with fixed sidebar, independent content scroll, and floating bottom input bar.
 
 ## 2.2 Flow A2: Settings Surface (implemented)
 Actor: `user` / `admin`
@@ -82,6 +85,8 @@ Actor: `user` with capability
 Admin review path:
 - `/admin/models/pending` approve/reject
 - `/admin/audit` observe audit records
+- admin can also delete a non-foundation model from model inventory when no dependent model versions or conversations exist; successful deletion removes model-scoped attachments plus related approval requests and records an audit event
+- if dependent model versions or conversations still exist, delete action is blocked and UI must explain that the model must be cleaned up through those dependencies first
 
 ## 4. Flow C: Dataset Management (Phase 1 skeleton, implemented)
 Actor: `user`
@@ -92,6 +97,18 @@ Actor: `user`
 4. upload dataset files
 5. run split operation (`train/val/test`)
 6. create dataset version snapshot
+
+## 4.1 Flow C1: Dataset Sample Browser + Batch Curation (evolution track)
+Actor: `user`
+
+1. open `/datasets/:datasetId`
+2. switch item view mode (`grid` / `list`) based on current task
+3. apply fast filters (search, split, item status, queue status, class/tag/metadata hints)
+4. select multiple items from filtered results
+5. execute batch item operations (for example split/status/metadata updates) through one action bar
+6. verify resulting queue distribution (`needs_work` / `in_review` / `rejected` / `approved`)
+7. jump into annotation workspace with queue/item context preselected (and keep `version` context when launched from a dataset snapshot)
+8. open training jobs or inference validation from a dataset-version action with preserved query context (`/training/jobs?dataset=<id>&version=<id>`, `/inference/validate?dataset=<id>&version=<id>`)
 
 ## 5. Flow D: Annotation Workflow (Phase 2 minimum, implementing now)
 Actor: `user` (annotator), `user/admin` (reviewer by capability)
@@ -112,7 +129,7 @@ Minimum actions:
 Current phase target:
 1. open `/datasets/:datasetId`
 2. review annotation summary and jump into a focused queue (`needs_work`, `in_review`, `rejected`, `approved`)
-3. open `/datasets/:datasetId/annotate`
+3. open `/datasets/:datasetId/annotate` (optional `?version=<dataset_version_id>` keeps snapshot context during review)
 4. select dataset item directly or restore one from queue deep link
 5. edit OCR/detection payload
 6. save as `in_progress`/`annotated`
@@ -120,6 +137,15 @@ Current phase target:
 8. review as `approved` or `rejected`
 9. once an item enters `in_review`, annotation payload becomes read-only in the upsert path; only the review endpoint may move it to `approved`/`rejected`
 10. when rejected, reviewer must provide `review_reason_code`; latest review reason/comment remain visible during rework until next review, and moving the item back to `in_progress` should keep the same item open inside the `needs_work` queue before any further edits
+
+## 5.1 Flow D1: Single-Sample Review Workbench (evolution track)
+Actor: `user` (annotator/reviewer by capability)
+
+1. open one dataset item from queue/browser
+2. inspect sample preview, current annotation payload, metadata, and latest review context in one screen
+3. compare annotation with prediction overlays when available
+4. update annotation or review decision without leaving the workbench context
+5. move to next queue item with keyboard/buttons while preserving queue focus
 
 ## 6. Flow E: Training Job Workflow (Phase 1 skeleton, Phase 3 runtime)
 Actor: `user`
@@ -140,6 +166,8 @@ Actor: `user`
    - `evaluating`
    - `completed` (or `failed` / `cancelled`)
 5. view logs and metrics in `/training/jobs/:jobId`
+6. from job detail, operators can jump to scoped inference validation and scoped jobs list with the same dataset/version context
+7. when opening job detail from a scoped jobs list, query scope should stay preserved across navigation (`dataset`, `version`)
 6. training detail also exposes scheduler decision history (latest snapshot plus prior reschedule/failover/fallback entries) for auditability
 
 ## 7. Flow F: Model Version Registration
@@ -160,6 +188,8 @@ Actor: `user`
 6. inspect visualized predictions + raw output + normalized output
 7. if failure sample, click feedback action to send sample to a dataset with matching task type
 8. system records `feedback_dataset_id`, ensures a dataset-scoped attachment exists in target dataset, and upserts a traceable dataset item for next-round annotation/training
+9. validation side actions can jump directly to scoped dataset detail, annotation queue, and training jobs while preserving dataset/version context
+10. annotation quick link additionally carries `meta=<run_id>` so annotation workspace can prefilter feedback samples for the selected inference run
 
 ## 9. Closed Business Loop 1: OCR Fine-tune
 1. create OCR dataset
@@ -180,6 +210,11 @@ Actor: `user`
 6. register model version
 7. validate inference
 8. feedback errors to dataset
+
+## 10.1 Version-Centric Loop Guardrail (all task types)
+1. dataset curation and review changes are committed before version snapshot creation
+2. training/export/evaluation paths are launched from explicit dataset-version snapshots
+3. inference feedback returns samples into dataset curation queues for the next version cycle
 
 ## 11. Flow H: Deployment Verification Governance
 Actor: `admin`
@@ -244,3 +279,5 @@ Actor: `admin` (control plane operator), `worker operator`
 - secondary sidebar blocks should collapse when density becomes distracting
 - all pages use consistent empty/loading/error/success state blocks
 - style and interaction semantics stay consistent across modules
+- visual-data-loop enhancements should prioritize IA and operational throughput over feature bloat, while preserving chat-first product identity
+- reference planning baseline: `docs/visual-data-loop-evolution.md`

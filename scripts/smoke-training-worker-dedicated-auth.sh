@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
+source "${ROOT_DIR}/scripts/lib/smoke-training-worker-common.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-training-worker-dedicated-auth] jq is required."
@@ -13,20 +14,14 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-pick_port() {
-  python3 - <<'PY'
-import socket
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-}
-
 API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-$(pick_port)}"
+API_PORT="${API_PORT:-$(smoke_pick_port)}"
 BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
+START_API="${START_API:-true}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-mock-pass-admin}"
+WORKER_PUBLIC_HOST="${WORKER_PUBLIC_HOST:-127.0.0.1}"
+WORKER_BIND_HOST="${WORKER_BIND_HOST:-127.0.0.1}"
 
 COOKIE_FILE="$(mktemp)"
 API_LOG="$(mktemp)"
@@ -114,13 +109,13 @@ create_and_claim_dedicated_worker() {
   local bootstrap_resp claim_resp claimed_endpoint
 
   CURRENT_WORKER_NAME="${worker_name}"
-  CURRENT_WORKER_ENDPOINT="http://127.0.0.1:${worker_port}"
+  CURRENT_WORKER_ENDPOINT="http://${WORKER_PUBLIC_HOST}:${worker_port}"
 
   bootstrap_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
     -H "Content-Type: application/json" \
     -H "X-CSRF-Token: ${csrf}" \
     -X POST "${BASE_URL}/api/admin/training-workers/bootstrap-sessions" \
-    -d "{\"deployment_mode\":\"script\",\"worker_profile\":\"yolo\",\"control_plane_base_url\":\"${BASE_URL}\",\"worker_name\":\"${worker_name}\",\"worker_public_host\":\"127.0.0.1\",\"worker_bind_port\":${worker_port},\"max_concurrency\":1}")"
+    -d "{\"deployment_mode\":\"script\",\"worker_profile\":\"yolo\",\"control_plane_base_url\":\"${BASE_URL}\",\"worker_name\":\"${worker_name}\",\"worker_public_host\":\"${WORKER_PUBLIC_HOST}\",\"worker_bind_port\":${worker_port},\"max_concurrency\":1}")"
   if [[ "$(echo "${bootstrap_resp}" | jq -r '.success // false')" != "true" ]]; then
     echo "[smoke-training-worker-dedicated-auth] failed to create bootstrap session."
     echo "${bootstrap_resp}"
@@ -162,10 +157,13 @@ start_worker_process() {
   worker_log="$(mktemp)"
   WORKER_LOGS+=("${worker_log}")
 
+  local worker_probe_url
+  worker_probe_url="http://127.0.0.1:${worker_port}/healthz"
+
   if [[ -n "${local_train_command}" ]]; then
     TRAINING_WORKER_AUTH_TOKEN="${CURRENT_WORKER_TOKEN}" \
     CONTROL_PLANE_BASE_URL="${BASE_URL}" \
-    WORKER_BIND_HOST=127.0.0.1 \
+    WORKER_BIND_HOST="${WORKER_BIND_HOST}" \
     WORKER_BIND_PORT="${worker_port}" \
     WORKER_ID="${CURRENT_WORKER_ID}" \
     WORKER_NAME="${CURRENT_WORKER_NAME}" \
@@ -180,7 +178,7 @@ start_worker_process() {
   else
     TRAINING_WORKER_AUTH_TOKEN="${CURRENT_WORKER_TOKEN}" \
     CONTROL_PLANE_BASE_URL="${BASE_URL}" \
-    WORKER_BIND_HOST=127.0.0.1 \
+    WORKER_BIND_HOST="${WORKER_BIND_HOST}" \
     WORKER_BIND_PORT="${worker_port}" \
     WORKER_ID="${CURRENT_WORKER_ID}" \
     WORKER_NAME="${CURRENT_WORKER_NAME}" \
@@ -194,7 +192,7 @@ start_worker_process() {
   fi
   WORKER_PIDS+=("$!")
 
-  if ! wait_for_url "${CURRENT_WORKER_ENDPOINT}/healthz" "worker API" 120 0.2; then
+  if ! wait_for_url "${worker_probe_url}" "worker API" 120 0.2; then
     cat "${worker_log}"
     exit 1
   fi
@@ -261,7 +259,7 @@ disable_worker() {
 run_reference_package_flow() {
   local csrf="$1"
   local worker_port="$2"
-  local create_job_resp job_id execution_target detail_resp job_status reference_log_count
+  local create_job_resp job_id execution_target detail_resp job_status reference_log_count inline_log_count
 
   create_and_claim_dedicated_worker "dedicated-reference-worker" "${worker_port}" "${csrf}"
   start_worker_process "${worker_port}" "${APP_DATA_DIR}/worker-runs-reference"
@@ -272,7 +270,7 @@ run_reference_package_flow() {
     -H "Content-Type: application/json" \
     -H "X-CSRF-Token: ${csrf}" \
     -X POST "${BASE_URL}/api/training/jobs" \
-    -d '{"name":"dedicated-reference-job","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"2","batch_size":"1"}}')"
+    -d "{\"name\":\"dedicated-reference-job\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${TRAINING_DATASET_ID}\",\"dataset_version_id\":\"${TRAINING_DATASET_VERSION_ID}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"2\",\"batch_size\":\"1\"}}")"
   job_id="$(echo "${create_job_resp}" | jq -r '.data.id // empty')"
   execution_target="$(echo "${create_job_resp}" | jq -r '.data.execution_target // empty')"
   if [[ -z "${job_id}" || "${execution_target}" != "worker" ]]; then
@@ -308,15 +306,24 @@ run_reference_package_flow() {
   fi
 
   reference_log_count="$(echo "${detail_resp}" | jq -r '[.data.logs[] | select(test("referenced dataset package|Downloaded referenced dataset package"))] | length')"
+  inline_log_count="$(echo "${detail_resp}" | jq -r '[.data.logs[] | select(test("inline dataset package"))] | length')"
   if [[ "${reference_log_count}" -le 0 ]]; then
-    echo "[smoke-training-worker-dedicated-auth] reference package logs not found."
-    echo "${detail_resp}"
-    exit 1
+    if [[ "${START_API}" == "true" || "${START_API}" == "1" ]]; then
+      echo "[smoke-training-worker-dedicated-auth] reference package logs not found in local API mode."
+      echo "${detail_resp}"
+      exit 1
+    fi
+    if [[ "${inline_log_count}" -le 0 ]]; then
+      echo "[smoke-training-worker-dedicated-auth] neither reference-package nor inline-package logs were found."
+      echo "${detail_resp}"
+      exit 1
+    fi
   fi
 
   echo "reference_worker_id=${CURRENT_WORKER_ID}"
   echo "reference_job_id=${job_id}"
   echo "reference_log_count=${reference_log_count}"
+  echo "reference_inline_log_count=${inline_log_count}"
 
   disable_worker "${CURRENT_WORKER_ID}" "${csrf}"
 }
@@ -335,7 +342,7 @@ run_cancel_flow() {
     -H "Content-Type: application/json" \
     -H "X-CSRF-Token: ${csrf}" \
     -X POST "${BASE_URL}/api/training/jobs" \
-    -d '{"name":"dedicated-cancel-job","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"3","batch_size":"1"}}')"
+    -d "{\"name\":\"dedicated-cancel-job\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${TRAINING_DATASET_ID}\",\"dataset_version_id\":\"${TRAINING_DATASET_VERSION_ID}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"3\",\"batch_size\":\"1\"}}")"
   job_id="$(echo "${create_job_resp}" | jq -r '.data.id // empty')"
   if [[ -z "${job_id}" ]]; then
     echo "[smoke-training-worker-dedicated-auth] failed to create cancel job."
@@ -389,7 +396,14 @@ run_cancel_flow() {
   echo "cancel_log_count=${cancel_log_count}"
 }
 
-start_api
+if [[ "${START_API}" == "true" || "${START_API}" == "1" ]]; then
+  start_api
+else
+  if ! wait_for_url "${BASE_URL}/api/health" "API" 180 0.2; then
+    echo "[smoke-training-worker-dedicated-auth] API is unreachable at ${BASE_URL}"
+    exit 1
+  fi
+fi
 login_admin
 CSRF_TOKEN="$(csrf_token)"
 if [[ -z "${CSRF_TOKEN}" ]]; then
@@ -397,8 +411,10 @@ if [[ -z "${CSRF_TOKEN}" ]]; then
   exit 1
 fi
 
-REFERENCE_PORT="$(pick_port)"
-CANCEL_PORT="$(pick_port)"
+resolve_detection_training_target "${BASE_URL}" "${COOKIE_FILE}" "smoke-training-worker-dedicated-auth"
+
+REFERENCE_PORT="$(smoke_pick_port)"
+CANCEL_PORT="$(smoke_pick_port)"
 
 REFERENCE_OUTPUT="$(run_reference_package_flow "${CSRF_TOKEN}" "${REFERENCE_PORT}")"
 CANCEL_OUTPUT="$(run_cancel_flow "${CSRF_TOKEN}" "${CANCEL_PORT}")"
@@ -406,3 +422,5 @@ CANCEL_OUTPUT="$(run_cancel_flow "${CSRF_TOKEN}" "${CANCEL_PORT}")"
 echo "[smoke-training-worker-dedicated-auth] PASS"
 echo "${REFERENCE_OUTPUT}"
 echo "${CANCEL_OUTPUT}"
+echo "training_dataset_id=${TRAINING_DATASET_ID}"
+echo "training_dataset_version_id=${TRAINING_DATASET_VERSION_ID}"

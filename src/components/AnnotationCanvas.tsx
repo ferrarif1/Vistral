@@ -16,6 +16,7 @@ export interface AnnotationBox {
 interface AnnotationCanvasProps {
   title: string;
   filename: string;
+  imageUrl?: string | null;
   boxes: AnnotationBox[];
   onChange: (boxes: AnnotationBox[]) => void;
   disabled?: boolean;
@@ -72,6 +73,7 @@ const MIN_BOX_SIZE = 8;
 export default function AnnotationCanvas({
   title,
   filename,
+  imageUrl = null,
   boxes,
   onChange,
   disabled,
@@ -82,11 +84,17 @@ export default function AnnotationCanvas({
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [interaction, setInteraction] = useState<InteractionState | null>(null);
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
 
   const selectedBox = useMemo(
     () => boxes.find((item) => item.id === selectedBoxId) ?? null,
     [boxes, selectedBoxId]
   );
+  const showImage = Boolean(imageUrl) && !imageLoadFailed;
+
+  useEffect(() => {
+    setImageLoadFailed(false);
+  }, [imageUrl]);
 
   const eventToPoint = (event: MouseEvent<HTMLDivElement>): Point | null => {
     return pointFromClient(event.clientX, event.clientY);
@@ -360,7 +368,16 @@ export default function AnnotationCanvas({
         onMouseUp={finishDraw}
         onMouseLeave={finishDraw}
       >
-        <div className="annotation-canvas-bg">
+        {showImage ? (
+          <img
+            src={imageUrl ?? undefined}
+            alt={filename}
+            className="annotation-canvas-image"
+            onError={() => setImageLoadFailed(true)}
+          />
+        ) : null}
+
+        <div className={`annotation-canvas-bg${showImage ? ' hidden' : ''}`}>
           <strong>{filename}</strong>
         </div>
 

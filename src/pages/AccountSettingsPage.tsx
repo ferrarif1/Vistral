@@ -15,17 +15,9 @@ import {
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const accountDirectoryBatchSize = 40;
-
-const formatTimestamp = (iso: string): string => {
-  const value = Date.parse(iso);
-  if (Number.isNaN(value)) {
-    return iso;
-  }
-
-  return new Date(value).toLocaleString();
-};
 
 export default function AccountSettingsPage() {
   const { t, roleLabel } = useI18n();
@@ -513,16 +505,26 @@ export default function AccountSettingsPage() {
                 <Panel as="li" className="workspace-record-item compact" tone="soft">
                   <div className="row between gap wrap">
                     <strong>{currentUser?.username ?? t('guest')}</strong>
-                    <Badge tone={currentUser?.role ? roleTone(currentUser.role) : 'neutral'}>
-                      {currentUser ? roleLabel(currentUser.role) : t('guest')}
-                    </Badge>
+                    <div className="workspace-record-actions">
+                      <Badge tone={currentUser?.role ? roleTone(currentUser.role) : 'neutral'}>
+                        {currentUser ? roleLabel(currentUser.role) : t('guest')}
+                      </Badge>
+                      {currentUser ? (
+                        <StatusTag status={currentUser.status}>
+                          {t('Status')}: {t(currentUser.status)}
+                        </StatusTag>
+                      ) : null}
+                    </div>
                   </div>
                   <small className="muted">
-                    {t('Created')}: {currentUser ? formatTimestamp(currentUser.created_at) : '-'}
+                    {t('Created')}: {currentUser ? formatCompactTimestamp(currentUser.created_at) : '-'} ·{' '}
+                    {t('Last updated')}: {currentUser ? formatCompactTimestamp(currentUser.updated_at) : '-'}
                   </small>
-                  <small className="muted">
-                    {t('Last updated')}: {currentUser ? formatTimestamp(currentUser.updated_at) : '-'}
-                  </small>
+                  {currentUser ? (
+                    <small className="muted">
+                      {t('Last login')}: {currentUser.last_login_at ? formatCompactTimestamp(currentUser.last_login_at) : t('Never')}
+                    </small>
+                  ) : null}
                 </Panel>
               </ul>
             </Card>
@@ -667,11 +669,14 @@ export default function AccountSettingsPage() {
                       <div className="workspace-record-summary stack tight">
                         <strong>{user.username}</strong>
                         <small className="muted">
-                          {t('Created')}: {formatTimestamp(user.created_at)}
+                          {t('Created')}: {formatCompactTimestamp(user.created_at)}
                         </small>
                       </div>
                       <div className="workspace-record-actions">
                         <Badge tone={roleTone(user.role)}>{roleLabel(user.role)}</Badge>
+                        <StatusTag status={user.status}>
+                          {t('Status')}: {t(user.status)}
+                        </StatusTag>
                       </div>
                     </div>
                     <div className="row gap wrap">
@@ -681,16 +686,11 @@ export default function AccountSettingsPage() {
                       <Badge tone={roleTone(user.role)}>
                         {t('Role')}: {roleLabel(user.role)}
                       </Badge>
-                      <StatusTag status={user.status}>
-                        {t('Status')}: {t(user.status)}
-                      </StatusTag>
-                      <Badge tone="neutral">
-                        {t('Last updated')}: {formatTimestamp(user.updated_at)}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('Last login')}: {user.last_login_at ? formatTimestamp(user.last_login_at) : t('Never')}
-                      </Badge>
                     </div>
+                    <small className="muted">
+                      {t('Last updated')}: {formatCompactTimestamp(user.updated_at)} · {t('Last login')}:{' '}
+                      {user.last_login_at ? formatCompactTimestamp(user.last_login_at) : t('Never')}
+                    </small>
                     {user.status === 'disabled' && user.status_reason ? (
                       <small className="muted">
                         {t('Disable reason')}: {user.status_reason}

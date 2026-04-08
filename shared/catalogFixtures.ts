@@ -10,6 +10,12 @@ const retiredSeedModelNames = new Set(['Factory PPE Checker']);
 
 const modelFixtureNamePatterns = [
   /^conversation-smoke-model-\d+$/i,
+  /^analyze further:\s*模型草稿已创建：.+$/i,
+  /^testmodels?\s*类型：ocr$/i,
+  /^对话烟测模型$/i,
+  /^doctr-phase2-smoke-model$/i,
+  /^doctr-runtime-success-model$/i,
+  /^ocr-closure-(?:doctr|paddle)-model$/i,
   /^real-(?:yolo|doctr)-model-\d+$/i,
   /^verify-model-[\w-]+$/i
 ];
@@ -17,6 +23,14 @@ const modelFixtureNamePatterns = [
 const datasetFixtureNamePatterns = [
   /^conversation-smoke-dataset-\d+$/i,
   /^attachment-smoke-dataset$/i,
+  /^conversation-training-target-\d+$/i,
+  /^coverage gate smoke$/i,
+  /^feedback-(?:ocr|detection)-target-\d+$/i,
+  /^ocr-closure-\d+$/i,
+  /^verify-feedback-reuse-\d{14}$/i,
+  /^version mismatch smoke$/i,
+  /^segmentation smoke$/i,
+  /^对话烟测数据集$/i,
   /^real-det-\d+$/i,
   /^roundtrip-/i,
   /^persist-check-ds$/i,
@@ -26,12 +40,20 @@ const datasetFixtureNamePatterns = [
 
 const trainingJobFixtureNamePatterns = [
   /^conversation-smoke-job-\d+$/i,
+  /^doctr-smoke-job$/i,
+  /^doctr-runtime-success$/i,
+  /^ocr-closure-(?:doctr|paddle)$/i,
   /^real-(?:yolo|doctr)-job-\d+$/i,
   /^local-command-yolo$/i,
   /^restart-resume-yolo$/i
 ];
 
-const modelVersionFixtureNamePatterns = [/^real-(?:yolo|doctr)-v\d+$/i];
+const modelVersionFixtureNamePatterns = [
+  /^doctr-smoke-v\d+$/i,
+  /^doctr-runtime-v\d+$/i,
+  /^ocr-closure-(?:doctr|paddle)-v\d+$/i,
+  /^real-(?:yolo|doctr)-v\d+$/i
+];
 
 const attachmentFixtureNamePatterns = [
   /^conversation-smoke\./i,

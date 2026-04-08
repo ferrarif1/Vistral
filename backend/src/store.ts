@@ -981,7 +981,7 @@ const sanitizeAppStatePayload = (
     }
 
     if (attachment.attached_to_type === 'Model') {
-      return !attachment.attached_to_id || keptModelIds.has(attachment.attached_to_id);
+      return Boolean(attachment.attached_to_id && keptModelIds.has(attachment.attached_to_id));
     }
 
     if (attachment.attached_to_type === 'Dataset') {

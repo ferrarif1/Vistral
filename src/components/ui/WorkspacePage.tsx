@@ -40,6 +40,18 @@ interface WorkspaceSectionHeaderProps extends Omit<HTMLAttributes<HTMLDivElement
   actions?: ReactNode;
 }
 
+interface WorkspaceContextBarProps extends HTMLAttributes<HTMLElement> {
+  leading?: ReactNode;
+  trailing?: ReactNode;
+  summary?: ReactNode;
+}
+
+interface WorkspaceWorkbenchProps extends HTMLAttributes<HTMLElement> {
+  toolbar?: ReactNode;
+  main: ReactNode;
+  side?: ReactNode;
+}
+
 const joinClasses = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(' ');
 
@@ -151,6 +163,42 @@ export function WorkspaceSectionHeader({
       </div>
       {actions}
     </div>
+  );
+}
+
+export function WorkspaceContextBar({
+  className,
+  leading,
+  trailing,
+  summary,
+  ...props
+}: WorkspaceContextBarProps) {
+  return (
+    <section className={joinClasses('workspace-context-bar', className)} {...props}>
+      <div className="workspace-context-bar-row">
+        <div className="workspace-context-leading">{leading}</div>
+        {trailing ? <div className="workspace-context-trailing">{trailing}</div> : null}
+      </div>
+      {summary ? <div className="workspace-context-summary">{summary}</div> : null}
+    </section>
+  );
+}
+
+export function WorkspaceWorkbench({
+  className,
+  toolbar,
+  main,
+  side,
+  ...props
+}: WorkspaceWorkbenchProps) {
+  return (
+    <section className={joinClasses('workspace-workbench', className)} {...props}>
+      {toolbar ? <div className="workspace-workbench-toolbar">{toolbar}</div> : null}
+      <div className="workspace-workbench-grid">
+        <div className="workspace-workbench-main">{main}</div>
+        {side ? <aside className="workspace-workbench-side">{side}</aside> : null}
+      </div>
+    </section>
   );
 }
 

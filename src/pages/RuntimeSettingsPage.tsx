@@ -29,6 +29,7 @@ import {
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const FRAMEWORKS: ModelFramework[] = ['paddleocr', 'doctr', 'yolo'];
 const recentMetricJobsPerFramework = 2;
@@ -192,15 +193,15 @@ const summarizeFrameworkMetricKeys = (
       jobsWithMetrics += 1;
       keys.forEach((metricKey) => metricKeys.add(metricKey));
       if (!latestJobLabel) {
-        latestJobLabel = job.name.trim() || job.id;
+        latestJobLabel = job.name.trim() || null;
       }
       if (!latestGeneratedAt) {
         latestGeneratedAt = artifactSummary?.generated_at ?? job.updated_at;
       }
     });
 
-    if (!latestJobLabel && frameworkJobs[0]) {
-      latestJobLabel = frameworkJobs[0].name.trim() || frameworkJobs[0].id;
+    if (!latestJobLabel && frameworkJobs[0]?.name.trim()) {
+      latestJobLabel = frameworkJobs[0].name.trim();
     }
     if (!latestGeneratedAt && frameworkJobs[0]) {
       latestGeneratedAt = frameworkJobs[0].updated_at;
@@ -346,6 +347,7 @@ export default function RuntimeSettingsPage() {
   const [activeBootstrapSessionId, setActiveBootstrapSessionId] = useState<string | null>(null);
   const [inferenceSourceSummary, setInferenceSourceSummary] = useState<Array<{ key: string; count: number }>>([]);
   const [trainingModeSummary, setTrainingModeSummary] = useState<Array<{ key: string; count: number }>>([]);
+  const [trainingJobLabels, setTrainingJobLabels] = useState<Record<string, string>>({});
   const [frameworkMetricKeySummary, setFrameworkMetricKeySummary] = useState<FrameworkMetricKeySummary[]>(
     () => buildEmptyFrameworkMetricKeySummary()
   );
@@ -439,6 +441,11 @@ export default function RuntimeSettingsPage() {
         const mode = job.execution_mode || 'unknown';
         modeCounter.set(mode, (modeCounter.get(mode) ?? 0) + 1);
       });
+      setTrainingJobLabels(
+        Object.fromEntries(
+          jobs.map((job) => [job.id, job.name.trim()])
+        )
+      );
 
       setInferenceSourceSummary(
         Array.from(sourceCounter.entries())
@@ -734,28 +741,14 @@ export default function RuntimeSettingsPage() {
   };
 
   const formatTimestamp = (value: string | null) => {
-    if (!value) {
-      return t('n/a');
-    }
-
-    const parsed = Date.parse(value);
-    if (Number.isNaN(parsed)) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(new Date(parsed));
+    return formatCompactTimestamp(value, t('n/a'));
   };
 
   const heroSection = (
     <WorkspaceHero
-      eyebrow={t('Runtime Control Plane')}
+      eyebrow={t('Runtime overview')}
       title={t('Runtime Settings')}
-      description={t('Keep framework diagnostics, execution summaries, and integration templates in one operational lane.')}
+      description={t('Check framework connections, worker availability, and recent execution signals from one place.')}
       actions={
         <div className="row gap wrap align-center">
           <StatusTag status={checking ? 'running' : 'ready'}>
@@ -832,7 +825,7 @@ export default function RuntimeSettingsPage() {
           },
           {
             title: t('Training metric retention'),
-            description: t('Metric retention visibility for recent training telemetry.'),
+            description: t('How much recent training telemetry is currently retained.'),
             value: summaryLoading ? t('Loading') : metricsRetentionSummary ? metricsRetentionSummary.current_total_rows : t('N/A')
           }
         ]}
@@ -844,9 +837,9 @@ export default function RuntimeSettingsPage() {
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
-                <h3>{t('Framework diagnostics')}</h3>
+                <h3>{t('Framework connections')}</h3>
                 <small className="muted">
-                  {t('Review live runtime bridge state for each framework and keep configuration gaps obvious.')}
+                  {t('Review whether each framework is reachable and whether setup is complete.')}
                 </small>
               </div>
             </div>
@@ -1000,7 +993,7 @@ export default function RuntimeSettingsPage() {
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
-                <h3>{t('Runtime controls')}</h3>
+                <h3>{t('Quick Actions')}</h3>
                 <small className="muted">
                   {t('Filter the diagnostics surface and rerun selected checks without leaving the page.')}
                 </small>
@@ -1055,9 +1048,9 @@ export default function RuntimeSettingsPage() {
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
-                <h3>{t('Worker onboarding')}</h3>
+                <h3>{t('Worker setup')}</h3>
                 <small className="muted">
-                  {t('Generate one-time pairing commands, then finish worker setup from the local /setup page.')}
+                  {t('Create one-time setup sessions and help operators finish worker connection locally.')}
                 </small>
               </div>
               <Badge tone="info">{t('Pending')}: {pendingBootstrapCount}</Badge>
@@ -1121,10 +1114,8 @@ export default function RuntimeSettingsPage() {
                       <Badge tone="neutral">{t(session.worker_profile)}</Badge>
                       <Badge tone="neutral">{t(session.deployment_mode)}</Badge>
                       <Badge tone="info">{t('token')}: {session.token_preview}</Badge>
+                      {session.linked_worker_id ? <Badge tone="success">{t('linked worker')}</Badge> : null}
                     </div>
-                    <small className="muted">
-                      {t('worker id')}: {session.worker_id}
-                    </small>
                     <small className="muted">
                       {t('setup url')}: {session.setup_url_hint}
                     </small>
@@ -1208,9 +1199,9 @@ export default function RuntimeSettingsPage() {
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
-                <h3>{t('Worker scheduler observability')}</h3>
+                <h3>{t('Worker availability')}</h3>
                 <small className="muted">
-                  {t('Inspect worker score composition and recent dispatch health before launching new jobs.')}
+                  {t('Review worker capacity, health, and readiness before sending new jobs.')}
                 </small>
               </div>
               <div className="row gap wrap align-center">
@@ -1349,8 +1340,8 @@ export default function RuntimeSettingsPage() {
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
-                <h3>{t('Execution watch')}</h3>
-                <small className="muted">{t('Recent inference and training execution signals stay visible here.')}</small>
+                <h3>{t('Recent activity')}</h3>
+                <small className="muted">{t('Recent inference and training summaries stay visible here.')}</small>
               </div>
             </div>
             {summaryLoading ? (
@@ -1481,7 +1472,7 @@ export default function RuntimeSettingsPage() {
                           <div className="row gap wrap">
                             {metricsRetentionSummary.top_jobs.map((item) => (
                               <Badge key={item.training_job_id} tone="info">
-                                {item.training_job_id}: {item.rows}
+                                {trainingJobLabels[item.training_job_id] || t('Recent training job')}: {item.rows}
                               </Badge>
                             ))}
                           </div>
@@ -1708,7 +1699,6 @@ export default function RuntimeSettingsPage() {
                 <div className="row gap wrap">
                   <Badge tone="neutral">{t(activeBootstrapSession.worker_profile)}</Badge>
                   <Badge tone="neutral">{t(activeBootstrapSession.deployment_mode)}</Badge>
-                  <Badge tone="info">{t('worker id')}: {activeBootstrapSession.worker_id}</Badge>
                   <Badge tone="neutral">{t('bind port')}: {activeBootstrapSession.worker_bind_port}</Badge>
                   <Badge tone="warning">
                     {t('issued auth mode')}: {t(activeBootstrapSession.issued_auth_mode)}
@@ -1722,9 +1712,7 @@ export default function RuntimeSettingsPage() {
                     </Badge>
                   ) : null}
                   {activeBootstrapSession.linked_worker_id ? (
-                    <Badge tone="success">
-                      {t('linked worker')}: {activeBootstrapSession.linked_worker_id}
-                    </Badge>
+                    <Badge tone="success">{t('linked worker')}</Badge>
                   ) : null}
                 </div>
                 <small className="muted">
@@ -1964,7 +1952,6 @@ export default function RuntimeSettingsPage() {
           {editingWorker ? (
             <Card as="section">
               <div className="row gap wrap align-center">
-                <Badge tone="info">{t('worker id')}: {editingWorker.id}</Badge>
                 <Badge tone="neutral">{t(editingWorker.registration_source)}</Badge>
                 <Badge tone="neutral">{t(editingWorker.auth_mode)}</Badge>
               </div>

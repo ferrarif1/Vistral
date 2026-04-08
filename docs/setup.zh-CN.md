@@ -93,6 +93,11 @@ npm run smoke:verify-report-retention-e2e
 - `EXPECTED_TRAINING_DATASET_VERSION_ID`
 - `AUTO_PREPARE_TRAINING_TARGET`（默认 `true`）
 
+worker 调度/派发/取消/故障转移/引用包/dedicated-auth smoke 可用环境变量：
+- `EXPECTED_TRAINING_DATASET_ID`
+- `EXPECTED_TRAINING_DATASET_VERSION_ID`
+  - 未显式传入时，脚本会自动选择一个可用 detection 数据集及可训练版本（`split_summary.train > 0` 且 `annotation_coverage > 0`）
+
 `smoke:inference-feedback-guard` 可用环境变量：
 - `EXPECTED_VALID_FEEDBACK_DATASET_ID`
 - `EXPECTED_OCR_FEEDBACK_DATASET_ID`
@@ -128,8 +133,9 @@ npm run smoke:verify-report-retention-e2e
 - 占位符示例：`{{repo_root}}`、`{{job_id}}`、`{{dataset_id}}`、`{{task_type}}`、`{{metrics_path}}`、`{{output_path}}`
 
 `docker:verify:full` 会在 `.data/verify-reports/` 生成验收报告。
-并会校验账号治理、对话侧真实创建动作、Phase2 标注复审与训练发起门禁（含 `dataset_version_id` 必须归属所选 `dataset_id`）、数据集导入导出 roundtrip（detection/ocr/segmentation），以及 YOLO/PaddleOCR/docTR real closure。
+并会校验账号治理、对话侧真实创建动作、Phase2 标注复审与训练发起门禁（含 `dataset_version_id` 必须归属所选 `dataset_id`）、数据集导入导出 roundtrip（detection/ocr/segmentation）、dedicated training-worker auth 分发/取消链路，以及 YOLO/PaddleOCR/docTR real closure。
 默认以 non-strict 模式执行 OCR 闭环（`OCR_CLOSURE_STRICT_LOCAL_COMMAND=false`），便于部署环境在本地命令不可用时容忍 simulated fallback。
+若部署环境无法解析 `host.docker.internal`，请在执行全链路验收前设置 `DEDICATED_AUTH_WORKER_PUBLIC_HOST`（必要时同时设置 `DEDICATED_AUTH_WORKER_BIND_HOST`）。
 
 如需 strict OCR 闭环校验，可执行：
 - `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run smoke:ocr-closure`

@@ -97,6 +97,11 @@ Relationships:
 - has many `ModelVersion`
 - has many `ApprovalRequest`
 
+Rules:
+- curated foundation/base catalog models are protected records and cannot be deleted by the admin cleanup endpoint
+- admin deletion is only allowed when no `ModelVersion` or `Conversation` still references the target model
+- successful admin deletion also removes model-scoped `FileAttachment` records and related `ApprovalRequest` records, with audit logging
+
 ### 4.3 Conversation
 Attributes:
 - `id` (PK)

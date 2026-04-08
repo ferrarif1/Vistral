@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import type {
+  AnnotationReviewReasonCode,
   AnnotationWithReview,
   DatasetItemRecord,
   DatasetRecord,
@@ -9,9 +10,11 @@ import type {
 } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
+import BulkActionBar from '../components/datasets/BulkActionBar';
+import DatasetItemBrowser from '../components/datasets/DatasetItemBrowser';
+import DatasetVersionRail from '../components/datasets/DatasetVersionRail';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
-import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Input, Select, Textarea } from '../components/ui/Field';
@@ -25,6 +28,8 @@ import {
 } from '../components/ui/WorkspacePage';
 import {
   filterItemsByAnnotationQueue,
+  getItemAnnotationStatus,
+  matchesAnnotationQueue,
   getAnnotationByItemId,
   summarizeAnnotationQueues,
   type AnnotationQueueFilter
@@ -32,6 +37,7 @@ import {
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const metadataToText = (metadata: Record<string, string>): string =>
   Object.entries(metadata)
@@ -56,10 +62,26 @@ const parseMetadataText = (source: string): Record<string, string> =>
       .filter(([key]) => key.length > 0)
   );
 
+const reviewReasonFilterOptions: AnnotationReviewReasonCode[] = [
+  'box_mismatch',
+  'label_error',
+  'text_error',
+  'missing_object',
+  'polygon_issue',
+  'other'
+];
+
 const buildAnnotationWorkspacePath = (
   datasetId: string,
   queue: AnnotationQueueFilter,
-  itemId?: string
+  itemId?: string,
+  options?: {
+    versionId?: string;
+    searchText?: string;
+    splitFilter?: 'all' | 'train' | 'val' | 'test' | 'unassigned';
+    itemStatusFilter?: 'all' | 'uploading' | 'processing' | 'ready' | 'error';
+    metadataFilter?: string;
+  }
 ): string => {
   const searchParams = new URLSearchParams();
   if (queue !== 'all') {
@@ -68,8 +90,49 @@ const buildAnnotationWorkspacePath = (
   if (itemId) {
     searchParams.set('item', itemId);
   }
+  const normalizedVersionId = options?.versionId?.trim() ?? '';
+  if (normalizedVersionId) {
+    searchParams.set('version', normalizedVersionId);
+  }
+  const normalizedSearchText = options?.searchText?.trim() ?? '';
+  if (normalizedSearchText) {
+    searchParams.set('q', normalizedSearchText);
+  }
+  if (options?.splitFilter && options.splitFilter !== 'all') {
+    searchParams.set('split', options.splitFilter);
+  }
+  if (options?.itemStatusFilter && options.itemStatusFilter !== 'all') {
+    searchParams.set('item_status', options.itemStatusFilter);
+  }
+  const normalizedMetadataFilter = options?.metadataFilter?.trim() ?? '';
+  if (normalizedMetadataFilter) {
+    searchParams.set('meta', normalizedMetadataFilter);
+  }
   const query = searchParams.toString();
   return query ? `/datasets/${datasetId}/annotate?${query}` : `/datasets/${datasetId}/annotate`;
+};
+
+const buildTrainingJobCreatePath = (datasetId: string, versionId: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  searchParams.set('version', versionId);
+  return `/training/jobs/new?${searchParams.toString()}`;
+};
+
+const buildTrainingJobsPath = (datasetId: string, versionId: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  searchParams.set('version', versionId);
+  return `/training/jobs?${searchParams.toString()}`;
+};
+
+const buildInferenceValidationPath = (datasetId: string, versionId?: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId) {
+    searchParams.set('version', versionId);
+  }
+  return `/inference/validate?${searchParams.toString()}`;
 };
 
 const backgroundRefreshIntervalMs = 5000;
@@ -81,6 +144,28 @@ type DatasetDetailSnapshot = {
   items: DatasetItemRecord[];
   versions: DatasetVersionRecord[];
   annotations: AnnotationWithReview[];
+};
+type ReviewReasonFilter = AnnotationReviewReasonCode | 'all';
+type SavedSampleView = {
+  id: string;
+  name: string;
+  searchText: string;
+  splitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
+  statusFilter: 'all' | 'uploading' | 'processing' | 'ready' | 'error';
+  queueFilter: AnnotationQueueFilter;
+  reviewReasonFilter: ReviewReasonFilter;
+  metadataFilter: string;
+  viewMode: 'list' | 'grid';
+};
+type ErrorPatternSlice = {
+  id: string;
+  label: string;
+  description: string;
+  count: number;
+  queueFilter: AnnotationQueueFilter;
+  splitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
+  reviewReasonFilter: ReviewReasonFilter;
+  metadataFilter: string;
 };
 
 const buildDatasetDetailSignature = (detail: {
@@ -102,6 +187,7 @@ export default function DatasetDetailPage() {
   const { t } = useI18n();
   const steps = useMemo(() => [t('Upload'), t('Split'), t('Version')], [t]);
   const { datasetId } = useParams<{ datasetId: string }>();
+  const [searchParams] = useSearchParams();
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
@@ -122,6 +208,21 @@ export default function DatasetDetailPage() {
   const [itemSplit, setItemSplit] = useState<'train' | 'val' | 'test' | 'unassigned'>('unassigned');
   const [itemStatus, setItemStatus] = useState<'uploading' | 'processing' | 'ready' | 'error'>('ready');
   const [itemMetadataText, setItemMetadataText] = useState('');
+  const [sampleSearchText, setSampleSearchText] = useState('');
+  const [sampleSplitFilter, setSampleSplitFilter] = useState<'all' | 'train' | 'val' | 'test' | 'unassigned'>('all');
+  const [sampleStatusFilter, setSampleStatusFilter] = useState<'all' | 'uploading' | 'processing' | 'ready' | 'error'>('all');
+  const [sampleQueueFilter, setSampleQueueFilter] = useState<AnnotationQueueFilter>('all');
+  const [sampleReviewReasonFilter, setSampleReviewReasonFilter] = useState<ReviewReasonFilter>('all');
+  const [sampleMetadataFilter, setSampleMetadataFilter] = useState('');
+  const [sampleViewMode, setSampleViewMode] = useState<'list' | 'grid'>('list');
+  const [savedSampleViews, setSavedSampleViews] = useState<SavedSampleView[]>([]);
+  const [selectedSavedSampleViewId, setSelectedSavedSampleViewId] = useState('');
+  const [savedSampleViewNameDraft, setSavedSampleViewNameDraft] = useState('');
+  const [selectedSampleItemIds, setSelectedSampleItemIds] = useState<string[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState('');
+  const [batchSplit, setBatchSplit] = useState<'keep' | 'train' | 'val' | 'test' | 'unassigned'>('keep');
+  const [batchStatus, setBatchStatus] = useState<'keep' | 'uploading' | 'processing' | 'ready' | 'error'>('keep');
+  const [batchTagsText, setBatchTagsText] = useState('');
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -129,6 +230,8 @@ export default function DatasetDetailPage() {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const detailSignatureRef = useRef('');
+  const preferredVersionId = (searchParams.get('version') ?? '').trim();
+  const sampleViewStorageKey = datasetId ? `vistral:dataset:${datasetId}:sample-views` : '';
 
   const applyDetailSnapshot = useCallback((snapshot: DatasetDetailSnapshot) => {
     const nextSignature = buildDatasetDetailSignature(snapshot);
@@ -193,6 +296,51 @@ export default function DatasetDetailPage() {
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
   }, [datasetId, loadDetail]);
 
+  useEffect(() => {
+    if (!sampleViewStorageKey) {
+      setSavedSampleViews([]);
+      setSelectedSavedSampleViewId('');
+      setSavedSampleViewNameDraft('');
+      return;
+    }
+
+    try {
+      const raw = localStorage.getItem(sampleViewStorageKey);
+      if (!raw) {
+        setSavedSampleViews([]);
+        setSelectedSavedSampleViewId('');
+        setSavedSampleViewNameDraft('');
+        return;
+      }
+      const parsed = JSON.parse(raw) as SavedSampleView[];
+      if (!Array.isArray(parsed)) {
+        setSavedSampleViews([]);
+        return;
+      }
+      const normalized = parsed
+        .filter((item) => typeof item?.id === 'string' && typeof item?.name === 'string')
+        .map((item) => ({
+          ...item,
+          reviewReasonFilter: item.reviewReasonFilter ?? 'all'
+        }))
+        .slice(0, 20);
+      setSavedSampleViews(normalized);
+      setSelectedSavedSampleViewId('');
+      setSavedSampleViewNameDraft('');
+    } catch {
+      setSavedSampleViews([]);
+      setSelectedSavedSampleViewId('');
+      setSavedSampleViewNameDraft('');
+    }
+  }, [sampleViewStorageKey]);
+
+  useEffect(() => {
+    if (!sampleViewStorageKey) {
+      return;
+    }
+    localStorage.setItem(sampleViewStorageKey, JSON.stringify(savedSampleViews));
+  }, [sampleViewStorageKey, savedSampleViews]);
+
   const readyCount = useMemo(
     () => attachments.filter((attachment) => attachment.status === 'ready').length,
     [attachments]
@@ -208,34 +356,134 @@ export default function DatasetDetailPage() {
     () => new Map(attachments.map((attachment) => [attachment.id, attachment])),
     [attachments]
   );
+  const resolveItemFilename = useCallback(
+    (item: DatasetItemRecord) => attachmentById.get(item.attachment_id)?.filename ?? t('Attached file unavailable'),
+    [attachmentById, t]
+  );
   const annotationByItemId = useMemo(() => getAnnotationByItemId(annotations), [annotations]);
   const annotationSummary = useMemo(
     () => summarizeAnnotationQueues(items, annotations),
     [annotations, items]
   );
-  const formatTimestamp = (value: string | null) => {
-    if (!value) {
-      return t('n/a');
-    }
-
-    const parsed = Date.parse(value);
-    if (Number.isNaN(parsed)) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(new Date(parsed));
-  };
   const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
   const selectedItem = useMemo(
     () => items.find((item) => item.id === selectedItemId) ?? null,
     [items, selectedItemId]
   );
-  const shouldVirtualizeItemList = items.length > 10;
+  const selectedVersion = useMemo(
+    () => versions.find((version) => version.id === selectedVersionId) ?? null,
+    [selectedVersionId, versions]
+  );
+  const selectedVersionHasTrainSplit = (selectedVersion?.split_summary.train ?? 0) > 0;
+  const selectedVersionHasCoverage = (selectedVersion?.annotation_coverage ?? 0) > 0;
+  const selectedVersionLaunchReady = Boolean(
+    dataset?.status === 'ready' &&
+      selectedVersion &&
+      selectedVersionHasTrainSplit &&
+      selectedVersionHasCoverage
+  );
+  const preferredReviewQueueForSelectedVersion = useMemo(() => {
+    if (annotationSummary.needs_work > 0) {
+      return 'needs_work' as const;
+    }
+    if (annotationSummary.rejected > 0) {
+      return 'rejected' as const;
+    }
+    if (annotationSummary.in_review > 0) {
+      return 'in_review' as const;
+    }
+    return 'approved' as const;
+  }, [annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected]);
+  const filteredSampleItems = useMemo(() => {
+    const normalizedSearch = sampleSearchText.trim().toLowerCase();
+    const normalizedMetadataFilter = sampleMetadataFilter.trim().toLowerCase();
+    return items.filter((item) => {
+      if (sampleSplitFilter !== 'all' && item.split !== sampleSplitFilter) {
+        return false;
+      }
+
+      if (sampleStatusFilter !== 'all' && item.status !== sampleStatusFilter) {
+        return false;
+      }
+
+      const annotationStatus = getItemAnnotationStatus(item.id, annotationByItemId);
+      if (!matchesAnnotationQueue(annotationStatus, sampleQueueFilter)) {
+        return false;
+      }
+      if (sampleReviewReasonFilter !== 'all') {
+        const latestReview = annotationByItemId.get(item.id)?.latest_review;
+        if (!latestReview || latestReview.review_reason_code !== sampleReviewReasonFilter) {
+          return false;
+        }
+      }
+
+      if (normalizedSearch) {
+        const filename = resolveItemFilename(item).toLowerCase();
+        if (!filename.includes(normalizedSearch)) {
+          return false;
+        }
+      }
+
+      if (normalizedMetadataFilter) {
+        const metadataEntries = Object.entries(item.metadata);
+        if (metadataEntries.length === 0) {
+          return false;
+        }
+
+        const hasMetadataHit = metadataEntries.some(([key, value]) => {
+          const normalizedKey = key.toLowerCase();
+          const normalizedValue = String(value).toLowerCase();
+          return (
+            normalizedKey.includes(normalizedMetadataFilter) ||
+            normalizedValue.includes(normalizedMetadataFilter)
+          );
+        });
+
+        if (!hasMetadataHit) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [
+    annotationByItemId,
+    items,
+    resolveItemFilename,
+    sampleMetadataFilter,
+    sampleQueueFilter,
+    sampleReviewReasonFilter,
+    sampleSearchText,
+    sampleSplitFilter,
+    sampleStatusFilter
+  ]);
+  const selectedSampleItemIdSet = useMemo(
+    () => new Set(selectedSampleItemIds),
+    [selectedSampleItemIds]
+  );
+  const allFilteredItemsSelected =
+    filteredSampleItems.length > 0 &&
+    filteredSampleItems.every((item) => selectedSampleItemIdSet.has(item.id));
+  const resolveItemPreviewUrl = useCallback(
+    (item: DatasetItemRecord): string | null => {
+      const attachmentId = item.attachment_id?.trim();
+      if (!attachmentId || item.status !== 'ready') {
+        return null;
+      }
+
+      const attachment = attachmentById.get(attachmentId);
+      if (attachment && attachment.status !== 'ready') {
+        return null;
+      }
+
+      return api.attachmentContentUrl(attachmentId);
+    },
+    [attachmentById]
+  );
+  const resolveAnnotationStatus = useCallback(
+    (itemId: string): string => getItemAnnotationStatus(itemId, annotationByItemId),
+    [annotationByItemId]
+  );
   const queuePreviewEntries = useMemo(
     () => {
       const needsWorkItems = filterItemsByAnnotationQueue(items, annotations, 'needs_work');
@@ -289,12 +537,208 @@ export default function DatasetDetailPage() {
     for (const queue of queuePriority) {
       const entry = queuePreviewEntries.find((item) => item.key === queue);
       if (entry && entry.count > 0) {
-        return buildAnnotationWorkspacePath(datasetId, queue, entry.firstItemId);
+        return buildAnnotationWorkspacePath(datasetId, queue, entry.firstItemId, {
+          versionId: selectedVersionId
+        });
       }
     }
 
-    return buildAnnotationWorkspacePath(datasetId, 'all');
-  }, [datasetId, queuePreviewEntries]);
+    return buildAnnotationWorkspacePath(datasetId, 'all', undefined, {
+      versionId: selectedVersionId
+    });
+  }, [datasetId, queuePreviewEntries, selectedVersionId]);
+  const annotationWorkspaceFromSampleBrowserPath = useMemo(() => {
+    if (!datasetId) {
+      return '';
+    }
+
+    const nextItemId = selectedSampleItemIds[0] ?? filteredSampleItems[0]?.id ?? '';
+    return buildAnnotationWorkspacePath(datasetId, sampleQueueFilter, nextItemId, {
+      versionId: selectedVersionId,
+      searchText: sampleSearchText,
+      splitFilter: sampleSplitFilter,
+      itemStatusFilter: sampleStatusFilter,
+      metadataFilter: sampleMetadataFilter
+    });
+  }, [
+    datasetId,
+    filteredSampleItems,
+    sampleMetadataFilter,
+    sampleQueueFilter,
+    sampleSearchText,
+    sampleSplitFilter,
+    sampleStatusFilter,
+    selectedVersionId,
+    selectedSampleItemIds
+  ]);
+  const errorPatternSlices = useMemo<ErrorPatternSlice[]>(() => {
+    const slices: ErrorPatternSlice[] = [];
+    const rejectedReasonCounts = new Map<AnnotationReviewReasonCode, number>();
+
+    for (const annotation of annotations) {
+      const latestReview = annotation.latest_review;
+      if (!latestReview || latestReview.status !== 'rejected' || !latestReview.review_reason_code) {
+        continue;
+      }
+      const reasonCode = latestReview.review_reason_code;
+      rejectedReasonCounts.set(reasonCode, (rejectedReasonCounts.get(reasonCode) ?? 0) + 1);
+    }
+
+    for (const reasonCode of reviewReasonFilterOptions) {
+      const count = rejectedReasonCounts.get(reasonCode) ?? 0;
+      if (count <= 0) {
+        continue;
+      }
+      slices.push({
+        id: `rejected-${reasonCode}`,
+        label: t('Rejected · {reason}', { reason: t(reasonCode) }),
+        description: t('Rejected samples grouped by latest review reason.'),
+        count,
+        queueFilter: 'rejected',
+        splitFilter: 'all',
+        reviewReasonFilter: reasonCode,
+        metadataFilter: ''
+      });
+    }
+
+    const lowConfidenceTagCount = items.filter((item) =>
+      Object.keys(item.metadata).some((key) => key.toLowerCase() === 'tag:low_confidence')
+    ).length;
+    if (lowConfidenceTagCount > 0) {
+      slices.push({
+        id: 'low-confidence-tag',
+        label: t('Tag · low_confidence'),
+        description: t('Samples already marked as low-confidence in metadata tags.'),
+        count: lowConfidenceTagCount,
+        queueFilter: 'all',
+        splitFilter: 'all',
+        reviewReasonFilter: 'all',
+        metadataFilter: 'tag:low_confidence'
+      });
+    }
+
+    const feedbackReturnCount = items.filter((item) => {
+      const value = item.metadata.inference_run_id;
+      return typeof value === 'string' && value.trim().length > 0;
+    }).length;
+    if (feedbackReturnCount > 0) {
+      slices.push({
+        id: 'feedback-return',
+        label: t('Feedback Return Samples'),
+        description: t('Samples returned from inference validation feedback loops.'),
+        count: feedbackReturnCount,
+        queueFilter: 'needs_work',
+        splitFilter: 'all',
+        reviewReasonFilter: 'all',
+        metadataFilter: 'inference_run_id'
+      });
+    }
+
+    const unassignedReadyCount = items.filter(
+      (item) => item.split === 'unassigned' && item.status === 'ready'
+    ).length;
+    if (unassignedReadyCount > 0) {
+      slices.push({
+        id: 'unassigned-ready',
+        label: t('Ready but Unassigned'),
+        description: t('Ready samples still waiting for train/val/test assignment.'),
+        count: unassignedReadyCount,
+        queueFilter: 'all',
+        splitFilter: 'unassigned',
+        reviewReasonFilter: 'all',
+        metadataFilter: ''
+      });
+    }
+
+    return slices.sort((left, right) => right.count - left.count).slice(0, 6);
+  }, [annotations, items, t]);
+  const applyErrorPatternSlice = useCallback(
+    (slice: ErrorPatternSlice) => {
+      setSampleSearchText('');
+      setSampleSplitFilter(slice.splitFilter);
+      setSampleStatusFilter('all');
+      setSampleQueueFilter(slice.queueFilter);
+      setSampleReviewReasonFilter(slice.reviewReasonFilter);
+      setSampleMetadataFilter(slice.metadataFilter);
+      setSelectedSampleItemIds([]);
+      setFeedback({
+        variant: 'success',
+        text: t('Sample browser focused on pattern: {pattern}', { pattern: slice.label })
+      });
+    },
+    [t]
+  );
+  const applySavedSampleView = useCallback(
+    (viewId: string) => {
+      setSelectedSavedSampleViewId(viewId);
+      if (!viewId) {
+        setSavedSampleViewNameDraft('');
+        return;
+      }
+      const target = savedSampleViews.find((view) => view.id === viewId);
+      if (!target) {
+        return;
+      }
+
+      setSavedSampleViewNameDraft(target.name);
+      setSampleSearchText(target.searchText);
+      setSampleSplitFilter(target.splitFilter);
+      setSampleStatusFilter(target.statusFilter);
+      setSampleQueueFilter(target.queueFilter);
+      setSampleReviewReasonFilter(target.reviewReasonFilter ?? 'all');
+      setSampleMetadataFilter(target.metadataFilter);
+      setSampleViewMode(target.viewMode);
+      setSelectedSampleItemIds([]);
+    },
+    [savedSampleViews]
+  );
+  const saveCurrentSampleView = useCallback(() => {
+    const normalizedName = savedSampleViewNameDraft.trim() || t('View');
+    const nextId =
+      selectedSavedSampleViewId ||
+      `view-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const nextView: SavedSampleView = {
+      id: nextId,
+      name: normalizedName,
+      searchText: sampleSearchText,
+      splitFilter: sampleSplitFilter,
+      statusFilter: sampleStatusFilter,
+      queueFilter: sampleQueueFilter,
+      reviewReasonFilter: sampleReviewReasonFilter,
+      metadataFilter: sampleMetadataFilter,
+      viewMode: sampleViewMode
+    };
+
+    setSavedSampleViews((previous) => {
+      const withoutTarget = previous.filter((item) => item.id !== nextId);
+      return [nextView, ...withoutTarget].slice(0, 20);
+    });
+    setSelectedSavedSampleViewId(nextId);
+    setSavedSampleViewNameDraft(normalizedName);
+    setFeedback({ variant: 'success', text: t('Saved current filter view.') });
+  }, [
+    sampleMetadataFilter,
+    sampleQueueFilter,
+    sampleReviewReasonFilter,
+    sampleSearchText,
+    sampleSplitFilter,
+    sampleStatusFilter,
+    sampleViewMode,
+    savedSampleViewNameDraft,
+    selectedSavedSampleViewId,
+    t
+  ]);
+  const deleteSavedSampleView = useCallback(() => {
+    if (!selectedSavedSampleViewId) {
+      return;
+    }
+    setSavedSampleViews((previous) =>
+      previous.filter((view) => view.id !== selectedSavedSampleViewId)
+    );
+    setSelectedSavedSampleViewId('');
+    setSavedSampleViewNameDraft('');
+    setFeedback({ variant: 'success', text: t('Saved view removed.') });
+  }, [selectedSavedSampleViewId, t]);
 
   useBackgroundPolling(
     () => {
@@ -343,6 +787,39 @@ export default function DatasetDetailPage() {
     setItemStatus(first.status);
     setItemMetadataText(metadataToText(first.metadata));
   }, [items, selectedItemId]);
+
+  useEffect(() => {
+    setSelectedSampleItemIds((previous) => {
+      if (previous.length === 0) {
+        return previous;
+      }
+
+      const validItemIdSet = new Set(items.map((item) => item.id));
+      const next = previous.filter((itemId) => validItemIdSet.has(itemId));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [items]);
+
+  useEffect(() => {
+    if (versions.length === 0) {
+      if (selectedVersionId) {
+        setSelectedVersionId('');
+      }
+      return;
+    }
+
+    if (preferredVersionId && versions.some((version) => version.id === preferredVersionId)) {
+      if (selectedVersionId !== preferredVersionId) {
+        setSelectedVersionId(preferredVersionId);
+      }
+      return;
+    }
+
+    const exists = versions.some((version) => version.id === selectedVersionId);
+    if (!exists) {
+      setSelectedVersionId(versions[0].id);
+    }
+  }, [preferredVersionId, selectedVersionId, versions]);
 
   const uploadDatasetFile = async (filename: string) => {
     if (!datasetId) {
@@ -574,7 +1051,7 @@ export default function DatasetDetailPage() {
     setBusy(true);
     setFeedback(null);
     try {
-      const created = await api.createDatasetItem(datasetId, {
+      await api.createDatasetItem(datasetId, {
         filename: normalizedFilename,
         split: referenceSplit,
         status: referenceStatus,
@@ -583,7 +1060,7 @@ export default function DatasetDetailPage() {
       await loadDetail('manual');
       setFeedback({
         variant: 'success',
-        text: t('Reference item {itemId} created.', { itemId: created.id })
+        text: t('Reference item created. Review it in the item list below.')
       });
       setReferenceFilename('');
     } catch (error) {
@@ -610,7 +1087,7 @@ export default function DatasetDetailPage() {
     setBusy(true);
     setFeedback(null);
     try {
-      const updated = await api.updateDatasetItem(datasetId, selectedItemId, {
+      await api.updateDatasetItem(datasetId, selectedItemId, {
         split: itemSplit,
         status: itemStatus,
         metadata
@@ -618,7 +1095,7 @@ export default function DatasetDetailPage() {
       await loadDetail('manual');
       setFeedback({
         variant: 'success',
-        text: t('Item {itemId} updated.', { itemId: updated.id })
+        text: t('Item updated. The latest dataset detail is now refreshed.')
       });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -627,6 +1104,121 @@ export default function DatasetDetailPage() {
     }
   };
 
+  const toggleSampleItemSelection = useCallback((itemId: string) => {
+    setSelectedSampleItemIds((previous) => {
+      if (previous.includes(itemId)) {
+        return previous.filter((id) => id !== itemId);
+      }
+
+      return [...previous, itemId];
+    });
+  }, []);
+
+  const selectAllFilteredItems = useCallback(() => {
+    if (filteredSampleItems.length === 0) {
+      return;
+    }
+
+    setSelectedSampleItemIds(filteredSampleItems.map((item) => item.id));
+  }, [filteredSampleItems]);
+
+  const clearSelectedSampleItems = useCallback(() => {
+    setSelectedSampleItemIds([]);
+  }, []);
+
+  const applyBatchItemUpdates = useCallback(async () => {
+    if (!datasetId) {
+      return;
+    }
+
+    if (selectedSampleItemIds.length === 0) {
+      setFeedback({ variant: 'error', text: t('Select at least one sample item first.') });
+      return;
+    }
+
+    const normalizedTagList = batchTagsText
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (batchSplit === 'keep' && batchStatus === 'keep' && normalizedTagList.length === 0) {
+      setFeedback({
+        variant: 'error',
+        text: t('Choose at least one batch update option (split, status, or tags).')
+      });
+      return;
+    }
+
+    const itemById = new Map(items.map((item) => [item.id, item]));
+    const selectedItems = selectedSampleItemIds
+      .map((itemId) => itemById.get(itemId))
+      .filter((item): item is DatasetItemRecord => Boolean(item));
+
+    if (selectedItems.length === 0) {
+      setFeedback({ variant: 'error', text: t('Selected items are no longer available. Refresh and retry.') });
+      return;
+    }
+
+    const batchTagEntries: Record<string, string> = {};
+    for (const tag of normalizedTagList) {
+      batchTagEntries[`tag:${tag}`] = 'true';
+    }
+
+    setBusy(true);
+    setFeedback(null);
+    try {
+      let updatedCount = 0;
+      await Promise.all(
+        selectedItems.map(async (item) => {
+          const nextPayload: {
+            split?: 'train' | 'val' | 'test' | 'unassigned';
+            status?: 'uploading' | 'processing' | 'ready' | 'error';
+            metadata?: Record<string, string>;
+          } = {};
+
+          if (batchSplit !== 'keep' && item.split !== batchSplit) {
+            nextPayload.split = batchSplit;
+          }
+
+          if (batchStatus !== 'keep' && item.status !== batchStatus) {
+            nextPayload.status = batchStatus;
+          }
+
+          if (normalizedTagList.length > 0) {
+            nextPayload.metadata = {
+              ...item.metadata,
+              ...batchTagEntries
+            };
+          }
+
+          if (
+            typeof nextPayload.split === 'undefined' &&
+            typeof nextPayload.status === 'undefined' &&
+            typeof nextPayload.metadata === 'undefined'
+          ) {
+            return;
+          }
+
+          await api.updateDatasetItem(datasetId, item.id, nextPayload);
+          updatedCount += 1;
+        })
+      );
+
+      await loadDetail('manual');
+      setFeedback({
+        variant: 'success',
+        text: t('Batch update completed. Updated {count} items.', { count: updatedCount })
+      });
+      if (updatedCount > 0) {
+        setSelectedSampleItemIds([]);
+      }
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }, [batchSplit, batchStatus, batchTagsText, datasetId, items, loadDetail, selectedSampleItemIds, t]);
+
   const heroSection = (
     <WorkspaceHero
       eyebrow={t('Dataset Lane')}
@@ -634,7 +1226,7 @@ export default function DatasetDetailPage() {
       description={
         dataset
           ? `${dataset.name} · ${t(dataset.task_type)} · ${t(dataset.status)}`
-          : t('Inspect dataset files, annotation readiness, and version snapshots in one lane.')
+          : t('Inspect dataset files, annotation readiness, and version snapshots in one place.')
       }
       actions={
         dataset ? (
@@ -767,7 +1359,9 @@ export default function DatasetDetailPage() {
                       size="sm"
                       variant="secondary"
                       className="annotation-summary-action-link"
-                      to={buildAnnotationWorkspacePath(dataset.id, entry.key, entry.firstItemId)}
+                      to={buildAnnotationWorkspacePath(dataset.id, entry.key, entry.firstItemId, {
+                        versionId: selectedVersionId
+                      })}
                     >
                       {t('Open Queue')}
                     </ButtonLink>
@@ -777,7 +1371,7 @@ export default function DatasetDetailPage() {
                     <ul className="workspace-record-list compact">
                       {entry.items.map((item) => {
                         const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                        const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
+                        const itemFilename = resolveItemFilename(item);
                         return (
                           <Panel key={item.id} as="li" className="workspace-record-item compact" tone="soft">
                             <div className="row between gap wrap">
@@ -798,14 +1392,15 @@ export default function DatasetDetailPage() {
                                 ) : null}
                               </div>
                             ) : null}
-                            <small className="muted">{item.id}</small>
                             {itemAnnotation?.latest_review?.review_comment ? (
                               <small className="muted">{itemAnnotation.latest_review.review_comment}</small>
                             ) : null}
                             <ButtonLink
                               size="sm"
                               variant="ghost"
-                              to={buildAnnotationWorkspacePath(dataset.id, entry.key, item.id)}
+                              to={buildAnnotationWorkspacePath(dataset.id, entry.key, item.id, {
+                                versionId: selectedVersionId
+                              })}
                             >
                               {t('Open Item')}
                             </ButtonLink>
@@ -863,143 +1458,151 @@ export default function DatasetDetailPage() {
                 </Button>
               }
             />
-            <small className="muted">{t('Ready files: {count}', { count: readyCount })}</small>
+            <small className="muted">
+              {t('Ready files: {count}', { count: readyCount })} · {t('Filtered samples')}: {filteredSampleItems.length}
+            </small>
             {items.length === 0 ? (
               <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files to generate items.')} />
             ) : (
               <div className="stack">
-                <Panel as="section" className="stack tight" tone="soft">
-                  <h4>{t('Item Editor')}</h4>
-                  <label>
-                    {t('Selected Item')}
-                    <Select
-                      value={selectedItemId}
-                      onChange={(event) => {
-                        const nextId = event.target.value;
-                        const next = items.find((item) => item.id === nextId);
-                        if (!next) {
-                          return;
-                        }
-                        selectItemForEditing(next);
+                <DatasetItemBrowser
+                  t={t}
+                  busy={busy}
+                  filteredItems={filteredSampleItems}
+                  selectedItemIdSet={selectedSampleItemIdSet}
+                  allFilteredItemsSelected={allFilteredItemsSelected}
+                  selectedCount={selectedSampleItemIds.length}
+                  viewMode={sampleViewMode}
+                  searchText={sampleSearchText}
+                  splitFilter={sampleSplitFilter}
+                  statusFilter={sampleStatusFilter}
+                  queueFilter={sampleQueueFilter}
+                  reviewReasonFilter={sampleReviewReasonFilter}
+                  metadataFilter={sampleMetadataFilter}
+                  savedViewNameDraft={savedSampleViewNameDraft}
+                  selectedSavedViewId={selectedSavedSampleViewId}
+                  savedViews={savedSampleViews.map((view) => ({ id: view.id, name: view.name }))}
+                  openFilteredQueuePath={
+                    annotationWorkspaceFromSampleBrowserPath ||
+                    buildAnnotationWorkspacePath(dataset.id, sampleQueueFilter, undefined, {
+                      versionId: selectedVersionId
+                    })
+                  }
+                  batchActionBar={
+                    <BulkActionBar
+                      t={t}
+                      busy={busy}
+                      selectedCount={selectedSampleItemIds.length}
+                      batchSplit={batchSplit}
+                      batchStatus={batchStatus}
+                      batchTagsText={batchTagsText}
+                      onBatchSplitChange={setBatchSplit}
+                      onBatchStatusChange={setBatchStatus}
+                      onBatchTagsTextChange={setBatchTagsText}
+                      onApplyBatchUpdates={() => {
+                        void applyBatchItemUpdates();
                       }}
-                    >
-                      {items.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.id} · {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
-                        </option>
-                      ))}
-                    </Select>
-                  </label>
-                  <div className="three-col">
-                    <label>
-                      {t('Item Split')}
-                      <Select
-                        value={itemSplit}
-                        onChange={(event) =>
-                          setItemSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
-                        }
-                      >
-                        <option value="unassigned">{t('unassigned')}</option>
-                        <option value="train">{t('train')}</option>
-                        <option value="val">{t('val')}</option>
-                        <option value="test">{t('test')}</option>
-                      </Select>
-                    </label>
-                    <label>
-                      {t('Item Status')}
-                      <Select
-                        value={itemStatus}
-                        onChange={(event) =>
-                          setItemStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
-                        }
-                      >
-                        <option value="ready">{t('ready')}</option>
-                        <option value="processing">{t('processing')}</option>
-                        <option value="uploading">{t('uploading')}</option>
-                        <option value="error">{t('error')}</option>
-                      </Select>
-                    </label>
-                  </div>
-                  <label>
-                    {t('Metadata (key=value per line, optional)')}
-                    <Textarea
-                      value={itemMetadataText}
-                      onChange={(event) => setItemMetadataText(event.target.value)}
-                      placeholder={t('for example: source=import_reference')}
-                      rows={3}
                     />
-                  </label>
-                  <Button onClick={saveItemUpdates} disabled={busy || !selectedItemId}>
-                    {t('Save Item Updates')}
-                  </Button>
-                  <small className="muted">
-                    {selectedItem && Object.keys(selectedItem.metadata).length > 0
-                      ? t('Current metadata: {metadata}', { metadata: metadataToText(selectedItem.metadata) })
-                      : t('No metadata')}
-                  </small>
-                </Panel>
+                  }
+                  onSearchTextChange={setSampleSearchText}
+                  onSplitFilterChange={setSampleSplitFilter}
+                  onStatusFilterChange={setSampleStatusFilter}
+                  onQueueFilterChange={(value) => setSampleQueueFilter(value as AnnotationQueueFilter)}
+                  onReviewReasonFilterChange={setSampleReviewReasonFilter}
+                  onMetadataFilterChange={setSampleMetadataFilter}
+                  onSavedViewNameDraftChange={setSavedSampleViewNameDraft}
+                  onSelectedSavedViewChange={applySavedSampleView}
+                  onSaveCurrentView={saveCurrentSampleView}
+                  onDeleteSavedView={deleteSavedSampleView}
+                  onSelectAllFiltered={selectAllFilteredItems}
+                  onClearSelected={clearSelectedSampleItems}
+                  onViewModeChange={setSampleViewMode}
+                  onToggleSelection={toggleSampleItemSelection}
+                  onEditItem={selectItemForEditing}
+                  resolveItemFilename={resolveItemFilename}
+                  resolvePreviewUrl={resolveItemPreviewUrl}
+                  resolveAnnotationStatus={resolveAnnotationStatus}
+                />
 
-                {shouldVirtualizeItemList ? (
-                  <VirtualList
-                    items={items}
-                    itemHeight={96}
-                    height={420}
-                    ariaLabel={t('Dataset Items')}
-                    listClassName="workspace-record-list"
-                    itemKey={(item) => item.id}
-                    renderItem={(item) => (
-                      <div className="workspace-record-item virtualized">
-                        <div className="stack tight">
-                          <div className="row between gap wrap">
-                            <strong>{attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}</strong>
-                            <div className="row gap wrap">
-                              <Badge tone="neutral">{t(item.split)}</Badge>
-                              <StatusTag status={item.status}>{t(item.status)}</StatusTag>
-                            </div>
-                          </div>
-                          <small className="muted">{item.id}</small>
-                          <div className="row between gap wrap">
-                            <small className="muted">
-                              {Object.keys(item.metadata).length > 0
-                                ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
-                                : t('No metadata')}
-                            </small>
-                            <Button size="sm" variant="ghost" onClick={() => selectItemForEditing(item)} disabled={busy}>
-                              {t('Edit Item')}
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  />
-                ) : (
-                  <ul className="workspace-record-list">
-                    {items.map((item) => (
-                      <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
-                        <div className="stack tight">
-                          <div className="row between gap wrap">
-                            <strong>{attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}</strong>
-                            <div className="row gap wrap">
-                              <Badge tone="neutral">{t(item.split)}</Badge>
-                              <StatusTag status={item.status}>{t(item.status)}</StatusTag>
-                            </div>
-                          </div>
-                          <small className="muted">{item.id}</small>
-                          <div className="row between gap wrap">
-                            <small className="muted">
-                              {Object.keys(item.metadata).length > 0
-                                ? t('Metadata keys: {count}', { count: Object.keys(item.metadata).length })
-                                : t('No metadata')}
-                            </small>
-                            <Button size="sm" variant="ghost" onClick={() => selectItemForEditing(item)} disabled={busy}>
-                              {t('Edit Item')}
-                            </Button>
-                          </div>
-                        </div>
-                      </Panel>
-                    ))}
-                  </ul>
-                )}
+                <AdvancedSection
+                  title={t('Item Editor')}
+                  description={t('Collapsed by default for progressive disclosure.')}
+                >
+                  <Panel as="section" className="stack tight" tone="soft">
+                    <label>
+                      {t('Selected Item')}
+                      <Select
+                        value={selectedItemId}
+                        onChange={(event) => {
+                          const nextId = event.target.value;
+                          const next = items.find((item) => item.id === nextId);
+                          if (!next) {
+                            return;
+                          }
+                          selectItemForEditing(next);
+                        }}
+                      >
+                        {items.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {resolveItemFilename(item) + ' · ' + t(item.split)}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    {selectedItem ? (
+                      <small className="muted">
+                        {t('Current status')}: {t(selectedItem.status)}
+                      </small>
+                    ) : null}
+                    <div className="three-col">
+                      <label>
+                        {t('Item Split')}
+                        <Select
+                          value={itemSplit}
+                          onChange={(event) =>
+                            setItemSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
+                          }
+                        >
+                          <option value="unassigned">{t('unassigned')}</option>
+                          <option value="train">{t('train')}</option>
+                          <option value="val">{t('val')}</option>
+                          <option value="test">{t('test')}</option>
+                        </Select>
+                      </label>
+                      <label>
+                        {t('Item Status')}
+                        <Select
+                          value={itemStatus}
+                          onChange={(event) =>
+                            setItemStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
+                          }
+                        >
+                          <option value="ready">{t('ready')}</option>
+                          <option value="processing">{t('processing')}</option>
+                          <option value="uploading">{t('uploading')}</option>
+                          <option value="error">{t('error')}</option>
+                        </Select>
+                      </label>
+                    </div>
+                    <label>
+                      {t('Metadata (key=value per line, optional)')}
+                      <Textarea
+                        value={itemMetadataText}
+                        onChange={(event) => setItemMetadataText(event.target.value)}
+                        placeholder={t('for example: source=import_reference')}
+                        rows={3}
+                      />
+                    </label>
+                    <Button onClick={saveItemUpdates} disabled={busy || !selectedItemId}>
+                      {t('Save Item Updates')}
+                    </Button>
+                    <small className="muted">
+                      {selectedItem && Object.keys(selectedItem.metadata).length > 0
+                        ? t('Current metadata: {metadata}', { metadata: metadataToText(selectedItem.metadata) })
+                        : t('No metadata')}
+                    </small>
+                  </Panel>
+                </AdvancedSection>
               </div>
             )}
           </Card>
@@ -1007,6 +1610,65 @@ export default function DatasetDetailPage() {
         }
         side={
           <>
+          <Card as="section">
+            <WorkspaceSectionHeader
+              title={t('Current status')}
+              description={t('Inspect dataset files, annotation readiness, and version snapshots in one place.')}
+            />
+            <div className="row gap wrap">
+              <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
+              <Badge tone="neutral">{t('Task Type')}: {t(dataset.task_type)}</Badge>
+              <Badge tone="neutral">{t('Classes')}: {dataset.label_schema.classes.length}</Badge>
+              <Badge tone="info">{t('Ready files')}: {readyCount}</Badge>
+            </div>
+            <small className="muted">
+              {t('Last updated')}: {formatCompactTimestamp(dataset.updated_at, t('n/a'))}
+            </small>
+            {dataset.description ? <small className="muted">{dataset.description}</small> : null}
+          </Card>
+
+          <Card as="section">
+            <WorkspaceSectionHeader
+              title={t('Error Pattern Slices')}
+              description={t('Quickly focus sample browser and review queue by frequent failure patterns.')}
+            />
+            {errorPatternSlices.length === 0 ? (
+              <small className="muted">{t('No pattern slices detected yet. Keep annotating to accumulate signals.')}</small>
+            ) : (
+              <ul className="workspace-record-list compact">
+                {errorPatternSlices.map((slice) => (
+                  <Panel key={slice.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
+                    <div className="row between gap wrap align-center">
+                      <strong>{slice.label}</strong>
+                      <Badge tone={slice.count > 0 ? 'warning' : 'neutral'}>{slice.count}</Badge>
+                    </div>
+                    <small className="muted">{slice.description}</small>
+                    <div className="row gap wrap">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => applyErrorPatternSlice(slice)}
+                      >
+                        {t('Focus in browser')}
+                      </Button>
+                      <ButtonLink
+                        size="sm"
+                        variant="ghost"
+                        to={buildAnnotationWorkspacePath(dataset.id, slice.queueFilter, undefined, {
+                          versionId: selectedVersionId,
+                          metadataFilter: slice.metadataFilter
+                        })}
+                      >
+                        {t('Open queue')}
+                      </ButtonLink>
+                    </div>
+                  </Panel>
+                ))}
+              </ul>
+            )}
+          </Card>
+
           <Card as="section">
             <WorkspaceSectionHeader
               title={t('Step 2. Train/Val/Test Split')}
@@ -1077,7 +1739,7 @@ export default function DatasetDetailPage() {
                     .filter((attachment) => attachment.status === 'ready')
                     .map((attachment) => (
                       <option key={attachment.id} value={attachment.id}>
-                        {attachment.filename} ({attachment.id})
+                        {attachment.filename}
                       </option>
                     ))}
                 </Select>
@@ -1164,46 +1826,32 @@ export default function DatasetDetailPage() {
             </Card>
           </AdvancedSection>
 
-          <Card as="section">
-            <WorkspaceSectionHeader
-              title={t('Dataset Versions')}
-              actions={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    void refreshVersionSection();
-                  }}
-                  disabled={busy || sectionRefreshing === 'versions'}
-                >
-                  {sectionRefreshing === 'versions' ? t('Refreshing...') : t('Refresh')}
-                </Button>
-              }
-            />
-            {versions.length === 0 ? (
-              <StateBlock variant="empty" title={t('No Versions')} description={t('Create first version snapshot after split.')} />
-            ) : (
-              <ul className="workspace-record-list compact">
-                {versions.map((version) => (
-                  <Panel key={version.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
-                    <div className="row between gap wrap align-center">
-                      <strong>{version.version_name}</strong>
-                      <Badge tone="neutral">{formatTimestamp(version.created_at)}</Badge>
-                    </div>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">{t('Items')}: {version.item_count}</Badge>
-                      <Badge tone="info">{t('Coverage')}: {formatCoveragePercent(version.annotation_coverage)}</Badge>
-                      <Badge tone="neutral">
-                        {t('train')} {version.split_summary.train} / {t('val')} {version.split_summary.val} / {t('test')} {version.split_summary.test}
-                      </Badge>
-                    </div>
-                    <small className="muted">{version.id}</small>
-                  </Panel>
-                ))}
-              </ul>
-            )}
-          </Card>
+          <DatasetVersionRail
+            t={t}
+            dataset={dataset}
+            versions={versions}
+            selectedVersionId={selectedVersionId}
+            selectedVersion={selectedVersion}
+            selectedVersionLaunchReady={selectedVersionLaunchReady}
+            selectedVersionHasTrainSplit={selectedVersionHasTrainSplit}
+            selectedVersionHasCoverage={selectedVersionHasCoverage}
+            preferredReviewQueueForSelectedVersion={preferredReviewQueueForSelectedVersion}
+            busy={busy}
+            isRefreshing={sectionRefreshing === 'versions'}
+            onRefresh={() => {
+              void refreshVersionSection();
+            }}
+            onSelectVersion={setSelectedVersionId}
+            formatCoveragePercent={formatCoveragePercent}
+            buildTrainingPath={(versionId) => buildTrainingJobCreatePath(dataset.id, versionId)}
+            buildReviewPath={(versionId, queue) =>
+              buildAnnotationWorkspacePath(dataset.id, queue, undefined, {
+                versionId
+              })
+            }
+            buildJobsPath={(versionId) => buildTrainingJobsPath(dataset.id, versionId)}
+            buildInferencePath={(versionId) => buildInferenceValidationPath(dataset.id, versionId)}
+          />
           </>
         }
       />

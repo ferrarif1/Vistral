@@ -1,6 +1,7 @@
 .workspace-overview-page {
   gap: var(--space-5);
   min-width: 0;
+  min-height: 100%;
 }
 
 .workspace-overview-page > * {
@@ -121,6 +122,76 @@
 .workspace-overview-main > *,
 .workspace-overview-side > * {
   min-width: 0;
+}
+
+.workspace-context-bar {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-3);
+}
+
+.workspace-context-bar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.workspace-context-leading,
+.workspace-context-trailing,
+.workspace-context-summary {
+  min-width: 0;
+}
+
+.workspace-context-leading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.workspace-context-trailing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.workspace-workbench {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  min-height: clamp(520px, 72vh, 880px);
+}
+
+.workspace-workbench-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+}
+
+.workspace-workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+.workspace-workbench-main,
+.workspace-workbench-side {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
 }
 
 .workspace-section-header {
@@ -483,6 +554,10 @@
     grid-template-columns: 1fr;
   }
 
+  .workspace-workbench-grid {
+    grid-template-columns: 1fr;
+  }
+
   .workspace-overview-signal-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -513,6 +588,20 @@
   .workspace-overview-hero-grid,
   .workspace-overview-panel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-workbench {
+    min-height: unset;
+  }
+
+  .workspace-workbench-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-workbench-main,
+  .workspace-workbench-side {
+    overflow: visible;
+    padding-right: 0;
   }
 
   .workspace-overview-signal-grid {

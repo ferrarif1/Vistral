@@ -130,7 +130,7 @@ export default function CreateModelPage() {
       setStep(1);
       setFeedback({
         variant: 'success',
-        text: t('Draft {draftId} created. Continue with model file upload.', { draftId: created.id })
+        text: t('Draft created. Continue with model file upload.')
       });
       await refreshModelFiles();
     } catch (error) {
@@ -203,7 +203,7 @@ export default function CreateModelPage() {
     setFeedback(null);
 
     try {
-      const request = await api.submitApprovalRequest({
+      await api.submitApprovalRequest({
         model_id: draftModel.id,
         review_notes: t('Round-1 mock submission from create wizard.'),
         parameter_snapshot: {
@@ -216,9 +216,7 @@ export default function CreateModelPage() {
       setDraftModel({ ...draftModel, status: 'pending_approval' });
       setFeedback({
         variant: 'success',
-        text: t('Approval request {requestId} submitted. Model status is now pending_approval.', {
-          requestId: request.id
-        })
+        text: t('Approval request submitted. Model status is now pending approval.')
       });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -488,7 +486,9 @@ export default function CreateModelPage() {
                       <strong>{t('Visibility')}</strong>
                       <StatusTag status="info">{t(draftModel.visibility)}</StatusTag>
                     </div>
-                    <small className="muted">{draftModel.id}</small>
+                    <small className="muted">
+                      {t('Metadata ready')} · {t('Ready model files')}: {readyFileCount}
+                    </small>
                   </li>
                 </ul>
               ) : (

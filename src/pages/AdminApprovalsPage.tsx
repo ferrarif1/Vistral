@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ApprovalRequest, User } from '../../shared/domain';
+import type { ApprovalRequest, ModelRecord, User } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
@@ -13,6 +13,7 @@ import {
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const approvalsBatchSize = 30;
 
@@ -20,6 +21,8 @@ export default function AdminApprovalsPage() {
   const { t } = useI18n();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [items, setItems] = useState<ApprovalRequest[]>([]);
+  const [models, setModels] = useState<ModelRecord[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -36,9 +39,23 @@ export default function AdminApprovalsPage() {
     setError('');
 
     try {
-      const [user, approvals] = await Promise.all([api.me(), api.listApprovalRequests()]);
+      const user = await api.me();
       setCurrentUser(user);
+      if (user.role !== 'admin') {
+        setItems([]);
+        setModels([]);
+        setUsers([]);
+        return;
+      }
+
+      const [approvals, nextModels, nextUsers] = await Promise.all([
+        api.listApprovalRequests(),
+        api.listModels(),
+        api.listUsers()
+      ]);
       setItems(approvals);
+      setModels(nextModels);
+      setUsers(nextUsers);
     } catch (loadError) {
       setError((loadError as Error).message);
     } finally {
@@ -57,8 +74,19 @@ export default function AdminApprovalsPage() {
   }, []);
 
   const pendingItems = useMemo(
-    () => items.filter((item) => item.status === 'pending'),
+    () =>
+      items
+        .filter((item) => item.status === 'pending')
+        .sort((left, right) => Date.parse(left.requested_at) - Date.parse(right.requested_at)),
     [items]
+  );
+  const modelIndex = useMemo(
+    () => new Map(models.map((model) => [model.id, model])),
+    [models]
+  );
+  const userIndex = useMemo(
+    () => new Map(users.map((user) => [user.id, user])),
+    [users]
   );
   const visiblePendingItems = useMemo(
     () => pendingItems.slice(0, visiblePendingCount),
@@ -69,16 +97,7 @@ export default function AdminApprovalsPage() {
     () => new Set(pendingItems.map((item) => item.requested_by)).size,
     [pendingItems]
   );
-  const oldestPendingRequestedAt = useMemo(() => {
-    if (pendingItems.length === 0) {
-      return null;
-    }
-
-    const sortedPending = [...pendingItems].sort(
-      (left, right) => Date.parse(left.requested_at) - Date.parse(right.requested_at)
-    );
-    return sortedPending[0]?.requested_at ?? null;
-  }, [pendingItems]);
+  const oldestPendingRequestedAt = pendingItems[0]?.requested_at ?? null;
   const busy = actionLoading || refreshing || loading;
 
   useEffect(() => {
@@ -90,14 +109,18 @@ export default function AdminApprovalsPage() {
     );
   }, [pendingItems.length]);
 
-  const approve = async (approvalId: string) => {
+  const approve = async (item: ApprovalRequest) => {
     setActionLoading(true);
     setError('');
     setResult('');
 
     try {
-      await api.approveRequest(approvalId, t('Approved in admin queue page.'));
-      setResult(t('Approval {approvalId} approved.', { approvalId }));
+      await api.approveRequest(item.id, t('Approved in admin queue page.'));
+      setResult(
+        t('Approved request for {modelName}.', {
+          modelName: modelIndex.get(item.model_id)?.name ?? t('Unavailable model record')
+        })
+      );
       await load('manual');
     } catch (actionError) {
       setError((actionError as Error).message);
@@ -106,18 +129,22 @@ export default function AdminApprovalsPage() {
     }
   };
 
-  const reject = async (approvalId: string) => {
+  const reject = async (item: ApprovalRequest) => {
     setActionLoading(true);
     setError('');
     setResult('');
 
     try {
       await api.rejectRequest(
-        approvalId,
+        item.id,
         t('Mock quality review failed.'),
         t('Rejected in admin queue page.')
       );
-      setResult(t('Approval {approvalId} rejected.', { approvalId }));
+      setResult(
+        t('Rejected request for {modelName}.', {
+          modelName: modelIndex.get(item.model_id)?.name ?? t('Unavailable model record')
+        })
+      );
       await load('manual');
     } catch (actionError) {
       setError((actionError as Error).message);
@@ -132,22 +159,11 @@ export default function AdminApprovalsPage() {
       title={t('Admin Approval Queue')}
       description={t('Review and process pending model approval requests.')}
       stats={[
-        { label: t('Pending'), value: pendingItems.length },
+        { label: t('Pending requests'), value: pendingItems.length },
         { label: t('Active reviewer'), value: currentUser?.username ?? t('guest') }
       ]}
     />
   );
-
-  const formatTimestamp = (value: string | null) => {
-    if (!value) {
-      return t('n/a');
-    }
-    const parsed = Date.parse(value);
-    if (Number.isNaN(parsed)) {
-      return value;
-    }
-    return new Date(parsed).toLocaleString();
-  };
 
   if (loading) {
     return (
@@ -193,7 +209,7 @@ export default function AdminApprovalsPage() {
           {
             title: t('Oldest pending'),
             description: t('Oldest approval request currently waiting for action.'),
-            value: formatTimestamp(oldestPendingRequestedAt)
+            value: formatCompactTimestamp(oldestPendingRequestedAt, t('n/a'))
           }
         ]}
       />
@@ -230,37 +246,63 @@ export default function AdminApprovalsPage() {
             ) : (
               <>
                 <ul className="workspace-record-list">
-                  {visiblePendingItems.map((item) => (
-                    <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
-                      <div className="workspace-record-item-top">
-                        <div className="workspace-record-summary stack tight">
-                          <strong>{item.id}</strong>
-                          <small className="muted">
-                            {t('Requested at')}: {formatTimestamp(item.requested_at)}
-                          </small>
+                  {visiblePendingItems.map((item) => {
+                    const model = modelIndex.get(item.model_id);
+                    const requester = userIndex.get(item.requested_by);
+
+                    return (
+                      <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
+                        <div className="workspace-record-item-top">
+                          <div className="workspace-record-summary stack tight">
+                            <strong>{model?.name ?? t('Model request')}</strong>
+                            <small className="muted">
+                              {[
+                                model ? t(model.model_type) : null,
+                                model ? t(model.visibility) : null,
+                                `${t('Requested at')}: ${formatCompactTimestamp(item.requested_at, t('n/a'))}`
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </small>
+                          </div>
+                          <div className="workspace-record-actions">
+                            <StatusTag status="pending">{t('pending')}</StatusTag>
+                          </div>
+                        </div>
+                        <p className="line-clamp-2">
+                          {model?.description ??
+                            t('This request is waiting for an approval decision before the model can move forward.')}
+                        </p>
+                        <div className="row gap wrap">
+                          <Badge tone="info">
+                            {t('Requester')}: {requester?.username ?? t('Requester unavailable')}
+                          </Badge>
+                          {model ? (
+                            <Badge tone="neutral">
+                              {t('Model Type')}: {t(model.model_type)}
+                            </Badge>
+                          ) : null}
+                          {model ? (
+                            <Badge tone="neutral">
+                              {t('Visibility')}: {t(model.visibility)}
+                            </Badge>
+                          ) : (
+                            <Badge tone="neutral">
+                              {t('Model')}: {t('Unavailable model record')}
+                            </Badge>
+                          )}
                         </div>
                         <div className="workspace-record-actions">
-                          <StatusTag status="pending">{t('pending')}</StatusTag>
+                          <Button size="sm" disabled={busy} onClick={() => approve(item)}>
+                            {t('Approve')}
+                          </Button>
+                          <Button variant="danger" size="sm" disabled={busy} onClick={() => reject(item)}>
+                            {t('Reject')}
+                          </Button>
                         </div>
-                      </div>
-                      <div className="row gap wrap">
-                        <Badge tone="neutral">
-                          {t('Model')}: {item.model_id}
-                        </Badge>
-                        <Badge tone="info">
-                          {t('Requested by: {requestedBy}', { requestedBy: item.requested_by })}
-                        </Badge>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <Button size="sm" disabled={busy} onClick={() => approve(item.id)}>
-                          {t('Approve')}
-                        </Button>
-                        <Button variant="danger" size="sm" disabled={busy} onClick={() => reject(item.id)}>
-                          {t('Reject')}
-                        </Button>
-                      </div>
-                    </Panel>
-                  ))}
+                      </Panel>
+                    );
+                  })}
                 </ul>
 
                 {hiddenPendingCount > 0 ? (
@@ -292,11 +334,20 @@ export default function AdminApprovalsPage() {
                   {t('Approvals should include clear notes and rejections should stay actionable for follow-up.')}
                 </small>
               </div>
-              <StateBlock
-                variant="empty"
-                title={t('Queue policy')}
-                description={t('Prioritize older pending requests first to keep review latency predictable.')}
-              />
+              <ul className="workspace-record-list compact">
+                <Panel as="li" className="workspace-record-item compact" tone="soft">
+                  <strong>{t('Queue policy')}</strong>
+                  <small className="muted">
+                    {t('Prioritize older pending requests first to keep review latency predictable.')}
+                  </small>
+                </Panel>
+                <Panel as="li" className="workspace-record-item compact" tone="soft">
+                  <strong>{t('Review guidance')}</strong>
+                  <small className="muted">
+                    {t('Approvals should include clear notes and rejections should stay actionable for follow-up.')}
+                  </small>
+                </Panel>
+              </ul>
             </Card>
 
             <Card as="article">

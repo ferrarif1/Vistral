@@ -13,8 +13,8 @@ if [[ "${#TARGETS[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-PATTERN_ENTITY_ID='\\b(m|d|dv|mv|f|u|tj|c|ar)-[0-9]+\\b'
-PATTERN_REQUEST_PAYLOAD='"model_id"\\s*:\\s*"m-|"model_version_id"\\s*:\\s*"mv-|"dataset_id"\\s*:\\s*"d-|"dataset_version_id"\\s*:\\s*"dv-|"input_attachment_id"\\s*:\\s*"f-'
+PATTERN_ENTITY_ID='\b(m|d|dv|mv|f|u|tj|c|ar)-[0-9]+\b'
+PATTERN_REQUEST_PAYLOAD='"model_id"\s*:\s*"m-|"model_version_id"\s*:\s*"mv-|"dataset_id"\s*:\s*"d-|"dataset_version_id"\s*:\s*"dv-|"input_attachment_id"\s*:\s*"f-'
 
 entity_matches="$(rg -n "${PATTERN_ENTITY_ID}" "${TARGETS[@]}" || true)"
 payload_matches="$(rg -n "${PATTERN_REQUEST_PAYLOAD}" "${TARGETS[@]}" || true)"

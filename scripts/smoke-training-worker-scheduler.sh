@@ -3,17 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
+source "${ROOT_DIR}/scripts/lib/smoke-training-worker-common.sh"
 
 API_HOST="${API_HOST:-127.0.0.1}"
 if [[ -z "${API_PORT:-}" ]]; then
-  API_PORT="$(
-    python3 - <<'PY'
-import socket
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-  )"
+  API_PORT="$(smoke_pick_port)"
 fi
 BASE_URL="http://${API_HOST}:${API_PORT}"
 WORKER_TOKEN="${WORKER_TOKEN:-smoke-training-worker-token}"
@@ -89,6 +83,8 @@ if [[ -z "${csrf_token}" ]]; then
   exit 1
 fi
 
+resolve_detection_training_target "${BASE_URL}" "${COOKIE_FILE}" "smoke-training-worker-scheduler"
+
 create_worker_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
@@ -117,7 +113,7 @@ job_1_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d '{"name":"worker-scheduled-job","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"1","batch_size":"1"}}')"
+  -d "{\"name\":\"worker-scheduled-job\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${TRAINING_DATASET_ID}\",\"dataset_version_id\":\"${TRAINING_DATASET_VERSION_ID}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"1\",\"batch_size\":\"1\"}}")"
 job_1_target="$(echo "${job_1_resp}" | jq -r '.data.execution_target // empty')"
 job_1_worker_id="$(echo "${job_1_resp}" | jq -r '.data.scheduled_worker_id // empty')"
 if [[ "${job_1_target}" != "worker" || "${job_1_worker_id}" != "${worker_id}" ]]; then
@@ -142,7 +138,7 @@ job_2_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d '{"name":"fallback-local-job","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"1","batch_size":"1"}}')"
+  -d "{\"name\":\"fallback-local-job\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${TRAINING_DATASET_ID}\",\"dataset_version_id\":\"${TRAINING_DATASET_VERSION_ID}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"1\",\"batch_size\":\"1\"}}")"
 job_2_target="$(echo "${job_2_resp}" | jq -r '.data.execution_target // empty')"
 job_2_worker_id="$(echo "${job_2_resp}" | jq -r '.data.scheduled_worker_id // empty')"
 if [[ "${job_2_target}" != "control_plane" || -n "${job_2_worker_id}" ]]; then
@@ -155,3 +151,5 @@ echo "[smoke-training-worker-scheduler] PASS"
 echo "worker_id=${worker_id}"
 echo "job_1_target=${job_1_target}"
 echo "job_2_target=${job_2_target}"
+echo "training_dataset_id=${TRAINING_DATASET_ID}"
+echo "training_dataset_version_id=${TRAINING_DATASET_VERSION_ID}"

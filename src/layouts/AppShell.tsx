@@ -113,7 +113,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   );
   const isCompactViewport = useCompactViewport(960);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const isConversationWorkspace = location.pathname === '/workspace/chat';
+  const isImmersiveWorkspace = location.pathname === '/workspace/chat';
 
   const refreshUser = useCallback(() => {
     api.me().then(setCurrentUser).catch(() => setCurrentUser(null));
@@ -442,7 +442,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       : t('Collapse sidebar');
   const sidebarToggleToken = isCompactViewport ? (mobileSidebarOpen ? 'X' : '=') : isDesktopSidebarCollapsed ? '>' : '<';
 
-  if (isConversationWorkspace) {
+  if (isImmersiveWorkspace) {
     return <main className="chat-route-main">{children}</main>;
   }
 

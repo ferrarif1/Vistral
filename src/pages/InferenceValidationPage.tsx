@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type {
   DatasetRecord,
   FileAttachment,
@@ -10,7 +11,7 @@ import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { Badge } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
+import { Button, ButtonLink } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
@@ -23,6 +24,7 @@ import {
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const backgroundRefreshIntervalMs = 5000;
 const PredictionVisualizer = lazy(() => import('../components/PredictionVisualizer'));
@@ -42,8 +44,51 @@ const buildInferenceWorkspaceSignature = (payload: {
     runs: [...payload.runs].sort((left, right) => left.id.localeCompare(right.id))
   });
 
+const buildScopedDatasetDetailPath = (datasetId: string, versionId?: string): string => {
+  if (!versionId?.trim()) {
+    return `/datasets/${datasetId}`;
+  }
+
+  const searchParams = new URLSearchParams();
+  searchParams.set('version', versionId.trim());
+  return `/datasets/${datasetId}?${searchParams.toString()}`;
+};
+
+const buildScopedAnnotationPath = (
+  datasetId: string,
+  queue: 'all' | 'needs_work' | 'in_review' | 'rejected' | 'approved',
+  versionId?: string,
+  options?: {
+    metadataFilter?: string;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (queue !== 'all') {
+    searchParams.set('queue', queue);
+  }
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  const normalizedMetadataFilter = options?.metadataFilter?.trim() ?? '';
+  if (normalizedMetadataFilter) {
+    searchParams.set('meta', normalizedMetadataFilter);
+  }
+  const query = searchParams.toString();
+  return query ? `/datasets/${datasetId}/annotate?${query}` : `/datasets/${datasetId}/annotate`;
+};
+
+const buildScopedTrainingJobsPath = (datasetId: string, versionId?: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/training/jobs?${searchParams.toString()}`;
+};
+
 export default function InferenceValidationPage() {
   const { t } = useI18n();
+  const [searchParams] = useSearchParams();
   const steps = useMemo(() => [t('Input'), t('Run'), t('Feedback')], [t]);
   const [versions, setVersions] = useState<ModelVersionRecord[]>([]);
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
@@ -64,6 +109,9 @@ export default function InferenceValidationPage() {
   const [runtimeError, setRuntimeError] = useState('');
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeConnectivityRecord[]>([]);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const preferredVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredContextAppliedRef = useRef(false);
   const resourcesSignatureRef = useRef('');
 
   const loadAll = useCallback(async (mode: LoadMode) => {
@@ -91,16 +139,31 @@ export default function InferenceValidationPage() {
 
       if (resourcesSignatureRef.current !== nextSignature) {
         resourcesSignatureRef.current = nextSignature;
+        const preferredDataset =
+          preferredDatasetId && !preferredContextAppliedRef.current
+            ? datasetResult.find((dataset) => dataset.id === preferredDatasetId) ?? null
+            : null;
+        const preferredTaskType = preferredDataset?.task_type ?? null;
+        const preferredTaskVersion = preferredTaskType
+          ? versionResult.find((version) => version.task_type === preferredTaskType) ?? null
+          : null;
+        const requestedVersion =
+          preferredVersionId && versionResult.find((version) => version.id === preferredVersionId)
+            ? preferredVersionId
+            : '';
         setVersions(versionResult);
         setDatasets(datasetResult);
         setAttachments(attachmentResult);
         setRuns(runResult);
         setSelectedRunId((prev) => (prev && runResult.some((run) => run.id === prev) ? prev : runResult[0]?.id || ''));
         setSelectedVersionId((prev) =>
-          prev && versionResult.some((version) => version.id === prev) ? prev : versionResult[0]?.id || ''
+          requestedVersion ||
+          (preferredTaskVersion?.id ?? '') ||
+          (prev && versionResult.some((version) => version.id === prev) ? prev : versionResult[0]?.id || '')
         );
         setSelectedDatasetId((prev) =>
-          prev && datasetResult.some((dataset) => dataset.id === prev) ? prev : datasetResult[0]?.id || ''
+          (preferredDataset?.id ?? '') ||
+          (prev && datasetResult.some((dataset) => dataset.id === prev) ? prev : datasetResult[0]?.id || '')
         );
         setSelectedAttachmentId((prev) => {
           const readyAttachments = attachmentResult.filter((attachment) => attachment.status === 'ready');
@@ -108,6 +171,9 @@ export default function InferenceValidationPage() {
             ? prev
             : readyAttachments[0]?.id || '';
         });
+        if (preferredDataset || requestedVersion) {
+          preferredContextAppliedRef.current = true;
+        }
       }
     } finally {
       if (mode === 'initial') {
@@ -118,7 +184,7 @@ export default function InferenceValidationPage() {
         setRefreshing(false);
       }
     }
-  }, []);
+  }, [preferredDatasetId, preferredVersionId]);
 
   useEffect(() => {
     loadAll('initial')
@@ -130,12 +196,34 @@ export default function InferenceValidationPage() {
     () => versions.find((version) => version.id === selectedVersionId) ?? null,
     [versions, selectedVersionId]
   );
+  const versionsById = useMemo(() => new Map(versions.map((version) => [version.id, version])), [versions]);
+  const datasetsById = useMemo(() => new Map(datasets.map((dataset) => [dataset.id, dataset])), [datasets]);
+  const attachmentById = useMemo(
+    () => new Map(attachments.map((attachment) => [attachment.id, attachment])),
+    [attachments]
+  );
+  const selectedAttachment = useMemo(
+    () => attachments.find((attachment) => attachment.id === selectedAttachmentId) ?? null,
+    [attachments, selectedAttachmentId]
+  );
 
   const selectedRunSummary = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
     [runs, selectedRunId]
   );
+  const describeRun = useCallback(
+    (run: InferenceRunRecord) => versionsById.get(run.model_version_id)?.version_name ?? t('Recent run'),
+    [t, versionsById]
+  );
   const selectedRun = selectedRunDetail && selectedRunDetail.id === selectedRunId ? selectedRunDetail : selectedRunSummary;
+  const selectedRunVersion = useMemo(
+    () => (selectedRun ? versionsById.get(selectedRun.model_version_id) ?? null : null),
+    [selectedRun, versionsById]
+  );
+  const selectedRunInputAttachment = useMemo(
+    () => (selectedRun ? attachmentById.get(selectedRun.input_attachment_id) ?? null : null),
+    [attachmentById, selectedRun]
+  );
   const feedbackTaskType = useMemo(
     () => selectedRun?.task_type ?? selectedVersion?.task_type ?? null,
     [selectedRun?.task_type, selectedVersion?.task_type]
@@ -151,6 +239,33 @@ export default function InferenceValidationPage() {
     () => feedbackDatasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
     [feedbackDatasets, selectedDatasetId]
   );
+  const selectedDataset = useMemo(
+    () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
+    [datasets, selectedDatasetId]
+  );
+  const scopedDatasetId = selectedDataset?.id ?? preferredDatasetId;
+  const scopedVersionId = selectedVersion?.id ?? preferredVersionId;
+  const scopedTrainingJobsPath = scopedDatasetId
+    ? buildScopedTrainingJobsPath(scopedDatasetId, scopedVersionId)
+    : '/training/jobs';
+  const scopedDatasetDetailPath = scopedDatasetId
+    ? buildScopedDatasetDetailPath(scopedDatasetId, scopedVersionId)
+    : '/datasets';
+  const scopedAnnotationQueue = useMemo<'all' | 'needs_work' | 'in_review' | 'rejected' | 'approved'>(() => {
+    if (!selectedRun) {
+      return 'needs_work';
+    }
+    if (selectedRun.feedback_dataset_id) {
+      return 'needs_work';
+    }
+    return 'in_review';
+  }, [selectedRun]);
+  const scopedAnnotationPath = scopedDatasetId
+    ? buildScopedAnnotationPath(scopedDatasetId, scopedAnnotationQueue, scopedVersionId, {
+        metadataFilter: selectedRun?.id
+      })
+    : '/datasets';
+  const hasPrefilledContext = Boolean(preferredDatasetId || preferredVersionId);
   const selectedRunPreviewUrl = useMemo(() => {
     if (!selectedRun) {
       return null;
@@ -301,23 +416,6 @@ export default function InferenceValidationPage() {
     () => runtimeChecks.filter((item) => item.source === 'reachable').length,
     [runtimeChecks]
   );
-  const formatTimestamp = (value: string | null) => {
-    if (!value) {
-      return t('n/a');
-    }
-
-    const parsed = Date.parse(value);
-    if (Number.isNaN(parsed)) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(new Date(parsed));
-  };
 
   const loadRuntimeConnectivity = useCallback(async () => {
     setRuntimeLoading(true);
@@ -432,7 +530,7 @@ export default function InferenceValidationPage() {
 
       setFeedback({
         variant: 'success',
-        text: t('Inference run {runId} completed.', { runId: created.id })
+        text: t('Inference completed. The latest run is now selected below.')
       });
       await loadAll('manual');
       setSelectedRunId(created.id);
@@ -552,9 +650,30 @@ export default function InferenceValidationPage() {
             description: t('Framework bridges currently reachable from the validation workspace.'),
             value: runtimeChecks.length === 0 && runtimeLoading ? t('Checking...') : reachableRuntimeCount,
             tone: reachableRuntimeCount === 0 ? 'attention' : 'default'
+          },
+          {
+            title: t('Context prefill'),
+            description: t('Dataset/version context provided from dataset detail actions.'),
+            value: hasPrefilledContext ? t('Ready') : t('N/A')
           }
         ]}
       />
+
+      {hasPrefilledContext ? (
+        <StateBlock
+          variant="success"
+          title={t('Validation context preselected')}
+          description={selectedDataset
+            ? t('Dataset context is prefilled from dataset detail. You can run and feed back quickly in the same lane.')
+            : t('Dataset context was requested from dataset detail.')}
+          extra={
+            <div className="row gap wrap">
+              {selectedDataset ? <Badge tone="info">{selectedDataset.name}</Badge> : null}
+              {selectedVersion ? <Badge tone="info">{selectedVersion.version_name}</Badge> : null}
+            </div>
+          }
+        />
+      ) : null}
 
       <WorkspaceSplit
         main={
@@ -623,6 +742,11 @@ export default function InferenceValidationPage() {
                 </Select>
               </label>
             </div>
+            {selectedDataset ? (
+              <small className="muted">
+                {t('Scoped dataset context')}: {selectedDataset.name} ({t(selectedDataset.task_type)})
+              </small>
+            ) : null}
             <div className="row gap wrap">
               <Button onClick={runInference} disabled={busy || !selectedVersionId || !selectedAttachmentId}>
                 {t('Run Inference')}
@@ -660,21 +784,25 @@ export default function InferenceValidationPage() {
                   {t('Select Run')}
                   <Select value={selectedRun.id} onChange={(event) => setSelectedRunId(event.target.value)}>
                     {runs.map((run) => (
-                      <option key={run.id} value={run.id}>
-                        {run.id} ({t(run.task_type)} / {t(run.framework)} / {t(run.status)})
+                    <option key={run.id} value={run.id}>
+                        {describeRun(run) +
+                          ' · ' +
+                          formatCompactTimestamp(run.updated_at, t('n/a')) +
+                          ' · ' +
+                          t(run.status)}
                       </option>
                     ))}
                   </Select>
                 </label>
                 <small className="muted">
                   {t('Run {runId} · Task {task} · Framework {framework}', {
-                    runId: selectedRun.id,
+                    runId: selectedRunVersion?.version_name ?? t('Recent run'),
                     task: t(selectedRun.task_type),
                     framework: t(selectedRun.framework)
                   })}
                 </small>
                 <small className="muted">
-                  {t('Last updated')}: {formatTimestamp(selectedRun.updated_at)}
+                  {t('Last updated')}: {formatCompactTimestamp(selectedRun.updated_at, t('n/a'))}
                 </small>
                 <div className="row gap wrap">
                   <Badge tone="neutral">
@@ -686,6 +814,18 @@ export default function InferenceValidationPage() {
                   <Badge tone="neutral">
                     {t('runner mode')}: {runtimeInsight?.runnerMode ? t(runtimeInsight.runnerMode) : t('n/a')}
                   </Badge>
+                  {attachmentById.get(selectedRun.input_attachment_id) ? (
+                    <Badge tone="info">
+                      {t('Input Attachment')}: {selectedRunInputAttachment?.filename}
+                    </Badge>
+                  ) : null}
+                  {selectedRun.feedback_dataset_id ? (
+                    <Badge tone="neutral">
+                      {t('Target Dataset')}:{' '}
+                      {datasetsById.get(selectedRun.feedback_dataset_id)?.name ??
+                        t('Selected dataset record unavailable')}
+                    </Badge>
+                  ) : null}
                 </div>
                 <StateBlock
                   variant={runtimeInsight?.variant ?? 'empty'}
@@ -721,6 +861,50 @@ export default function InferenceValidationPage() {
         }
         side={
           <>
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Current status')}
+                description={t(
+                  'Run validation, inspect normalized output, and route failure samples back into dataset workflows.'
+                )}
+              />
+              <ul className="workspace-record-list compact">
+                <Panel as="li" className="workspace-record-item compact" tone="soft">
+                  <div className="row between gap wrap">
+                    <strong>{t('Model Version')}</strong>
+                    <Badge tone="neutral">{selectedVersion?.version_name ?? t('n/a')}</Badge>
+                  </div>
+                  <small className="muted">
+                    {selectedVersion ? `${t(selectedVersion.task_type)} · ${t(selectedVersion.framework)}` : t('No Model Versions Yet')}
+                  </small>
+                </Panel>
+                <Panel as="li" className="workspace-record-item compact" tone="soft">
+                  <div className="row between gap wrap">
+                    <strong>{t('Input Attachment')}</strong>
+                    <Badge tone={selectedAttachment ? 'info' : 'neutral'}>
+                      {selectedAttachment?.filename ?? t('n/a')}
+                    </Badge>
+                  </div>
+                  <small className="muted">{t('Ready files')}: {readyAttachmentCount}</small>
+                </Panel>
+                <Panel as="li" className="workspace-record-item compact" tone="soft">
+                  <div className="row between gap wrap">
+                    <strong>{t('Target Dataset')}</strong>
+                    <Badge tone={selectedFeedbackDataset ? 'neutral' : 'warning'}>
+                      {selectedFeedbackDataset?.name ?? t('n/a')}
+                    </Badge>
+                  </div>
+                  <small className="muted">
+                    {feedbackTaskType
+                      ? t('Only datasets with task {taskType} are shown for feedback.', {
+                          taskType: t(feedbackTaskType)
+                        })
+                      : t('No Runs Yet')}
+                  </small>
+                </Panel>
+              </ul>
+            </Card>
+
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Runtime Connectivity')}
@@ -764,7 +948,9 @@ export default function InferenceValidationPage() {
                         {t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}
                       </Badge>
                     </div>
-                    <small className="muted">{t('checked at')}: {formatTimestamp(item?.checked_at ?? null)}</small>
+                    <small className="muted">
+                      {t('checked at')}: {formatCompactTimestamp(item?.checked_at ?? null, t('n/a'))}
+                    </small>
                     <small className="muted">{item?.message ?? t('No check data yet.')}</small>
                     <small className="muted">{sourceDescription}</small>
                   </Panel>
@@ -779,14 +965,21 @@ export default function InferenceValidationPage() {
                 description={t('Push the selected failure sample back into a dataset so the next training loop can absorb it.')}
               />
 
-            {datasets.length === 0 ? (
+            {!selectedRun ? (
+              <StateBlock
+                variant="empty"
+                title={t('No Runs Yet')}
+                description={t('Run inference to inspect outputs.')}
+              />
+            ) : null}
+            {selectedRun && datasets.length === 0 ? (
               <StateBlock
                 variant="empty"
                 title={t('No Datasets Yet')}
                 description={t('Create or import a dataset before sending failure samples back.')}
               />
             ) : null}
-            {datasets.length > 0 && feedbackDatasets.length === 0 ? (
+            {selectedRun && datasets.length > 0 && feedbackDatasets.length === 0 ? (
               <StateBlock
                 variant="empty"
                 title={t('No Matching Datasets')}
@@ -830,7 +1023,23 @@ export default function InferenceValidationPage() {
               <Button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>
                 {t('Send to Dataset')}
               </Button>
+              <ButtonLink to={scopedDatasetDetailPath} variant="ghost" size="sm">
+                {t('Open scoped dataset')}
+              </ButtonLink>
+              <ButtonLink to={scopedAnnotationPath} variant="ghost" size="sm">
+                {t('Open scoped annotation')}
+              </ButtonLink>
+              <ButtonLink to={scopedTrainingJobsPath} variant="ghost" size="sm">
+                {t('Open scoped jobs')}
+              </ButtonLink>
             </div>
+            {selectedRun ? (
+              <small className="muted">
+                {t('Annotation quick link keeps queue scope and applies metadata filter for run {runId}.', {
+                  runId: selectedRun.id
+                })}
+              </small>
+            ) : null}
             </Card>
           </>
         }

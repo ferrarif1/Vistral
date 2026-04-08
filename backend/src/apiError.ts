@@ -48,7 +48,9 @@ const isInvalidStateMessage = (message: string): boolean => {
     return false;
   }
 
-  return normalized.startsWith('only ') && normalized.includes(' can ');
+  return (
+    normalized.startsWith('only ') && normalized.includes(' can ')
+  ) || normalized.includes('cannot be deleted while');
 };
 
 const isValidationMessage = (message: string): boolean => {
@@ -80,7 +82,8 @@ const isValidationMessage = (message: string): boolean => {
     'control plane base url must be a full http(s) url',
     'control plane base url must use http or https',
     'pairing token is required',
-    'pairing token is invalid or expired'
+    'pairing token is invalid or expired',
+    'protected foundation models cannot be deleted'
   ]);
 };
 

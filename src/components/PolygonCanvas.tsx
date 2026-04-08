@@ -14,6 +14,7 @@ export interface PolygonAnnotation {
 interface PolygonCanvasProps {
   title: string;
   filename: string;
+  imageUrl?: string | null;
   polygons: PolygonAnnotation[];
   onChange: (polygons: PolygonAnnotation[]) => void;
   disabled?: boolean;
@@ -38,6 +39,7 @@ const nextPolygonId = (): string => `poly-${Date.now()}-${Math.random().toString
 export default function PolygonCanvas({
   title,
   filename,
+  imageUrl = null,
   polygons,
   onChange,
   disabled,
@@ -51,11 +53,17 @@ export default function PolygonCanvas({
   const [draftLabel, setDraftLabel] = useState('region');
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [error, setError] = useState('');
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
 
   const selectedPolygon = useMemo(
     () => polygons.find((polygon) => polygon.id === selectedPolygonId) ?? null,
     [polygons, selectedPolygonId]
   );
+  const showImage = Boolean(imageUrl) && !imageLoadFailed;
+
+  useEffect(() => {
+    setImageLoadFailed(false);
+  }, [imageUrl]);
 
   useEffect(() => {
     if (!selectedPolygonId) {
@@ -246,7 +254,16 @@ export default function PolygonCanvas({
         onMouseUp={stopDrag}
         onMouseLeave={stopDrag}
       >
-        <div className="polygon-canvas-bg">
+        {showImage ? (
+          <img
+            src={imageUrl ?? undefined}
+            alt={filename}
+            className="polygon-canvas-image"
+            onError={() => setImageLoadFailed(true)}
+          />
+        ) : null}
+
+        <div className={`polygon-canvas-bg${showImage ? ' hidden' : ''}`}>
           <strong>{filename}</strong>
         </div>
 

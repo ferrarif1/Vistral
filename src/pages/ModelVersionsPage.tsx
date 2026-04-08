@@ -16,26 +16,13 @@ import {
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const versionsVirtualizationThreshold = 14;
 const versionsVirtualRowHeight = 214;
 const versionsVirtualViewportHeight = 640;
 const backgroundRefreshIntervalMs = 6000;
 type LoadMode = 'initial' | 'manual' | 'background';
-
-const formatTimestamp = (iso: string): string => {
-  const value = Date.parse(iso);
-  if (Number.isNaN(value)) {
-    return iso;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(value));
-};
 
 const buildVersionSignature = (items: ModelVersionRecord[]): string =>
   JSON.stringify(
@@ -76,6 +63,34 @@ const buildJobSignature = (items: TrainingJobRecord[]): string =>
         updated_at: item.updated_at
       }))
   );
+
+const buildMetricsPreview = (
+  metrics: ModelVersionRecord['metrics_summary'],
+  maxItems = 3
+): { preview: string; hiddenCount: number } => {
+  const entries = Object.entries(metrics);
+  const preview = entries
+    .slice(0, maxItems)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' · ');
+
+  return {
+    preview,
+    hiddenCount: Math.max(0, entries.length - maxItems)
+  };
+};
+
+const buildScopedTrainingJobDetailPath = (jobId: string, job?: TrainingJobRecord | null): string => {
+  const searchParams = new URLSearchParams();
+  if (job?.dataset_id) {
+    searchParams.set('dataset', job.dataset_id);
+  }
+  if (job?.dataset_version_id) {
+    searchParams.set('version', job.dataset_version_id);
+  }
+  const query = searchParams.toString();
+  return query ? `/training/jobs/${jobId}?${query}` : `/training/jobs/${jobId}`;
+};
 
 export default function ModelVersionsPage() {
   const { t } = useI18n();
@@ -200,6 +215,7 @@ export default function ModelVersionsPage() {
   );
 
   const modelsById = useMemo(() => new Map(models.map((model) => [model.id, model])), [models]);
+  const jobsById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
   const compareIdSet = useMemo(() => new Set(compareIds), [compareIds]);
 
   useEffect(() => {
@@ -291,13 +307,13 @@ export default function ModelVersionsPage() {
     setSuccess('');
 
     try {
-      const created = await api.registerModelVersion({
+      await api.registerModelVersion({
         model_id: modelId,
         training_job_id: jobId,
         version_name: versionName.trim()
       });
 
-      setSuccess(t('Model version {versionId} registered.', { versionId: created.id }));
+      setSuccess(t('Model version registered. It is now available for validation and comparison.'));
       setVersionName('');
       await load('manual');
     } catch (registerError) {
@@ -309,6 +325,74 @@ export default function ModelVersionsPage() {
 
   const registrationBlocked = models.length === 0 || completedJobs.length === 0;
   const shouldVirtualizeVersions = sortedVersions.length > versionsVirtualizationThreshold;
+
+  const renderVersionRow = (version: ModelVersionRecord, as: 'div' | 'li' = 'li') => {
+    const linkedModel = modelsById.get(version.model_id);
+    const linkedJob = version.training_job_id ? jobsById.get(version.training_job_id) : null;
+    const metricsPreview = buildMetricsPreview(version.metrics_summary);
+
+    return (
+      <Panel
+        key={as === 'li' ? version.id : undefined}
+        as={as}
+        className={`workspace-record-item${as === 'div' ? ' virtualized' : ''}`}
+        tone="soft"
+      >
+        <div className="workspace-record-item-top">
+          <div className="workspace-record-summary stack tight">
+            <strong>{version.version_name}</strong>
+            <small className="muted">
+              {linkedModel?.name ?? t('Unavailable model record')} · {t(version.task_type)} · {t(version.framework)} ·{' '}
+              {t('Created')}: {formatCompactTimestamp(version.created_at)}
+            </small>
+          </div>
+          <div className="workspace-record-actions">
+            <StatusTag status={version.status}>{t(version.status)}</StatusTag>
+            <Button
+              type="button"
+              variant={compareIdSet.has(version.id) ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => toggleCompareVersion(version.id)}
+            >
+              {compareIdSet.has(version.id) ? t('Selected') : t('Compare')}
+            </Button>
+            {version.training_job_id ? (
+              <ButtonLink
+                to={buildScopedTrainingJobDetailPath(version.training_job_id, linkedJob)}
+                variant="secondary"
+                size="sm"
+              >
+                {t('Open Job')}
+              </ButtonLink>
+            ) : null}
+          </div>
+        </div>
+        <p className="line-clamp-2">
+          {metricsPreview.preview
+            ? `${t('metrics')}: ${metricsPreview.preview}${
+                metricsPreview.hiddenCount > 0 ? ` · +${metricsPreview.hiddenCount}` : ''
+              }`
+            : t('Metrics summary unavailable.')}
+        </p>
+        <div className="row gap wrap">
+          <Badge tone="neutral">
+            {t('model')}: {linkedModel?.name ?? t('Unavailable model record')}
+          </Badge>
+          <Badge tone="info">
+            {t('job')}: {linkedJob?.name ?? (version.training_job_id ? t('Training job record unavailable') : t('manual'))}
+          </Badge>
+          <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
+            {version.artifact_attachment_id ? `${t('artifact')}: ${t('Ready')}` : t('No artifact yet')}
+          </Badge>
+        </div>
+        <small className="muted">
+          {version.artifact_attachment_id
+            ? t('Artifact linked and ready for downstream use.')
+            : t('Artifact is still pending or unavailable for this version.')}
+        </small>
+      </Panel>
+    );
+  };
 
   return (
     <WorkspacePage>
@@ -392,119 +476,11 @@ export default function ModelVersionsPage() {
               listClassName="workspace-record-list"
               rowClassName="workspace-record-row"
               ariaLabel={t('Version Inventory')}
-              renderItem={(version) => {
-                const linkedModel = modelsById.get(version.model_id);
-                const metricsSummary = Object.entries(version.metrics_summary)
-                  .map(([key, value]) => `${key}=${value}`)
-                  .join(', ');
-
-                return (
-                  <Panel className="workspace-record-item virtualized" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{version.version_name}</strong>
-                        <small className="muted">
-                          {linkedModel?.name ?? version.model_id} · {t(version.task_type)} · {t(version.framework)} · {t('Created')}:{' '}
-                          {formatTimestamp(version.created_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={version.status}>{t(version.status)}</StatusTag>
-                        <Button
-                          type="button"
-                          variant={compareIdSet.has(version.id) ? 'secondary' : 'ghost'}
-                          size="sm"
-                          onClick={() => toggleCompareVersion(version.id)}
-                        >
-                          {compareIdSet.has(version.id) ? t('Selected') : t('Compare')}
-                        </Button>
-                        {version.training_job_id ? (
-                          <ButtonLink to={`/training/jobs/${version.training_job_id}`} variant="secondary" size="sm">
-                            {t('Open Job')}
-                          </ButtonLink>
-                        ) : null}
-                      </div>
-                    </div>
-                    <p className="line-clamp-2">
-                      {metricsSummary ? `${t('metrics')}: ${metricsSummary}` : t('Metrics summary unavailable.')}
-                    </p>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {t('model')}: {linkedModel?.name ?? version.model_id}
-                      </Badge>
-                      <Badge tone="info">
-                        {t('job')}: {version.training_job_id ?? t('manual')}
-                      </Badge>
-                      <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
-                        {version.artifact_attachment_id
-                          ? `${t('artifact')}: ${t('Ready')}`
-                          : t('No artifact yet')}
-                      </Badge>
-                    </div>
-                    {version.artifact_attachment_id ? (
-                      <small className="muted">{version.artifact_attachment_id}</small>
-                    ) : null}
-                  </Panel>
-                );
-              }}
+              renderItem={(version) => renderVersionRow(version, 'div')}
             />
           ) : (
             <ul className="workspace-record-list">
-              {sortedVersions.map((version) => {
-                const linkedModel = modelsById.get(version.model_id);
-                const metricsSummary = Object.entries(version.metrics_summary)
-                  .map(([key, value]) => `${key}=${value}`)
-                  .join(', ');
-
-                return (
-                  <Panel key={version.id} as="li" className="workspace-record-item" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{version.version_name}</strong>
-                        <small className="muted">
-                          {linkedModel?.name ?? version.model_id} · {t(version.task_type)} · {t(version.framework)} · {t('Created')}:{' '}
-                          {formatTimestamp(version.created_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={version.status}>{t(version.status)}</StatusTag>
-                        <Button
-                          type="button"
-                          variant={compareIdSet.has(version.id) ? 'secondary' : 'ghost'}
-                          size="sm"
-                          onClick={() => toggleCompareVersion(version.id)}
-                        >
-                          {compareIdSet.has(version.id) ? t('Selected') : t('Compare')}
-                        </Button>
-                        {version.training_job_id ? (
-                          <ButtonLink to={`/training/jobs/${version.training_job_id}`} variant="secondary" size="sm">
-                            {t('Open Job')}
-                          </ButtonLink>
-                        ) : null}
-                      </div>
-                    </div>
-                    <p className="line-clamp-2">
-                      {metricsSummary ? `${t('metrics')}: ${metricsSummary}` : t('Metrics summary unavailable.')}
-                    </p>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {t('model')}: {linkedModel?.name ?? version.model_id}
-                      </Badge>
-                      <Badge tone="info">
-                        {t('job')}: {version.training_job_id ?? t('manual')}
-                      </Badge>
-                      <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
-                        {version.artifact_attachment_id
-                          ? `${t('artifact')}: ${t('Ready')}`
-                          : t('No artifact yet')}
-                      </Badge>
-                    </div>
-                    {version.artifact_attachment_id ? (
-                      <small className="muted">{version.artifact_attachment_id}</small>
-                    ) : null}
-                  </Panel>
-                );
-              })}
+              {sortedVersions.map((version) => renderVersionRow(version))}
             </ul>
           )}
           </Card>
@@ -547,12 +523,15 @@ export default function ModelVersionsPage() {
                           <StatusTag status={version.status}>{t(version.status)}</StatusTag>
                         </div>
                         <div className="row gap wrap">
-                          <Badge tone="neutral">{linkedModel?.name ?? version.model_id}</Badge>
+                          <Badge tone="neutral">{linkedModel?.name ?? t('Unavailable model record')}</Badge>
                           <Badge tone="neutral">{t(version.task_type)}</Badge>
                           <Badge tone="info">{t(version.framework)}</Badge>
                         </div>
                         <small className="muted">
-                          {t('Created')}: {formatTimestamp(version.created_at)} · {t('job')}: {version.training_job_id ?? t('manual')}
+                          {t('Created')}: {formatCompactTimestamp(version.created_at)} · {t('job')}:{' '}
+                          {version.training_job_id
+                            ? jobsById.get(version.training_job_id)?.name ?? t('Training job record unavailable')
+                            : t('manual')}
                         </small>
                       </Panel>
                     );

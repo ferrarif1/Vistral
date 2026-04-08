@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { TrainingJobRecord, TrainingJobStatus } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import VirtualList from '../components/VirtualList';
@@ -15,6 +16,7 @@ import {
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const activeStatusSet = new Set<TrainingJobStatus>(['queued', 'preparing', 'running', 'evaluating']);
 const terminalStatusSet = new Set<TrainingJobStatus>(['completed', 'failed', 'cancelled']);
@@ -28,19 +30,7 @@ const terminalJobsVirtualViewportHeight = 440;
 
 type LoadMode = 'initial' | 'manual' | 'background';
 
-const formatTimestamp = (iso: string): string => {
-  const value = Date.parse(iso);
-  if (Number.isNaN(value)) {
-    return iso;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(value));
-};
+const formatTimestamp = (iso: string): string => formatCompactTimestamp(iso);
 
 const buildJobsSignature = (jobs: TrainingJobRecord[]): string =>
   JSON.stringify(
@@ -59,6 +49,7 @@ const buildJobsSignature = (jobs: TrainingJobRecord[]): string =>
 
 export default function TrainingJobsPage() {
   const { t } = useI18n();
+  const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<TrainingJobRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -122,28 +113,63 @@ export default function TrainingJobsPage() {
       }),
     [jobs]
   );
+  const scopedDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const scopedVersionId = (searchParams.get('version') ?? '').trim();
+  const scopedJobs = useMemo(
+    () =>
+      sortedJobs.filter((job) => {
+        if (scopedDatasetId && job.dataset_id !== scopedDatasetId) {
+          return false;
+        }
+        if (scopedVersionId && job.dataset_version_id !== scopedVersionId) {
+          return false;
+        }
+        return true;
+      }),
+    [scopedDatasetId, scopedVersionId, sortedJobs]
+  );
+  const hasScopeFilter = Boolean(scopedDatasetId || scopedVersionId);
+  const detailQuerySuffix = useMemo(() => {
+    const query = searchParams.toString();
+    return query ? `?${query}` : '';
+  }, [searchParams]);
+  const scopedCreatePath = useMemo(() => {
+    if (!hasScopeFilter) {
+      return '/training/jobs/new';
+    }
+    const next = new URLSearchParams();
+    if (scopedDatasetId) {
+      next.set('dataset', scopedDatasetId);
+    }
+    if (scopedVersionId) {
+      next.set('version', scopedVersionId);
+    }
+    return `/training/jobs/new?${next.toString()}`;
+  }, [hasScopeFilter, scopedDatasetId, scopedVersionId]);
 
   const summary = useMemo(
     () => ({
-      running: jobs.filter((job) => activeStatusSet.has(job.status)).length,
-      completed: jobs.filter((job) => job.status === 'completed').length,
-      failed: jobs.filter((job) => ['failed', 'cancelled'].includes(job.status)).length
+      running: scopedJobs.filter((job) => activeStatusSet.has(job.status)).length,
+      completed: scopedJobs.filter((job) => job.status === 'completed').length,
+      failed: scopedJobs.filter((job) => ['failed', 'cancelled'].includes(job.status)).length
     }),
-    [jobs]
+    [scopedJobs]
   );
 
   const liveJobs = useMemo(
-    () => sortedJobs.filter((job) => activeStatusSet.has(job.status)),
-    [sortedJobs]
+    () => scopedJobs.filter((job) => activeStatusSet.has(job.status)),
+    [scopedJobs]
   );
   const recentTerminalJobs = useMemo(
-    () => sortedJobs.filter((job) => terminalStatusSet.has(job.status)),
-    [sortedJobs]
+    () => scopedJobs.filter((job) => terminalStatusSet.has(job.status)),
+    [scopedJobs]
   );
   const shouldVirtualizeLiveJobs = liveJobs.length > liveJobsVirtualizationThreshold;
   const shouldVirtualizeTerminalJobs = recentTerminalJobs.length > terminalJobsVirtualizationThreshold;
   const workerLiveJobs = liveJobs.filter((job) => job.execution_target === 'worker').length;
   const controlPlaneLiveJobs = liveJobs.filter((job) => job.execution_target === 'control_plane').length;
+  const describeExecutionTarget = (target: TrainingJobRecord['execution_target']) =>
+    target === 'worker' ? t('Worker execution') : t('Local execution');
 
   const renderLiveJobRecord = (job: TrainingJobRecord, as: 'div' | 'li' = 'li') => {
     const snapshotReady = Boolean(job.dataset_version_id);
@@ -164,7 +190,7 @@ export default function TrainingJobsPage() {
           </div>
           <div className="workspace-record-actions">
             <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-            <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
+            <ButtonLink to={`/training/jobs/${job.id}${detailQuerySuffix}`} variant="ghost" size="sm">
               {t('Open Detail')}
             </ButtonLink>
           </div>
@@ -173,7 +199,7 @@ export default function TrainingJobsPage() {
           <Badge tone="neutral">
             {t('Base model')}: {job.base_model}
           </Badge>
-          <Badge tone="neutral">{t(job.execution_target)}</Badge>
+          <Badge tone="neutral">{describeExecutionTarget(job.execution_target)}</Badge>
           <Badge tone={snapshotReady ? 'info' : 'warning'}>
             {snapshotReady ? t('Version bound') : t('Version pending')}
           </Badge>
@@ -201,7 +227,7 @@ export default function TrainingJobsPage() {
         </div>
         <div className="workspace-record-actions">
           <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-          <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
+          <ButtonLink to={`/training/jobs/${job.id}${detailQuerySuffix}`} variant="ghost" size="sm">
             {t('Open Detail')}
           </ButtonLink>
         </div>
@@ -244,11 +270,28 @@ export default function TrainingJobsPage() {
           },
           {
             title: t('Total'),
-            description: t('All visible jobs across the current workspace scope.'),
-            value: jobs.length
+            description: t('All jobs in current scoped view.'),
+            value: scopedJobs.length
           }
         ]}
       />
+
+      {hasScopeFilter ? (
+        <StateBlock
+          variant="success"
+          title={t('Version-scoped job view active')}
+          description={t('Showing jobs filtered by dataset/version context from dataset detail.')}
+          extra={
+            <div className="row gap wrap">
+              {scopedDatasetId ? <Badge tone="info">{t('dataset')}: {scopedDatasetId}</Badge> : null}
+              {scopedVersionId ? <Badge tone="info">{t('version')}: {scopedVersionId}</Badge> : null}
+              <ButtonLink variant="ghost" size="sm" to="/training/jobs">
+                {t('Clear scope')}
+              </ButtonLink>
+            </div>
+          }
+        />
+      ) : null}
 
       <WorkspaceSplit
         main={
@@ -304,9 +347,9 @@ export default function TrainingJobsPage() {
             </div>
             <strong className="workspace-side-metric">{summary.running}</strong>
             <small className="muted">
-              {t('Worker lane')}: {workerLiveJobs} · {t('Control-plane lane')}: {controlPlaneLiveJobs}
+              {t('Worker execution')}: {workerLiveJobs} · {t('Local execution')}: {controlPlaneLiveJobs}
             </small>
-            <ButtonLink to="/training/jobs/new">
+            <ButtonLink to={scopedCreatePath}>
               {t('Create Training Job')}
             </ButtonLink>
             </Card>

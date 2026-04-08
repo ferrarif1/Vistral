@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
-import type { TrainingArtifactSummary, TrainingJobRecord, TrainingMetricRecord } from '../../shared/domain';
+import { useParams, useSearchParams } from 'react-router-dom';
+import type {
+  DatasetRecord,
+  TrainingArtifactSummary,
+  TrainingJobRecord,
+  TrainingMetricRecord
+} from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import VirtualList from '../components/VirtualList';
@@ -16,6 +21,7 @@ import {
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const STATUS_STEPS: Array<TrainingJobRecord['status']> = [
   'draft',
@@ -45,10 +51,40 @@ const backgroundRefreshIntervalMs = 5000;
 
 type LoadMode = 'initial' | 'manual' | 'background';
 
+const buildScopedTrainingJobsPath = (datasetId: string, versionId?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/training/jobs?${searchParams.toString()}`;
+};
+
+const buildScopedInferencePath = (datasetId: string, versionId?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/inference/validate?${searchParams.toString()}`;
+};
+
+const buildScopedDatasetDetailPath = (datasetId: string, versionId?: string | null): string => {
+  if (!versionId?.trim()) {
+    return `/datasets/${datasetId}`;
+  }
+
+  const searchParams = new URLSearchParams();
+  searchParams.set('version', versionId.trim());
+  return `/datasets/${datasetId}?${searchParams.toString()}`;
+};
+
 export default function TrainingJobDetailPage() {
   const { t } = useI18n();
   const { jobId } = useParams<{ jobId: string }>();
+  const [searchParams] = useSearchParams();
   const [job, setJob] = useState<TrainingJobRecord | null>(null);
+  const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [metrics, setMetrics] = useState<TrainingMetricRecord[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [artifactAttachmentId, setArtifactAttachmentId] = useState<string | null>(null);
@@ -77,19 +113,28 @@ export default function TrainingJobDetailPage() {
     }
 
     try {
-      const detail = await api.getTrainingJobDetail(jobId);
+      const [detail, datasetResult] = await Promise.all([
+        api.getTrainingJobDetail(jobId),
+        api.listDatasets().catch(() => [] as DatasetRecord[])
+      ]);
       const nextSignature = JSON.stringify({
         job: detail.job,
         metrics: detail.metrics,
         logs: detail.logs,
         artifact_attachment_id: detail.artifact_attachment_id,
         artifact_summary: detail.artifact_summary,
-        workspace_dir: detail.workspace_dir
+        workspace_dir: detail.workspace_dir,
+        datasets: datasetResult.map((dataset) => ({
+          id: dataset.id,
+          name: dataset.name,
+          updated_at: dataset.updated_at
+        }))
       });
 
       if (detailSignatureRef.current !== nextSignature) {
         detailSignatureRef.current = nextSignature;
         setJob(detail.job);
+        setDatasets(datasetResult);
         setMetrics(detail.metrics);
         setLogs(detail.logs);
         setArtifactAttachmentId(detail.artifact_attachment_id);
@@ -142,6 +187,10 @@ export default function TrainingJobDetailPage() {
     const index = STATUS_STEPS.indexOf(job.status);
     return index >= 0 ? index : STATUS_STEPS.length - 1;
   }, [job]);
+  const datasetsById = useMemo(
+    () => new Map(datasets.map((dataset) => [dataset.id, dataset])),
+    [datasets]
+  );
 
   const latestMetrics = useMemo(() => {
     const latestByMetric = new Map<string, TrainingMetricRecord>();
@@ -228,24 +277,6 @@ export default function TrainingJobDetailPage() {
     const startIndex = Math.max(0, logs.length - visibleLogCount);
     return logs.slice(startIndex);
   }, [logs, visibleLogCount]);
-  const formatTimestamp = (value: string | null) => {
-    if (!value) {
-      return t('n/a');
-    }
-
-    const parsed = Date.parse(value);
-    if (Number.isNaN(parsed)) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(new Date(parsed));
-  };
-
   useEffect(() => {
     setVisibleLogCount((previous) => {
       if (logs.length === 0) {
@@ -378,16 +409,19 @@ export default function TrainingJobDetailPage() {
   const heroSection = (
     <WorkspaceHero
       eyebrow={t('Training Detail')}
-      title={t('Training Job Detail')}
+      title={job ? job.name : t('Training Job Detail')}
       description={
         job
-          ? `${job.name} · ${t(job.task_type)} · ${t(job.framework)}`
+          ? t('Track readiness, metrics, worker delivery, and artifact handoff for this training run.')
           : t('Review status, logs, and metrics for the selected training run.')
       }
       stats={[
         { label: t('Status'), value: job ? t(job.status) : t('Pending') },
-        { label: t('Metrics'), value: metrics.length },
-        { label: t('Logs'), value: logs.length }
+        {
+          label: t('Version snapshot'),
+          value: job ? (job.dataset_version_id ? t('Version bound') : t('Version pending')) : t('Pending')
+        },
+        { label: t('Artifact'), value: artifactAttachmentId ? t('Ready') : t('pending') }
       ]}
     />
   );
@@ -421,6 +455,39 @@ export default function TrainingJobDetailPage() {
   const canRetry = ['failed', 'cancelled'].includes(job.status);
   const isInterrupted = job.status === 'failed' || job.status === 'cancelled';
   const isCompleted = job.status === 'completed';
+  const linkedDataset = datasetsById.get(job.dataset_id);
+  const queryScopedDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const queryScopedVersionId = (searchParams.get('version') ?? '').trim();
+  const scopedDatasetId = queryScopedDatasetId || job.dataset_id;
+  const scopedVersionId = queryScopedVersionId || job.dataset_version_id;
+  const datasetDisplayName = linkedDataset?.name ?? t('Selected dataset record unavailable');
+  const scopedJobsPath = buildScopedTrainingJobsPath(scopedDatasetId, scopedVersionId);
+  const scopedInferencePath = buildScopedInferencePath(scopedDatasetId, scopedVersionId);
+  const scopedDatasetDetailPath = buildScopedDatasetDetailPath(scopedDatasetId, scopedVersionId);
+  const versionSnapshotLabel = job.dataset_version_id ? t('Version bound') : t('Version pending');
+  const executionTargetLabel = job.execution_target === 'worker' ? t('Worker lane') : t('Control-plane lane');
+  const describeSelectedWorker = (
+    executionTarget: TrainingJobRecord['execution_target'],
+    workerId: string | null
+  ) => {
+    if (executionTarget === 'control_plane') {
+      return t('Local fallback');
+    }
+
+    if (workerId) {
+      return t('Worker assigned');
+    }
+
+    return t('Awaiting worker assignment');
+  };
+  const latestUpdateLabel = formatCompactTimestamp(job.updated_at, t('n/a'));
+  const trimmedLogExcerpt = job.log_excerpt.trim();
+  const hasTechnicalContext = Boolean(
+    workspaceDir ||
+      artifactSummary?.primary_model_path ||
+      job.scheduler_decision?.selected_worker_id ||
+      (job.scheduler_decision?.excluded_worker_ids.length ?? 0) > 0
+  );
   const refreshDetail = () => {
     load('manual')
       .then(() => setFeedback(null))
@@ -489,23 +556,35 @@ export default function TrainingJobDetailPage() {
           <>
             <Card as="section" className="stack">
               <div className="stack tight">
-                <h3>{t('Runtime Status')}</h3>
+                <h3>{t('Run summary')}</h3>
                 <small className="muted">
-                  {t('Execution metadata and artifact status for this run.')}
+                  {t('Dataset, launch state, and handoff readiness for this run.')}
                 </small>
               </div>
               <div className="row gap wrap">
                 <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-                <Badge tone="neutral">{t('Dataset')}: {job.dataset_id}</Badge>
+                <Badge tone="neutral">{t('Dataset')}: {datasetDisplayName}</Badge>
                 <Badge tone="neutral">{t('Base model')}: {job.base_model}</Badge>
-                <Badge tone="info">{t('Execution mode')}: {t(job.execution_mode)}</Badge>
+                <Badge tone={job.dataset_version_id ? 'success' : 'warning'}>
+                  {t('Version snapshot')}: {versionSnapshotLabel}
+                </Badge>
+                <Badge tone={job.execution_target === 'worker' ? 'info' : 'warning'}>
+                  {t('Execution target')}: {executionTargetLabel}
+                </Badge>
                 <Badge tone={artifactAttachmentId ? 'success' : 'warning'}>
                   {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('pending')}
                 </Badge>
               </div>
-              {artifactAttachmentId ? (
-                <small className="muted">{t('Artifact attachment')}: {artifactAttachmentId}</small>
-              ) : null}
+              <small className="muted">
+                {job.dataset_version_id
+                  ? t('Dataset snapshot is already locked for this run.')
+                  : t('Run is still preparing its version snapshot.')}
+              </small>
+              <small className="muted">
+                {artifactAttachmentId
+                  ? t('Artifact linked and ready for downstream use.')
+                  : t('Artifact is still pending or unavailable for this version.')}
+              </small>
               {artifactAttachmentId ? (
                 <div className="row gap wrap">
                   <Button type="button" variant="secondary" size="sm" onClick={downloadArtifact}>
@@ -518,7 +597,9 @@ export default function TrainingJobDetailPage() {
                 <Panel className="stack tight" tone="soft">
                   <div className="row between align-center wrap">
                     <strong>{t('Scheduler decision')}</strong>
-                    <small className="muted">{formatTimestamp(job.scheduler_decision.decided_at)}</small>
+                    <small className="muted">
+                      {formatCompactTimestamp(job.scheduler_decision.decided_at, t('n/a'))}
+                    </small>
                   </div>
                   <div className="row gap wrap">
                     <Badge tone="neutral">{t('Trigger')}: {t(job.scheduler_decision.trigger)}</Badge>
@@ -526,37 +607,52 @@ export default function TrainingJobDetailPage() {
                     <Badge tone={job.scheduler_decision.execution_target === 'worker' ? 'info' : 'warning'}>
                       {t('Target')}: {t(job.scheduler_decision.execution_target)}
                     </Badge>
-                    {job.scheduler_decision.selected_worker_id ? (
-                      <Badge tone="info">
-                        {t('Selected worker')}: {job.scheduler_decision.selected_worker_id}
+                    <Badge
+                      tone={
+                        job.scheduler_decision.execution_target === 'worker' &&
+                        job.scheduler_decision.selected_worker_id
+                          ? 'info'
+                          : job.scheduler_decision.execution_target === 'control_plane'
+                            ? 'warning'
+                            : 'neutral'
+                      }
+                    >
+                      {t('Selected worker')}:{' '}
+                      {describeSelectedWorker(
+                        job.scheduler_decision.execution_target,
+                        job.scheduler_decision.selected_worker_id
+                      )}
+                    </Badge>
+                  </div>
+                  <details className="workspace-details">
+                    <summary>{t('Scheduler score breakdown')}</summary>
+                    <div className="row gap wrap">
+                      <Badge tone="neutral">
+                        {t('Score')}: {job.scheduler_decision.selected_worker_score?.toFixed(4) ?? t('n/a')}
                       </Badge>
-                    ) : (
-                      <Badge tone="warning">{t('Selected worker')}: {t('none')}</Badge>
-                    )}
-                  </div>
-                  <div className="row gap wrap">
-                    <Badge tone="neutral">
-                      {t('Score')}: {job.scheduler_decision.selected_worker_score?.toFixed(4) ?? t('n/a')}
-                    </Badge>
-                    <Badge tone="neutral">
-                      {t('Load')}: {job.scheduler_decision.selected_worker_load_component?.toFixed(4) ?? t('n/a')}
-                    </Badge>
-                    <Badge tone="neutral">
-                      {t('Penalty')}: {job.scheduler_decision.selected_worker_health_penalty?.toFixed(4) ?? t('n/a')}
-                    </Badge>
-                    <Badge tone="neutral">
-                      {t('Capability bonus')}: {job.scheduler_decision.selected_worker_capability_bonus?.toFixed(4) ?? t('n/a')}
-                    </Badge>
-                    <Badge tone="neutral">
-                      {t('In flight')}: {job.scheduler_decision.selected_worker_in_flight_jobs ?? t('n/a')}
-                    </Badge>
-                    <Badge tone="neutral">
-                      {t('Max concurrency')}: {job.scheduler_decision.selected_worker_max_concurrency ?? t('n/a')}
-                    </Badge>
-                  </div>
+                      <Badge tone="neutral">
+                        {t('Load')}: {job.scheduler_decision.selected_worker_load_component?.toFixed(4) ?? t('n/a')}
+                      </Badge>
+                      <Badge tone="neutral">
+                        {t('Penalty')}: {job.scheduler_decision.selected_worker_health_penalty?.toFixed(4) ?? t('n/a')}
+                      </Badge>
+                      <Badge tone="neutral">
+                        {t('Capability bonus')}:{' '}
+                        {job.scheduler_decision.selected_worker_capability_bonus?.toFixed(4) ?? t('n/a')}
+                      </Badge>
+                      <Badge tone="neutral">
+                        {t('In flight')}: {job.scheduler_decision.selected_worker_in_flight_jobs ?? t('n/a')}
+                      </Badge>
+                      <Badge tone="neutral">
+                        {t('Max concurrency')}: {job.scheduler_decision.selected_worker_max_concurrency ?? t('n/a')}
+                      </Badge>
+                    </div>
+                  </details>
                   {job.scheduler_decision.excluded_worker_ids.length > 0 ? (
                     <small className="muted">
-                      {t('Excluded workers')}: {job.scheduler_decision.excluded_worker_ids.join(', ')}
+                      {t('Excluded worker count: {count}', {
+                        count: job.scheduler_decision.excluded_worker_ids.length
+                      })}
                     </small>
                   ) : null}
                   {job.scheduler_decision.fallback_reason ? (
@@ -581,14 +677,17 @@ export default function TrainingJobDetailPage() {
                               <strong>
                                 {t(decision.trigger)} · {t('Attempt')} {decision.attempt}
                               </strong>
-                              <small className="muted">{formatTimestamp(decision.decided_at)}</small>
+                              <small className="muted">
+                                {formatCompactTimestamp(decision.decided_at, t('n/a'))}
+                              </small>
                             </div>
                             <div className="row gap wrap">
                               <Badge tone={decision.execution_target === 'worker' ? 'info' : 'warning'}>
                                 {t('Target')}: {t(decision.execution_target)}
                               </Badge>
                               <Badge tone="neutral">
-                                {t('Worker')}: {decision.selected_worker_id ?? t('none')}
+                                {t('Selected worker')}:{' '}
+                                {describeSelectedWorker(decision.execution_target, decision.selected_worker_id)}
                               </Badge>
                               <Badge tone="neutral">
                                 {t('Score')}: {decision.selected_worker_score?.toFixed(4) ?? t('n/a')}
@@ -602,7 +701,9 @@ export default function TrainingJobDetailPage() {
                             </div>
                             {decision.excluded_worker_ids.length > 0 ? (
                               <small className="muted">
-                                {t('Excluded workers')}: {decision.excluded_worker_ids.join(', ')}
+                                {t('Excluded worker count: {count}', {
+                                  count: decision.excluded_worker_ids.length
+                                })}
                               </small>
                             ) : null}
                             {decision.fallback_reason ? (
@@ -616,11 +717,48 @@ export default function TrainingJobDetailPage() {
                       </div>
                     </details>
                   ) : null}
+                  {hasTechnicalContext ? (
+                    <details className="workspace-details">
+                      <summary>{t('Technical context')}</summary>
+                      <div className="stack tight">
+                        <small className="muted">
+                          {t('Storage paths and raw scheduler identifiers stay here when you need them.')}
+                        </small>
+                        {job.scheduler_decision.selected_worker_id ? (
+                          <small className="muted">
+                            {t('Worker ID: {id}', { id: job.scheduler_decision.selected_worker_id })}
+                          </small>
+                        ) : null}
+                        {job.scheduler_decision.excluded_worker_ids.length > 0 ? (
+                          <small className="muted">
+                            {t('Excluded worker IDs: {ids}', {
+                              ids: job.scheduler_decision.excluded_worker_ids.join(', ')
+                            })}
+                          </small>
+                        ) : null}
+                        {artifactSummary?.primary_model_path ? (
+                          <small className="muted">
+                            {t('Primary model path')}: {artifactSummary.primary_model_path}
+                          </small>
+                        ) : null}
+                        {workspaceDir ? (
+                          <small className="muted">
+                            {t('Workspace')}: {workspaceDir}
+                          </small>
+                        ) : null}
+                      </div>
+                    </details>
+                  ) : null}
                 </Panel>
               ) : (
-                <small className="muted">{t('Scheduler decision snapshot not available yet.')}</small>
+                <small className="muted">{t('Scheduler update not available yet.')}</small>
               )}
-              <small className="muted">{job.log_excerpt}</small>
+              {trimmedLogExcerpt ? (
+                <details className="workspace-details">
+                  <summary>{t('Latest log summary')}</summary>
+                  <pre className="code-block">{trimmedLogExcerpt}</pre>
+                </details>
+              ) : null}
               {artifactSummary ? (
                 <>
                   <div className="row gap wrap">
@@ -635,14 +773,12 @@ export default function TrainingJobDetailPage() {
                       <Badge tone="info">{t('Sampled items')}: {artifactSummary.sampled_items}</Badge>
                     ) : null}
                     {artifactSummary.generated_at ? (
-                      <Badge tone="neutral">{t('Artifact generated at')}: {formatTimestamp(artifactSummary.generated_at)}</Badge>
+                      <Badge tone="neutral">
+                        {t('Artifact generated at')}:{' '}
+                        {formatCompactTimestamp(artifactSummary.generated_at, t('n/a'))}
+                      </Badge>
                     ) : null}
                   </div>
-                  {artifactSummary.primary_model_path ? (
-                    <small className="muted">
-                      {t('Primary model path')}: {artifactSummary.primary_model_path}
-                    </small>
-                  ) : null}
                   {artifactSummary.metrics_keys.length > 0 ? (
                     <div className="row gap wrap">
                       {artifactSummary.metrics_keys.map((metricKey) => (
@@ -659,9 +795,6 @@ export default function TrainingJobDetailPage() {
                   ) : null}
                 </>
               ) : null}
-              <small className="muted">
-                {t('Workspace')}: {workspaceDir || t('pending')}
-              </small>
             </Card>
 
             <Card as="section" className="stack">
@@ -851,8 +984,11 @@ export default function TrainingJobDetailPage() {
                 >
                   {t('Download Artifact')}
                 </Button>
-                <ButtonLink to="/training/jobs" variant="secondary">
+                <ButtonLink to={scopedJobsPath} variant="secondary">
                   {t('Back to jobs list')}
+                </ButtonLink>
+                <ButtonLink to={scopedInferencePath} variant="secondary">
+                  {t('Open scoped inference')}
                 </ButtonLink>
                 <ButtonLink to="/models/versions" variant="secondary">
                   {t('Open model versions')}
@@ -862,7 +998,7 @@ export default function TrainingJobDetailPage() {
 
             <Card as="section">
               <div className="stack tight">
-                <h3>{t('Execution snapshot')}</h3>
+                <h3>{t('Execution summary')}</h3>
                 <small className="muted">
                   {t('Compact view of launch, runtime, and artifact status for quick triage.')}
                 </small>
@@ -871,9 +1007,21 @@ export default function TrainingJobDetailPage() {
                 <Panel as="li" className="workspace-record-item compact" tone="soft">
                   <div className="row between gap wrap">
                     <strong>{t('Dataset')}</strong>
-                    <Badge tone="info">{job.dataset_id}</Badge>
+                    <Badge tone="info">{datasetDisplayName}</Badge>
                   </div>
-                  <small className="muted">{t('Task')}: {t(job.task_type)}</small>
+                  <small className="muted">
+                    {t('Task')}: {t(job.task_type)} · {t('Version snapshot')}: {versionSnapshotLabel}
+                  </small>
+                  {linkedDataset ? (
+                    <div className="workspace-button-stack">
+                      <ButtonLink to={scopedDatasetDetailPath} variant="ghost" size="sm">
+                        {t('Open dataset')}
+                      </ButtonLink>
+                      <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
+                        {t('Validate inference')}
+                      </ButtonLink>
+                    </div>
+                  ) : null}
                 </Panel>
                 <Panel as="li" className="workspace-record-item compact" tone="soft">
                   <div className="row between gap wrap">
@@ -881,13 +1029,16 @@ export default function TrainingJobDetailPage() {
                     <Badge tone="neutral">{t(job.framework)}</Badge>
                   </div>
                   <small className="muted">{t('Base model')}: {job.base_model}</small>
+                  <small className="muted">{t('Execution target')}: {executionTargetLabel}</small>
                 </Panel>
                 <Panel as="li" className="workspace-record-item compact" tone="soft">
                   <div className="row between gap wrap">
                     <strong>{t('Status')}</strong>
                     <StatusTag status={job.status}>{t(job.status)}</StatusTag>
                   </div>
-                  <small className="muted">{t('Execution mode')}: {t(job.execution_mode)}</small>
+                  <small className="muted">
+                    {t('Execution mode')}: {t(job.execution_mode)} · {t('Last updated')}: {latestUpdateLabel}
+                  </small>
                 </Panel>
                 <Panel as="li" className="workspace-record-item compact" tone="soft">
                   <div className="row between gap wrap">
@@ -896,7 +1047,18 @@ export default function TrainingJobDetailPage() {
                       {artifactAttachmentId ? t('Ready') : t('pending')}
                     </StatusTag>
                   </div>
-                  <small className="muted">{artifactAttachmentId || t('Artifact not generated yet.')}</small>
+                  <small className="muted">
+                    {artifactAttachmentId
+                      ? t('Artifact linked and ready for downstream use.')
+                      : t('Artifact not generated yet.')}
+                  </small>
+                  {artifactAttachmentId ? (
+                    <div className="workspace-button-stack">
+                      <ButtonLink to="/models/versions" variant="ghost" size="sm">
+                        {t('Open model versions')}
+                      </ButtonLink>
+                    </div>
+                  ) : null}
                 </Panel>
               </ul>
             </Card>

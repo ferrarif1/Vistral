@@ -8,6 +8,8 @@ import type {
   FileAttachment,
   ModelVersionRecord
 } from '../../shared/domain';
+import PredictionOverlayControls from '../components/annotation/PredictionOverlayControls';
+import SampleReviewWorkbench from '../components/annotation/SampleReviewWorkbench';
 import type { AnnotationBox } from '../components/AnnotationCanvas';
 import type { PolygonAnnotation } from '../components/PolygonCanvas';
 import StateBlock from '../components/StateBlock';
@@ -46,6 +48,16 @@ interface OcrLine {
   region_id: string | null;
 }
 
+interface PredictionCandidate {
+  id: string;
+  kind: 'ocr_line' | 'box' | 'rotated_box' | 'polygon' | 'label';
+  title: string;
+  confidence: number | null;
+  extra: string;
+  text?: string;
+  regionId?: string | null;
+}
+
 const nextLineId = (): string => `line-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 const toNumber = (value: unknown, fallback: number): number => {
@@ -54,6 +66,138 @@ const toNumber = (value: unknown, fallback: number): number => {
   }
 
   return fallback;
+};
+
+const toOptionalNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  return null;
+};
+
+const buildPredictionCandidates = (payload: Record<string, unknown>): PredictionCandidate[] => {
+  const candidates: PredictionCandidate[] = [];
+
+  const ocrLines = Array.isArray(payload.lines) ? payload.lines : [];
+  for (let index = 0; index < ocrLines.length; index += 1) {
+    const line = ocrLines[index] as { id?: unknown; text?: unknown; confidence?: unknown; region_id?: unknown };
+    const text = typeof line.text === 'string' ? line.text.trim() : '';
+    if (!text) {
+      continue;
+    }
+    const confidence = toOptionalNumber(line.confidence);
+    const regionId = typeof line.region_id === 'string' && line.region_id.trim() ? line.region_id : null;
+    candidates.push({
+      id: (typeof line.id === 'string' && line.id.trim()) || `prediction-line-${index + 1}`,
+      kind: 'ocr_line',
+      title: text,
+      confidence,
+      extra: regionId ? `region ${regionId}` : 'unbound',
+      text,
+      regionId
+    });
+  }
+
+  const boxes = Array.isArray(payload.boxes) ? payload.boxes : [];
+  for (let index = 0; index < boxes.length; index += 1) {
+    const box = boxes[index] as { label?: unknown; score?: unknown; confidence?: unknown; width?: unknown; height?: unknown };
+    const label = typeof box.label === 'string' && box.label.trim() ? box.label.trim() : `box-${index + 1}`;
+    const confidence = toOptionalNumber(box.score) ?? toOptionalNumber(box.confidence);
+    const width = toOptionalNumber(box.width);
+    const height = toOptionalNumber(box.height);
+    const areaSummary =
+      width !== null && height !== null ? `${Math.max(0, Math.round(width))}×${Math.max(0, Math.round(height))}` : 'bbox';
+    candidates.push({
+      id: `prediction-box-${index + 1}`,
+      kind: 'box',
+      title: label,
+      confidence,
+      extra: areaSummary
+    });
+  }
+
+  const rotatedBoxes = Array.isArray(payload.rotated_boxes) ? payload.rotated_boxes : [];
+  for (let index = 0; index < rotatedBoxes.length; index += 1) {
+    const rotatedBox = rotatedBoxes[index] as { label?: unknown; score?: unknown; confidence?: unknown; angle?: unknown };
+    const label =
+      typeof rotatedBox.label === 'string' && rotatedBox.label.trim()
+        ? rotatedBox.label.trim()
+        : `rotated-${index + 1}`;
+    const confidence = toOptionalNumber(rotatedBox.score) ?? toOptionalNumber(rotatedBox.confidence);
+    const angle = toOptionalNumber(rotatedBox.angle);
+    candidates.push({
+      id: `prediction-rotated-${index + 1}`,
+      kind: 'rotated_box',
+      title: label,
+      confidence,
+      extra: angle === null ? 'obb' : `angle ${angle.toFixed(1)}°`
+    });
+  }
+
+  const polygons = Array.isArray(payload.polygons) ? payload.polygons : [];
+  for (let index = 0; index < polygons.length; index += 1) {
+    const polygon = polygons[index] as { label?: unknown; score?: unknown; confidence?: unknown; points?: unknown };
+    const label =
+      typeof polygon.label === 'string' && polygon.label.trim()
+        ? polygon.label.trim()
+        : `polygon-${index + 1}`;
+    const confidence = toOptionalNumber(polygon.score) ?? toOptionalNumber(polygon.confidence);
+    const points = Array.isArray(polygon.points) ? polygon.points.length : 0;
+    candidates.push({
+      id: `prediction-polygon-${index + 1}`,
+      kind: 'polygon',
+      title: label,
+      confidence,
+      extra: points > 0 ? `${points} pts` : 'polygon'
+    });
+  }
+
+  const labels = Array.isArray(payload.labels) ? payload.labels : [];
+  for (let index = 0; index < labels.length; index += 1) {
+    const item = labels[index] as { label?: unknown; score?: unknown; confidence?: unknown };
+    const label = typeof item.label === 'string' && item.label.trim() ? item.label.trim() : `label-${index + 1}`;
+    const confidence = toOptionalNumber(item.score) ?? toOptionalNumber(item.confidence);
+    candidates.push({
+      id: `prediction-label-${index + 1}`,
+      kind: 'label',
+      title: label,
+      confidence,
+      extra: 'class'
+    });
+  }
+
+  return candidates;
+};
+
+const hasLowConfidencePredictionSignal = (
+  annotation: AnnotationWithReview | null | undefined,
+  threshold: number
+): boolean => {
+  if (!annotation || annotation.source !== 'pre_annotation') {
+    return false;
+  }
+
+  const payload = annotation.payload as Record<string, unknown>;
+  const candidates = buildPredictionCandidates(payload);
+  return candidates.some(
+    (candidate) => candidate.confidence !== null && candidate.confidence < threshold
+  );
+};
+
+const countLowConfidencePredictionSignals = (
+  annotation: AnnotationWithReview | null | undefined,
+  threshold: number
+): number => {
+  if (!annotation || annotation.source !== 'pre_annotation') {
+    return 0;
+  }
+
+  const payload = annotation.payload as Record<string, unknown>;
+  const candidates = buildPredictionCandidates(payload);
+  return candidates.filter(
+    (candidate) => candidate.confidence !== null && candidate.confidence < threshold
+  ).length;
 };
 
 const backgroundRefreshIntervalMs = 5000;
@@ -70,6 +214,34 @@ const reviewReasonOptions: AnnotationReviewReasonCode[] = [
   'polygon_issue',
   'other'
 ];
+
+const normalizeQueueSplitFilter = (
+  value: string | null
+): 'all' | 'train' | 'val' | 'test' | 'unassigned' => {
+  if (value === 'train' || value === 'val' || value === 'test' || value === 'unassigned') {
+    return value;
+  }
+
+  return 'all';
+};
+
+const normalizeQueueItemStatusFilter = (
+  value: string | null
+): 'all' | 'uploading' | 'processing' | 'ready' | 'error' => {
+  if (value === 'uploading' || value === 'processing' || value === 'ready' || value === 'error') {
+    return value;
+  }
+
+  return 'all';
+};
+
+const normalizeBinaryParam = (value: string | null, fallback: boolean): boolean => {
+  if (value === null) {
+    return fallback;
+  }
+
+  return value === '1' || value === 'true';
+};
 
 const buildAnnotationWorkspaceSignature = (payload: {
   dataset: DatasetRecord;
@@ -95,11 +267,22 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
   return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
 };
 
+const buildScopedInferenceValidationPath = (datasetId: string, versionId?: string): string => {
+  const search = new URLSearchParams();
+  search.set('dataset', datasetId);
+  const normalizedVersionId = versionId?.trim() ?? '';
+  if (normalizedVersionId) {
+    search.set('version', normalizedVersionId);
+  }
+  return `/inference/validate?${search.toString()}`;
+};
+
 export default function AnnotationWorkspacePage() {
   const { t } = useI18n();
   const steps = useMemo(() => [t('Select Item'), t('Annotate'), t('Review')], [t]);
   const { datasetId } = useParams<{ datasetId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const scopedDatasetVersionId = (searchParams.get('version') ?? '').trim();
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
@@ -108,8 +291,16 @@ export default function AnnotationWorkspacePage() {
   const [queueFilter, setQueueFilter] = useState<AnnotationQueueFilter>(() =>
     normalizeAnnotationQueueFilter(searchParams.get('queue'))
   );
+  const [queueSearchText, setQueueSearchText] = useState('');
+  const [queueSplitFilter, setQueueSplitFilter] = useState<'all' | 'train' | 'val' | 'test' | 'unassigned'>('all');
+  const [queueItemStatusFilter, setQueueItemStatusFilter] = useState<'all' | 'uploading' | 'processing' | 'ready' | 'error'>('all');
+  const [queueMetadataFilter, setQueueMetadataFilter] = useState('');
   const [selectedItemId, setSelectedItemId] = useState('');
   const [selectedModelVersionId, setSelectedModelVersionId] = useState('');
+  const [showAnnotationOverlay, setShowAnnotationOverlay] = useState(true);
+  const [showPredictionOverlay, setShowPredictionOverlay] = useState(true);
+  const [predictionConfidenceThreshold, setPredictionConfidenceThreshold] = useState('0.50');
+  const [onlyLowConfidenceCandidates, setOnlyLowConfidenceCandidates] = useState(false);
   const [boxes, setBoxes] = useState<AnnotationBox[]>([]);
   const [ocrLines, setOcrLines] = useState<OcrLine[]>([]);
   const [polygons, setPolygons] = useState<PolygonAnnotation[]>([]);
@@ -125,6 +316,13 @@ export default function AnnotationWorkspacePage() {
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [queueToast, setQueueToast] = useState<{ variant: 'success' | 'info'; text: string } | null>(null);
   const workspaceSignatureRef = useRef('');
+  const scopedInferenceValidationPath = useMemo(
+    () =>
+      datasetId
+        ? buildScopedInferenceValidationPath(datasetId, scopedDatasetVersionId)
+        : '/inference/validate',
+    [datasetId, scopedDatasetVersionId]
+  );
 
   const load = useCallback(async (mode: LoadMode) => {
     if (!datasetId) {
@@ -194,6 +392,40 @@ export default function AnnotationWorkspacePage() {
   useEffect(() => {
     const requestedQueueFilter = normalizeAnnotationQueueFilter(searchParams.get('queue'));
     setQueueFilter((current) => (current === requestedQueueFilter ? current : requestedQueueFilter));
+    const requestedQueueSearchText = searchParams.get('q') ?? '';
+    setQueueSearchText((current) =>
+      current === requestedQueueSearchText ? current : requestedQueueSearchText
+    );
+    const requestedQueueSplitFilter = normalizeQueueSplitFilter(searchParams.get('split'));
+    setQueueSplitFilter((current) =>
+      current === requestedQueueSplitFilter ? current : requestedQueueSplitFilter
+    );
+    const requestedQueueItemStatusFilter = normalizeQueueItemStatusFilter(
+      searchParams.get('item_status')
+    );
+    setQueueItemStatusFilter((current) =>
+      current === requestedQueueItemStatusFilter ? current : requestedQueueItemStatusFilter
+    );
+    const requestedQueueMetadataFilter = searchParams.get('meta') ?? '';
+    setQueueMetadataFilter((current) =>
+      current === requestedQueueMetadataFilter ? current : requestedQueueMetadataFilter
+    );
+    const requestedShowAnnotationOverlay = normalizeBinaryParam(searchParams.get('ann'), true);
+    setShowAnnotationOverlay((current) =>
+      current === requestedShowAnnotationOverlay ? current : requestedShowAnnotationOverlay
+    );
+    const requestedShowPredictionOverlay = normalizeBinaryParam(searchParams.get('pred'), true);
+    setShowPredictionOverlay((current) =>
+      current === requestedShowPredictionOverlay ? current : requestedShowPredictionOverlay
+    );
+    const requestedOnlyLowConfidenceCandidates = normalizeBinaryParam(searchParams.get('low_conf'), false);
+    setOnlyLowConfidenceCandidates((current) =>
+      current === requestedOnlyLowConfidenceCandidates ? current : requestedOnlyLowConfidenceCandidates
+    );
+    const requestedConfidence = searchParams.get('conf') ?? '0.50';
+    setPredictionConfidenceThreshold((current) =>
+      current === requestedConfidence ? current : requestedConfidence
+    );
   }, [searchParams]);
 
   const selectedAnnotation = useMemo(
@@ -262,7 +494,73 @@ export default function AnnotationWorkspacePage() {
 
     return buckets;
   }, [annotationByItemId, sortedQueueItems]);
-  const filteredItems = queueItemsByFilter[queueFilter];
+  const queueItems = queueItemsByFilter[queueFilter];
+  const numericPredictionConfidenceThreshold = useMemo(() => {
+    const parsed = Number(predictionConfidenceThreshold);
+    if (Number.isNaN(parsed)) {
+      return 0;
+    }
+
+    return Math.max(0, Math.min(parsed, 1));
+  }, [predictionConfidenceThreshold]);
+  const filteredItems = useMemo(() => {
+    const normalizedSearch = queueSearchText.trim().toLowerCase();
+    const normalizedMetadataFilter = queueMetadataFilter.trim().toLowerCase();
+    return queueItems.filter((item) => {
+      if (queueSplitFilter !== 'all' && item.split !== queueSplitFilter) {
+        return false;
+      }
+
+      if (queueItemStatusFilter !== 'all' && item.status !== queueItemStatusFilter) {
+        return false;
+      }
+
+      if (normalizedSearch) {
+        const filename = attachmentById.get(item.attachment_id)?.filename?.toLowerCase() ?? '';
+        if (!filename.includes(normalizedSearch)) {
+          return false;
+        }
+      }
+
+      if (normalizedMetadataFilter) {
+        const metadataEntries = Object.entries(item.metadata);
+        if (metadataEntries.length === 0) {
+          return false;
+        }
+
+        const hasMetadataHit = metadataEntries.some(([key, value]) => {
+          const normalizedKey = key.toLowerCase();
+          const normalizedValue = String(value).toLowerCase();
+          return (
+            normalizedKey.includes(normalizedMetadataFilter) ||
+            normalizedValue.includes(normalizedMetadataFilter)
+          );
+        });
+        if (!hasMetadataHit) {
+          return false;
+        }
+      }
+
+      if (onlyLowConfidenceCandidates) {
+        const itemAnnotation = annotationByItemId.get(item.id);
+        if (!hasLowConfidencePredictionSignal(itemAnnotation, numericPredictionConfidenceThreshold)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [
+    attachmentById,
+    annotationByItemId,
+    numericPredictionConfidenceThreshold,
+    onlyLowConfidenceCandidates,
+    queueItemStatusFilter,
+    queueItems,
+    queueMetadataFilter,
+    queueSearchText,
+    queueSplitFilter
+  ]);
   const shouldVirtualizeQueueList = filteredItems.length > 10;
   const selectedQueueIndex = useMemo(
     () => filteredItems.findIndex((item) => item.id === selectedItemId),
@@ -273,6 +571,71 @@ export default function AnnotationWorkspacePage() {
     selectedQueueIndex >= 0
       ? selectedQueueIndex < filteredItems.length - 1
       : filteredItems.length > 0;
+  const lowConfidenceCountByItemId = useMemo(() => {
+    const next = new Map<string, number>();
+    for (const item of filteredItems) {
+      const annotation = annotationByItemId.get(item.id);
+      const lowConfidenceCount = countLowConfidencePredictionSignals(
+        annotation,
+        numericPredictionConfidenceThreshold
+      );
+      if (lowConfidenceCount > 0) {
+        next.set(item.id, lowConfidenceCount);
+      }
+    }
+    return next;
+  }, [annotationByItemId, filteredItems, numericPredictionConfidenceThreshold]);
+  const lowConfidenceQueueRadarItems = useMemo(
+    () =>
+      filteredItems
+        .map((item) => ({
+          item,
+          count: lowConfidenceCountByItemId.get(item.id) ?? 0
+        }))
+        .filter((entry) => entry.count > 0)
+        .sort((left, right) => right.count - left.count)
+        .slice(0, 6),
+    [filteredItems, lowConfidenceCountByItemId]
+  );
+  const totalLowConfidenceQueueSignals = useMemo(
+    () =>
+      lowConfidenceQueueRadarItems.reduce(
+        (total, entry) => total + entry.count,
+        0
+      ),
+    [lowConfidenceQueueRadarItems]
+  );
+  const nextLowConfidenceQueueItemId = useMemo(() => {
+    if (filteredItems.length === 0) {
+      return '';
+    }
+
+    const currentIndex = selectedQueueIndex >= 0 ? selectedQueueIndex : -1;
+    const loopIndexes: number[] = [];
+    for (let offset = 1; offset <= filteredItems.length; offset += 1) {
+      const index = (currentIndex + offset + filteredItems.length) % filteredItems.length;
+      loopIndexes.push(index);
+    }
+
+    for (const index of loopIndexes) {
+      const candidate = filteredItems[index];
+      if (!candidate || candidate.id === selectedItemId) {
+        continue;
+      }
+      const annotation = annotationByItemId.get(candidate.id);
+      if (hasLowConfidencePredictionSignal(annotation, numericPredictionConfidenceThreshold)) {
+        return candidate.id;
+      }
+    }
+
+    return '';
+  }, [
+    annotationByItemId,
+    filteredItems,
+    numericPredictionConfidenceThreshold,
+    selectedItemId,
+    selectedQueueIndex
+  ]);
   const inReviewQueueContext = useMemo(() => {
     if (queueFilter !== 'in_review') {
       return null;
@@ -329,11 +692,75 @@ export default function AnnotationWorkspacePage() {
       return t('No dataset item selected');
     }
 
-    return attachmentById.get(selectedItem.attachment_id)?.filename ?? selectedItem.attachment_id;
+    return attachmentById.get(selectedItem.attachment_id)?.filename ?? t('File unavailable');
   }, [attachmentById, selectedItem, t]);
+  const selectedAttachmentPreviewUrl = useMemo(() => {
+    if (!selectedItem) {
+      return null;
+    }
+
+    const selectedAttachmentId = selectedItem.attachment_id?.trim();
+    if (!selectedAttachmentId) {
+      return null;
+    }
+
+    const attachment = attachmentById.get(selectedAttachmentId);
+    if (attachment && attachment.status !== 'ready') {
+      return null;
+    }
+
+    return api.attachmentContentUrl(selectedAttachmentId);
+  }, [attachmentById, selectedItem]);
   const isEditLocked = Boolean(
     selectedAnnotation && ['in_review', 'rejected', 'approved'].includes(selectedAnnotation.status)
   );
+  const selectedItemMetadataEntries = useMemo(
+    () => (selectedItem ? Object.entries(selectedItem.metadata) : []),
+    [selectedItem]
+  );
+  const selectedItemTagEntries = useMemo(
+    () =>
+      selectedItemMetadataEntries
+        .filter(([key]) => key.startsWith('tag:'))
+        .map(([key]) => key.slice(4)),
+    [selectedItemMetadataEntries]
+  );
+  const selectedItemOperationalMetadataEntries = useMemo(
+    () => selectedItemMetadataEntries.filter(([key]) => !key.startsWith('tag:')),
+    [selectedItemMetadataEntries]
+  );
+  const hasPredictionOverlay = selectedAnnotation?.source === 'pre_annotation';
+  const predictionCandidates = useMemo(() => {
+    if (!selectedAnnotation || !hasPredictionOverlay) {
+      return [] as PredictionCandidate[];
+    }
+
+    const payload = selectedAnnotation.payload as Record<string, unknown>;
+    return buildPredictionCandidates(payload);
+  }, [hasPredictionOverlay, selectedAnnotation]);
+  const lowConfidencePredictionCandidates = useMemo(
+    () =>
+      predictionCandidates.filter(
+        (candidate) =>
+          candidate.confidence !== null &&
+          candidate.confidence < numericPredictionConfidenceThreshold
+      ),
+    [numericPredictionConfidenceThreshold, predictionCandidates]
+  );
+  const canUsePredictionInOcrEditor = dataset?.task_type === 'ocr' && !isEditLocked;
+  const selectedItemHasLowConfidenceTag = Boolean(selectedItem?.metadata['tag:low_confidence']);
+  const predictionCandidateCount = useMemo(() => {
+    if (!showPredictionOverlay || !hasPredictionOverlay) {
+      return 0;
+    }
+    return predictionCandidates.length;
+  }, [
+    hasPredictionOverlay,
+    predictionCandidates.length,
+    showPredictionOverlay
+  ]);
+  const lowConfidencePredictionCount = lowConfidencePredictionCandidates.length;
+  const canvasBoxes = showAnnotationOverlay ? boxes : [];
   const editLockMessage = useMemo(() => {
     if (!selectedAnnotation) {
       return '';
@@ -550,30 +977,92 @@ export default function AnnotationWorkspacePage() {
     return () => window.clearTimeout(timer);
   }, [queueToast]);
 
-  const syncWorkspaceQuery = useCallback((nextQueueFilter: AnnotationQueueFilter, nextItemId: string) => {
+  useEffect(() => {
     const nextParams = new URLSearchParams(searchParams);
-    if (nextQueueFilter === 'all') {
+    if (queueFilter === 'all') {
       nextParams.delete('queue');
     } else {
-      nextParams.set('queue', nextQueueFilter);
+      nextParams.set('queue', queueFilter);
     }
 
-    if (nextItemId) {
-      nextParams.set('item', nextItemId);
+    if (selectedItemId) {
+      nextParams.set('item', selectedItemId);
     } else {
       nextParams.delete('item');
     }
 
-    setSearchParams(nextParams, { replace: true });
-  }, [searchParams, setSearchParams]);
+    if (queueSearchText.trim()) {
+      nextParams.set('q', queueSearchText.trim());
+    } else {
+      nextParams.delete('q');
+    }
+
+    if (queueSplitFilter === 'all') {
+      nextParams.delete('split');
+    } else {
+      nextParams.set('split', queueSplitFilter);
+    }
+
+    if (queueItemStatusFilter === 'all') {
+      nextParams.delete('item_status');
+    } else {
+      nextParams.set('item_status', queueItemStatusFilter);
+    }
+
+    if (queueMetadataFilter.trim()) {
+      nextParams.set('meta', queueMetadataFilter.trim());
+    } else {
+      nextParams.delete('meta');
+    }
+
+    if (showAnnotationOverlay) {
+      nextParams.delete('ann');
+    } else {
+      nextParams.set('ann', '0');
+    }
+
+    if (showPredictionOverlay) {
+      nextParams.delete('pred');
+    } else {
+      nextParams.set('pred', '0');
+    }
+
+    if (onlyLowConfidenceCandidates) {
+      nextParams.set('low_conf', '1');
+    } else {
+      nextParams.delete('low_conf');
+    }
+
+    if (predictionConfidenceThreshold.trim() && predictionConfidenceThreshold.trim() !== '0.50') {
+      nextParams.set('conf', predictionConfidenceThreshold.trim());
+    } else {
+      nextParams.delete('conf');
+    }
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [
+    onlyLowConfidenceCandidates,
+    predictionConfidenceThreshold,
+    queueFilter,
+    queueItemStatusFilter,
+    queueMetadataFilter,
+    queueSearchText,
+    queueSplitFilter,
+    searchParams,
+    selectedItemId,
+    setSearchParams,
+    showAnnotationOverlay,
+    showPredictionOverlay
+  ]);
 
   const focusWorkspaceItem = useCallback(
     (nextQueueFilter: AnnotationQueueFilter, nextItemId: string) => {
       setQueueFilter(nextQueueFilter);
       setSelectedItemId(nextItemId);
-      syncWorkspaceQuery(nextQueueFilter, nextItemId);
     },
-    [syncWorkspaceQuery]
+    []
   );
   const openQueueFilter = useCallback(
     (targetFilter: AnnotationQueueFilter) => {
@@ -602,6 +1091,76 @@ export default function AnnotationWorkspacePage() {
       focusWorkspaceItem(queueFilter, filteredItems[nextIndex].id);
     },
     [filteredItems, focusWorkspaceItem, queueFilter, selectedQueueIndex]
+  );
+  const focusNextLowConfidenceQueueItem = useCallback(() => {
+    if (!nextLowConfidenceQueueItemId) {
+      setQueueToast({
+        variant: 'info',
+        text: t('No additional low-confidence sample found in current queue.')
+      });
+      return;
+    }
+
+    focusWorkspaceItem(queueFilter, nextLowConfidenceQueueItemId);
+    setQueueToast({
+      variant: 'info',
+      text: t('Moved to next low-confidence sample in current queue.')
+    });
+  }, [focusWorkspaceItem, nextLowConfidenceQueueItemId, queueFilter, t]);
+
+  const toggleLowConfidenceTagForSelectedItem = useCallback(async () => {
+    if (!datasetId || !selectedItem) {
+      return;
+    }
+
+    const nextMetadata = { ...selectedItem.metadata };
+    if (nextMetadata['tag:low_confidence']) {
+      delete nextMetadata['tag:low_confidence'];
+      delete nextMetadata['triage:confidence'];
+    } else {
+      nextMetadata['tag:low_confidence'] = 'true';
+      nextMetadata['triage:confidence'] = 'low';
+    }
+
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await api.updateDatasetItem(datasetId, selectedItem.id, {
+        metadata: nextMetadata
+      });
+      await load('manual');
+      setFeedback({
+        variant: 'success',
+        text: nextMetadata['tag:low_confidence']
+          ? t('Selected sample tagged as low-confidence triage.')
+          : t('Low-confidence triage tag removed from selected sample.')
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }, [datasetId, load, selectedItem, t]);
+
+  const applyPredictionCandidateToOcrEditor = useCallback(
+    (candidate: PredictionCandidate) => {
+      if (candidate.kind !== 'ocr_line' || !candidate.text) {
+        return;
+      }
+
+      setLineText(candidate.text);
+      setLineConfidence(
+        candidate.confidence !== null ? candidate.confidence.toFixed(2) : '0.90'
+      );
+      if (candidate.regionId && boxes.some((box) => box.id === candidate.regionId)) {
+        setLineRegionId(candidate.regionId);
+      }
+      setQueueToast({
+        variant: 'info',
+        text: t('Prediction line loaded into OCR editor. Adjust and add it as needed.')
+      });
+    },
+    [boxes, t]
   );
 
   useEffect(() => {
@@ -719,10 +1278,7 @@ export default function AnnotationWorkspacePage() {
 
       setFeedback({
         variant: 'success',
-        text: t('Annotation {annotationId} saved as {status}.', {
-          annotationId: upserted.id,
-          status: t(upserted.status)
-        })
+        text: t('Annotation saved as {status}.', { status: t(upserted.status) })
       });
 
       await load('manual');
@@ -1173,6 +1729,66 @@ export default function AnnotationWorkspacePage() {
             );
           })}
         </div>
+        <div className="annotation-queue-advanced-filters">
+          <Input
+            value={queueSearchText}
+            onChange={(event) => setQueueSearchText(event.target.value)}
+            placeholder={t('Search filename')}
+          />
+          <Select
+            value={queueSplitFilter}
+            onChange={(event) =>
+              setQueueSplitFilter(
+                event.target.value as 'all' | 'train' | 'val' | 'test' | 'unassigned'
+              )
+            }
+          >
+            <option value="all">{t('All splits')}</option>
+            <option value="unassigned">{t('unassigned')}</option>
+            <option value="train">{t('train')}</option>
+            <option value="val">{t('val')}</option>
+            <option value="test">{t('test')}</option>
+          </Select>
+          <Select
+            value={queueItemStatusFilter}
+            onChange={(event) =>
+              setQueueItemStatusFilter(
+                event.target.value as 'all' | 'uploading' | 'processing' | 'ready' | 'error'
+              )
+            }
+          >
+            <option value="all">{t('All statuses')}</option>
+            <option value="ready">{t('ready')}</option>
+            <option value="processing">{t('processing')}</option>
+            <option value="uploading">{t('uploading')}</option>
+            <option value="error">{t('error')}</option>
+          </Select>
+          <Input
+            value={queueMetadataFilter}
+            onChange={(event) => setQueueMetadataFilter(event.target.value)}
+            placeholder={t('Filter metadata/tag')}
+          />
+        </div>
+        <div className="annotation-queue-lowconf-row">
+          <div className="row gap wrap align-center">
+            <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
+              {t('Low-confidence samples')}: {lowConfidenceQueueRadarItems.length}
+            </Badge>
+            <Badge tone={totalLowConfidenceQueueSignals > 0 ? 'warning' : 'neutral'}>
+              {t('Low-confidence signals')}: {totalLowConfidenceQueueSignals}
+            </Badge>
+          </div>
+          <Button
+            type="button"
+            variant={onlyLowConfidenceCandidates ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setOnlyLowConfidenceCandidates((current) => !current)}
+          >
+            {onlyLowConfidenceCandidates
+              ? t('Show full queue')
+              : t('Only low-confidence')}
+          </Button>
+        </div>
         <div className="annotation-queue-nav">
           <small className="muted">
             {selectedQueueIndex >= 0
@@ -1266,7 +1882,8 @@ export default function AnnotationWorkspacePage() {
               itemKey={(item) => item.id}
               renderItem={(item) => {
                 const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
+                const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
+                const lowConfidenceCount = lowConfidenceCountByItemId.get(item.id) ?? 0;
                 return (
                   <div className={`workspace-record-item virtualized${selectedItemId === item.id ? ' selected' : ''}`}>
                     <label className="row gap wrap align-center annotation-item-select">
@@ -1280,12 +1897,14 @@ export default function AnnotationWorkspacePage() {
                       />
                       <div className="stack tight annotation-item-copy">
                         <strong>{itemFilename}</strong>
-                        <small className="muted">{item.id}</small>
                       </div>
                       <Badge tone="neutral">{t(item.split)}</Badge>
                       <StatusBadge status={item.status} />
                       {itemAnnotation ? <Badge tone="info">{t('Annotation')}: {t(itemAnnotation.status)}</Badge> : null}
                       {!itemAnnotation ? <Badge tone="warning">{t('Annotation')}: {t('unannotated')}</Badge> : null}
+                      {lowConfidenceCount > 0 ? (
+                        <Badge tone="warning">{t('Low conf')}: {lowConfidenceCount}</Badge>
+                      ) : null}
                       {itemAnnotation?.latest_review?.review_reason_code ? (
                         <Badge tone="warning">{t(itemAnnotation.latest_review.review_reason_code)}</Badge>
                       ) : null}
@@ -1301,7 +1920,8 @@ export default function AnnotationWorkspacePage() {
             <ul className="workspace-record-list">
               {filteredItems.map((item) => {
                 const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id;
+                const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
+                const lowConfidenceCount = lowConfidenceCountByItemId.get(item.id) ?? 0;
                 return (
                   <Panel
                     key={item.id}
@@ -1320,12 +1940,14 @@ export default function AnnotationWorkspacePage() {
                       />
                       <div className="stack tight annotation-item-copy">
                         <strong>{itemFilename}</strong>
-                        <small className="muted">{item.id}</small>
                       </div>
                       <Badge tone="neutral">{t(item.split)}</Badge>
                       <StatusBadge status={item.status} />
                       {itemAnnotation ? <Badge tone="info">{t('Annotation')}: {t(itemAnnotation.status)}</Badge> : null}
                       {!itemAnnotation ? <Badge tone="warning">{t('Annotation')}: {t('unannotated')}</Badge> : null}
+                      {lowConfidenceCount > 0 ? (
+                        <Badge tone="warning">{t('Low conf')}: {lowConfidenceCount}</Badge>
+                      ) : null}
                       {itemAnnotation?.latest_review?.review_reason_code ? (
                         <Badge tone="warning">{t(itemAnnotation.latest_review.review_reason_code)}</Badge>
                       ) : null}
@@ -1353,7 +1975,8 @@ export default function AnnotationWorkspacePage() {
               <AnnotationCanvas
                 title={t('Annotation Canvas')}
                 filename={selectedFilename}
-                boxes={boxes}
+                imageUrl={selectedAttachmentPreviewUrl}
+                boxes={canvasBoxes}
                 onChange={setBoxes}
                 disabled={busy || !selectedItem || isEditLocked}
               />
@@ -1427,6 +2050,7 @@ export default function AnnotationWorkspacePage() {
                 <PolygonCanvas
                   title={t('Segmentation Polygon Canvas')}
                   filename={selectedFilename}
+                  imageUrl={selectedAttachmentPreviewUrl}
                   polygons={polygons}
                   onChange={setPolygons}
                   disabled={busy || !selectedItem || isEditLocked}
@@ -1482,6 +2106,43 @@ export default function AnnotationWorkspacePage() {
         }
         side={
           <>
+          <SampleReviewWorkbench
+            t={t}
+            selectedFilename={selectedFilename}
+            selectedItem={selectedItem}
+            selectedAnnotation={selectedAnnotation}
+            selectedItemTagEntries={selectedItemTagEntries}
+            selectedItemOperationalMetadataEntries={selectedItemOperationalMetadataEntries}
+          />
+
+          <PredictionOverlayControls
+            t={t}
+            busy={busy}
+            hasPredictionOverlay={hasPredictionOverlay}
+            showAnnotationOverlay={showAnnotationOverlay}
+            showPredictionOverlay={showPredictionOverlay}
+            onlyLowConfidenceCandidates={onlyLowConfidenceCandidates}
+            predictionConfidenceThreshold={predictionConfidenceThreshold}
+            predictionCandidateCount={predictionCandidateCount}
+            lowConfidencePredictionCount={lowConfidencePredictionCount}
+            selectedItemHasLowConfidenceTag={selectedItemHasLowConfidenceTag}
+            predictionCandidates={predictionCandidates}
+            numericPredictionConfidenceThreshold={numericPredictionConfidenceThreshold}
+            canUsePredictionInOcrEditor={canUsePredictionInOcrEditor}
+            nextLowConfidenceQueueItemId={nextLowConfidenceQueueItemId}
+            hasSelectedItem={Boolean(selectedItem)}
+            scopedInferenceValidationPath={scopedInferenceValidationPath}
+            onShowAnnotationOverlayChange={setShowAnnotationOverlay}
+            onShowPredictionOverlayChange={setShowPredictionOverlay}
+            onOnlyLowConfidenceChange={setOnlyLowConfidenceCandidates}
+            onPredictionConfidenceThresholdChange={setPredictionConfidenceThreshold}
+            onUsePredictionCandidate={applyPredictionCandidateToOcrEditor}
+            onFocusNextLowConfidence={focusNextLowConfidenceQueueItem}
+            onToggleLowConfidenceTag={() => {
+              void toggleLowConfidenceTagForSelectedItem();
+            }}
+          />
+
           <Card as="section">
             <div className="stack tight">
               <h3>{t('Queue Focus')}</h3>
@@ -1496,8 +2157,10 @@ export default function AnnotationWorkspacePage() {
             </div>
             <div className="row gap wrap">
               <Badge tone="neutral">{t('queue')}: {queueFilter === 'all' ? t('All items') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}</Badge>
-              {selectedItem ? <Badge tone="info">{selectedItem.id}</Badge> : null}
+              {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
+              {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : null}
             </div>
+            <small className="muted">{selectedFilename}</small>
             <small className="muted">{t('Queue shortcuts: J next · K previous')}</small>
             <div className="workspace-button-stack">
               <Button
@@ -1519,6 +2182,53 @@ export default function AnnotationWorkspacePage() {
                 {t('Next Item')}
               </Button>
             </div>
+          </Card>
+
+          <Card as="section">
+            <div className="row between gap wrap align-center">
+              <h3>{t('Low-confidence Radar')}</h3>
+              <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
+                {lowConfidenceQueueRadarItems.length}
+              </Badge>
+            </div>
+            {lowConfidenceQueueRadarItems.length === 0 ? (
+              <small className="muted">
+                {t('No low-confidence prediction signals in the current filtered queue.')}
+              </small>
+            ) : (
+              <ul className="workspace-record-list compact">
+                {lowConfidenceQueueRadarItems.map(({ item, count }) => {
+                  const filename =
+                    attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
+                  const itemAnnotation = annotationByItemId.get(item.id) ?? null;
+                  return (
+                    <Panel key={`low-conf-radar-${item.id}`} as="li" className="workspace-record-item compact stack tight" tone="soft">
+                      <div className="row between gap wrap align-center">
+                        <strong className="line-clamp-1">{filename}</strong>
+                        <Badge tone="warning">{t('Low conf')}: {count}</Badge>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t(item.split)}</Badge>
+                        {itemAnnotation ? (
+                          <Badge tone="info">{t(itemAnnotation.status)}</Badge>
+                        ) : (
+                          <Badge tone="warning">{t('unannotated')}</Badge>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => focusWorkspaceItem(queueFilter, item.id)}
+                        disabled={busy}
+                      >
+                        {t('Open sample')}
+                      </Button>
+                    </Panel>
+                  );
+                })}
+              </ul>
+            )}
           </Card>
 
           {selectedAnnotation?.latest_review ? (

@@ -18,7 +18,7 @@ Define executable route and page structure for the AI-native conversation worksp
 ### 3.2 Entry
 - `/`
   - redirects to `/workspace/chat`
-  - professional console remains directly accessible via `/workspace/console` and shared navigation
+  - professional console remains directly accessible via `/workspace/console`
 
 ### 3.3 Conversation Workspace
 - `/workspace/chat`
@@ -45,18 +45,17 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.4 Professional Console
 - `/workspace/console`
-  - operational snapshots and quick links
-  - uses the shared `AppShell` navigation with grouped sections for workspaces, build/run flows, governance, and settings
-  - desktop sidebar keeps a fixed viewport height; navigation scrolls internally so long menus do not push content off-screen
-  - desktop navigation groups can collapse independently so operators can hide lower-priority menus without losing route context
-  - desktop sidebar supports collapse/expand into a compact rail so operators can widen content-heavy pages
-  - desktop account actions use the same sidebar footer / compact rail menu as chat so settings and logout stay anchored in one predictable place
-  - mobile navigation uses a temporary drawer opened from the header and dismissed by overlay tap or close action
+  - immersive workspace shell aligned with chat workspace
+  - fixed left sidebar + independent right content scroll + floating bottom command/input bar
+  - sidebar keeps fixed viewport height and internal scrolling for grouped quick actions
+  - sidebar footer keeps account menu anchored at the bottom, consistent with chat workspace
+  - mobile sidebar uses drawer behavior with overlay-dismiss interaction
 
 ### 3.5 Model Domain
 - `/models/explore`
 - shared overview layout: hero summary, signal cards, main catalog list, side follow-up actions
 - normal catalog views hide internal smoke/verification/demo fixtures and keep only a minimal curated sample set when demo data is required
+- admin viewers can delete eligible non-foundation models inline from catalog inventories; curated foundation/base models show a protected badge instead of delete controls
 - `/models/my-models`
 - shared overview layout with ownership-focused status and next-step actions
 - `/models/create` (stepper required)
@@ -69,11 +68,15 @@ Define executable route and page structure for the AI-native conversation worksp
   - dataset list + create entry
 - `/datasets/:datasetId`
   - dataset detail
+  - supports optional `?version=<dataset_version_id>` to preselect active snapshot context
   - top stepper for ingestion/split/version
   - dataset attachments always visible/deletable/status-aware
+  - visual sample browser area supports grid/list switch, fast filters, and bulk item operations
+  - item browser filters should include at minimum search, split, item status, annotation queue status, and metadata/tag hints
   - dataset detail also surfaces annotation summary cards and direct queue links into annotation workspace (`needs_work`, `in_review`, `rejected`, `approved`)
 - `/datasets/:datasetId/annotate`
-  - minimal annotation workspace
+  - sample review workbench layout (sample + annotation + review context + metadata in one workspace)
+  - supports optional `?version=<dataset_version_id>` so dataset-detail snapshot context can stay visible while reviewing queues
   - detection box + OCR text annotation
   - submit-review and approve/reject actions
   - filtered item queues plus persistent latest-review context for rework
@@ -81,6 +84,7 @@ Define executable route and page structure for the AI-native conversation worksp
 ### 3.7 Training Domain
 - `/training/jobs`
   - job list
+  - supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) so dataset-detail snapshot actions can open a filtered operational view
   - initial page load may show blocking loading state, but background refresh must stay non-jumping and only update visible state when job data actually changes
   - manual refresh remains available for operators who want explicit control
 - `/training/jobs/new`
@@ -93,6 +97,7 @@ Define executable route and page structure for the AI-native conversation worksp
 ### 3.8 Inference Validation Domain
 - `/inference/validate`
   - runtime connectivity diagnostics (PaddleOCR/docTR/YOLO)
+  - supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) from dataset-detail snapshot actions
   - upload image
   - choose model version
   - run inference
@@ -127,6 +132,9 @@ Define executable route and page structure for the AI-native conversation worksp
 - `AttachmentUploader`: visible + deletable + status list
 - `StepIndicator`: mandatory for multi-step flows
 - `AdvancedSection`: only low-frequency or advanced controls should collapse by default; compatibility-only fallback inputs should stay open when they are the primary available path
+- `DatasetItemBrowser`: shared sample browser block for dataset item grids/lists, filters, and batch actions
+- `BulkActionBar`: shared batch operation bar for item-level split/status/tag/metadata actions
+- `SampleReviewWorkbench`: unified item review layout used by annotation/review-heavy screens
 - background refresh must be visibility-aware and should run only while transient states exist (for example `uploading`, `processing`, active jobs, active review queues)
 - dense operational inventories (for example dataset items and annotation queues) should prefer fixed-height internal scroll with windowed rendering instead of mounting every row at once
 
@@ -136,17 +144,21 @@ Define executable route and page structure for the AI-native conversation worksp
 - top stepper for `Upload -> Organize -> Version`
 - attachment list stays visible
 - split/version actions are explicit operations
+- visual sample browser supports both scanning and triage actions in-place (not only a static detail list)
+- item-level batch actions are available for repetitive curation operations
 - annotation summary stays visible in the same page so operators can see ready-for-review, rejected, and approved counts before leaving the dataset
-- quick links can open annotation workspace with queue/item context already selected
+- quick links can open annotation workspace with queue/item context already selected (and carry selected dataset-version context when available)
+- version-operation links should be able to open training jobs and inference validation with dataset/version scope context preserved
 - initial page load may show blocking loading state, but background refresh must stay quiet and only update visible state when dataset/attachment/item/version data actually changes
 - manual refresh remains available so operators can explicitly pull the latest dataset state when needed
 
 ### 5.2 Annotation Workspace
 - top stepper for `Select Item -> Annotate -> Review`
+- sample review workbench keeps sample preview, annotation payload, metadata, and latest review context aligned in one task surface
 - item rail supports focused queue filters (`all`, `needs_work`, `in_review`, `rejected`, `approved`) without losing the current selection when background data is unchanged
 - latest review detail card stays visible for rejected/rework items so annotators can see why the previous review failed
 - when a rejected item is explicitly moved back to `in_progress`, the workspace should keep the same item selected and shift into `needs_work` so rework can continue without losing context
-- deep links from dataset detail can preselect queue filter and item id
+- deep links from dataset detail can preselect queue filter, item id, and optional dataset-version context
 - initial page load may show blocking loading state, but background refresh must not keep resetting the current item or canvas when server data has not changed
 - manual refresh remains available so annotators can pull the latest review/pre-annotation state on demand
 
@@ -173,6 +185,7 @@ Define executable route and page structure for the AI-native conversation worksp
 - `/models/explore`, `/models/my-models`, and `/models/versions` use the shared overview layout (`hero -> signals -> main list + side actions`)
 - primary inventory stays in the main column; creation or follow-up actions stay visible in the side column
 - loading, empty, error, and success states use the same `StateBlock` semantics as dataset and training pages
+- when current user is `admin`, model inventory rows also expose inline delete controls for eligible non-foundation models; deletion stays blocked with clear feedback when dependent conversations or model versions still exist
 
 ### 5.6 Settings Surface
 - `/settings` acts as the single settings entry in the console sidebar
@@ -218,3 +231,4 @@ Define executable route and page structure for the AI-native conversation worksp
 - Phase 1 focuses on skeleton pages + mock APIs.
 - Phase 2 introduces and now starts implementing minimal annotation workspace and review loop.
 - Phase 3+ integrates real framework adapters and executors.
+- visual-data-loop evolution track (reference: `docs/visual-data-loop-evolution.md`) incrementally upgrades dataset browser/review/version workflows without replacing chat-first IA.

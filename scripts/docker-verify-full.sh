@@ -37,6 +37,12 @@ APPROVAL_ID=''
 DETECTION_RUN_ID=''
 OCR_RUN_ID=''
 ATTACHMENT_ID=''
+DEDICATED_REFERENCE_WORKER_ID=''
+DEDICATED_REFERENCE_JOB_ID=''
+DEDICATED_CANCEL_WORKER_ID=''
+DEDICATED_CANCEL_JOB_ID=''
+DEDICATED_TRAINING_DATASET_ID=''
+DEDICATED_TRAINING_DATASET_VERSION_ID=''
 RUNTIME_METRICS_RETENTION_JSON='null'
 CONVERSATION_UPLOAD_FILE="$(mktemp)"
 MODEL_UPLOAD_FILE="$(mktemp)"
@@ -83,6 +89,12 @@ finalize_report() {
     --arg detection_run_id "${DETECTION_RUN_ID}" \
     --arg ocr_run_id "${OCR_RUN_ID}" \
     --arg attachment_id "${ATTACHMENT_ID}" \
+    --arg dedicated_reference_worker_id "${DEDICATED_REFERENCE_WORKER_ID}" \
+    --arg dedicated_reference_job_id "${DEDICATED_REFERENCE_JOB_ID}" \
+    --arg dedicated_cancel_worker_id "${DEDICATED_CANCEL_WORKER_ID}" \
+    --arg dedicated_cancel_job_id "${DEDICATED_CANCEL_JOB_ID}" \
+    --arg dedicated_training_dataset_id "${DEDICATED_TRAINING_DATASET_ID}" \
+    --arg dedicated_training_dataset_version_id "${DEDICATED_TRAINING_DATASET_VERSION_ID}" \
     --argjson checks "${CHECKS_JSON}" \
     --argjson runtime_metrics_retention "${RUNTIME_METRICS_RETENTION_JSON}" \
     '{
@@ -102,7 +114,13 @@ finalize_report() {
         approval_id: $approval_id,
         detection_run_id: $detection_run_id,
         ocr_run_id: $ocr_run_id,
-        attachment_id: $attachment_id
+        attachment_id: $attachment_id,
+        dedicated_reference_worker_id: $dedicated_reference_worker_id,
+        dedicated_reference_job_id: $dedicated_reference_job_id,
+        dedicated_cancel_worker_id: $dedicated_cancel_worker_id,
+        dedicated_cancel_job_id: $dedicated_cancel_job_id,
+        dedicated_training_dataset_id: $dedicated_training_dataset_id,
+        dedicated_training_dataset_version_id: $dedicated_training_dataset_version_id
       },
       checks: $checks,
       runtime_metrics_retention: $runtime_metrics_retention
@@ -135,6 +153,12 @@ finalize_report() {
 - approval_id: ${APPROVAL_ID}
 - detection_run_id: ${DETECTION_RUN_ID}
 - ocr_run_id: ${OCR_RUN_ID}
+- dedicated_reference_worker_id: ${DEDICATED_REFERENCE_WORKER_ID}
+- dedicated_reference_job_id: ${DEDICATED_REFERENCE_JOB_ID}
+- dedicated_cancel_worker_id: ${DEDICATED_CANCEL_WORKER_ID}
+- dedicated_cancel_job_id: ${DEDICATED_CANCEL_JOB_ID}
+- dedicated_training_dataset_id: ${DEDICATED_TRAINING_DATASET_ID}
+- dedicated_training_dataset_version_id: ${DEDICATED_TRAINING_DATASET_VERSION_ID}
 
 ## Runtime Metrics Retention
 - current_total_rows: ${retention_current}
@@ -176,7 +200,7 @@ get_csrf_token() {
 }
 
 CURRENT_STEP='infrastructure health checks'
-echo "[docker-verify-full] 1/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 1/17 ${CURRENT_STEP}"
 if [[ "${VERIFY_SKIP_HEALTHZ}" != "1" ]]; then
   curl -fsS "${BASE_URL}/healthz" >/dev/null
 fi
@@ -188,7 +212,7 @@ else
 fi
 
 CURRENT_STEP='probe login'
-echo "[docker-verify-full] 2/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 2/17 ${CURRENT_STEP}"
 curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -207,7 +231,7 @@ curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
 append_check "${CURRENT_STEP}" "passed" "probe user login/me succeeded and wrong-password was rejected"
 
 CURRENT_STEP='business account login'
-echo "[docker-verify-full] 3/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 3/17 ${CURRENT_STEP}"
 curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -222,7 +246,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "business user login and csrf succeeded"
 
 CURRENT_STEP='resolve conversation model'
-echo "[docker-verify-full] 4/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 4/17 ${CURRENT_STEP}"
 CONVERSATION_MODEL_ID="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/models" | jq -r '.data[0].id // empty')"
 if [[ -z "${CONVERSATION_MODEL_ID}" ]]; then
@@ -240,7 +264,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "conversation_model=${CONVERSATION_MODEL_ID}"
 
 CURRENT_STEP='account governance'
-echo "[docker-verify-full] 5/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 5/17 ${CURRENT_STEP}"
 ACCOUNT_GOVERNANCE_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" ADMIN_USERNAME="${ADMIN_USERNAME}" ADMIN_PASSWORD="${ADMIN_PASSWORD}" bash scripts/smoke-account-governance.sh)"
 echo "${ACCOUNT_GOVERNANCE_OUTPUT}"
 ACCOUNT_GOVERNANCE_CREATED_USER_ID="$(echo "${ACCOUNT_GOVERNANCE_OUTPUT}" | awk -F= '/^created_user_id=/{print $2; exit}')"
@@ -253,7 +277,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "created_user=${ACCOUNT_GOVERNANCE_CREATED_USERNAME}(${ACCOUNT_GOVERNANCE_CREATED_USER_ID}), admin=${ACCOUNT_GOVERNANCE_ADMIN_ID}"
 
 CURRENT_STEP='conversation attachment upload lifecycle'
-echo "[docker-verify-full] 6/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 6/17 ${CURRENT_STEP}"
 printf 'docker verify conversation upload payload (%s)\n' "${RUN_TAG}" >"${CONVERSATION_UPLOAD_FILE}"
 ATTACHMENT_UPLOAD_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/files/conversation/upload" \
@@ -285,7 +309,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "attachment ${ATTACHMENT_ID} reached ready state"
 
 CURRENT_STEP='start conversation with attachment'
-echo "[docker-verify-full] 7/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 7/17 ${CURRENT_STEP}"
 CONVERSATION_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/conversations/start" \
   -H 'Content-Type: application/json' \
@@ -303,7 +327,7 @@ echo "${CONVERSATION_RESPONSE}" | jq -e '.success == true and (.data.messages | 
 append_check "${CURRENT_STEP}" "passed" "conversation ${CONVERSATION_ID} created with assistant reply"
 
 CURRENT_STEP='conversation operational actions'
-echo "[docker-verify-full] 8/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 8/17 ${CURRENT_STEP}"
 CONVERSATION_ACTIONS_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-conversation-actions.sh)"
 echo "${CONVERSATION_ACTIONS_OUTPUT}"
 CONVERSATION_ACTIONS_DATASET_ID="$(echo "${CONVERSATION_ACTIONS_OUTPUT}" | awk -F= '/^dataset_id=/{print $2; exit}')"
@@ -318,7 +342,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "dataset=${CONVERSATION_ACTIONS_DATASET_ID}, model_draft=${CONVERSATION_ACTIONS_MODEL_DRAFT_ID}, training_job=${CONVERSATION_ACTIONS_TRAINING_JOB_ID}, training_dataset=${CONVERSATION_ACTIONS_TRAINING_DATASET_ID}, training_dataset_version=${CONVERSATION_ACTIONS_TRAINING_DATASET_VERSION_ID}"
 
 CURRENT_STEP='model draft -> model file -> approval submit'
-echo "[docker-verify-full] 9/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 9/17 ${CURRENT_STEP}"
 MODEL_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/models/draft" \
   -H 'Content-Type: application/json' \
@@ -371,7 +395,7 @@ APPROVAL_ID="$(echo "${APPROVAL_RESPONSE}" | jq -r '.data.id')"
 append_check "${CURRENT_STEP}" "passed" "model ${MODEL_ID} submitted as approval ${APPROVAL_ID}"
 
 CURRENT_STEP='runtime connectivity contract'
-echo "[docker-verify-full] 10/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 10/17 ${CURRENT_STEP}"
 RUNTIME_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/runtime/connectivity")"
 echo "${RUNTIME_RESPONSE}" | jq -e '.success == true and (.data | length) >= 3 and ([.data[].error_kind] | all(. != null))' >/dev/null
@@ -382,7 +406,7 @@ RUNTIME_METRICS_RETENTION_JSON="$(echo "${RUNTIME_METRICS_RETENTION_RESPONSE}" |
 append_check "${CURRENT_STEP}" "passed" "runtime connectivity + metrics retention summary available"
 
 CURRENT_STEP='detection + ocr inference'
-echo "[docker-verify-full] 11/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 11/17 ${CURRENT_STEP}"
 MODEL_VERSIONS_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/model-versions")"
 DETECTION_MODEL_VERSION_ID="$(echo "${MODEL_VERSIONS_RESPONSE}" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
@@ -424,7 +448,7 @@ echo "${OCR_RESPONSE}" | jq -e '.success == true and (.data.normalized_output.oc
 append_check "${CURRENT_STEP}" "passed" "detection run ${DETECTION_RUN_ID} (${DETECTION_MODEL_VERSION_ID}) and ocr run ${OCR_RUN_ID} (${OCR_MODEL_VERSION_ID}) succeeded"
 
 CURRENT_STEP='inference feedback to dataset'
-echo "[docker-verify-full] 12/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 12/17 ${CURRENT_STEP}"
 DATASETS_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/datasets")"
 DETECTION_FEEDBACK_DATASET_ID="$(echo "${DATASETS_RESPONSE}" | jq -r '.data[] | select(.task_type=="detection") | .id' | head -n 1)"
@@ -682,7 +706,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "detection mismatch->${MISMATCH_DETECTION_DATASET_ID} rejected and linked->${DETECTION_FEEDBACK_DATASET_ID}; ocr mismatch->${MISMATCH_OCR_DATASET_ID} rejected and linked->${OCR_FEEDBACK_DATASET_ID}; reuse dataset=${REUSE_FEEDBACK_DATASET_ID} run=${REUSE_RUN_ID}"
 
 CURRENT_STEP='phase2 annotation/review + launch-readiness guards'
-echo "[docker-verify-full] 13/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 13/17 ${CURRENT_STEP}"
 PHASE2_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" EXPECT_RUNTIME_FALLBACK=false bash scripts/smoke-phase2.sh)"
 echo "${PHASE2_OUTPUT}"
 PHASE2_DATASET_ID="$(echo "${PHASE2_OUTPUT}" | awk -F= '/^dataset_id=/{print $2; exit}')"
@@ -694,7 +718,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "phase2 dataset=${PHASE2_DATASET_ID}, no-train gate version=${PHASE2_NO_TRAIN_VERSION_ID}"
 
 CURRENT_STEP='dataset export/import roundtrip'
-echo "[docker-verify-full] 14/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 14/17 ${CURRENT_STEP}"
 DATASET_ROUNDTRIP_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-dataset-export-roundtrip.sh)"
 echo "${DATASET_ROUNDTRIP_OUTPUT}"
 
@@ -708,7 +732,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "roundtrip targets: det=${ROUNDTRIP_DET_TARGET}, ocr=${ROUNDTRIP_OCR_TARGET}, seg=${ROUNDTRIP_SEG_TARGET}"
 
 CURRENT_STEP='real closure smoke (yolo + paddleocr + doctr)'
-echo "[docker-verify-full] 15/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 15/17 ${CURRENT_STEP}"
 REAL_CLOSURE_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-real-closure.sh)"
 echo "${REAL_CLOSURE_OUTPUT}"
 
@@ -722,7 +746,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "sources: yolo=${REAL_CLOSURE_YOLO_SOURCE}, paddleocr=${REAL_CLOSURE_OCR_SOURCE}, doctr=${REAL_CLOSURE_DOCTR_SOURCE}"
 
 CURRENT_STEP='ocr closure smoke (paddleocr + doctr)'
-echo "[docker-verify-full] 16/16 ${CURRENT_STEP}"
+echo "[docker-verify-full] 16/17 ${CURRENT_STEP}"
 OCR_CLOSURE_OUTPUT="$(START_API=false OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-ocr-closure.sh)"
 echo "${OCR_CLOSURE_OUTPUT}"
 
@@ -744,6 +768,35 @@ if [[ -z "${OCR_CLOSURE_DOCTR_PRIMARY_NAME}" || -z "${OCR_CLOSURE_DOCTR_PRIMARY_
   exit 1
 fi
 append_check "${CURRENT_STEP}" "passed" "execution_sources: paddleocr=${OCR_CLOSURE_PADDLE_SOURCE}, doctr=${OCR_CLOSURE_DOCTR_SOURCE}; metrics: paddle_accuracy=${OCR_CLOSURE_PADDLE_ACCURACY}, doctr_${OCR_CLOSURE_DOCTR_PRIMARY_NAME}=${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}"
+
+CURRENT_STEP='training worker dedicated auth smoke'
+echo "[docker-verify-full] 17/17 ${CURRENT_STEP}"
+DEDICATED_AUTH_WORKER_PUBLIC_HOST="${DEDICATED_AUTH_WORKER_PUBLIC_HOST:-host.docker.internal}"
+DEDICATED_AUTH_WORKER_BIND_HOST="${DEDICATED_AUTH_WORKER_BIND_HOST:-0.0.0.0}"
+DEDICATED_AUTH_OUTPUT="$(
+  START_API=false \
+  BASE_URL="${BASE_URL}" \
+  ADMIN_USERNAME="${ADMIN_USERNAME}" \
+  ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
+  WORKER_PUBLIC_HOST="${DEDICATED_AUTH_WORKER_PUBLIC_HOST}" \
+  WORKER_BIND_HOST="${DEDICATED_AUTH_WORKER_BIND_HOST}" \
+  bash scripts/smoke-training-worker-dedicated-auth.sh
+)"
+echo "${DEDICATED_AUTH_OUTPUT}"
+DEDICATED_REFERENCE_WORKER_ID="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^reference_worker_id=/{print $2; exit}')"
+DEDICATED_REFERENCE_JOB_ID="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^reference_job_id=/{print $2; exit}')"
+DEDICATED_CANCEL_WORKER_ID="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^cancel_worker_id=/{print $2; exit}')"
+DEDICATED_CANCEL_JOB_ID="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^cancel_job_id=/{print $2; exit}')"
+DEDICATED_REFERENCE_LOG_COUNT="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^reference_log_count=/{print $2; exit}')"
+DEDICATED_REFERENCE_INLINE_LOG_COUNT="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^reference_inline_log_count=/{print $2; exit}')"
+DEDICATED_CANCEL_LOG_COUNT="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^cancel_log_count=/{print $2; exit}')"
+DEDICATED_TRAINING_DATASET_ID="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^training_dataset_id=/{print $2; exit}')"
+DEDICATED_TRAINING_DATASET_VERSION_ID="$(echo "${DEDICATED_AUTH_OUTPUT}" | awk -F= '/^training_dataset_version_id=/{print $2; exit}')"
+if [[ -z "${DEDICATED_REFERENCE_WORKER_ID}" || -z "${DEDICATED_REFERENCE_JOB_ID}" || -z "${DEDICATED_CANCEL_WORKER_ID}" || -z "${DEDICATED_CANCEL_JOB_ID}" || -z "${DEDICATED_REFERENCE_LOG_COUNT}" || -z "${DEDICATED_CANCEL_LOG_COUNT}" ]]; then
+  echo "[docker-verify-full] dedicated-auth output missing required ids"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "reference_worker=${DEDICATED_REFERENCE_WORKER_ID}, reference_job=${DEDICATED_REFERENCE_JOB_ID}, reference_logs=${DEDICATED_REFERENCE_LOG_COUNT}, reference_inline_logs=${DEDICATED_REFERENCE_INLINE_LOG_COUNT:-0}, cancel_worker=${DEDICATED_CANCEL_WORKER_ID}, cancel_job=${DEDICATED_CANCEL_JOB_ID}, cancel_logs=${DEDICATED_CANCEL_LOG_COUNT}, training_dataset=${DEDICATED_TRAINING_DATASET_ID:-unknown}, training_dataset_version=${DEDICATED_TRAINING_DATASET_VERSION_ID:-unknown}"
 
 finalize_report "passed" "full deployment verification succeeded"
 

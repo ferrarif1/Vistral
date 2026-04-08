@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { DatasetRecord, DatasetVersionRecord, RequirementTaskDraft } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
@@ -25,10 +25,12 @@ const curatedBaseModelCatalog = {
 const taskTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
 
 type TrainingFramework = keyof typeof curatedBaseModelCatalog;
+const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
 
 export default function CreateTrainingJobPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const steps = useMemo(() => [t('Task'), t('Dataset'), t('Params'), t('Review')], [t]);
   const stepTitles = useMemo(
     () => [t('Step 1. Task and Framework'), t('Step 2. Dataset and Base Model'), t('Step 3. Core Params'), t('Step 4. Review')],
@@ -65,6 +67,10 @@ export default function CreateTrainingJobPage() {
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const preferredVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredDatasetAppliedRef = useRef(false);
+  const preferredVersionAppliedRef = useRef(false);
   const draftAnnotationType = taskDraft?.recommended_annotation_type ?? taskDraft?.annotation_type ?? '';
 
   useEffect(() => {
@@ -73,6 +79,21 @@ export default function CreateTrainingJobPage() {
       .listDatasets()
       .then((result) => {
         setDatasets(result);
+        const preferredDataset =
+          preferredDatasetId && !preferredDatasetAppliedRef.current
+            ? result.find((dataset) => dataset.id === preferredDatasetId) ?? null
+            : null;
+
+        if (preferredDataset) {
+          preferredDatasetAppliedRef.current = true;
+          if (preferredDataset.task_type !== taskType) {
+            setTaskType(preferredDataset.task_type);
+          }
+          setDatasetId(preferredDataset.id);
+          setStep((current) => (current < 1 ? 1 : current));
+          return;
+        }
+
         const first = result.find((dataset) => dataset.task_type === taskType);
         setDatasetId((current) =>
           current && result.some((dataset) => dataset.id === current && dataset.task_type === taskType)
@@ -82,7 +103,7 @@ export default function CreateTrainingJobPage() {
       })
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
       .finally(() => setLoading(false));
-  }, [taskType]);
+  }, [preferredDatasetId, taskType]);
 
   useEffect(() => {
     if (!datasetId) {
@@ -102,8 +123,20 @@ export default function CreateTrainingJobPage() {
         }
 
         setDatasetVersions(result);
+        const preferredVersion =
+          preferredVersionId &&
+          !preferredVersionAppliedRef.current &&
+          result.find((version) => version.id === preferredVersionId)
+            ? preferredVersionId
+            : '';
+
+        if (preferredVersion) {
+          preferredVersionAppliedRef.current = true;
+        }
+
         setDatasetVersionId((current) =>
-          current && result.some((version) => version.id === current) ? current : (result[0]?.id ?? '')
+          preferredVersion ||
+          (current && result.some((version) => version.id === current) ? current : (result[0]?.id ?? ''))
         );
       })
       .catch((error) => {
@@ -121,7 +154,7 @@ export default function CreateTrainingJobPage() {
     return () => {
       active = false;
     };
-  }, [datasetId]);
+  }, [datasetId, preferredVersionId]);
 
   useEffect(() => {
     if (taskType === 'ocr' && framework === 'yolo') {
@@ -157,6 +190,32 @@ export default function CreateTrainingJobPage() {
     () => datasetVersions.find((version) => version.id === datasetVersionId) ?? null,
     [datasetVersionId, datasetVersions]
   );
+  const scopedJobsPath = useMemo(() => {
+    const next = new URLSearchParams();
+    if (datasetId) {
+      next.set('dataset', datasetId);
+    }
+    if (datasetVersionId) {
+      next.set('version', datasetVersionId);
+    }
+    const query = next.toString();
+    return query ? `/training/jobs?${query}` : '/training/jobs';
+  }, [datasetId, datasetVersionId]);
+  const scopedDatasetDetailPath = useMemo(() => {
+    if (!selectedDataset) {
+      return '/datasets';
+    }
+    if (!datasetVersionId) {
+      return `/datasets/${selectedDataset.id}`;
+    }
+    const next = new URLSearchParams();
+    next.set('version', datasetVersionId);
+    return `/datasets/${selectedDataset.id}?${next.toString()}`;
+  }, [datasetVersionId, selectedDataset]);
+  const snapshotPrefilledFromLink =
+    Boolean(preferredDatasetId) &&
+    datasetId === preferredDatasetId &&
+    (!preferredVersionId || datasetVersionId === preferredVersionId);
   const readyMatchingDatasets = useMemo(
     () => filteredDatasets.filter((dataset) => dataset.status === 'ready').length,
     [filteredDatasets]
@@ -250,9 +309,9 @@ export default function CreateTrainingJobPage() {
 
       setFeedback({
         variant: 'success',
-        text: t('Training job {jobId} created.', { jobId: created.id })
+        text: t('Training job created. Opening the detail page.')
       });
-      navigate(`/training/jobs/${created.id}`);
+      navigate(`/training/jobs/${created.id}?dataset=${encodeURIComponent(datasetId)}&version=${encodeURIComponent(datasetVersionId)}`);
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -305,7 +364,7 @@ export default function CreateTrainingJobPage() {
       label: t('Dataset Version'),
       done: Boolean(selectedDatasetVersion),
       hint: selectedDatasetVersion
-        ? `${selectedDatasetVersion.version_name} (${selectedDatasetVersion.id})`
+        ? `${selectedDatasetVersion.version_name} · ${t('train')} ${selectedDatasetVersion.split_summary.train} · ${t('Annotation coverage')}: ${formatCoveragePercent(selectedDatasetVersion.annotation_coverage)}`
         : t('Choose an immutable dataset version snapshot for this run.')
     },
     {
@@ -424,7 +483,8 @@ export default function CreateTrainingJobPage() {
                 </option>
                 {datasetVersions.map((version) => (
                   <option key={version.id} value={version.id}>
-                    {version.version_name} ({version.id})
+                    {version.version_name} · {t('train')} {version.split_summary.train} ·{' '}
+                    {formatCoveragePercent(version.annotation_coverage)}
                   </option>
                 ))}
               </Select>
@@ -467,9 +527,7 @@ export default function CreateTrainingJobPage() {
                     {launchReady ? t('Ready') : t('draft')}
                   </StatusTag>
                 </div>
-                <small className="muted">
-                  {selectedDatasetVersion.version_name} ({selectedDatasetVersion.id})
-                </small>
+                <small className="muted">{selectedDatasetVersion.version_name}</small>
               </li>
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
@@ -479,8 +537,8 @@ export default function CreateTrainingJobPage() {
                   </Badge>
                 </div>
                 <small className="muted">
-                  train {selectedDatasetVersion.split_summary.train} · val {selectedDatasetVersion.split_summary.val} ·
-                  test {selectedDatasetVersion.split_summary.test} · unassigned {selectedDatasetVersion.split_summary.unassigned}
+                  {t('train')} {selectedDatasetVersion.split_summary.train} · {t('val')} {selectedDatasetVersion.split_summary.val} ·
+                  {t('test')} {selectedDatasetVersion.split_summary.test} · {t('unassigned')} {selectedDatasetVersion.split_summary.unassigned}
                 </small>
               </li>
               <li className="workspace-record-item compact">
@@ -577,7 +635,7 @@ export default function CreateTrainingJobPage() {
               </StatusTag>
             </div>
             <small className="muted">
-              {(selectedDataset?.name ?? datasetId) || t('N/A')} · {t('Dataset Version')}: {selectedDatasetVersion?.version_name || datasetVersionId || t('N/A')}
+              {selectedDataset?.name ?? t('N/A')} · {t('Dataset Version')}: {selectedDatasetVersion?.version_name ?? t('N/A')}
             </small>
           </li>
           <li className="workspace-record-item compact">
@@ -612,12 +670,26 @@ export default function CreateTrainingJobPage() {
           {
             label: t('Draft assist'),
             value: taskDraft ? 1 : 0
+          },
+          {
+            label: t('Snapshot prefill'),
+            value: snapshotPrefilledFromLink ? t('Ready') : t('N/A')
           }
         ]}
       />
 
       {loading ? (
         <StateBlock variant="loading" title={t('Preparing')} description={t('Loading dataset options.')} />
+      ) : null}
+
+      {snapshotPrefilledFromLink ? (
+        <StateBlock
+          variant="success"
+          title={t('Snapshot preselected from dataset detail')}
+          description={preferredVersionId
+            ? t('Dataset and version snapshot were prefilled. You can launch directly after readiness review.')
+            : t('Dataset was prefilled. Choose a version snapshot, then continue launch review.')}
+        />
       ) : null}
 
       {feedback ? (
@@ -771,10 +843,10 @@ export default function CreateTrainingJobPage() {
                 >
                   {submitting ? t('Submitting...') : t('Create Training Job')}
                 </Button>
-                <ButtonLink to="/datasets" variant="secondary" block>
-                  {t('Manage Datasets')}
+                <ButtonLink to={scopedDatasetDetailPath} variant="secondary" block>
+                  {selectedDataset ? t('Open scoped dataset') : t('Manage Datasets')}
                 </ButtonLink>
-                <ButtonLink to="/training/jobs" variant="secondary" block>
+                <ButtonLink to={scopedJobsPath} variant="secondary" block>
                   {t('Open Training Jobs')}
                 </ButtonLink>
               </div>

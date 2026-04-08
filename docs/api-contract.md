@@ -394,11 +394,20 @@ Notes:
 - keep each file under about `120 MB` to avoid proxy/body-size rejection (`413`)
 
 ### GET /files/{id}/content
-Fetch binary content for a ready attachment in ownership scope.
+Fetch binary content for a ready attachment in readable resource scope.
 
 Response:
 - raw binary stream (not JSON envelope)
 - headers include `Content-Type`, `Content-Length`, `Content-Disposition`
+
+Read access rules:
+- admin can always read
+- attachment owner can read
+- non-owner can read when they have access to the bound resource:
+  - dataset attachment: can read if dataset access is allowed
+  - model attachment: can read if model access is allowed
+  - conversation attachment: can read if conversation access is allowed
+  - inference attachment: can read if linked inference run/model-version access is allowed
 
 ### DELETE /files/{id}
 Delete attachment in ownership scope.
@@ -419,6 +428,27 @@ List owned/authorized models.
 
 ### POST /models/draft
 Create model draft.
+
+### DELETE /admin/models/{id}
+Delete a model from the catalog (admin only).
+
+Rules:
+- admin only
+- curated foundation/base models are protected and must return a validation error instead of being deleted
+- deletion is blocked when any `ModelVersion` still references the model
+- deletion is blocked when any `Conversation` still references the model
+- successful deletion removes:
+  - the `Model` record
+  - model-scoped `FileAttachment` records and stored binaries
+  - related `ApprovalRequest` records
+- successful deletion writes an audit log entry for governance traceability
+
+Response:
+```json
+{
+  "removed": true
+}
+```
 
 ### POST /approvals/submit
 Submit model approval request.

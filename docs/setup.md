@@ -96,6 +96,11 @@ npm run smoke:verify-report-retention-e2e
 - `EXPECTED_TRAINING_DATASET_VERSION_ID`
 - `AUTO_PREPARE_TRAINING_TARGET` (default `true`)
 
+Worker scheduler/dispatch/cancel/failover/package/dedicated-auth smoke knobs:
+- `EXPECTED_TRAINING_DATASET_ID`
+- `EXPECTED_TRAINING_DATASET_VERSION_ID`
+  - when omitted, scripts auto-select a ready detection dataset + trainable version (`split_summary.train > 0` and `annotation_coverage > 0`)
+
 `smoke:inference-feedback-guard` environment knobs:
 - `EXPECTED_VALID_FEEDBACK_DATASET_ID`
 - `EXPECTED_OCR_FEEDBACK_DATASET_ID`
@@ -137,8 +142,9 @@ Persistence-related env vars (prototype):
 - placeholder examples: `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 
 `docker:verify:full` writes audit-style reports to `.data/verify-reports/`.
-It now also validates account governance, conversation operational actions, phase2 annotation/review + launch-readiness gates (including dataset-version ownership under the selected dataset), dataset export/import roundtrip (detection/ocr/segmentation), and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
+It now also validates account governance, conversation operational actions, phase2 annotation/review + launch-readiness gates (including dataset-version ownership under the selected dataset), dataset export/import roundtrip (detection/ocr/segmentation), dedicated training-worker auth dispatch/cancel flow, and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
 By default it runs OCR closure in non-strict mode (`OCR_CLOSURE_STRICT_LOCAL_COMMAND=false`) so deployment verification can tolerate simulated fallback when local commands are unavailable.
+If your deployment environment cannot resolve `host.docker.internal`, set `DEDICATED_AUTH_WORKER_PUBLIC_HOST` (and optionally `DEDICATED_AUTH_WORKER_BIND_HOST`) before running full verify.
 
 Strict OCR closure options:
 - `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run smoke:ocr-closure`

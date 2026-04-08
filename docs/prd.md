@@ -127,6 +127,9 @@ Vistral must provide one closed-loop platform where engineers can:
 - store error sample analysis
 - register model version with training linkage
 - compare model versions
+- administrators can remove non-foundation model records from the catalog when those models have no dependent model versions or conversations
+- curated foundation/base models remain protected from deletion so the training entry catalog always keeps the intended baseline choices
+- successful admin deletion must also clean up model-scoped attachments and related approval requests, and emit an audit log for governance traceability
 
 ### FR-011 Inference Validation
 - upload image and run inference with selected model version
@@ -175,6 +178,28 @@ Framework integrations must follow unified trainer interface:
   - re-dispatch should follow a bounded retry policy (max attempts + short backoff) to prevent endless dispatch thrashing
   - dispatch failure can fallback to control-plane local execution when fallback policy is enabled
 - contracts should support rolling expansion and shrink (for example adding/removing `B/C/D` nodes during runtime)
+
+### FR-015 Visual Data Loop Workspace Upgrade
+- absorb high-value workflow mechanisms from mature visual data tooling (for example Roboflow) without cloning page structures
+- keep Vistral chat-first positioning while upgrading professional workspace efficiency
+- dataset detail should expose an operational sample browser:
+  - grid/list browsing modes
+  - fast filters (search, split, status, annotation queue status, class/tag/metadata hits)
+  - bulk select + bulk item actions (at minimum split/status metadata updates)
+- sample-level workflow should behave as a unified review workbench:
+  - original sample, annotation payload, latest review context, metadata, and actions in one surface
+- dataset versions should be first-class workflow anchors:
+  - training/export/evaluation actions must remain visibly tied to explicit dataset-version snapshots
+- prediction-vs-annotation comparison entry should be explicit in review/validation workflows:
+  - overlay controls
+  - low-confidence / likely-error triage hints
+- tags and metadata must be operational:
+  - editable and filterable in sample workflows
+  - usable as loop signals for review routing and training scope preparation
+- implementation should prioritize information architecture and operational throughput over feature count
+
+Reference planning document:
+- `docs/visual-data-loop-evolution.md`
 
 ## 8. Non-Functional Requirements
 

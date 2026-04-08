@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AuditLogRecord, User } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
-import VirtualList from '../components/VirtualList';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Card, Panel } from '../components/ui/Surface';
@@ -14,11 +13,29 @@ import {
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
+import { formatCompactTimestamp } from '../utils/formatting';
+
+const humanizeAuditToken = (value: string) => {
+  const normalized = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+
+  if (!normalized) {
+    return 'Unknown';
+  }
+
+  return normalized
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
 
 export default function AdminAuditPage() {
   const { t } = useI18n();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [items, setItems] = useState<AuditLogRecord[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -37,11 +54,13 @@ export default function AdminAuditPage() {
 
       if (user.role !== 'admin') {
         setItems([]);
+        setUsers([]);
         return;
       }
 
-      const logs = await api.listAuditLogs();
+      const [logs, directoryUsers] = await Promise.all([api.listAuditLogs(), api.listUsers()]);
       setItems(logs);
+      setUsers(directoryUsers);
     } catch (loadError) {
       setError((loadError as Error).message);
     } finally {
@@ -60,10 +79,18 @@ export default function AdminAuditPage() {
   }, [load]);
 
   const sortedItems = useMemo(
-    () => [...items].sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()),
+    () =>
+      [...items].sort(
+        (left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp)
+      ),
     [items]
   );
-  const shouldVirtualizeAuditLogs = useMemo(() => sortedItems.length > 12, [sortedItems.length]);
+
+  const userIndex = useMemo(
+    () => new Map<string, User>(users.map((user) => [user.id, user])),
+    [users]
+  );
+
   const summary = useMemo(
     () => ({
       total: sortedItems.length,
@@ -73,6 +100,7 @@ export default function AdminAuditPage() {
     }),
     [sortedItems]
   );
+
   const topEntityTypes = useMemo(() => {
     const counts = sortedItems.reduce<Record<string, number>>((result, item) => {
       result[item.entity_type] = (result[item.entity_type] ?? 0) + 1;
@@ -83,35 +111,65 @@ export default function AdminAuditPage() {
       .sort((left, right) => right[1] - left[1])
       .slice(0, 4);
   }, [sortedItems]);
+
   const isDenied = currentUser !== null && currentUser.role !== 'admin';
 
-  const renderAuditRecord = (item: AuditLogRecord, as: 'div' | 'li' = 'div') => (
-    <Panel
-      as={as}
-      className={`workspace-record-item${as === 'div' ? ' virtualized' : ''}`}
-      tone="soft"
-    >
-      <div className="workspace-record-item-top">
-        <div className="workspace-record-summary stack tight">
-          <strong>{item.action}</strong>
-          <small className="muted">{new Date(item.timestamp).toLocaleString()}</small>
+  const renderAuditRecord = (item: AuditLogRecord, as: 'div' | 'li' = 'div') => {
+    const actor = item.user_id ? userIndex.get(item.user_id) ?? null : null;
+    const actorLabel = actor
+      ? `${actor.username} · ${t(actor.role === 'admin' ? 'Admin' : 'User')}`
+      : t('Unknown account');
+    const metadataCount = Object.keys(item.metadata ?? {}).length;
+    const readableAction = humanizeAuditToken(item.action);
+    const readableEntityType = humanizeAuditToken(item.entity_type);
+
+    return (
+      <Panel as={as} className="workspace-record-item" tone="soft">
+        <div className="workspace-record-item-top">
+          <div className="workspace-record-summary stack tight">
+            <strong>{readableAction}</strong>
+            <small className="muted">{formatCompactTimestamp(item.timestamp, t('n/a'))}</small>
+          </div>
+          <div className="workspace-record-actions">
+            <Badge tone={item.user_id ? 'info' : 'neutral'}>
+              {item.user_id ? t('User event') : t('System event')}
+            </Badge>
+          </div>
         </div>
-        <div className="workspace-record-actions">
-          <Badge tone={item.user_id ? 'info' : 'neutral'}>
-            {item.user_id ? t('user') : t('system')}
+
+        <div className="row gap wrap">
+          <Badge tone="info">{readableEntityType}</Badge>
+          <Badge tone={item.entity_id ? 'success' : 'neutral'}>
+            {item.entity_id ? t('Target record attached') : t('No target record')}
+          </Badge>
+          <Badge tone={metadataCount > 0 ? 'warning' : 'neutral'}>
+            {metadataCount > 0
+              ? t('Metadata fields: {count}', { count: metadataCount })
+              : t('No metadata fields')}
           </Badge>
         </div>
-      </div>
-      <div className="row gap wrap">
-        <Badge tone="info">{item.entity_type}</Badge>
-        <Badge tone="neutral">{item.entity_id ?? t('n/a')}</Badge>
-        <Badge tone="neutral">{item.user_id ?? t('system')}</Badge>
-      </div>
-      <small className="muted line-clamp-2">
-        {t('metadata')}: {item.metadata ? JSON.stringify(item.metadata) : t('n/a')}
-      </small>
-    </Panel>
-  );
+
+        <small className="muted">
+          {item.user_id
+            ? t('Actor: {actor}', { actor: actorLabel })
+            : t('Recorded by background automation.')}
+        </small>
+
+        <details className="workspace-details">
+          <summary>{t('View raw context')}</summary>
+          <div className="stack tight">
+            <small className="muted">{t('Action key: {value}', { value: item.action })}</small>
+            <small className="muted">{t('Target type: {value}', { value: item.entity_type })}</small>
+            <small className="muted">{t('Actor ID: {id}', { id: item.user_id ?? t('n/a') })}</small>
+            <small className="muted">{t('Target ID: {id}', { id: item.entity_id ?? t('n/a') })}</small>
+            <pre className="code-block">
+              {metadataCount > 0 ? JSON.stringify(item.metadata, null, 2) : '{}'}
+            </pre>
+          </div>
+        </details>
+      </Panel>
+    );
+  };
 
   const heroSection = (
     <WorkspaceHero
@@ -207,20 +265,9 @@ export default function AdminAuditPage() {
                   }
                 />
 
-                {shouldVirtualizeAuditLogs ? (
-                  <VirtualList
-                    items={sortedItems}
-                    itemHeight={152}
-                    height={560}
-                    ariaLabel={t('Admin Audit Logs')}
-                    itemKey={(item) => item.id}
-                    renderItem={(item: AuditLogRecord) => renderAuditRecord(item)}
-                  />
-                ) : (
-                  <ul className="workspace-record-list">
-                    {sortedItems.map((item) => renderAuditRecord(item, 'li'))}
-                  </ul>
-                )}
+                <ul className="workspace-record-list">
+                  {sortedItems.map((item) => renderAuditRecord(item, 'li'))}
+                </ul>
               </Card>
             }
             side={
@@ -243,7 +290,7 @@ export default function AdminAuditPage() {
                       {topEntityTypes.map(([entityType, count]) => (
                         <Panel key={entityType} as="li" className="workspace-record-item compact" tone="soft">
                           <div className="row between gap wrap">
-                            <strong>{entityType}</strong>
+                            <strong>{humanizeAuditToken(entityType)}</strong>
                             <Badge tone="info">{count}</Badge>
                           </div>
                           <small className="muted">{t('Records currently mapped to this entity type.')}</small>

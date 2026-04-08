@@ -131,18 +131,21 @@ When work is interrupted by a new conversation task, append handoff details in `
 Current priority queue:
 
 1. Refactor the full frontend against `DESIGN.md` / `notion/DESIGN.md` so all pages share one AI-native design system and layout language.
-2. Close Phase 2 annotation workflow from dataset detail into reviewer/rework queue and persistent reject context.
-3. Tighten dataset-version-backed training launch readiness after annotation/review closure.
-4. Continue the lower-priority framework realification backlog:
+2. Execute visual-data-loop evolution track (`docs/visual-data-loop-evolution.md`):
+   - Phase 1 first: dataset sample browser (grid/filter/batch), sample review workbench layout polish, and version-centered action clarity.
+3. Close Phase 2 annotation workflow from dataset detail into reviewer/rework queue and persistent reject context.
+4. Tighten dataset-version-backed training launch readiness after annotation/review closure.
+5. Continue the lower-priority framework realification backlog:
    - dependency-aware real framework execution inside local runners
    - richer epoch-level metrics retention/export hardening
    - dependency-present smoke expansion without duplicate routes/pages
-5. Continue worker rollout hardening after the paused dedicated-auth round:
-   - integrate `smoke-training-worker-dedicated-auth` into `docker:verify:full`
-   - reduce duplication across worker smoke scripts / helpers
-6. Design and implement worker GUI onboarding:
+6. Continue worker rollout hardening after dedicated-auth closure:
+   - keep worker smoke scripts seed-id portable (dynamic train-target resolution + guard checks)
+   - optionally extract remaining bootstrap/login lifecycle helpers to further reduce duplication
+   - add host override guidance/smoke for environments without `host.docker.internal`
+7. Design and implement worker GUI onboarding:
    - runtime-side `Add Worker` wizard
    - Docker-first worker bootstrap and pairing flow
    - local worker setup UI + validation gates before scheduling enablement
-7. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
-8. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.
+8. Monitor for any remaining refresh-jump reports outside the now-completed main/secondary polling sweep.
+9. If more visual refinement is requested later, run a screenshot-driven pass on remaining iconography and spacing details.

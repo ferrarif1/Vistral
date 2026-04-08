@@ -55,6 +55,11 @@
 - `created_at` / `updated_at` / `last_accessed_at`
 - `usage_count`
 
+规则：
+- 基座/基础模型目录中的整理模型属于受保护记录，管理员删除接口不得移除它们
+- 只有当目标模型不再被任何 `ModelVersion` 或 `Conversation` 引用时，管理员删除才允许执行
+- 删除成功时，还需一并移除模型作用域 `FileAttachment` 与关联 `ApprovalRequest`，并写入审计日志
+
 ### Conversation / Message / FileAttachment
 - 会话与消息维持对话上下文
 - 附件状态：`uploading | processing | ready | error`

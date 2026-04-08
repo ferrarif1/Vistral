@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
+source "${ROOT_DIR}/scripts/lib/smoke-training-worker-common.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-training-worker-cancel] jq is required."
@@ -13,19 +14,10 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-pick_port() {
-  python3 - <<'PY'
-import socket
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-}
-
 API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-$(pick_port)}"
+API_PORT="${API_PORT:-$(smoke_pick_port)}"
 WORKER_HOST="127.0.0.1"
-WORKER_PORT="${WORKER_PORT:-$(pick_port)}"
+WORKER_PORT="${WORKER_PORT:-$(smoke_pick_port)}"
 BASE_URL="http://${API_HOST}:${API_PORT}"
 WORKER_TOKEN="${WORKER_TOKEN:-smoke-worker-cancel-token}"
 
@@ -113,6 +105,8 @@ if [[ -z "${csrf_token}" ]]; then
   exit 1
 fi
 
+resolve_detection_training_target "${BASE_URL}" "${COOKIE_FILE}" "smoke-training-worker-cancel"
+
 worker_endpoint="http://${WORKER_HOST}:${WORKER_PORT}"
 create_worker_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
@@ -141,7 +135,7 @@ create_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d '{"name":"cancel-worker-job","task_type":"detection","framework":"yolo","dataset_id":"d-2","dataset_version_id":"dv-2","base_model":"yolo11n","config":{"epochs":"3","batch_size":"1"}}')"
+  -d "{\"name\":\"cancel-worker-job\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${TRAINING_DATASET_ID}\",\"dataset_version_id\":\"${TRAINING_DATASET_VERSION_ID}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"3\",\"batch_size\":\"1\"}}")"
 job_id="$(echo "${create_job_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${job_id}" ]]; then
   echo "[smoke-training-worker-cancel] failed to create job."
@@ -198,3 +192,5 @@ fi
 echo "[smoke-training-worker-cancel] PASS"
 echo "job_id=${job_id}"
 echo "final_status=${final_status}"
+echo "training_dataset_id=${TRAINING_DATASET_ID}"
+echo "training_dataset_version_id=${TRAINING_DATASET_VERSION_ID}"

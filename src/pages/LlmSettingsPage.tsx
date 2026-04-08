@@ -106,10 +106,10 @@ export default function LlmSettingsPage() {
     savedConfig.temperature !== normalizedForm.temperature ||
     hasTypedApiKey;
   const keyHandlingText = hasTypedApiKey
-    ? t('Typed API Key will replace the saved key on save and be used for connection test.')
+    ? t('A newly entered key will be used for this test and saved if you click Save.')
     : hasApiKey
-      ? t('Blank API Key means save/test will keep using the saved key.')
-      : t('No saved key yet. Input API key once to start managed editing.');
+      ? t('Leave API Key blank to keep using the saved key.')
+      : t('No key saved yet. Add one once to finish setup.');
 
   const applyChatAnywherePreset = () => {
     setForm((prev) => ({
@@ -132,7 +132,7 @@ export default function LlmSettingsPage() {
     }
 
     update('api_key', '');
-    setStatus({ variant: 'success', text: t('Typed API key discarded. Saved key handling restored.') });
+    setStatus({ variant: 'success', text: t('Typed key removed. Saved key will be reused again.') });
     setConnectionAdvice('');
   };
 
@@ -160,7 +160,7 @@ export default function LlmSettingsPage() {
       setForm(buildEditableForm(saved));
       setStatus({
         variant: 'success',
-        text: t('Configuration saved to encrypted local storage. Current key: {key}.', {
+        text: t('Settings saved. Stored key reminder: {key}.', {
           key: saved.api_key_masked
         })
       });
@@ -179,7 +179,7 @@ export default function LlmSettingsPage() {
       setForm(buildEditableForm(cleared));
       setApiKeyMasked(cleared.api_key_masked);
       setHasApiKey(cleared.has_api_key);
-      setStatus({ variant: 'success', text: t('Configuration cleared from encrypted local storage.') });
+      setStatus({ variant: 'success', text: t('Saved settings cleared.') });
       setConnectionAdvice('');
       emitLlmConfigUpdated();
     } catch (error) {
@@ -192,7 +192,7 @@ export default function LlmSettingsPage() {
     setRefreshing(true);
     try {
       await refresh();
-      setStatus({ variant: 'success', text: t('Reloaded saved LLM settings.') });
+      setStatus({ variant: 'success', text: t('Saved settings reloaded.') });
       setConnectionAdvice('');
     } catch (error) {
       setStatus({ variant: 'error', text: (error as Error).message });
@@ -256,13 +256,13 @@ export default function LlmSettingsPage() {
       <SettingsTabs />
 
       <WorkspaceHero
-        eyebrow={t('LLM Control Plane')}
-        title={t('LLM Settings (Bring Your Own Key)')}
-        description={t('Manage provider credentials, saved key reuse, and live connection checks from one page.')}
+        eyebrow={t('Settings')}
+        title={t('LLM Settings')}
+        description={t('Connect one OpenAI-compatible provider for the chat workspace.')}
         stats={[
-          { label: t('Saved mode'), value: savedEnabled ? t('enabled') : t('disabled') },
+          { label: t('Mode'), value: savedEnabled ? t('enabled') : t('disabled') },
           { label: t('Stored key'), value: hasApiKey ? apiKeyMasked : t('not set') },
-          { label: t('Unsaved edits'), value: hasUnsavedChanges ? t('Yes') : t('No') }
+          { label: t('Pending changes'), value: hasUnsavedChanges ? t('Yes') : t('No') }
         ]}
       />
 
@@ -281,24 +281,24 @@ export default function LlmSettingsPage() {
       <WorkspaceMetricGrid
         items={[
           {
-            title: t('Saved mode'),
-            description: t('Saved conversation mode toggle from the encrypted local config.'),
+            title: t('Mode'),
+            description: t('Whether chat currently uses the saved provider settings.'),
             value: savedEnabled ? t('enabled') : t('disabled')
           },
           {
             title: t('Stored key'),
-            description: t('Whether an encrypted key is already stored for reuse.'),
+            description: t('Whether a key is already saved for reuse.'),
             value: hasApiKey ? t('Ready') : t('N/A')
           },
           {
-            title: t('Unsaved edits'),
-            description: t('Form changes that still need save or discard.'),
+            title: t('Pending changes'),
+            description: t('Any change here will stay local until you save or clear it.'),
             value: hasUnsavedChanges ? t('Yes') : t('No'),
             tone: hasUnsavedChanges ? 'attention' : 'default'
           },
           {
-            title: t('Preset shortcuts'),
-            description: t('Preset models available for one-click selection.'),
+            title: t('Quick presets'),
+            description: t('Number of one-click presets available for faster setup.'),
             value: CHATANYWHERE_MODEL_PRESETS.length
           }
         ]}
@@ -308,8 +308,8 @@ export default function LlmSettingsPage() {
         main={
           <Card className="stack">
             <WorkspaceSectionHeader
-              title={t('Editing Lane')}
-              description={t('Update endpoint, key, model, and temperature in one focused form.')}
+              title={t('Configuration')}
+              description={t('Update endpoint, key, model, and temperature in one place.')}
             />
 
           <div className="workspace-form-grid">
@@ -364,14 +364,14 @@ export default function LlmSettingsPage() {
 
           <Panel className="workspace-record-item compact" tone="soft">
             <div className="stack tight">
-              <small className="muted">{t('Provider is fixed to OpenAI-compatible mode in this prototype.')}</small>
-              <small className="muted">{t('Leave API Key blank to keep the saved key when editing or testing.')}</small>
+              <small className="muted">{t('Provider currently uses OpenAI-compatible mode.')}</small>
+              <small className="muted">{t('Leave API Key blank to keep using the saved key.')}</small>
               <small className="muted">{keyHandlingText}</small>
             </div>
           </Panel>
 
           <div className="stack tight">
-            <strong>{t('Preset shortcuts')}</strong>
+            <strong>{t('Quick presets')}</strong>
             <small className="muted">
               {t('Use a preset button to move faster while keeping the underlying form editable.')}
             </small>
@@ -420,8 +420,8 @@ export default function LlmSettingsPage() {
           <>
             <Card className="stack">
               <WorkspaceSectionHeader
-                title={t('Saved snapshot')}
-                description={t('Masked saved values remain visible so you can tell what will be reused.')}
+                title={t('Saved settings')}
+                description={t('Saved values stay visible here so you know what will be reused.')}
               />
 
             <div className="workspace-button-stack">
@@ -444,7 +444,7 @@ export default function LlmSettingsPage() {
             <ul className="workspace-record-list compact">
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
-                  <strong>{t('Saved mode')}</strong>
+                  <strong>{t('Mode')}</strong>
                   <StatusTag status={statusVariant}>
                     {savedEnabled ? t('enabled') : t('disabled')}
                   </StatusTag>
@@ -460,7 +460,7 @@ export default function LlmSettingsPage() {
                     {hasApiKey ? t('Ready') : t('not set')}
                   </StatusTag>
                 </div>
-                <small className="muted">{t('Stored key: {key}', { key: apiKeyMasked })}</small>
+                <small className="muted">{t('Masked key reminder: {key}', { key: apiKeyMasked })}</small>
               </li>
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
@@ -473,29 +473,29 @@ export default function LlmSettingsPage() {
               </li>
               <li className="workspace-record-item compact">
                 <div className="row between gap wrap">
-                  <strong>{t('Unsaved edits')}</strong>
+                  <strong>{t('Pending changes')}</strong>
                   <StatusTag status={unsavedVariant}>
                     {hasUnsavedChanges ? t('Yes') : t('No')}
                   </StatusTag>
                 </div>
                 <small className="muted">
-                  {hasUnsavedChanges ? t('Unsaved edits are pending.') : t('No unsaved edits.')}
+                  {hasUnsavedChanges ? t('Pending changes are waiting to be saved.') : t('No pending changes.')}
                 </small>
               </li>
             </ul>
           </Card>
 
             <AdvancedSection
-              title={t('Connection guidance')}
-              description={t('Open troubleshooting and security guidance only when needed.')}
+              title={t('Connection notes')}
+              description={t('Open troubleshooting and security reminders only when needed.')}
             >
               {connectionAdvice ? (
                 <StateBlock variant="success" title={t('Troubleshooting')} description={connectionAdvice} />
               ) : (
                 <StateBlock
                   variant="empty"
-                  title={t('No live troubleshooting advice right now.')}
-                  description={t('Try a connection test after changing base URL, key, or model.')}
+                  title={t('No connection advice right now.')}
+                  description={t('Run a test after changing the endpoint, key, or model.')}
                 />
               )}
 

@@ -15,19 +15,7 @@ import {
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
-
-const formatUtcToLocal = (value: string, fallback: string): string => {
-  if (!value) {
-    return fallback;
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return parsed.toLocaleString();
-};
+import { formatCompactTimestamp } from '../utils/formatting';
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 type ReportSortMode = 'latest' | 'oldest' | 'failed_first';
@@ -509,7 +497,7 @@ export default function AdminVerificationReportsPage() {
                     <small className="muted">{item.summary || t('No summary provided.')}</small>
                     <div className="row gap wrap">
                       <Badge tone="neutral">
-                        {t('finished')}: {formatUtcToLocal(item.finished_at_utc, notAvailable)}
+                        {t('finished')}: {formatCompactTimestamp(item.finished_at_utc, notAvailable)}
                       </Badge>
                       <Badge tone="info">
                         {t('base_url')}: {item.target_base_url || notAvailable}

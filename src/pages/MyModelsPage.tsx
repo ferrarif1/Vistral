@@ -1,55 +1,57 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ModelRecord } from '../../shared/domain';
+import type { ModelRecord, User } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
-import VirtualList from '../components/VirtualList';
-import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button, ButtonLink } from '../components/ui/Button';
+import ModelInventory from '../components/models/ModelInventory';
+import { Badge } from '../components/ui/Badge';
+import { ButtonLink } from '../components/ui/Button';
 import { Card, Panel } from '../components/ui/Surface';
 import {
   WorkspaceHero,
   WorkspaceMetricGrid,
   WorkspacePage,
-  WorkspaceSectionHeader,
   WorkspaceSplit
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 const readyStatusSet = new Set<ModelRecord['status']>(['approved', 'published']);
-const myModelsVirtualizationThreshold = 14;
-const myModelsVirtualRowHeight = 168;
-const myModelsVirtualViewportHeight = 620;
-
-const formatTimestamp = (iso: string): string => {
-  const value = Date.parse(iso);
-  if (Number.isNaN(value)) {
-    return iso;
-  }
-
-  return new Date(value).toLocaleString();
-};
+type LoadMode = 'initial' | 'manual';
 
 export default function MyModelsPage() {
   const { t } = useI18n();
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [deletingModelId, setDeletingModelId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [result, setResult] = useState('');
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (mode: LoadMode = 'initial') => {
+    if (mode === 'initial') {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
     try {
-      const result = await api.listMyModels();
+      const [user, result] = await Promise.all([api.me(), api.listMyModels()]);
+      setCurrentUser(user);
       setModels(result);
       setError('');
     } catch (loadError) {
       setError((loadError as Error).message);
     } finally {
-      setLoading(false);
+      if (mode === 'initial') {
+        setLoading(false);
+      } else {
+        setRefreshing(false);
+      }
     }
   };
 
   useEffect(() => {
-    load().catch(() => {
+    load('initial').catch(() => {
       // no-op
     });
   }, []);
@@ -74,7 +76,25 @@ export default function MyModelsPage() {
     [models]
   );
 
-  const shouldVirtualizeModels = sortedModels.length > myModelsVirtualizationThreshold;
+  const deleteModel = async (model: ModelRecord) => {
+    setDeletingModelId(model.id);
+    setError('');
+    setResult('');
+
+    try {
+      await api.removeModelByAdmin(model.id);
+      setResult(
+        t('Deleted model {modelName}.', {
+          modelName: model.name
+        })
+      );
+      await load('manual');
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setDeletingModelId(null);
+    }
+  };
 
   return (
     <WorkspacePage>
@@ -99,6 +119,7 @@ export default function MyModelsPage() {
       />
 
       {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
+      {result ? <StateBlock variant="success" title={t('Action Completed')} description={result} /> : null}
 
       <WorkspaceMetricGrid
         items={[
@@ -128,110 +149,28 @@ export default function MyModelsPage() {
 
       <WorkspaceSplit
         main={
-          <Card as="article">
-            <WorkspaceSectionHeader
-              title={t('Owned Model Inventory')}
-              description={t('Follow the status of models you created, then move to versions or approval-related work.')}
-              actions={
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    load().catch(() => {
-                      // no-op
-                    });
-                  }}
-                  disabled={loading}
-                >
-                  {loading ? t('Loading') : t('Refresh')}
-                </Button>
-              }
-            />
-
-            {loading ? (
-              <StateBlock
-                variant="loading"
-                title={t('Loading Models')}
-                description={t('Checking ownership-scoped models.')}
-              />
-            ) : sortedModels.length === 0 ? (
-              <StateBlock
-                variant="empty"
-                title={t('No owned models yet.')}
-                description={t('Your created models will appear here once you start a draft.')}
-              />
-            ) : shouldVirtualizeModels ? (
-              <VirtualList
-                items={sortedModels}
-                itemHeight={myModelsVirtualRowHeight}
-                height={myModelsVirtualViewportHeight}
-                itemKey={(model) => model.id}
-                listClassName="workspace-record-list"
-                rowClassName="workspace-record-row"
-                ariaLabel={t('Owned Model Inventory')}
-                renderItem={(model) => (
-                  <Panel className="workspace-record-item virtualized" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{model.name}</strong>
-                        <small className="muted">
-                          {t(model.model_type)} · {t(model.visibility)} · {t('Last updated')}:{' '}
-                          {formatTimestamp(model.updated_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={model.status}>{t(model.status)}</StatusTag>
-                      </div>
-                    </div>
-                    <p className="line-clamp-2">{model.description || t('No description provided.')}</p>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {t('Visibility')}: {t(model.visibility)}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('Model Type')}: {t(model.model_type)}
-                      </Badge>
-                      <Badge tone="info">
-                        {t('owner')}: {model.owner_user_id}
-                      </Badge>
-                    </div>
-                  </Panel>
-                )}
-              />
-            ) : (
-              <ul className="workspace-record-list">
-                {sortedModels.map((model) => (
-                  <Panel key={model.id} as="li" className="workspace-record-item" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{model.name}</strong>
-                        <small className="muted">
-                          {t(model.model_type)} · {t(model.visibility)} · {t('Last updated')}:{' '}
-                          {formatTimestamp(model.updated_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={model.status}>{t(model.status)}</StatusTag>
-                      </div>
-                    </div>
-                    <p className="line-clamp-2">{model.description || t('No description provided.')}</p>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {t('Visibility')}: {t(model.visibility)}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('Model Type')}: {t(model.model_type)}
-                      </Badge>
-                      <Badge tone="info">
-                        {t('owner')}: {model.owner_user_id}
-                      </Badge>
-                    </div>
-                  </Panel>
-                ))}
-              </ul>
+          <ModelInventory
+            title={t('Owned Model Inventory')}
+            description={t(
+              'Follow the status of models you created, then move to versions or approval-related work.'
             )}
-          </Card>
+            ariaLabel={t('Owned Model Inventory')}
+            loadingDescription={t('Checking ownership-scoped models.')}
+            emptyTitle={t('No owned models yet.')}
+            emptyDescription={t('Your created models will appear here once you start a draft.')}
+            models={sortedModels}
+            loading={loading}
+            refreshing={refreshing}
+            canAdminDelete={currentUser?.role === 'admin'}
+            deletingModelId={deletingModelId}
+            onRefresh={() => {
+              load('manual').catch(() => {
+                // no-op
+              });
+            }}
+            onDeleteModel={deleteModel}
+            t={t}
+          />
         }
         side={
           <>

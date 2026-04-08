@@ -1262,3 +1262,24 @@ Rules:
   - `npm run smoke:training-worker-package-reference`
   - `npm run smoke:training-worker-cancel`
   - `npm run smoke:training-worker-dedicated-auth`
+
+## 2026-04-08 14:50 (Asia/Shanghai)
+- context: Continued core deployment verification hardening after dedicated-auth integration; focused on seed-id portability and worker smoke maintainability.
+- done:
+  - Added worker smoke shared helper: `scripts/lib/smoke-training-worker-common.sh`.
+  - Removed fixed `d-2/dv-2` coupling from all worker scheduler/dispatch/cancel/failover/health/reference/dedicated-auth smoke scripts by using dynamic training target resolution (`EXPECTED_TRAINING_DATASET_ID`, `EXPECTED_TRAINING_DATASET_VERSION_ID` overrides still supported).
+  - Fixed `scripts/smoke-no-seed-hardcoding.sh` regex patterns so seed-id guard checks are effective.
+  - Extended `scripts/docker-verify-full.sh` dedicated-auth check details and report entities to include worker/job ids, reference/cancel log counters, and selected training dataset/version ids.
+- next:
+  1. Optionally extract worker smoke process/bootstrap/login/CSRF helpers further to reduce remaining duplication across scripts.
+  2. Add one compatibility smoke path for environments where `host.docker.internal` is unavailable (custom worker public host fallback guidance).
+  3. Continue core roadmap closure from queue item 7 (`PLANS.md`): worker GUI onboarding and pairing UX.
+- risks:
+  - Dynamic target resolver currently requires at least one ready detection dataset with a trainable version (`split_summary.train > 0` and `annotation_coverage > 0`) in the target environment.
+  - Worker smoke scripts still duplicate API/worker lifecycle bootstrapping logic; future auth/scheduler behavior changes may require multi-file sync until deeper helper extraction is done.
+- verification:
+  - `bash scripts/smoke-no-seed-hardcoding.sh`
+  - `npm run smoke:training-worker-dedicated-auth`
+  - `npm run smoke:training-worker-dispatch`
+  - `npm run smoke:training-worker-package-reference`
+  - `npm run docker:verify:full`

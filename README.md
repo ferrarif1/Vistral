@@ -36,6 +36,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/training-worker-onboarding.md`
    - `docs/training-platform-roadmap.md`
    - `docs/dataset-management.md`
+   - `docs/visual-data-loop-evolution.md`
    - `docs/annotation-workflow.md`
    - `docs/model-runtime-architecture.md`
 4. Follow the single Docker deployment path in `docs/deployment.docker.md`.
@@ -177,6 +178,7 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - forces reference package dispatch mode (`reference_json_v1`) and validates worker package download + training completion path
 - `npm run smoke:training-worker-dedicated-auth`
   - validates bootstrap-issued dedicated worker auth end-to-end: claim -> heartbeat -> reference package dispatch -> cancel propagation
+  - worker smoke scripts also accept `EXPECTED_TRAINING_DATASET_ID` / `EXPECTED_TRAINING_DATASET_VERSION_ID`; when omitted they auto-select a ready detection dataset + trainable version
 
 ### Prototype persistence and restart behavior
 - Business state is persisted to local JSON snapshot file (`.data/app-state.json` by default).
@@ -256,9 +258,10 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - Start/update full stack (pure Docker single entry): `npm run docker:up`
 - Deployment self-check: `npm run docker:healthcheck`
 - Full deployment E2E verify: `npm run docker:verify:full`
-  - covers auth/permissions, account governance checks, real multipart attachment lifecycle, conversation operational actions (dataset/model-draft/training-job creation), approval + inference feedback, phase2 annotation/review + training launch-readiness gates, dataset export/import roundtrip (detection/ocr/segmentation), detection real-closure smoke, and dedicated OCR closure smoke
+  - covers auth/permissions, account governance checks, real multipart attachment lifecycle, conversation operational actions (dataset/model-draft/training-job creation), approval + inference feedback, phase2 annotation/review + training launch-readiness gates, dataset export/import roundtrip (detection/ocr/segmentation), detection real-closure smoke, dedicated OCR closure smoke, and dedicated training-worker auth dispatch/cancel smoke
   - default runs OCR closure in non-strict mode (`OCR_CLOSURE_STRICT_LOCAL_COMMAND=false`) for deployment compatibility
   - optional strict OCR closure in full verify: `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run docker:verify:full`
+  - if your Docker runtime cannot resolve `host.docker.internal`, set `DEDICATED_AUTH_WORKER_PUBLIC_HOST` (and optionally `DEDICATED_AUTH_WORKER_BIND_HOST`) before running full verify
 - E2E verify outputs report files under `.data/verify-reports/` (JSON + Markdown)
 - Web entry: `http://127.0.0.1:8080`
 - API health: `http://127.0.0.1:8080/api/health`
