@@ -18,7 +18,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
 const versionsVirtualizationThreshold = 14;
-const versionsVirtualRowHeight = 186;
+const versionsVirtualRowHeight = 214;
 const versionsVirtualViewportHeight = 640;
 const backgroundRefreshIntervalMs = 6000;
 type LoadMode = 'initial' | 'manual' | 'background';
@@ -29,7 +29,12 @@ const formatTimestamp = (iso: string): string => {
     return iso;
   }
 
-  return new Date(value).toLocaleString();
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
 };
 
 const buildVersionSignature = (items: ModelVersionRecord[]): string =>
@@ -85,6 +90,10 @@ export default function ModelVersionsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [compareVersions, setCompareVersions] = useState<ModelVersionRecord[]>([]);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState('');
   const versionsSignatureRef = useRef('');
   const modelsSignatureRef = useRef('');
   const jobsSignatureRef = useRef('');
@@ -191,6 +200,51 @@ export default function ModelVersionsPage() {
   );
 
   const modelsById = useMemo(() => new Map(models.map((model) => [model.id, model])), [models]);
+  const compareIdSet = useMemo(() => new Set(compareIds), [compareIds]);
+
+  useEffect(() => {
+    const nextCompareIds = compareIds.filter((id) => versions.some((version) => version.id === id));
+    if (nextCompareIds.length !== compareIds.length) {
+      setCompareIds(nextCompareIds);
+    }
+  }, [compareIds, versions]);
+
+  useEffect(() => {
+    if (compareIds.length === 0) {
+      setCompareVersions([]);
+      setCompareError('');
+      setCompareLoading(false);
+      return;
+    }
+
+    let active = true;
+    setCompareLoading(true);
+    setCompareError('');
+
+    Promise.all(compareIds.map((versionId) => api.getModelVersion(versionId)))
+      .then((results) => {
+        if (!active) {
+          return;
+        }
+        setCompareVersions(results);
+      })
+      .catch((compareLoadError) => {
+        if (!active) {
+          return;
+        }
+        setCompareError((compareLoadError as Error).message);
+      })
+      .finally(() => {
+        if (!active) {
+          return;
+        }
+        setCompareLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [compareIds]);
 
   const summary = useMemo(
     () => ({
@@ -203,6 +257,27 @@ export default function ModelVersionsPage() {
     }),
     [completedJobs.length, models.length, versions]
   );
+
+  const comparisonMetricKeys = useMemo(() => {
+    const keys = new Set<string>();
+    compareVersions.forEach((version) => {
+      Object.keys(version.metrics_summary).forEach((key) => keys.add(key));
+    });
+    return Array.from(keys).sort((left, right) => left.localeCompare(right));
+  }, [compareVersions]);
+
+  const toggleCompareVersion = (versionId: string) => {
+    setCompareError('');
+    setCompareIds((current) => {
+      if (current.includes(versionId)) {
+        return current.filter((item) => item !== versionId);
+      }
+      if (current.length >= 2) {
+        return [current[1], versionId];
+      }
+      return [...current, versionId];
+    });
+  };
 
   const registerVersion = async () => {
     if (!modelId || !jobId || !versionName.trim()) {
@@ -335,6 +410,14 @@ export default function ModelVersionsPage() {
                       </div>
                       <div className="workspace-record-actions">
                         <StatusTag status={version.status}>{t(version.status)}</StatusTag>
+                        <Button
+                          type="button"
+                          variant={compareIdSet.has(version.id) ? 'secondary' : 'ghost'}
+                          size="sm"
+                          onClick={() => toggleCompareVersion(version.id)}
+                        >
+                          {compareIdSet.has(version.id) ? t('Selected') : t('Compare')}
+                        </Button>
                         {version.training_job_id ? (
                           <ButtonLink to={`/training/jobs/${version.training_job_id}`} variant="secondary" size="sm">
                             {t('Open Job')}
@@ -354,10 +437,13 @@ export default function ModelVersionsPage() {
                       </Badge>
                       <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
                         {version.artifact_attachment_id
-                          ? `${t('artifact')}: ${version.artifact_attachment_id}`
+                          ? `${t('artifact')}: ${t('Ready')}`
                           : t('No artifact yet')}
                       </Badge>
                     </div>
+                    {version.artifact_attachment_id ? (
+                      <small className="muted">{version.artifact_attachment_id}</small>
+                    ) : null}
                   </Panel>
                 );
               }}
@@ -382,6 +468,14 @@ export default function ModelVersionsPage() {
                       </div>
                       <div className="workspace-record-actions">
                         <StatusTag status={version.status}>{t(version.status)}</StatusTag>
+                        <Button
+                          type="button"
+                          variant={compareIdSet.has(version.id) ? 'secondary' : 'ghost'}
+                          size="sm"
+                          onClick={() => toggleCompareVersion(version.id)}
+                        >
+                          {compareIdSet.has(version.id) ? t('Selected') : t('Compare')}
+                        </Button>
                         {version.training_job_id ? (
                           <ButtonLink to={`/training/jobs/${version.training_job_id}`} variant="secondary" size="sm">
                             {t('Open Job')}
@@ -401,10 +495,13 @@ export default function ModelVersionsPage() {
                       </Badge>
                       <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
                         {version.artifact_attachment_id
-                          ? `${t('artifact')}: ${version.artifact_attachment_id}`
+                          ? `${t('artifact')}: ${t('Ready')}`
                           : t('No artifact yet')}
                       </Badge>
                     </div>
+                    {version.artifact_attachment_id ? (
+                      <small className="muted">{version.artifact_attachment_id}</small>
+                    ) : null}
                   </Panel>
                 );
               })}
@@ -415,10 +512,90 @@ export default function ModelVersionsPage() {
         side={
           <>
             <Card as="article">
-            <div className="stack tight">
-              <h3>{t('Registration Lane')}</h3>
-              <small className="muted">
-                {t('Keep version registration visible while reviewing completed runs.')}
+              <div className="stack tight">
+                <h3>{t('Version Comparison')}</h3>
+                <small className="muted">
+                  {t('Pick up to two versions from the inventory to compare metrics, framework, and lineage.')}
+                </small>
+              </div>
+
+              {compareError ? (
+                <StateBlock variant="error" title={t('Comparison unavailable')} description={compareError} />
+              ) : compareLoading ? (
+                <StateBlock variant="loading" title={t('Loading comparison')} description={t('Fetching selected version details.')} />
+              ) : compareVersions.length === 0 ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('Select versions to compare')}
+                  description={t('Use the Compare action in the inventory list. The latest two selections stay pinned here.')}
+                />
+              ) : (
+                <div className="stack">
+                  <div className="row gap wrap">
+                    {compareVersions.map((version) => (
+                      <Badge key={version.id} tone="info">
+                        {version.version_name}
+                      </Badge>
+                    ))}
+                  </div>
+                  {compareVersions.map((version) => {
+                    const linkedModel = modelsById.get(version.model_id);
+                    return (
+                      <Panel key={version.id} as="article" className="workspace-record-item compact" tone="soft">
+                        <div className="row between gap wrap align-center">
+                          <strong>{version.version_name}</strong>
+                          <StatusTag status={version.status}>{t(version.status)}</StatusTag>
+                        </div>
+                        <div className="row gap wrap">
+                          <Badge tone="neutral">{linkedModel?.name ?? version.model_id}</Badge>
+                          <Badge tone="neutral">{t(version.task_type)}</Badge>
+                          <Badge tone="info">{t(version.framework)}</Badge>
+                        </div>
+                        <small className="muted">
+                          {t('Created')}: {formatTimestamp(version.created_at)} · {t('job')}: {version.training_job_id ?? t('manual')}
+                        </small>
+                      </Panel>
+                    );
+                  })}
+
+                  {comparisonMetricKeys.length > 0 ? (
+                    <div className="stack tight">
+                      <strong>{t('Metric deltas')}</strong>
+                      <div className="workspace-record-list compact">
+                        {comparisonMetricKeys.map((metricKey) => (
+                          <Panel key={metricKey} as="div" className="workspace-record-item compact" tone="soft">
+                            <div className="row between gap wrap align-center">
+                              <strong>{metricKey}</strong>
+                              {compareVersions.length === 2 ? (
+                                <Badge tone="neutral">
+                                  {t('delta')}: {compareVersions[0].metrics_summary[metricKey] ?? '—'} vs{' '}
+                                  {compareVersions[1].metrics_summary[metricKey] ?? '—'}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            <div className="row gap wrap">
+                              {compareVersions.map((version) => (
+                                <Badge key={`${version.id}-${metricKey}`} tone="info">
+                                  {version.version_name}: {version.metrics_summary[metricKey] ?? '—'}
+                                </Badge>
+                              ))}
+                            </div>
+                          </Panel>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <small className="muted">{t('Selected versions do not expose comparable metric keys yet.')}</small>
+                  )}
+                </div>
+              )}
+            </Card>
+
+            <Card as="article">
+              <div className="stack tight">
+                <h3>{t('Registration Lane')}</h3>
+                <small className="muted">
+                  {t('Keep version registration visible while reviewing completed runs.')}
               </small>
             </div>
 

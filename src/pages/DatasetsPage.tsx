@@ -28,7 +28,12 @@ const formatTimestamp = (iso: string): string => {
     return iso;
   }
 
-  return new Date(value).toLocaleString();
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
 };
 
 const getClassPreview = (classes: string[], limit = 2) => ({
@@ -154,6 +159,47 @@ export default function DatasetsPage() {
 
   const shouldVirtualizeDatasets = sortedDatasets.length > datasetVirtualizationThreshold;
 
+  const renderDatasetRecord = (dataset: DatasetRecord, as: 'div' | 'li' = 'li') => {
+    const classPreview = getClassPreview(dataset.label_schema.classes);
+
+    return (
+      <Panel
+        as={as}
+        key={dataset.id}
+        className={`workspace-record-item${as === 'div' ? ' virtualized' : ''}`}
+        tone="soft"
+      >
+        <div className="workspace-record-item-top">
+          <div className="workspace-record-summary stack tight">
+            <strong>{dataset.name}</strong>
+            <small className="muted">
+              {t(dataset.task_type)} · {t('Last updated')}: {formatTimestamp(dataset.updated_at)}
+            </small>
+          </div>
+          <div className="workspace-record-actions">
+            <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
+            <ButtonLink variant="ghost" size="sm" to={`/datasets/${dataset.id}`}>
+              {t('Open Detail')}
+            </ButtonLink>
+          </div>
+        </div>
+        <p className="line-clamp-2">{dataset.description}</p>
+        <div className="row gap wrap">
+          <Badge tone="neutral">{t(dataset.task_type)}</Badge>
+          <Badge tone="info">
+            {t('Classes')}: {dataset.label_schema.classes.length}
+          </Badge>
+          {classPreview.visible.map((label) => (
+            <Badge key={`${dataset.id}-${label}`} tone="neutral">
+              {label}
+            </Badge>
+          ))}
+          {classPreview.hiddenCount > 0 ? <Badge tone="neutral">+{classPreview.hiddenCount}</Badge> : null}
+        </div>
+      </Panel>
+    );
+  };
+
   return (
     <WorkspacePage>
       <WorkspaceHero
@@ -199,7 +245,7 @@ export default function DatasetsPage() {
           {
             title: t('Task Type'),
             description: t('OCR and detection remain the main operational paths here.'),
-            value: summary.ocr + summary.detection
+            value: `${summary.ocr} ${t('ocr')} / ${summary.detection} ${t('detection')}`
           }
         ]}
       />
@@ -240,140 +286,82 @@ export default function DatasetsPage() {
                 listClassName="workspace-record-list"
                 rowClassName="workspace-record-row"
                 ariaLabel={t('Dataset Inventory')}
-                renderItem={(dataset) => {
-                  const classPreview = getClassPreview(dataset.label_schema.classes);
-                  return (
-                    <div className="workspace-record-item virtualized">
-                      <div className="workspace-record-item-top">
-                        <div className="workspace-record-summary stack tight">
-                          <strong>{dataset.name}</strong>
-                          <small className="muted">
-                            {t(dataset.task_type)} · {t(dataset.status)} · {t('Last updated')}:{' '}
-                            {formatTimestamp(dataset.updated_at)}
-                          </small>
-                        </div>
-                        <div className="workspace-record-actions">
-                          <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
-                          <ButtonLink variant="secondary" size="sm" to={`/datasets/${dataset.id}`}>
-                            {t('Open Detail')}
-                          </ButtonLink>
-                        </div>
-                      </div>
-                      <p className="line-clamp-2">{dataset.description}</p>
-                      <div className="row gap wrap">
-                        <Badge tone="neutral">{t(dataset.task_type)}</Badge>
-                        <Badge tone="info">
-                          {t('Classes')}: {dataset.label_schema.classes.length}
-                        </Badge>
-                        {classPreview.visible.map((label) => (
-                          <Badge key={`${dataset.id}-${label}`} tone="neutral">
-                            {label}
-                          </Badge>
-                        ))}
-                        {classPreview.hiddenCount > 0 ? (
-                          <Badge tone="neutral">+{classPreview.hiddenCount}</Badge>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                }}
+                renderItem={(dataset) => renderDatasetRecord(dataset, 'div')}
               />
             ) : (
               <ul className="workspace-record-list">
-                {sortedDatasets.map((dataset) => {
-                  const classPreview = getClassPreview(dataset.label_schema.classes);
-                  return (
-                    <li key={dataset.id} className="workspace-record-item">
-                      <div className="workspace-record-item-top">
-                        <div className="workspace-record-summary stack tight">
-                          <strong>{dataset.name}</strong>
-                          <small className="muted">
-                            {t(dataset.task_type)} · {t(dataset.status)} · {t('Last updated')}:{' '}
-                            {formatTimestamp(dataset.updated_at)}
-                          </small>
-                        </div>
-                        <div className="workspace-record-actions">
-                          <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
-                          <ButtonLink variant="secondary" size="sm" to={`/datasets/${dataset.id}`}>
-                            {t('Open Detail')}
-                          </ButtonLink>
-                        </div>
-                      </div>
-                      <p className="line-clamp-2">{dataset.description}</p>
-                      <div className="row gap wrap">
-                        <Badge tone="neutral">{t(dataset.task_type)}</Badge>
-                        <Badge tone="info">
-                          {t('Classes')}: {dataset.label_schema.classes.length}
-                        </Badge>
-                        {classPreview.visible.map((label) => (
-                          <Badge key={`${dataset.id}-${label}`} tone="neutral">
-                            {label}
-                          </Badge>
-                        ))}
-                        {classPreview.hiddenCount > 0 ? (
-                          <Badge tone="neutral">+{classPreview.hiddenCount}</Badge>
-                        ) : null}
-                      </div>
-                    </li>
-                  );
-                })}
+                {sortedDatasets.map((dataset) => renderDatasetRecord(dataset))}
               </ul>
             )}
           </Card>
         }
         side={
-          <Panel className="stack">
-            <div className="stack tight">
-              <h3>{t('Create Dataset')}</h3>
-              <small className="muted">
-                {t('Set the dataset intent first, then continue deeper in the detail workspace.')}
-              </small>
-            </div>
+          <>
+            <Card as="article" className="stack">
+              <WorkspaceSectionHeader
+                title={t('Create Dataset')}
+                description={t('Set the dataset intent first, then continue deeper in the detail workspace.')}
+              />
 
-            <div className="workspace-form-grid">
-              <label>
-                {t('Name')}
-                <Input value={name} onChange={(event) => setName(event.target.value)} />
-              </label>
-              <label>
-                {t('Task Type')}
-                <Select
-                  value={taskType}
-                  onChange={(event) =>
-                    setTaskType(
-                      event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
-                    )
-                  }
-                >
-                  {taskTypeOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {t(option)}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className="workspace-form-span-2">
-                {t('Description')}
-                <Textarea
-                  value={description}
-                  rows={4}
-                  onChange={(event) => setDescription(event.target.value)}
-                />
-              </label>
-              <label className="workspace-form-span-2">
-                {t('Label Classes (comma separated)')}
-                <Input
-                  value={classesText}
-                  onChange={(event) => setClassesText(event.target.value)}
-                  placeholder="defect,scratch"
-                />
-              </label>
-            </div>
+              <div className="workspace-form-grid">
+                <label>
+                  {t('Name')}
+                  <Input value={name} onChange={(event) => setName(event.target.value)} />
+                </label>
+                <label>
+                  {t('Task Type')}
+                  <Select
+                    value={taskType}
+                    onChange={(event) =>
+                      setTaskType(
+                        event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
+                      )
+                    }
+                  >
+                    {taskTypeOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {t(option)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <label className="workspace-form-span-2">
+                  {t('Description')}
+                  <Textarea
+                    value={description}
+                    rows={4}
+                    onChange={(event) => setDescription(event.target.value)}
+                  />
+                </label>
+                <label className="workspace-form-span-2">
+                  {t('Label Classes (comma separated)')}
+                  <Input
+                    value={classesText}
+                    onChange={(event) => setClassesText(event.target.value)}
+                    placeholder="defect,scratch"
+                  />
+                </label>
+              </div>
 
-            <Button onClick={createDataset} disabled={submitting} block>
-              {submitting ? t('Creating...') : t('Create Dataset')}
-            </Button>
-          </Panel>
+              <Panel className="stack tight" tone="soft">
+                <strong>
+                  {t('Upload')} · {t('Split')} · {t('Version')}
+                </strong>
+                <small className="muted">
+                  {t('Open the dataset detail page to upload files, create splits, and version the asset.')}
+                </small>
+              </Panel>
+
+              <div className="workspace-button-stack">
+                <Button onClick={createDataset} disabled={submitting} block>
+                  {submitting ? t('Creating...') : t('Create Dataset')}
+                </Button>
+                <ButtonLink to="/workspace/chat" variant="ghost" size="sm" block>
+                  {t('Open Conversation Workspace')}
+                </ButtonLink>
+              </div>
+            </Card>
+          </>
         }
       />
     </WorkspacePage>

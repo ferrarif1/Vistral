@@ -5,6 +5,7 @@ import type {
   ChangePasswordInput,
   ClaimTrainingWorkerBootstrapSessionInput,
   ClaimTrainingWorkerBootstrapSessionResult,
+  CreateTrainingWorkerInput,
   CreateTrainingWorkerBootstrapSessionInput,
   ConversationRecord,
   CreateUserInput,
@@ -32,6 +33,7 @@ import type {
   TrainingWorkerBootstrapSessionRecord,
   TrainingWorkerNodeView,
   UpsertAnnotationInput,
+  UpdateTrainingWorkerInput,
   UpdateUserStatusInput,
   VerificationReportRecord,
   User
@@ -275,6 +277,20 @@ export const api = {
       body: JSON.stringify(input)
     }),
   listTrainingWorkers: () => request<TrainingWorkerNodeView[]>('/api/admin/training-workers'),
+  createTrainingWorker: (input: CreateTrainingWorkerInput) =>
+    request<TrainingWorkerNodeView>('/api/admin/training-workers', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+  updateTrainingWorker: (workerId: string, input: UpdateTrainingWorkerInput) =>
+    request<TrainingWorkerNodeView>(`/api/admin/training-workers/${encodeURIComponent(workerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input)
+    }),
+  removeTrainingWorker: (workerId: string) =>
+    request<{ removed: true }>(`/api/admin/training-workers/${encodeURIComponent(workerId)}`, {
+      method: 'DELETE'
+    }),
   listTrainingWorkerBootstrapSessions: () =>
     request<TrainingWorkerBootstrapSessionRecord[]>('/api/admin/training-workers/bootstrap-sessions'),
   createTrainingWorkerBootstrapSession: (input: CreateTrainingWorkerBootstrapSessionInput) =>

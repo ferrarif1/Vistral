@@ -75,6 +75,13 @@ const buildAnnotationWorkspacePath = (
 const backgroundRefreshIntervalMs = 5000;
 
 type LoadMode = 'initial' | 'manual' | 'background';
+type DatasetDetailSnapshot = {
+  dataset: DatasetRecord;
+  attachments: FileAttachment[];
+  items: DatasetItemRecord[];
+  versions: DatasetVersionRecord[];
+  annotations: AnnotationWithReview[];
+};
 
 const buildDatasetDetailSignature = (detail: {
   dataset: DatasetRecord;
@@ -118,9 +125,22 @@ export default function DatasetDetailPage() {
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [sectionRefreshing, setSectionRefreshing] = useState<'attachments' | 'items' | 'versions' | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const detailSignatureRef = useRef('');
+
+  const applyDetailSnapshot = useCallback((snapshot: DatasetDetailSnapshot) => {
+    const nextSignature = buildDatasetDetailSignature(snapshot);
+    if (detailSignatureRef.current !== nextSignature) {
+      detailSignatureRef.current = nextSignature;
+      setDataset(snapshot.dataset);
+      setAttachments(snapshot.attachments);
+      setItems(snapshot.items);
+      setVersions(snapshot.versions);
+      setAnnotations(snapshot.annotations);
+    }
+  }, []);
 
   const loadDetail = useCallback(async (mode: LoadMode) => {
     if (!datasetId) {
@@ -136,23 +156,21 @@ export default function DatasetDetailPage() {
     }
 
     try {
-      const [detail, annotationList] = await Promise.all([
+      const [detail, attachmentList, itemList, versionList, annotationList] = await Promise.all([
         api.getDatasetDetail(datasetId),
+        api.listDatasetAttachments(datasetId),
+        api.listDatasetItems(datasetId),
+        api.listDatasetVersions(datasetId),
         api.listDatasetAnnotations(datasetId)
       ]);
-      const nextSignature = buildDatasetDetailSignature({
-        ...detail,
+
+      applyDetailSnapshot({
+        dataset: detail.dataset,
+        attachments: attachmentList,
+        items: itemList,
+        versions: versionList,
         annotations: annotationList
       });
-
-      if (detailSignatureRef.current !== nextSignature) {
-        detailSignatureRef.current = nextSignature;
-        setDataset(detail.dataset);
-        setAttachments(detail.attachments);
-        setItems(detail.items);
-        setVersions(detail.versions);
-        setAnnotations(annotationList);
-      }
     } finally {
       if (mode === 'initial') {
         setLoading(false);
@@ -162,7 +180,7 @@ export default function DatasetDetailPage() {
         setRefreshing(false);
       }
     }
-  }, [datasetId]);
+  }, [applyDetailSnapshot, datasetId]);
 
   useEffect(() => {
     if (!datasetId) {
@@ -195,6 +213,24 @@ export default function DatasetDetailPage() {
     () => summarizeAnnotationQueues(items, annotations),
     [annotations, items]
   );
+  const formatTimestamp = (value: string | null) => {
+    if (!value) {
+      return t('n/a');
+    }
+
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) {
+      return value;
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(new Date(parsed));
+  };
+  const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
   const selectedItem = useMemo(
     () => items.find((item) => item.id === selectedItemId) ?? null,
     [items, selectedItemId]
@@ -332,6 +368,72 @@ export default function DatasetDetailPage() {
     await api.removeAttachment(attachmentId);
     await loadDetail('manual');
   };
+
+  const refreshAttachmentSection = useCallback(async () => {
+    if (!datasetId || !dataset) {
+      return;
+    }
+
+    setSectionRefreshing('attachments');
+    try {
+      const attachmentList = await api.listDatasetAttachments(datasetId);
+      applyDetailSnapshot({
+        dataset,
+        attachments: attachmentList,
+        items,
+        versions,
+        annotations
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setSectionRefreshing(null);
+    }
+  }, [annotations, applyDetailSnapshot, dataset, datasetId, items, versions]);
+
+  const refreshItemSection = useCallback(async () => {
+    if (!datasetId || !dataset) {
+      return;
+    }
+
+    setSectionRefreshing('items');
+    try {
+      const itemList = await api.listDatasetItems(datasetId);
+      applyDetailSnapshot({
+        dataset,
+        attachments,
+        items: itemList,
+        versions,
+        annotations
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setSectionRefreshing(null);
+    }
+  }, [annotations, applyDetailSnapshot, attachments, dataset, datasetId, versions]);
+
+  const refreshVersionSection = useCallback(async () => {
+    if (!datasetId || !dataset) {
+      return;
+    }
+
+    setSectionRefreshing('versions');
+    try {
+      const versionList = await api.listDatasetVersions(datasetId);
+      applyDetailSnapshot({
+        dataset,
+        attachments,
+        items,
+        versions: versionList,
+        annotations
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setSectionRefreshing(null);
+    }
+  }, [annotations, applyDetailSnapshot, attachments, dataset, datasetId, items]);
 
   const runSplit = async () => {
     if (!datasetId) {
@@ -729,10 +831,38 @@ export default function DatasetDetailPage() {
             emptyDescription={t('Upload images or archives. Files stay visible for this dataset context.')}
             uploadButtonLabel={t('Upload Dataset File')}
             disabled={busy}
+            headerActions={
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void refreshAttachmentSection();
+                }}
+                disabled={busy || sectionRefreshing === 'attachments'}
+              >
+                {sectionRefreshing === 'attachments' ? t('Refreshing...') : t('Refresh')}
+              </Button>
+            }
           />
 
           <Card as="section">
-            <h3>{t('Dataset Items')}</h3>
+            <WorkspaceSectionHeader
+              title={t('Dataset Items')}
+              actions={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    void refreshItemSection();
+                  }}
+                  disabled={busy || sectionRefreshing === 'items'}
+                >
+                  {sectionRefreshing === 'items' ? t('Refreshing...') : t('Refresh')}
+                </Button>
+              }
+            />
             <small className="muted">{t('Ready files: {count}', { count: readyCount })}</small>
             {items.length === 0 ? (
               <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files to generate items.')} />
@@ -821,15 +951,13 @@ export default function DatasetDetailPage() {
                       <div className="workspace-record-item virtualized">
                         <div className="stack tight">
                           <div className="row between gap wrap">
-                            <span>{item.id}</span>
+                            <strong>{attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}</strong>
                             <div className="row gap wrap">
                               <Badge tone="neutral">{t(item.split)}</Badge>
                               <StatusTag status={item.status}>{t(item.status)}</StatusTag>
                             </div>
                           </div>
-                          <small className="muted">
-                            {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
-                          </small>
+                          <small className="muted">{item.id}</small>
                           <div className="row between gap wrap">
                             <small className="muted">
                               {Object.keys(item.metadata).length > 0
@@ -850,15 +978,13 @@ export default function DatasetDetailPage() {
                       <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
                         <div className="stack tight">
                           <div className="row between gap wrap">
-                            <span>{item.id}</span>
+                            <strong>{attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}</strong>
                             <div className="row gap wrap">
                               <Badge tone="neutral">{t(item.split)}</Badge>
                               <StatusTag status={item.status}>{t(item.status)}</StatusTag>
                             </div>
                           </div>
-                          <small className="muted">
-                            {attachmentById.get(item.attachment_id)?.filename ?? item.attachment_id}
-                          </small>
+                          <small className="muted">{item.id}</small>
                           <div className="row between gap wrap">
                             <small className="muted">
                               {Object.keys(item.metadata).length > 0
@@ -882,10 +1008,10 @@ export default function DatasetDetailPage() {
         side={
           <>
           <Card as="section">
-            <h3>{t('Step 2. Train/Val/Test Split')}</h3>
-            <small className="muted">
-              {t('Adjust split ratios and apply when the dataset item set is ready.')}
-            </small>
+            <WorkspaceSectionHeader
+              title={t('Step 2. Train/Val/Test Split')}
+              description={t('Adjust split ratios and apply when the dataset item set is ready.')}
+            />
             <label>
               {t('Train Ratio')}
               <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
@@ -904,10 +1030,10 @@ export default function DatasetDetailPage() {
           </Card>
 
           <Card as="section">
-            <h3>{t('Step 3. Dataset Version')}</h3>
-            <small className="muted">
-              {t('Create immutable snapshots before training so runs stay reproducible.')}
-            </small>
+            <WorkspaceSectionHeader
+              title={t('Step 3. Dataset Version')}
+              description={t('Create immutable snapshots before training so runs stay reproducible.')}
+            />
             <label>
               {t('Version Name (optional)')}
               <Input
@@ -1039,18 +1165,40 @@ export default function DatasetDetailPage() {
           </AdvancedSection>
 
           <Card as="section">
-            <h3>{t('Dataset Versions')}</h3>
+            <WorkspaceSectionHeader
+              title={t('Dataset Versions')}
+              actions={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    void refreshVersionSection();
+                  }}
+                  disabled={busy || sectionRefreshing === 'versions'}
+                >
+                  {sectionRefreshing === 'versions' ? t('Refreshing...') : t('Refresh')}
+                </Button>
+              }
+            />
             {versions.length === 0 ? (
               <StateBlock variant="empty" title={t('No Versions')} description={t('Create first version snapshot after split.')} />
             ) : (
               <ul className="workspace-record-list compact">
                 {versions.map((version) => (
                   <Panel key={version.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
-                    <strong>{version.version_name}</strong>
+                    <div className="row between gap wrap align-center">
+                      <strong>{version.version_name}</strong>
+                      <Badge tone="neutral">{formatTimestamp(version.created_at)}</Badge>
+                    </div>
                     <div className="row gap wrap">
                       <Badge tone="neutral">{t('Items')}: {version.item_count}</Badge>
-                      <Badge tone="info">{t('Coverage')}: {version.annotation_coverage}</Badge>
+                      <Badge tone="info">{t('Coverage')}: {formatCoveragePercent(version.annotation_coverage)}</Badge>
+                      <Badge tone="neutral">
+                        {t('train')} {version.split_summary.train} / {t('val')} {version.split_summary.val} / {t('test')} {version.split_summary.test}
+                      </Badge>
                     </div>
+                    <small className="muted">{version.id}</small>
                   </Panel>
                 ))}
               </ul>

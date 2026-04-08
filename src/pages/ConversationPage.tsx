@@ -34,6 +34,7 @@ import {
   formatByteSize
 } from '../../shared/uploadLimits';
 import SessionMenu from '../components/SessionMenu';
+import AdvancedSection from '../components/AdvancedSection';
 import { useI18n } from '../i18n/I18nProvider';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import useCompactViewport from '../hooks/useCompactViewport';
@@ -385,6 +386,18 @@ const formatMessageParagraphs = (content: string): string[] =>
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+
+const formatMessageTime = (value: string): string => {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(parsed));
+};
 
 const hasChineseText = (value: string): boolean => /[\u4e00-\u9fff]/.test(value);
 
@@ -1192,7 +1205,7 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                   >
                     <div className="chat-message-meta">
                       <span>{message.sender === 'user' ? currentUsername || t('you') : t('Vistral')}</span>
-                      <small>{new Date(message.created_at).toLocaleTimeString()}</small>
+                      <small>{formatMessageTime(message.created_at)}</small>
                     </div>
                     <MessageBubble
                       sender={message.sender}
@@ -1329,6 +1342,7 @@ interface ConversationDraftAttachmentPanelProps {
   draggingSelectedAttachmentId: string | null;
   dragOverSelectedAttachmentId: string | null;
   onOpenUploadFileDialog: () => void;
+  onUploadFilenameReference: (filename: string) => Promise<boolean>;
   onIncludeAllReadyAttachments: () => void;
   onClearCurrentAttachmentContext: () => void;
   onOpenAttachment: (attachmentId: string) => void;
@@ -1356,6 +1370,7 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
   draggingSelectedAttachmentId,
   dragOverSelectedAttachmentId,
   onOpenUploadFileDialog,
+  onUploadFilenameReference,
   onIncludeAllReadyAttachments,
   onClearCurrentAttachmentContext,
   onOpenAttachment,
@@ -1367,7 +1382,27 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
   onSelectedAttachmentDrop,
   onSelectedAttachmentDragEnd
 }: ConversationDraftAttachmentPanelProps) {
+  const [manualFilename, setManualFilename] = useState('');
   const shouldVirtualizeAttachmentTray = attachments.length > attachmentTrayVirtualizationThreshold;
+
+  const submitManualFilenameReference = useCallback(async () => {
+    const uploaded = await onUploadFilenameReference(manualFilename);
+    if (uploaded) {
+      setManualFilename('');
+    }
+  }, [manualFilename, onUploadFilenameReference]);
+
+  const handleManualFilenameKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key !== 'Enter') {
+        return;
+      }
+
+      event.preventDefault();
+      void submitManualFilenameReference();
+    },
+    [submitManualFilenameReference]
+  );
 
   const renderAttachmentTrayItem = (item: FileAttachment) => {
     const isSelected = selectedAttachmentIdSet.has(item.id);
@@ -1545,6 +1580,30 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
               limit: UPLOAD_SOFT_LIMIT_LABEL
             })}
           </small>
+          <AdvancedSection
+            title={t('Manual filename upload')}
+            description={t('Use this compatibility mode when direct file selection is unavailable.')}
+          >
+            <div className="chat-simple-attachment-manual">
+              <Input
+                value={manualFilename}
+                onChange={(event) => setManualFilename(event.target.value)}
+                onKeyDown={handleManualFilenameKeyDown}
+                placeholder={t('Enter file name, for example: sample-image.jpg')}
+                disabled={uploading || sending}
+              />
+              <Button
+                type="button"
+                className="chat-simple-attachment-action-btn"
+                variant="secondary"
+                size="sm"
+                onClick={() => void submitManualFilenameReference()}
+                disabled={uploading || sending}
+              >
+                {uploading ? t('Working...') : t('Upload')}
+              </Button>
+            </div>
+          </AdvancedSection>
           {attachments.length > 0 ? shouldVirtualizeAttachmentTray ? (
             <VirtualList
               items={attachments}
@@ -2081,6 +2140,38 @@ export default function ConversationPage() {
       setNotice(t('{count} file(s) queued for upload.', { count: targets.length }));
     } catch (uploadError) {
       setError((uploadError as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }, [refreshAttachments, t]);
+
+  const uploadAttachmentByFilenameReference = useCallback(async (filename: string) => {
+    const normalizedFilename = filename.trim();
+    if (!normalizedFilename) {
+      setAttachmentListExpanded(true);
+      setError(t('Reference filename is required.'));
+      return false;
+    }
+
+    setUploading(true);
+    setError('');
+
+    try {
+      const uploaded = await api.uploadConversationAttachment(normalizedFilename);
+      await refreshAttachments();
+      setSelectedAttachmentIds((previous) =>
+        Array.from(new Set([...previous, uploaded.id]))
+      );
+      setAttachmentListExpanded(false);
+      setNotice(
+        t('Attachment {filename} included in current message.', {
+          filename: uploaded.filename || normalizedFilename
+        })
+      );
+      return true;
+    } catch (uploadError) {
+      setError((uploadError as Error).message);
+      return false;
     } finally {
       setUploading(false);
     }
@@ -3182,6 +3273,7 @@ export default function ConversationPage() {
               draggingSelectedAttachmentId={draggingSelectedAttachmentId}
               dragOverSelectedAttachmentId={dragOverSelectedAttachmentId}
               onOpenUploadFileDialog={openUploadFileDialog}
+              onUploadFilenameReference={uploadAttachmentByFilenameReference}
               onIncludeAllReadyAttachments={includeAllReadyAttachments}
               onClearCurrentAttachmentContext={clearCurrentAttachmentContext}
               onOpenAttachment={openAttachment}

@@ -1974,7 +1974,7 @@ small {
 }
 
 .chat-history-item.menu-open {
-  background: var(--chat-history-hover);
+  background: var(--chat-history-open);
   border-color: var(--chat-border);
   box-shadow: none;
 }
@@ -2064,8 +2064,8 @@ small {
 }
 
 .chat-history-item.active {
-  background: var(--chat-history-hover);
-  border-color: transparent;
+  background: var(--chat-history-open);
+  border-color: var(--chat-border);
   box-shadow: none;
   position: relative;
 }
@@ -2949,6 +2949,13 @@ small {
   font-size: 12px;
 }
 
+.chat-simple-attachment-manual {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+}
+
 .chat-simple-selected-inline {
   display: grid;
   gap: var(--space-2);
@@ -3559,6 +3566,10 @@ small {
     grid-template-columns: minmax(0, 1fr) auto auto;
     border-radius: var(--radius-md);
     padding: 8px 10px;
+  }
+
+  .chat-simple-attachment-manual {
+    grid-template-columns: 1fr;
   }
 
   .chat-simple-attachment-name,

@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent as ReactChangeEvent } from 'react';
+import { useRef, useState, type ChangeEvent as ReactChangeEvent, type ReactNode } from 'react';
 import type { FileAttachment } from '../../shared/domain';
 import {
   UPLOAD_SOFT_LIMIT_LABEL,
@@ -24,6 +24,7 @@ interface AttachmentUploaderProps {
   disabled?: boolean;
   emptyDescription: string;
   uploadButtonLabel?: string;
+  headerActions?: ReactNode;
 }
 
 export default function AttachmentUploader({
@@ -35,7 +36,8 @@ export default function AttachmentUploader({
   onDelete,
   disabled,
   emptyDescription,
-  uploadButtonLabel
+  uploadButtonLabel,
+  headerActions
 }: AttachmentUploaderProps) {
   const { t } = useI18n();
   const [filename, setFilename] = useState('');
@@ -146,7 +148,10 @@ export default function AttachmentUploader({
     <Card as="section">
       <div className="row gap between">
         <h3>{title}</h3>
-        <Badge tone="neutral">{t('Visible in current context')}</Badge>
+        <div className="row gap wrap align-center">
+          {headerActions}
+          <Badge tone="neutral">{t('Visible in current context')}</Badge>
+        </div>
       </div>
 
       <div className="row gap">

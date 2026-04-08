@@ -22,7 +22,7 @@ import {
   normalizeLlmConfig
 } from '../services/llmConfig';
 
-const CHATANYWHERE_MODEL_PRESETS = ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-3.5-turbo'] as const;
+const CHATANYWHERE_MODEL_PRESETS = ['gpt-4o-mini', 'gpt-4.1-mini'] as const;
 
 const resolveConnectionAdvice = (
   message: string,
@@ -116,7 +116,7 @@ export default function LlmSettingsPage() {
       ...prev,
       provider: 'chatanywhere',
       base_url: 'https://api.chatanywhere.tech/v1',
-      model: prev.model.trim() || 'gpt-3.5-turbo'
+      model: prev.model.trim() || 'gpt-4o-mini'
     }));
     setStatus({ variant: 'success', text: t('ChatAnywhere preset applied.') });
   };
@@ -339,7 +339,7 @@ export default function LlmSettingsPage() {
               <Input
                 value={form.model}
                 onChange={(event) => update('model', event.target.value)}
-                placeholder="gpt-3.5-turbo"
+                placeholder="gpt-4o-mini"
               />
             </label>
             <label>

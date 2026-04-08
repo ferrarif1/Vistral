@@ -38,7 +38,12 @@ const formatTimestamp = (iso: string): string => {
     return iso;
   }
 
-  return new Date(value).toLocaleString();
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
 };
 
 const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
@@ -168,13 +173,8 @@ export default function ProfessionalConsolePage() {
         title={t('Professional Console')}
         description={
           snapshot
-            ? t(
-                'Role: {role}. This panel provides a professional control-plane entry for structured model operations.',
-                {
-                  role: roleLabel(snapshot.user.role)
-                }
-              )
-            : t('Role-aware operational snapshot for structured model operations.')
+            ? t('Operate model lifecycle with a control-plane view: pipeline status, approvals, and key model operations in one place.')
+            : t('Operational snapshot')
         }
         actions={
           <Button
@@ -201,7 +201,7 @@ export default function ProfessionalConsolePage() {
             value: pendingReviews
           },
           {
-            label: t('Processing attachments'),
+            label: t('File Processing'),
             value: processingAttachments
           }
         ]}
@@ -232,10 +232,32 @@ export default function ProfessionalConsolePage() {
     (attachment) => attachment.status === 'uploading' || attachment.status === 'processing'
   ).length;
   const pendingApprovals = snapshot.approvals.filter((approval) => approval.status === 'pending');
-  const queuePreview = (pendingApprovals.length > 0 ? pendingApprovals : snapshot.approvals).slice(0, 4);
-  const queueCta = snapshot.user.role === 'admin'
-    ? { to: '/admin/models/pending', label: t('Open Queue') }
-    : { to: '/models/my-models', label: t('Open My Models') };
+  const recentMyModels = [...snapshot.myModels]
+    .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))
+    .slice(0, 4);
+  const recentProcessingAttachments = snapshot.conversationAttachments
+    .filter((attachment) => attachment.status === 'uploading' || attachment.status === 'processing')
+    .slice(0, 4);
+  const modelIndex = new Map(
+    [...snapshot.visibleModels, ...snapshot.myModels].map((model) => [model.id, model])
+  );
+
+  const priorityMode =
+    pendingApprovals.length > 0 ? 'approval' : recentMyModels.length > 0 ? 'model' : recentProcessingAttachments.length > 0 ? 'attachment' : 'empty';
+  const priorityDescription =
+    priorityMode === 'approval'
+      ? t('Items needing attention now.')
+      : priorityMode === 'model'
+        ? t('Continue the latest model work without scanning the full navigation tree.')
+        : priorityMode === 'attachment'
+          ? t('Recent files still processing in conversation context can be resumed from chat.')
+          : t('No console data available.');
+  const priorityCta =
+    priorityMode === 'approval'
+      ? { to: '/admin/models/pending', label: t('Open Queue') }
+      : priorityMode === 'model'
+        ? { to: '/models/my-models', label: t('Inspect my models') }
+        : { to: '/workspace/chat', label: t('Continue in Chat') };
 
   const actionGroups: ConsoleActionGroup[] = [
     {
@@ -243,7 +265,6 @@ export default function ProfessionalConsolePage() {
       description: t('Jump into the right surface based on the task you want to finish next.'),
       links: [
         { to: '/workspace/chat', label: t('Open Conversation Workspace') },
-        { to: '/workspace/console', label: t('Open Professional Console') },
         { to: '/settings', label: t('Open Settings') }
       ]
     },
@@ -313,7 +334,7 @@ export default function ProfessionalConsolePage() {
           <Card as="article">
             <WorkspaceSectionHeader
               title={t('Priority Queue')}
-              description={t('Items needing attention now.')}
+              description={priorityDescription}
               actions={
                 <div className="row gap wrap">
                   <Button
@@ -329,40 +350,93 @@ export default function ProfessionalConsolePage() {
                   >
                     {refreshing ? t('Refreshing...') : t('Refresh')}
                   </Button>
-                  <ButtonLink to={queueCta.to} variant="secondary" size="sm">
-                    {queueCta.label}
-                  </ButtonLink>
+                  {priorityMode !== 'empty' ? (
+                    <ButtonLink to={priorityCta.to} variant="secondary" size="sm">
+                      {priorityCta.label}
+                    </ButtonLink>
+                  ) : null}
                 </div>
               }
             />
 
-            {queuePreview.length === 0 ? (
+            {priorityMode === 'empty' ? (
               <StateBlock
                 variant="empty"
-                title={t('No approvals need attention right now.')}
+                title={t('No follow-up items right now.')}
                 description={t('All queued approvals are already resolved.')}
               />
             ) : (
               <ul className="workspace-record-list compact">
-                {queuePreview.map((approval: ApprovalRequest) => (
-                  <Panel key={approval.id} as="li" className="workspace-record-item compact" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{approval.id}</strong>
-                        <small className="muted">{t('Model: {modelId}', { modelId: approval.model_id })}</small>
-                        <small className="muted">
-                          {t('Requested')}: {formatTimestamp(approval.requested_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={approval.status}>{t(approval.status)}</StatusTag>
-                        <ButtonLink to={queueCta.to} variant="ghost" size="sm">
-                          {t('Open Queue')}
-                        </ButtonLink>
-                      </div>
-                    </div>
-                  </Panel>
-                ))}
+                {priorityMode === 'approval'
+                  ? pendingApprovals.slice(0, 4).map((approval: ApprovalRequest) => {
+                      const model = modelIndex.get(approval.model_id);
+
+                      return (
+                        <Panel key={approval.id} as="li" className="workspace-record-item compact" tone="soft">
+                          <div className="workspace-record-item-top">
+                            <div className="workspace-record-summary stack tight">
+                              <strong>{model?.name ?? approval.model_id}</strong>
+                              <small className="muted">
+                                {model ? `${t(model.model_type)} · ${t(model.status)}` : t('Model: {modelId}', { modelId: approval.model_id })}
+                              </small>
+                              <small className="muted">
+                                {t('Requested at')}: {formatTimestamp(approval.requested_at)}
+                              </small>
+                            </div>
+                            <div className="workspace-record-actions">
+                              <StatusTag status={approval.status}>{t(approval.status)}</StatusTag>
+                              <ButtonLink to={priorityCta.to} variant="ghost" size="sm">
+                                {t('Open Queue')}
+                              </ButtonLink>
+                            </div>
+                          </div>
+                        </Panel>
+                      );
+                    })
+                  : null}
+                {priorityMode === 'model'
+                  ? recentMyModels.map((model) => (
+                      <Panel key={model.id} as="li" className="workspace-record-item compact" tone="soft">
+                        <div className="workspace-record-item-top">
+                          <div className="workspace-record-summary stack tight">
+                            <strong>{model.name}</strong>
+                            <small className="muted">
+                              {t(model.model_type)} · {t(model.status)}
+                            </small>
+                            <small className="muted">
+                              {t('Last updated')}: {formatTimestamp(model.updated_at)}
+                            </small>
+                          </div>
+                          <div className="workspace-record-actions">
+                            <StatusTag status={model.status}>{t(model.status)}</StatusTag>
+                            <ButtonLink to={priorityCta.to} variant="ghost" size="sm">
+                              {priorityCta.label}
+                            </ButtonLink>
+                          </div>
+                        </div>
+                      </Panel>
+                    ))
+                  : null}
+                {priorityMode === 'attachment'
+                  ? recentProcessingAttachments.map((attachment) => (
+                      <Panel key={attachment.id} as="li" className="workspace-record-item compact" tone="soft">
+                        <div className="workspace-record-item-top">
+                          <div className="workspace-record-summary stack tight">
+                            <strong>{attachment.filename}</strong>
+                            <small className="muted">
+                              {t(attachment.status)} · {t('Last updated')}: {formatTimestamp(attachment.updated_at)}
+                            </small>
+                          </div>
+                          <div className="workspace-record-actions">
+                            <StatusTag status={attachment.status}>{t(attachment.status)}</StatusTag>
+                            <ButtonLink to={priorityCta.to} variant="ghost" size="sm">
+                              {priorityCta.label}
+                            </ButtonLink>
+                          </div>
+                        </div>
+                      </Panel>
+                    ))
+                  : null}
               </ul>
             )}
           </Card>
@@ -373,7 +447,7 @@ export default function ProfessionalConsolePage() {
               <div className="stack tight">
                 <h3>{t('Conversation carryover')}</h3>
                 <small className="muted">
-                  {t('Files still processing in chat context can be revisited from the conversation workspace.')}
+                  {t('Recent files still processing in conversation context can be resumed from chat.')}
                 </small>
               </div>
               <strong className="workspace-side-metric">{processingFiles}</strong>

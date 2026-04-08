@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type {
+  CreateTrainingWorkerInput,
   ModelFramework,
   RuntimeConnectivityRecord,
   RuntimeMetricsRetentionSummary,
@@ -8,6 +9,7 @@ import type {
   TrainingWorkerBootstrapSessionRecord,
   TrainingWorkerDeploymentMode,
   TrainingWorkerProfile,
+  TrainingWorkerStatus,
   TrainingWorkerNodeView
 } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
@@ -15,7 +17,7 @@ import StateBlock from '../components/StateBlock';
 import SettingsTabs from '../components/settings/SettingsTabs';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
-import { Input, Select } from '../components/ui/Field';
+import { Input, Select, Textarea } from '../components/ui/Field';
 import { Drawer } from '../components/ui/Overlay';
 import ProgressStepper from '../components/ui/ProgressStepper';
 import { Card, Panel } from '../components/ui/Surface';
@@ -48,6 +50,16 @@ type WorkerOnboardingDraft = {
   worker_public_host: string;
   worker_bind_port: string;
   max_concurrency: string;
+};
+
+type WorkerRegistryDraft = {
+  name: string;
+  endpoint: string;
+  status: TrainingWorkerStatus;
+  enabled: boolean;
+  max_concurrency: string;
+  capabilities_text: string;
+  metadata_text: string;
 };
 
 const endpointEnvByFramework: Record<ModelFramework, { endpoint: string; apiKey: string }> = {
@@ -215,6 +227,76 @@ const buildDefaultWorkerOnboardingDraft = (): WorkerOnboardingDraft => ({
   max_concurrency: '1'
 });
 
+const normalizeCapabilityTokens = (raw: string): string[] =>
+  raw
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const normalizeMetadataInput = (raw: string): Record<string, string> =>
+  raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((result, line) => {
+      const separatorIndex = line.indexOf('=');
+      if (separatorIndex < 0) {
+        result[line] = '';
+        return result;
+      }
+
+      const key = line.slice(0, separatorIndex).trim();
+      const value = line.slice(separatorIndex + 1).trim();
+      if (key) {
+        result[key] = value;
+      }
+      return result;
+    }, {});
+
+const serializeCapabilities = (capabilities: string[]) => capabilities.join(', ');
+
+const serializeMetadata = (metadata: Record<string, string>) =>
+  Object.entries(metadata)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+
+const buildDefaultWorkerRegistryDraft = (): WorkerRegistryDraft => ({
+  name: '',
+  endpoint: '',
+  status: 'online',
+  enabled: true,
+  max_concurrency: '1',
+  capabilities_text: 'framework:yolo, task:detection',
+  metadata_text: ''
+});
+
+const buildWorkerRegistryDraftFromWorker = (worker: TrainingWorkerNodeView): WorkerRegistryDraft => ({
+  name: worker.name,
+  endpoint: worker.endpoint ?? '',
+  status: worker.status,
+  enabled: worker.enabled,
+  max_concurrency: String(worker.max_concurrency),
+  capabilities_text: serializeCapabilities(worker.capabilities),
+  metadata_text: serializeMetadata(worker.metadata)
+});
+
+const formatWorkerUrlHost = (value: string): string =>
+  value.includes(':') && !value.startsWith('[') ? `[${value}]` : value;
+
+const buildWorkerEndpointHint = (
+  workerPublicHost: string | null,
+  workerBindPort: number
+): string | null =>
+  workerPublicHost ? `http://${formatWorkerUrlHost(workerPublicHost)}:${workerBindPort}` : null;
+
+const buildWorkerSetupUrlHint = (workerPublicHost: string | null, workerBindPort: number): string => {
+  const endpoint = buildWorkerEndpointHint(workerPublicHost, workerBindPort);
+  return endpoint ? `${endpoint}/setup` : `http://<worker-host>:${workerBindPort}/setup`;
+};
+
+const isConcreteWorkerUrl = (value: string | null | undefined): value is string =>
+  Boolean(value && value.trim() && !value.includes('<worker-host>'));
+
 const workerBootstrapStatusTone = (
   status: TrainingWorkerBootstrapSessionRecord['status']
 ): 'ready' | 'running' | 'failed' | 'draft' => {
@@ -246,6 +328,15 @@ export default function RuntimeSettingsPage() {
   const [bootstrapSessionsAccessDenied, setBootstrapSessionsAccessDenied] = useState(false);
   const [bootstrapSessionsError, setBootstrapSessionsError] = useState('');
   const [workerOnboardingOpen, setWorkerOnboardingOpen] = useState(false);
+  const [workerRegistryOpen, setWorkerRegistryOpen] = useState(false);
+  const [workerRegistrySaving, setWorkerRegistrySaving] = useState(false);
+  const [workerRegistryError, setWorkerRegistryError] = useState('');
+  const [editingWorkerId, setEditingWorkerId] = useState<string | null>(null);
+  const [workerRegistryDraft, setWorkerRegistryDraft] = useState<WorkerRegistryDraft>(
+    () => buildDefaultWorkerRegistryDraft()
+  );
+  const [workerMutationTargetId, setWorkerMutationTargetId] = useState<string | null>(null);
+  const [workerMutationAction, setWorkerMutationAction] = useState<string>('');
   const [creatingBootstrapSession, setCreatingBootstrapSession] = useState(false);
   const [downloadingBootstrapSessionId, setDownloadingBootstrapSessionId] = useState<string | null>(null);
   const [validatingBootstrapSessionId, setValidatingBootstrapSessionId] = useState<string | null>(null);
@@ -289,6 +380,14 @@ export default function RuntimeSettingsPage() {
     } catch (copyError) {
       setCopyMessage(t('Copy failed: {message}', { message: (copyError as Error).message }));
     }
+  };
+
+  const openExternalUrl = (url: string) => {
+    if (!isConcreteWorkerUrl(url)) {
+      return;
+    }
+
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const refresh = async (framework?: ModelFramework) => {
@@ -442,6 +541,99 @@ export default function RuntimeSettingsPage() {
     }
   };
 
+  const openCreateWorkerRegistry = () => {
+    setEditingWorkerId(null);
+    setWorkerRegistryDraft(buildDefaultWorkerRegistryDraft());
+    setWorkerRegistryError('');
+    setWorkerRegistryOpen(true);
+  };
+
+  const openEditWorkerRegistry = (worker: TrainingWorkerNodeView) => {
+    setEditingWorkerId(worker.id);
+    setWorkerRegistryDraft(buildWorkerRegistryDraftFromWorker(worker));
+    setWorkerRegistryError('');
+    setWorkerRegistryOpen(true);
+  };
+
+  const buildWorkerRegistryPayload = (): CreateTrainingWorkerInput => ({
+    name: workerRegistryDraft.name.trim(),
+    endpoint: workerRegistryDraft.endpoint.trim() || null,
+    status: workerRegistryDraft.status,
+    enabled: workerRegistryDraft.enabled,
+    max_concurrency: Number.parseInt(workerRegistryDraft.max_concurrency, 10) || 1,
+    capabilities: normalizeCapabilityTokens(workerRegistryDraft.capabilities_text),
+    metadata: normalizeMetadataInput(workerRegistryDraft.metadata_text)
+  });
+
+  const saveWorkerRegistry = async () => {
+    setWorkerRegistrySaving(true);
+    setWorkerRegistryError('');
+    try {
+      const payload = buildWorkerRegistryPayload();
+      const updatedWorker = editingWorkerId
+        ? await api.updateTrainingWorker(editingWorkerId, payload)
+        : await api.createTrainingWorker(payload);
+      setWorkers((prev) => {
+        const next = editingWorkerId
+          ? prev.map((item) => (item.id === updatedWorker.id ? updatedWorker : item))
+          : [updatedWorker, ...prev];
+        return [...next].sort((left, right) => left.name.localeCompare(right.name));
+      });
+      setWorkerRegistryOpen(false);
+      setEditingWorkerId(null);
+      setWorkerRegistryDraft(buildDefaultWorkerRegistryDraft());
+    } catch (workerError) {
+      setWorkerRegistryError((workerError as Error).message);
+    } finally {
+      setWorkerRegistrySaving(false);
+    }
+  };
+
+  const patchWorker = async (
+    workerId: string,
+    patch: Partial<CreateTrainingWorkerInput>,
+    actionLabel: string
+  ) => {
+    setWorkerMutationTargetId(workerId);
+    setWorkerMutationAction(actionLabel);
+    setWorkersError('');
+    try {
+      const updated = await api.updateTrainingWorker(workerId, patch);
+      setWorkers((prev) =>
+        [...prev.map((item) => (item.id === workerId ? updated : item))].sort((left, right) =>
+          left.name.localeCompare(right.name)
+        )
+      );
+    } catch (workerError) {
+      setWorkersError((workerError as Error).message);
+    } finally {
+      setWorkerMutationTargetId(null);
+      setWorkerMutationAction('');
+    }
+  };
+
+  const removeWorker = async (worker: TrainingWorkerNodeView) => {
+    const confirmed = window.confirm(
+      t('Remove worker {name} from the scheduling pool?', { name: worker.name })
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setWorkerMutationTargetId(worker.id);
+    setWorkerMutationAction('remove');
+    setWorkersError('');
+    try {
+      await api.removeTrainingWorker(worker.id);
+      setWorkers((prev) => prev.filter((item) => item.id !== worker.id));
+    } catch (workerError) {
+      setWorkersError((workerError as Error).message);
+    } finally {
+      setWorkerMutationTargetId(null);
+      setWorkerMutationAction('');
+    }
+  };
+
   const validateBootstrapSession = async (sessionId: string) => {
     setValidatingBootstrapSessionId(sessionId);
     setBootstrapSessionsError('');
@@ -514,8 +706,26 @@ export default function RuntimeSettingsPage() {
   ).length;
   const activeBootstrapSession =
     bootstrapSessions.find((session) => session.id === activeBootstrapSessionId) ?? null;
+  const editingWorker =
+    editingWorkerId ? workers.find((worker) => worker.id === editingWorkerId) ?? null : null;
   const onboardingStep =
     activeBootstrapSession?.status === 'online' ? 2 : activeBootstrapSession ? 1 : 0;
+  const workerRegistryTitle = editingWorker ? t('Edit Worker') : t('Register Worker');
+  const onboardingPreviewBindPort =
+    Number.parseInt(workerOnboardingDraft.worker_bind_port, 10) || 9090;
+  const onboardingPreviewPublicHost = workerOnboardingDraft.worker_public_host.trim() || null;
+  const onboardingPreviewEndpoint = buildWorkerEndpointHint(
+    onboardingPreviewPublicHost,
+    onboardingPreviewBindPort
+  );
+  const onboardingPreviewSetupUrl = buildWorkerSetupUrlHint(
+    onboardingPreviewPublicHost,
+    onboardingPreviewBindPort
+  );
+  const activeBootstrapSetupUrl = activeBootstrapSession?.setup_url_hint ?? null;
+  const activeBootstrapEndpointHint = activeBootstrapSession?.worker_endpoint_hint ?? null;
+  const activeBootstrapSetupUrlReady = isConcreteWorkerUrl(activeBootstrapSession?.setup_url_hint);
+  const activeBootstrapEndpointReady = isConcreteWorkerUrl(activeBootstrapSession?.worker_endpoint_hint);
   const formatPercent = (value: number | null | undefined) => {
     if (value === null || value === undefined || !Number.isFinite(value)) {
       return t('n/a');
@@ -667,7 +877,7 @@ export default function RuntimeSettingsPage() {
                     </small>
                     <small className="muted">{t('endpoint')}: {item?.endpoint ?? t('not set')}</small>
                     <small className="muted">{t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}</small>
-                    <small className="muted">{t('checked at')}: {item?.checked_at ?? t('n/a')}</small>
+                    <small className="muted">{t('checked at')}: {formatTimestamp(item?.checked_at ?? null)}</small>
                     {source === 'reachable' ? (
                       <StateBlock
                         variant="success"
@@ -922,6 +1132,12 @@ export default function RuntimeSettingsPage() {
                       {t('endpoint hint')}: {session.worker_endpoint_hint ?? t('to be confirmed in /setup')}
                     </small>
                     <small className="muted">
+                      {t('claimed at')}: {formatTimestamp(session.claimed_at)}
+                    </small>
+                    <small className="muted">
+                      {t('last seen')}: {formatTimestamp(session.last_seen_at)}
+                    </small>
+                    <small className="muted">
                       {t('expires')}: {formatTimestamp(session.expires_at)}
                     </small>
                     {session.callback_validation_message ? (
@@ -938,6 +1154,23 @@ export default function RuntimeSettingsPage() {
                         }}
                       >
                         {t('Open')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void copyText(t('Setup URL'), session.setup_url_hint)}
+                      >
+                        {t('Copy Setup URL')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openExternalUrl(session.setup_url_hint)}
+                        disabled={!isConcreteWorkerUrl(session.setup_url_hint)}
+                      >
+                        {t('Open Setup')}
                       </Button>
                       <Button
                         type="button"
@@ -980,7 +1213,12 @@ export default function RuntimeSettingsPage() {
                   {t('Inspect worker score composition and recent dispatch health before launching new jobs.')}
                 </small>
               </div>
-              <Badge tone="neutral">{t('Workers')}: {workers.length}</Badge>
+              <div className="row gap wrap align-center">
+                <Badge tone="neutral">{t('Workers')}: {workers.length}</Badge>
+                <Button type="button" variant="secondary" size="sm" onClick={openCreateWorkerRegistry}>
+                  {t('Register Worker')}
+                </Button>
+              </div>
             </div>
             {workersLoading ? (
               <StateBlock
@@ -1045,10 +1283,63 @@ export default function RuntimeSettingsPage() {
                       {t('endpoint')}: {worker.endpoint ?? t('not set')}
                     </small>
                     <small className="muted">
-                      {t('scheduler note')}: load={worker.scheduler_load_component.toFixed(3)}, penalty=
-                      {worker.scheduler_health_penalty.toFixed(3)}, bonus=
-                      {worker.scheduler_capability_bonus.toFixed(3)}
+                      {t('Registration')}: {t(worker.registration_source)} · {t('Auth mode')}: {t(worker.auth_mode)} ·{' '}
+                      {t('Enabled')}: {worker.enabled ? t('yes') : t('no')}
                     </small>
+                    <div className="workspace-record-actions">
+                      <Button type="button" variant="ghost" size="sm" onClick={() => openEditWorkerRegistry(worker)}>
+                        {t('Edit')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={workerMutationTargetId === worker.id}
+                        onClick={() =>
+                          void patchWorker(
+                            worker.id,
+                            { status: worker.status === 'draining' ? 'online' : 'draining' },
+                            'status'
+                          )
+                        }
+                      >
+                        {workerMutationTargetId === worker.id && workerMutationAction === 'status'
+                          ? t('Saving...')
+                          : worker.status === 'draining'
+                            ? t('Resume Scheduling')
+                            : t('Mark Draining')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={workerMutationTargetId === worker.id}
+                        onClick={() =>
+                          void patchWorker(
+                            worker.id,
+                            { enabled: !worker.enabled },
+                            'enabled'
+                          )
+                        }
+                      >
+                        {workerMutationTargetId === worker.id && workerMutationAction === 'enabled'
+                          ? t('Saving...')
+                          : worker.enabled
+                            ? t('Disable')
+                            : t('Enable')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="danger"
+                        size="sm"
+                        disabled={worker.in_flight_jobs > 0 || workerMutationTargetId === worker.id}
+                        onClick={() => void removeWorker(worker)}
+                      >
+                        {workerMutationTargetId === worker.id && workerMutationAction === 'remove'
+                          ? t('Removing...')
+                          : t('Remove')}
+                      </Button>
+                    </div>
                   </Panel>
                 ))}
               </ul>
@@ -1079,7 +1370,7 @@ export default function RuntimeSettingsPage() {
                       <div className="row gap wrap">
                         {inferenceSourceSummary.map((entry) => (
                           <Badge key={entry.key} tone="neutral">
-                            {entry.key}: {entry.count}
+                            {t(entry.key)}: {entry.count}
                           </Badge>
                         ))}
                       </div>
@@ -1096,7 +1387,7 @@ export default function RuntimeSettingsPage() {
                       <div className="row gap wrap">
                         {trainingModeSummary.map((entry) => (
                           <Badge key={entry.key} tone="info">
-                            {entry.key}: {entry.count}
+                            {t(entry.key)}: {entry.count}
                           </Badge>
                         ))}
                       </div>
@@ -1358,6 +1649,31 @@ export default function RuntimeSettingsPage() {
               />
             </label>
 
+            <Panel tone="soft">
+              <div className="stack tight">
+                <strong>{t('Worker access preview')}</strong>
+                <small className="muted">
+                  {t('Precompute the worker callback endpoint and local /setup page before generating the pairing session.')}
+                </small>
+                <small className="muted">
+                  {t('endpoint hint')}: {onboardingPreviewEndpoint ?? t('to be confirmed in /setup')}
+                </small>
+                <small className="muted">
+                  {t('Setup URL')}: {onboardingPreviewSetupUrl}
+                </small>
+              </div>
+            </Panel>
+
+            {!onboardingPreviewPublicHost ? (
+              <StateBlock
+                variant="empty"
+                title={t('Worker host still missing')}
+                description={t(
+                  'Fill Worker public host / IP so the generated setup URL and callback endpoint are directly usable from the control plane.'
+                )}
+              />
+            ) : null}
+
             <div className="workspace-button-stack">
               <Button type="button" onClick={() => void createBootstrapSession()} disabled={creatingBootstrapSession}>
                 {creatingBootstrapSession ? t('Generating...') : t('Generate Pairing Command')}
@@ -1394,27 +1710,69 @@ export default function RuntimeSettingsPage() {
                   <Badge tone="neutral">{t(activeBootstrapSession.deployment_mode)}</Badge>
                   <Badge tone="info">{t('worker id')}: {activeBootstrapSession.worker_id}</Badge>
                   <Badge tone="neutral">{t('bind port')}: {activeBootstrapSession.worker_bind_port}</Badge>
+                  <Badge tone="warning">
+                    {t('issued auth mode')}: {t(activeBootstrapSession.issued_auth_mode)}
+                  </Badge>
                   {activeBootstrapSession.worker_public_host ? (
                     <Badge tone="info">{t('host')}: {activeBootstrapSession.worker_public_host}</Badge>
+                  ) : null}
+                  {activeBootstrapSession.issued_auth_token_preview ? (
+                    <Badge tone="info">
+                      {t('issued token')}: {activeBootstrapSession.issued_auth_token_preview}
+                    </Badge>
+                  ) : null}
+                  {activeBootstrapSession.linked_worker_id ? (
+                    <Badge tone="success">
+                      {t('linked worker')}: {activeBootstrapSession.linked_worker_id}
+                    </Badge>
                   ) : null}
                 </div>
                 <small className="muted">
                   {t('pairing token')}: {activeBootstrapSession.pairing_token}
                 </small>
                 <small className="muted">
-                  {t('setup url')}: {activeBootstrapSession.setup_url_hint}
+                  {t('setup url')}: {activeBootstrapSetupUrl}
                 </small>
                 <small className="muted">
-                  {t('endpoint hint')}: {activeBootstrapSession.worker_endpoint_hint ?? t('to be confirmed in /setup')}
+                  {t('endpoint hint')}: {activeBootstrapEndpointHint ?? t('to be confirmed in /setup')}
+                </small>
+                <small className="muted">
+                  {t('claimed at')}: {formatTimestamp(activeBootstrapSession.claimed_at)}
+                </small>
+                <small className="muted">
+                  {t('last seen')}: {formatTimestamp(activeBootstrapSession.last_seen_at)}
+                </small>
+                <small className="muted">
+                  {t('callback checked')}: {formatTimestamp(activeBootstrapSession.callback_checked_at)}
+                </small>
+                <small className="muted">
+                  {t('expires')}: {formatTimestamp(activeBootstrapSession.expires_at)}
                 </small>
                 <div className="row gap wrap">
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => void copyText(t('Pairing token'), activeBootstrapSession.pairing_token)}
+                    onClick={() => void copyText(t('pairing token'), activeBootstrapSession.pairing_token)}
                   >
                     {t('Copy Token')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void copyText(t('Setup URL'), activeBootstrapSession.setup_url_hint)}
+                  >
+                    {t('Copy Setup URL')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openExternalUrl(activeBootstrapSession.setup_url_hint)}
+                    disabled={!activeBootstrapSetupUrlReady}
+                  >
+                    {t('Open Setup')}
                   </Button>
                   <Button
                     type="button"
@@ -1450,6 +1808,24 @@ export default function RuntimeSettingsPage() {
                 </div>
                 {activeBootstrapSession.callback_validation_message ? (
                   <small className="muted">{activeBootstrapSession.callback_validation_message}</small>
+                ) : null}
+                {!activeBootstrapSetupUrlReady ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Setup URL still needs a real host')}
+                    description={t(
+                      'This pairing session was created without Worker public host / IP. Regenerate it with a reachable host so the operator can open /setup directly and the control plane can validate callbacks cleanly.'
+                    )}
+                  />
+                ) : null}
+                {!activeBootstrapEndpointReady ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Worker host still missing')}
+                    description={t(
+                      'Fill Worker public host / IP so the generated setup URL and callback endpoint are directly usable from the control plane.'
+                    )}
+                  />
                 ) : null}
               </Card>
 
@@ -1513,6 +1889,15 @@ export default function RuntimeSettingsPage() {
                     {t('3. Confirm endpoint / concurrency / capabilities, then run Validate and Save')}
                   </small>
                 </div>
+                {!activeBootstrapSetupUrlReady ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Setup URL still needs a real host')}
+                    description={t(
+                      'This pairing session was created without Worker public host / IP. Regenerate it with a reachable host so the operator can open /setup directly and the control plane can validate callbacks cleanly.'
+                    )}
+                  />
+                ) : null}
                 {activeBootstrapSession.status === 'online' ? (
                   <StateBlock
                     variant="success"
@@ -1547,6 +1932,177 @@ export default function RuntimeSettingsPage() {
               description={t('Generate one session first, then this drawer will show the exact startup command and pairing token.')}
             />
           )}
+        </div>
+      </Drawer>
+
+      <Drawer
+        open={workerRegistryOpen}
+        onClose={() => setWorkerRegistryOpen(false)}
+        side="right"
+        className="runtime-worker-drawer"
+        title={workerRegistryTitle}
+      >
+        <div className="stack">
+          <div className="workspace-section-header">
+            <div className="stack tight">
+              <h3>{workerRegistryTitle}</h3>
+              <small className="muted">
+                {editingWorker
+                  ? t('Adjust endpoint, scheduler status, or capacity without leaving the runtime page.')
+                  : t('Manually register an existing worker endpoint when you do not need the guided pairing flow.')}
+              </small>
+            </div>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setWorkerRegistryOpen(false)}>
+              {t('Close')}
+            </Button>
+          </div>
+
+          {workerRegistryError ? (
+            <StateBlock variant="error" title={t('Worker update failed')} description={workerRegistryError} />
+          ) : null}
+
+          {editingWorker ? (
+            <Card as="section">
+              <div className="row gap wrap align-center">
+                <Badge tone="info">{t('worker id')}: {editingWorker.id}</Badge>
+                <Badge tone="neutral">{t(editingWorker.registration_source)}</Badge>
+                <Badge tone="neutral">{t(editingWorker.auth_mode)}</Badge>
+              </div>
+              <small className="muted">
+                {t('Last heartbeat')}: {formatTimestamp(editingWorker.last_heartbeat_at)} · {t('Last success')}:{' '}
+                {formatTimestamp(editingWorker.dispatch_last_success_at)}
+              </small>
+            </Card>
+          ) : null}
+
+          <Card as="section">
+            <label>
+              {t('Worker name')}
+              <Input
+                value={workerRegistryDraft.name}
+                onChange={(event) =>
+                  setWorkerRegistryDraft((prev) => ({
+                    ...prev,
+                    name: event.target.value
+                  }))
+                }
+                placeholder="gpu-worker-b"
+              />
+            </label>
+
+            <label>
+              {t('Worker endpoint')}
+              <Input
+                value={workerRegistryDraft.endpoint}
+                onChange={(event) =>
+                  setWorkerRegistryDraft((prev) => ({
+                    ...prev,
+                    endpoint: event.target.value
+                  }))
+                }
+                placeholder="http://10.10.0.22:9090"
+              />
+            </label>
+
+            <div className="workspace-form-grid">
+              <label>
+                {t('Status')}
+                <Select
+                  value={workerRegistryDraft.status}
+                  onChange={(event) =>
+                    setWorkerRegistryDraft((prev) => ({
+                      ...prev,
+                      status: event.target.value as TrainingWorkerStatus
+                    }))
+                  }
+                >
+                  <option value="online">{t('online')}</option>
+                  <option value="offline">{t('offline')}</option>
+                  <option value="draining">{t('draining')}</option>
+                </Select>
+              </label>
+
+              <label>
+                {t('Max concurrency')}
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={workerRegistryDraft.max_concurrency}
+                  onChange={(event) =>
+                    setWorkerRegistryDraft((prev) => ({
+                      ...prev,
+                      max_concurrency: event.target.value
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            <label className="workspace-checkbox-row">
+              <input
+                type="checkbox"
+                checked={workerRegistryDraft.enabled}
+                onChange={(event) =>
+                  setWorkerRegistryDraft((prev) => ({
+                    ...prev,
+                    enabled: event.target.checked
+                  }))
+                }
+              />
+              <span>{t('Enabled for scheduling')}</span>
+            </label>
+
+            <label>
+              {t('Capabilities')}
+              <Textarea
+                value={workerRegistryDraft.capabilities_text}
+                onChange={(event) =>
+                  setWorkerRegistryDraft((prev) => ({
+                    ...prev,
+                    capabilities_text: event.target.value
+                  }))
+                }
+                rows={3}
+                placeholder="framework:yolo, task:detection"
+              />
+              <small className="muted">
+                {t('Use comma or line breaks, for example framework:yolo and task:detection.')}
+              </small>
+            </label>
+
+            <label>
+              {t('Metadata')}
+              <Textarea
+                value={workerRegistryDraft.metadata_text}
+                onChange={(event) =>
+                  setWorkerRegistryDraft((prev) => ({
+                    ...prev,
+                    metadata_text: event.target.value
+                  }))
+                }
+                rows={4}
+                placeholder={'ip=10.10.0.22\nzone=rack-b'}
+              />
+              <small className="muted">{t('One key=value pair per line.')}</small>
+            </label>
+
+            <div className="workspace-button-stack">
+              <Button type="button" onClick={() => void saveWorkerRegistry()} disabled={workerRegistrySaving}>
+                {workerRegistrySaving ? t('Saving...') : editingWorker ? t('Save Worker') : t('Create Worker')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setWorkerRegistryDraft(editingWorker ? buildWorkerRegistryDraftFromWorker(editingWorker) : buildDefaultWorkerRegistryDraft());
+                  setWorkerRegistryError('');
+                }}
+              >
+                {t('Reset Draft')}
+              </Button>
+            </div>
+          </Card>
         </div>
       </Drawer>
     </WorkspacePage>

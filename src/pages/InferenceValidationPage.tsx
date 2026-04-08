@@ -50,6 +50,7 @@ export default function InferenceValidationPage() {
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [runs, setRuns] = useState<InferenceRunRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
+  const [selectedRunDetail, setSelectedRunDetail] = useState<InferenceRunRecord | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
   const [selectedAttachmentId, setSelectedAttachmentId] = useState('');
@@ -57,6 +58,8 @@ export default function InferenceValidationPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [selectedRunLoading, setSelectedRunLoading] = useState(false);
+  const [selectedRunError, setSelectedRunError] = useState('');
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [runtimeError, setRuntimeError] = useState('');
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeConnectivityRecord[]>([]);
@@ -128,10 +131,11 @@ export default function InferenceValidationPage() {
     [versions, selectedVersionId]
   );
 
-  const selectedRun = useMemo(
+  const selectedRunSummary = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
     [runs, selectedRunId]
   );
+  const selectedRun = selectedRunDetail && selectedRunDetail.id === selectedRunId ? selectedRunDetail : selectedRunSummary;
   const feedbackTaskType = useMemo(
     () => selectedRun?.task_type ?? selectedVersion?.task_type ?? null,
     [selectedRun?.task_type, selectedVersion?.task_type]
@@ -297,6 +301,23 @@ export default function InferenceValidationPage() {
     () => runtimeChecks.filter((item) => item.source === 'reachable').length,
     [runtimeChecks]
   );
+  const formatTimestamp = (value: string | null) => {
+    if (!value) {
+      return t('n/a');
+    }
+
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) {
+      return value;
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(new Date(parsed));
+  };
 
   const loadRuntimeConnectivity = useCallback(async () => {
     setRuntimeLoading(true);
@@ -327,6 +348,54 @@ export default function InferenceValidationPage() {
       setSelectedDatasetId(feedbackDatasets[0].id);
     }
   }, [feedbackDatasets, selectedDatasetId]);
+
+  const refreshSelectedRunDetail = useCallback(async (runId: string) => {
+    if (!runId) {
+      setSelectedRunDetail(null);
+      setSelectedRunError('');
+      return;
+    }
+
+    setSelectedRunLoading(true);
+    setSelectedRunError('');
+    try {
+      const detail = await api.getInferenceRun(runId);
+      setSelectedRunDetail(detail);
+      setRuns((prev) => {
+        const exists = prev.some((run) => run.id === detail.id);
+        const next = exists ? prev.map((run) => (run.id === detail.id ? detail : run)) : [detail, ...prev];
+        return [...next].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+      });
+    } catch (error) {
+      setSelectedRunError((error as Error).message);
+    } finally {
+      setSelectedRunLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const targetRunId = selectedRunSummary?.id ?? '';
+    if (!targetRunId) {
+      setSelectedRunDetail(null);
+      setSelectedRunError('');
+      return;
+    }
+
+    const summaryUpdatedAt = selectedRunSummary?.updated_at ?? '';
+    const detailUpdatedAt = selectedRunDetail?.updated_at ?? '';
+
+    if (selectedRunDetail?.id === targetRunId && summaryUpdatedAt === detailUpdatedAt) {
+      return;
+    }
+
+    void refreshSelectedRunDetail(targetRunId);
+  }, [
+    refreshSelectedRunDetail,
+    selectedRunDetail?.id,
+    selectedRunDetail?.updated_at,
+    selectedRunSummary?.id,
+    selectedRunSummary?.updated_at
+  ]);
 
   const uploadInput = async (filename: string) => {
     await api.uploadInferenceAttachment(filename);
@@ -367,6 +436,7 @@ export default function InferenceValidationPage() {
       });
       await loadAll('manual');
       setSelectedRunId(created.id);
+      await refreshSelectedRunDetail(created.id);
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -400,6 +470,7 @@ export default function InferenceValidationPage() {
 
       setFeedback({ variant: 'success', text: t('Sample feedback sent to dataset.') });
       await loadAll('manual');
+      await refreshSelectedRunDetail(selectedRun.id);
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -563,12 +634,28 @@ export default function InferenceValidationPage() {
               <WorkspaceSectionHeader
                 title={t('Latest Inference Output')}
                 description={t('Review runtime source, preview image, normalized output, and raw payload from the selected run.')}
+                actions={
+                  selectedRun ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void refreshSelectedRunDetail(selectedRun.id)}
+                      disabled={selectedRunLoading}
+                    >
+                      {selectedRunLoading ? t('Refreshing...') : t('Refresh selected run')}
+                    </Button>
+                  ) : null
+                }
               />
 
             {!selectedRun ? (
               <StateBlock variant="empty" title={t('No Runs Yet')} description={t('Run inference to inspect outputs.')} />
             ) : (
               <>
+                {selectedRunError ? (
+                  <StateBlock variant="error" title={t('Run detail unavailable')} description={selectedRunError} />
+                ) : null}
                 <label>
                   {t('Select Run')}
                   <Select value={selectedRun.id} onChange={(event) => setSelectedRunId(event.target.value)}>
@@ -585,6 +672,9 @@ export default function InferenceValidationPage() {
                     task: t(selectedRun.task_type),
                     framework: t(selectedRun.framework)
                   })}
+                </small>
+                <small className="muted">
+                  {t('Last updated')}: {formatTimestamp(selectedRun.updated_at)}
                 </small>
                 <div className="row gap wrap">
                   <Badge tone="neutral">
@@ -674,6 +764,7 @@ export default function InferenceValidationPage() {
                         {t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}
                       </Badge>
                     </div>
+                    <small className="muted">{t('checked at')}: {formatTimestamp(item?.checked_at ?? null)}</small>
                     <small className="muted">{item?.message ?? t('No check data yet.')}</small>
                     <small className="muted">{sourceDescription}</small>
                   </Panel>

@@ -228,6 +228,23 @@ export default function TrainingJobDetailPage() {
     const startIndex = Math.max(0, logs.length - visibleLogCount);
     return logs.slice(startIndex);
   }, [logs, visibleLogCount]);
+  const formatTimestamp = (value: string | null) => {
+    if (!value) {
+      return t('n/a');
+    }
+
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) {
+      return value;
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(new Date(parsed));
+  };
 
   useEffect(() => {
     setVisibleLogCount((previous) => {
@@ -330,6 +347,18 @@ export default function TrainingJobDetailPage() {
     } finally {
       setExportingMetricsCsv(false);
     }
+  };
+
+  const downloadArtifact = () => {
+    if (!artifactAttachmentId) {
+      return;
+    }
+
+    const anchor = document.createElement('a');
+    anchor.href = api.attachmentContentUrl(artifactAttachmentId);
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.click();
   };
 
   const renderMetricTimelineRow = (metric: TrainingMetricRecord, as: 'div' | 'li' = 'div') => (
@@ -471,20 +500,31 @@ export default function TrainingJobDetailPage() {
                 <Badge tone="neutral">{t('Base model')}: {job.base_model}</Badge>
                 <Badge tone="info">{t('Execution mode')}: {t(job.execution_mode)}</Badge>
                 <Badge tone={artifactAttachmentId ? 'success' : 'warning'}>
-                  {t('Artifact attachment')}: {artifactAttachmentId || t('pending')}
+                  {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('pending')}
                 </Badge>
               </div>
+              {artifactAttachmentId ? (
+                <small className="muted">{t('Artifact attachment')}: {artifactAttachmentId}</small>
+              ) : null}
+              {artifactAttachmentId ? (
+                <div className="row gap wrap">
+                  <Button type="button" variant="secondary" size="sm" onClick={downloadArtifact}>
+                    {t('Download Artifact')}
+                  </Button>
+                  <small className="muted">{t('Artifact ready for download from this detail page.')}</small>
+                </div>
+              ) : null}
               {job.scheduler_decision ? (
                 <Panel className="stack tight" tone="soft">
                   <div className="row between align-center wrap">
                     <strong>{t('Scheduler decision')}</strong>
-                    <small className="muted">{job.scheduler_decision.decided_at}</small>
+                    <small className="muted">{formatTimestamp(job.scheduler_decision.decided_at)}</small>
                   </div>
                   <div className="row gap wrap">
-                    <Badge tone="neutral">{t('Trigger')}: {job.scheduler_decision.trigger}</Badge>
+                    <Badge tone="neutral">{t('Trigger')}: {t(job.scheduler_decision.trigger)}</Badge>
                     <Badge tone="neutral">{t('Attempt')}: {job.scheduler_decision.attempt}</Badge>
                     <Badge tone={job.scheduler_decision.execution_target === 'worker' ? 'info' : 'warning'}>
-                      {t('Target')}: {job.scheduler_decision.execution_target}
+                      {t('Target')}: {t(job.scheduler_decision.execution_target)}
                     </Badge>
                     {job.scheduler_decision.selected_worker_id ? (
                       <Badge tone="info">
@@ -539,13 +579,13 @@ export default function TrainingJobDetailPage() {
                           >
                             <div className="row between align-center wrap">
                               <strong>
-                                {decision.trigger} · {t('Attempt')} {decision.attempt}
+                                {t(decision.trigger)} · {t('Attempt')} {decision.attempt}
                               </strong>
-                              <small className="muted">{decision.decided_at}</small>
+                              <small className="muted">{formatTimestamp(decision.decided_at)}</small>
                             </div>
                             <div className="row gap wrap">
                               <Badge tone={decision.execution_target === 'worker' ? 'info' : 'warning'}>
-                                {t('Target')}: {decision.execution_target}
+                                {t('Target')}: {t(decision.execution_target)}
                               </Badge>
                               <Badge tone="neutral">
                                 {t('Worker')}: {decision.selected_worker_id ?? t('none')}
@@ -595,7 +635,7 @@ export default function TrainingJobDetailPage() {
                       <Badge tone="info">{t('Sampled items')}: {artifactSummary.sampled_items}</Badge>
                     ) : null}
                     {artifactSummary.generated_at ? (
-                      <Badge tone="neutral">{t('Artifact generated at')}: {artifactSummary.generated_at}</Badge>
+                      <Badge tone="neutral">{t('Artifact generated at')}: {formatTimestamp(artifactSummary.generated_at)}</Badge>
                     ) : null}
                   </div>
                   {artifactSummary.primary_model_path ? (
@@ -801,6 +841,15 @@ export default function TrainingJobDetailPage() {
                   title={t('Export all metrics timeline in CSV format.')}
                 >
                   {exportingMetricsCsv ? t('Exporting...') : t('Download Metrics CSV')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={downloadArtifact}
+                  disabled={!artifactAttachmentId}
+                  title={t('Download artifact attachment generated by this run.')}
+                >
+                  {t('Download Artifact')}
                 </Button>
                 <ButtonLink to="/training/jobs" variant="secondary">
                   {t('Back to jobs list')}

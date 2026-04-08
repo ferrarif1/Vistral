@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TrainingJobRecord, TrainingJobStatus } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import VirtualList from '../components/VirtualList';
-import { StatusTag } from '../components/ui/Badge';
+import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Card, Panel } from '../components/ui/Surface';
 import {
@@ -34,7 +34,12 @@ const formatTimestamp = (iso: string): string => {
     return iso;
   }
 
-  return new Date(value).toLocaleString();
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
 };
 
 const buildJobsSignature = (jobs: TrainingJobRecord[]): string =>
@@ -137,6 +142,72 @@ export default function TrainingJobsPage() {
   );
   const shouldVirtualizeLiveJobs = liveJobs.length > liveJobsVirtualizationThreshold;
   const shouldVirtualizeTerminalJobs = recentTerminalJobs.length > terminalJobsVirtualizationThreshold;
+  const workerLiveJobs = liveJobs.filter((job) => job.execution_target === 'worker').length;
+  const controlPlaneLiveJobs = liveJobs.filter((job) => job.execution_target === 'control_plane').length;
+
+  const renderLiveJobRecord = (job: TrainingJobRecord, as: 'div' | 'li' = 'li') => {
+    const snapshotReady = Boolean(job.dataset_version_id);
+
+    return (
+      <Panel
+        as={as}
+        key={job.id}
+        className={`workspace-record-item${as === 'div' ? ' virtualized' : ''}`}
+        tone="soft"
+      >
+        <div className="workspace-record-item-top">
+          <div className="workspace-record-summary stack tight">
+            <strong>{job.name}</strong>
+            <small className="muted">
+              {t(job.task_type)} · {t(job.framework)} · {t('Last updated')}: {formatTimestamp(job.updated_at)}
+            </small>
+          </div>
+          <div className="workspace-record-actions">
+            <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+            <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
+              {t('Open Detail')}
+            </ButtonLink>
+          </div>
+        </div>
+        <div className="row gap wrap">
+          <Badge tone="neutral">
+            {t('Base model')}: {job.base_model}
+          </Badge>
+          <Badge tone="neutral">{t(job.execution_target)}</Badge>
+          <Badge tone={snapshotReady ? 'info' : 'warning'}>
+            {snapshotReady ? t('Version bound') : t('Version pending')}
+          </Badge>
+        </div>
+        <small className="muted line-clamp-2">
+          {job.log_excerpt || t('Logs will become visible after execution starts.')}
+        </small>
+      </Panel>
+    );
+  };
+
+  const renderTerminalJobRecord = (job: TrainingJobRecord, as: 'div' | 'li' = 'li') => (
+    <Panel
+      as={as}
+      key={job.id}
+      className={`workspace-record-item compact${as === 'div' ? ' virtualized' : ''}`}
+      tone="soft"
+    >
+      <div className="workspace-record-item-top">
+        <div className="workspace-record-summary stack tight">
+          <strong>{job.name}</strong>
+          <small className="muted">
+            {t(job.framework)} · {t(job.status)} · {formatTimestamp(job.updated_at)}
+          </small>
+        </div>
+        <div className="workspace-record-actions">
+          <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+          <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
+            {t('Open Detail')}
+          </ButtonLink>
+        </div>
+      </div>
+    </Panel>
+  );
 
   return (
     <WorkspacePage>
@@ -211,56 +282,14 @@ export default function TrainingJobsPage() {
               items={liveJobs}
               itemHeight={liveJobsVirtualRowHeight}
               height={liveJobsVirtualViewportHeight}
-              itemKey={(job) => job.id}
-              listClassName="workspace-record-list"
-              rowClassName="workspace-record-row"
-              ariaLabel={t('Live queue')}
-              renderItem={(job) => (
-                <Panel className="workspace-record-item virtualized" tone="soft">
-                  <div className="workspace-record-item-top">
-                    <div className="workspace-record-summary stack tight">
-                      <strong>{job.name}</strong>
-                      <small className="muted">
-                        {t(job.task_type)} · {t(job.framework)} · {t(job.status)} · {t('Last updated')}: {formatTimestamp(job.updated_at)}
-                      </small>
-                    </div>
-                    <div className="workspace-record-actions">
-                      <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-                      <ButtonLink to={`/training/jobs/${job.id}`} variant="secondary" size="sm">
-                        {t('Open Detail')}
-                      </ButtonLink>
-                    </div>
-                  </div>
-                  <small className="muted line-clamp-2">
-                    {job.log_excerpt || t('Logs will become visible after execution starts.')}
-                  </small>
-                </Panel>
-              )}
-            />
-          ) : (
-            <ul className="workspace-record-list">
-              {liveJobs.map((job) => (
-                <Panel key={job.id} as="li" className="workspace-record-item" tone="soft">
-                  <div className="workspace-record-item-top">
-                    <div className="workspace-record-summary stack tight">
-                      <strong>{job.name}</strong>
-                      <small className="muted">
-                        {t(job.task_type)} · {t(job.framework)} · {t(job.status)} · {t('Last updated')}: {formatTimestamp(job.updated_at)}
-                      </small>
-                    </div>
-                    <div className="workspace-record-actions">
-                      <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-                      <ButtonLink to={`/training/jobs/${job.id}`} variant="secondary" size="sm">
-                        {t('Open Detail')}
-                      </ButtonLink>
-                    </div>
-                  </div>
-                  <small className="muted line-clamp-2">
-                    {job.log_excerpt || t('Logs will become visible after execution starts.')}
-                  </small>
-                </Panel>
-              ))}
-            </ul>
+                itemKey={(job) => job.id}
+                listClassName="workspace-record-list"
+                rowClassName="workspace-record-row"
+                ariaLabel={t('Live queue')}
+                renderItem={(job) => renderLiveJobRecord(job, 'div')}
+              />
+            ) : (
+            <ul className="workspace-record-list">{liveJobs.map((job) => renderLiveJobRecord(job))}</ul>
           )}
           </Card>
         }
@@ -268,16 +297,16 @@ export default function TrainingJobsPage() {
           <>
             <Card as="article">
             <div className="stack tight">
-              <h3>{t('Create next run')}</h3>
+              <h3>{t('Launch next experiment')}</h3>
               <small className="muted">
                 {t('Open the training wizard when you are ready to launch another experiment.')}
               </small>
             </div>
             <strong className="workspace-side-metric">{summary.running}</strong>
             <small className="muted">
-              {t('Active runs')} · {summary.running} / {jobs.length}
+              {t('Worker lane')}: {workerLiveJobs} · {t('Control-plane lane')}: {controlPlaneLiveJobs}
             </small>
-            <ButtonLink to="/training/jobs/new" variant="secondary">
+            <ButtonLink to="/training/jobs/new">
               {t('Create Training Job')}
             </ButtonLink>
             </Card>
@@ -301,47 +330,11 @@ export default function TrainingJobsPage() {
                 listClassName="workspace-record-list compact"
                 rowClassName="workspace-record-row"
                 ariaLabel={t('Recent terminal runs')}
-                renderItem={(job) => (
-                  <Panel className="workspace-record-item compact virtualized" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{job.name}</strong>
-                        <small className="muted">
-                          {t(job.framework)} · {t(job.status)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-                        <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
-                          {t('Open Detail')}
-                        </ButtonLink>
-                      </div>
-                    </div>
-                    <small className="muted">{formatTimestamp(job.updated_at)}</small>
-                  </Panel>
-                )}
+                renderItem={(job) => renderTerminalJobRecord(job, 'div')}
               />
             ) : (
               <ul className="workspace-record-list compact">
-                {recentTerminalJobs.map((job) => (
-                  <Panel key={job.id} as="li" className="workspace-record-item compact" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{job.name}</strong>
-                        <small className="muted">
-                          {t(job.framework)} · {t(job.status)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-                        <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
-                          {t('Open Detail')}
-                        </ButtonLink>
-                      </div>
-                    </div>
-                    <small className="muted">{formatTimestamp(job.updated_at)}</small>
-                  </Panel>
-                ))}
+                {recentTerminalJobs.map((job) => renderTerminalJobRecord(job))}
               </ul>
             )}
             </Card>
