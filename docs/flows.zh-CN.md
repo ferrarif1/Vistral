@@ -54,7 +54,7 @@
 8. 在不丢失当前路由上下文与页脚控制项（如语言/会话状态）的前提下继续当前任务
 
 说明：
-- `/workspace/console` 现为沉浸式工作区路由（与 `/workspace/chat` 同构），采用固定侧栏、内容独立滚动、底部悬浮输入条。
+- `/workspace/console` 现保持在共享应用壳层，并统一为专业工作台结构（顶部工具栏 + 中间主区 + 右侧检查器），滚动按区域拆分。
 
 ## 2.2 Flow A2：统一设置页（已实现）
 执行者：`user` / `admin`
@@ -104,11 +104,13 @@
 1. 进入 `/datasets/:datasetId`
 2. 按任务选择样本视图（`grid` / `list`）
 3. 使用快速筛选（搜索、split、样本状态、队列状态、class/tag/metadata 提示）
-4. 从筛选结果中批量选择样本
-5. 在统一批量动作条中执行样本更新（如 split/status/metadata）
-6. 观察队列分布变化（`needs_work` / `in_review` / `rejected` / `approved`）
-7. 带队列与样本上下文跳转到标注工作台继续处理（若来自数据集版本快照则同时保留 `version` 上下文）
-8. 从数据集版本动作直达训练任务或推理验证，并保留上下文查询参数（`/training/jobs?dataset=<id>&version=<id>`、`/inference/validate?dataset=<id>&version=<id>`）
+4. metadata 筛选同时支持模糊关键词与 `key=value` 表达式（例如 `source=inference_feedback`、`feedback_reason=missing_detection`、`tag:low_confidence=true`）
+5. 从筛选结果中批量选择样本
+6. 在统一批量动作条中执行样本更新（如 split/status/metadata）
+7. 可将当前筛选（含切片衍生筛选）保存为可复用视图，并在页面内应用/删除
+8. 观察队列分布变化（`needs_work` / `in_review` / `rejected` / `approved`）
+9. 带队列与样本上下文跳转到标注工作台继续处理（若来自数据集版本快照则同时保留 `version` 上下文）
+10. 从数据集版本动作直达训练任务或推理验证，并保留上下文查询参数（`/training/jobs?dataset=<id>&version=<id>`、`/inference/validate?dataset=<id>&version=<id>`）
 
 ## 5. Flow D：在线标注工作流（Phase 2 最小可用）
 执行者：`user`（标注），`user/admin`（具能力审核）
@@ -131,12 +133,14 @@
 2. 查看标注摘要，并从 `needs_work` / `in_review` / `rejected` / `approved` 队列跳转
 3. 进入 `/datasets/:datasetId/annotate`（可选 `?version=<dataset_version_id>`，用于在复核时保留版本上下文）
 4. 直接恢复指定样本或队列上下文
-5. 编辑 OCR/检测标注
-6. 保存为 `in_progress` 或 `annotated`
-7. 提交 `annotated -> in_review`
-8. 审核为 `approved` 或 `rejected`
-9. 条目一旦进入 `in_review`，标注内容在 upsert 路径下应变为只读；后续只能通过审核接口进入 `approved` / `rejected`
-10. 若为 `rejected`，必须填写 `review_reason_code`，且返工时继续展示最近审核原因与备注；当条目移回 `in_progress` 时，应保持当前样本打开并自动落到 `needs_work` 队列，之后才能继续编辑
+5. 队列筛选（搜索/split/样本状态/metadata/低置信）会以“生效筛选标签”形式持续可见，并支持一键清空
+6. metadata 快捷筛选可一键填充常见排查模式（`tag:low_confidence=true`、`inference_run_id`、高频 `feedback_reason`）
+7. 编辑 OCR/检测标注
+8. 保存为 `in_progress` 或 `annotated`
+9. 提交 `annotated -> in_review`
+10. 审核为 `approved` 或 `rejected`
+11. 条目一旦进入 `in_review`，标注内容在 upsert 路径下应变为只读；后续只能通过审核接口进入 `approved` / `rejected`
+12. 若为 `rejected`，必须填写 `review_reason_code`，且返工时继续展示最近审核原因与备注；当条目移回 `in_progress` 时，应保持当前样本打开并自动落到 `needs_work` 队列，之后才能继续编辑
 
 ## 5.1 Flow D1：单样本复核工作台（演进轨道）
 执行者：`user`（具标注/审核能力）
@@ -172,7 +176,8 @@
 ## 7. Flow F：模型版本注册
 执行者：`user`
 
-1. 训练任务完成后可注册模型版本
+1. 训练任务完成后，且 `execution_mode=local_command` 时才可注册模型版本
+1a. 若产物摘要显示为非真实本地执行（`mode=template`、存在 `fallback_reason`、或 `training_performed=false`），必须阻止注册；仅在显式设置 `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1` 时可放开
 2. 在 `/models/versions` 发起注册
 3. 版本关联模型 + 数据集 + 训练任务 + 指标摘要
 
@@ -185,9 +190,11 @@
 4. 选择模型版本
 5. 执行推理
 6. 查看可视化结果 + raw 输出 + normalized 输出
+6a. 若 `source` 命中 `mock/template/fallback` 或 raw 中存在 fallback reason，页面必须明确提示“当前结果为回退/模板结果，不是真实 OCR 识别”
+6b. 若 OCR 在回退路径中未产生文本行，页面必须提示“未识别到文本 / 本次运行未产生真实 OCR 结果”
 7. 错样一键回流到任务类型匹配的数据集
 8. 推理验证侧栏动作可带上下文直达数据集详情、标注队列与训练任务列表
-9. 标注快捷入口额外携带 `meta=<run_id>`，可在标注工作区直接预筛选当前推理运行的回流样本
+9. 标注快捷入口额外携带 `meta=inference_run_id=<run_id>`，可在标注工作区直接预筛选当前推理运行的回流样本
 
 ## 9. 闭环业务 1：OCR 微调
 1. 创建 OCR 数据集
@@ -217,7 +224,7 @@
 ## 11. Flow H：部署验收治理
 执行者：`admin`
 
-1. 运行 `docker:verify:full` 生成验收报告
+1. 运行 `docker:verify:full` 生成验收报告（含 OCR fallback 安全守卫校验）
 2. 进入 `/admin/verification-reports`
 3. 通过状态/base_url/日期区间/关键词筛选报告
 4. 可选使用快捷日期（近 7 天 / 近 30 天）

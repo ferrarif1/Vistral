@@ -134,6 +134,12 @@ infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
 execution_source="$(echo "${infer_resp}" | jq -r '.data.execution_source // empty')"
 runner_mode="$(echo "${infer_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 fallback_reason="$(echo "${infer_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+fallback_reason_unified="$(echo "${infer_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+yolo_boxes_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.boxes // []) | if type=="array" then length else -1 end')"
+yolo_rotated_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.rotated_boxes // []) | if type=="array" then length else -1 end')"
+yolo_polygon_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.polygons // []) | if type=="array" then length else -1 end')"
+yolo_mask_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.masks // []) | if type=="array" then length else -1 end')"
+yolo_label_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.labels // []) | if type=="array" then length else -1 end')"
 if [[ "${execution_source}" != "yolo_local_command" ]]; then
   echo "[smoke-runner-real-upload] expected execution_source=yolo_local_command, got ${execution_source}."
   echo "${infer_resp}"
@@ -146,6 +152,16 @@ if [[ "${runner_mode}" != "template" ]]; then
 fi
 if [[ "${fallback_reason}" != real_predict_skipped:* || "${fallback_reason}" != *"model_path"* ]]; then
   echo "[smoke-runner-real-upload] expected fallback_reason to indicate model_path issue, got ${fallback_reason}."
+  echo "${infer_resp}"
+  exit 1
+fi
+if [[ "${fallback_reason_unified}" != real_predict_skipped:* || "${fallback_reason_unified}" != *"model_path"* ]]; then
+  echo "[smoke-runner-real-upload] expected unified fallback_reason to indicate model_path issue, got ${fallback_reason_unified}."
+  echo "${infer_resp}"
+  exit 1
+fi
+if [[ "${yolo_boxes_count}" != "0" || "${yolo_rotated_count}" != "0" || "${yolo_polygon_count}" != "0" || "${yolo_mask_count}" != "0" || "${yolo_label_count}" != "0" ]]; then
+  echo "[smoke-runner-real-upload] expected YOLO template fallback to return empty structured predictions."
   echo "${infer_resp}"
   exit 1
 fi

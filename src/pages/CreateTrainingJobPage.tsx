@@ -12,7 +12,8 @@ import {
   WorkspaceHero,
   WorkspaceMetricGrid,
   WorkspacePage,
-  WorkspaceSplit
+  WorkspaceSectionHeader,
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -726,16 +727,77 @@ export default function CreateTrainingJobPage() {
         ]}
       />
 
-      <WorkspaceSplit
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Flow controls')}</h3>
+                <small className="muted">{stepDescriptions[step]}</small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || submitting} size="sm">
+                  {t('Back')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={nextStep}
+                  disabled={step === steps.length - 1 || submitting || loading}
+                  size="sm"
+                >
+                  {t('Next')}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={submit}
+                  disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !launchReady}
+                  size="sm"
+                >
+                  {submitting ? t('Submitting...') : t('Create Training Job')}
+                </Button>
+              </div>
+            </div>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <StatusTag status={launchReady ? 'ready' : 'draft'}>
+                  {t('Launch readiness')}: {launchReady ? t('Ready') : t('draft')}
+                </StatusTag>
+                <StatusTag status="info">
+                  {t('Current step')}: {step + 1}/{steps.length}
+                </StatusTag>
+                <StatusTag status="info">
+                  {t('Framework')}: {t(framework)}
+                </StatusTag>
+                {selectedDataset ? (
+                  <StatusTag status={selectedDataset.status}>{selectedDataset.name}</StatusTag>
+                ) : null}
+                {selectedDatasetVersion ? (
+                  <StatusTag status={datasetVersionHasAnnotationCoverage ? 'ready' : 'draft'}>
+                    {selectedDatasetVersion.version_name}
+                  </StatusTag>
+                ) : null}
+              </div>
+            </div>
+          </Card>
+        }
         main={
-          <div className="stack">
-            <StepIndicator steps={steps} current={step} />
+          <div className="workspace-main-stack">
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Current step')}
+                description={stepTitles[step]}
+                actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
+              />
+              <small className="muted">{stepDescriptions[step]}</small>
+              <StepIndicator steps={steps} current={step} />
+            </Card>
             {renderStage()}
           </div>
         }
         side={
-          <>
-            <Card className="stack">
+          <div className="workspace-inspector-rail">
+            <Card as="article" className="workspace-inspector-card">
               <div className="stack tight">
                 <h3>{t('Requirement to Task Draft')}</h3>
                 <small className="muted">
@@ -797,7 +859,7 @@ export default function CreateTrainingJobPage() {
               )}
             </Card>
 
-            <Card className="stack">
+            <Card as="article" className="workspace-inspector-card">
               <div className="stack tight">
                 <h3>{t('Current run plan')}</h3>
                 <small className="muted">{stepDescriptions[step]}</small>
@@ -817,32 +879,12 @@ export default function CreateTrainingJobPage() {
               </ul>
             </Card>
 
-            <Panel className="stack">
+            <Panel as="article" className="workspace-inspector-card">
               <div className="stack tight">
                 <h3>{t('Launch lane')}</h3>
                 <small className="muted">{t('Keep the main training actions and supporting routes close together.')}</small>
               </div>
               <div className="workspace-button-stack">
-                <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || submitting} block>
-                  {t('Back')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={nextStep}
-                  disabled={step === steps.length - 1 || submitting || loading}
-                  block
-                >
-                  {t('Next')}
-                </Button>
-                <Button
-                  type="button"
-                  onClick={submit}
-                  disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !launchReady}
-                  block
-                >
-                  {submitting ? t('Submitting...') : t('Create Training Job')}
-                </Button>
                 <ButtonLink to={scopedDatasetDetailPath} variant="secondary" block>
                   {selectedDataset ? t('Open scoped dataset') : t('Manage Datasets')}
                 </ButtonLink>
@@ -851,7 +893,7 @@ export default function CreateTrainingJobPage() {
                 </ButtonLink>
               </div>
             </Panel>
-          </>
+          </div>
         }
       />
     </WorkspacePage>

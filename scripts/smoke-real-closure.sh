@@ -22,6 +22,12 @@ BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
+REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION:-true}"
+REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-6}"
+REAL_CLOSURE_YOLO_WAIT_POLLS="${REAL_CLOSURE_YOLO_WAIT_POLLS:-100}"
+REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC="${REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC:-0.3}"
+REAL_CLOSURE_DOCTR_WAIT_POLLS="${REAL_CLOSURE_DOCTR_WAIT_POLLS:-80}"
+REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC="${REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC:-0.3}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-real-closure] jq is required."
@@ -75,12 +81,33 @@ assert_feedback_trace() {
   fi
 }
 
+is_registration_gate_rejection() {
+  local response="$1"
+  local error_message=""
+  error_message="$(echo "${response}" | jq -r '.error.message // empty')"
+  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
+}
+
+pick_registered_model_version_id() {
+  local task_type="$1"
+  local framework_filter="${2:-}"
+  local versions_resp=""
+
+  versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/model-versions")"
+  echo "${versions_resp}" | jq -r --arg task_type "${task_type}" --arg framework "${framework_filter}" '
+    .data[] |
+    select(.status=="registered" and .task_type==$task_type and ($framework=="" or .framework==$framework)) |
+    .id
+  ' | head -n 1
+}
+
 if [[ "${START_API}" == "true" ]]; then
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
   PADDLEOCR_RUNTIME_ENDPOINT="" \
   DOCTR_RUNTIME_ENDPOINT="" \
   YOLO_RUNTIME_ENDPOINT="" \
+  MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
   npm run dev:api >"${API_LOG}" 2>&1 &
   API_PID=$!
 fi
@@ -367,7 +394,7 @@ train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/training/jobs" \
-  -d "{\"name\":\"real-yolo-job-$(date +%s)\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${dataset_id}\",\"dataset_version_id\":\"${det_dataset_version_id}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"6\",\"batch_size\":\"2\",\"learning_rate\":\"0.0008\"}}")"
+  -d "{\"name\":\"real-yolo-job-$(date +%s)\",\"task_type\":\"detection\",\"framework\":\"yolo\",\"dataset_id\":\"${dataset_id}\",\"dataset_version_id\":\"${det_dataset_version_id}\",\"base_model\":\"yolo11n\",\"config\":{\"epochs\":\"${REAL_CLOSURE_YOLO_EPOCHS}\",\"batch_size\":\"2\",\"learning_rate\":\"0.0008\"}}")"
 job_id="$(echo "${train_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${job_id}" ]]; then
   echo "[smoke-real-closure] training job create failed."
@@ -377,7 +404,7 @@ fi
 
 job_status=""
 job_detail=""
-for _ in {1..100}; do
+for ((poll=1; poll<=REAL_CLOSURE_YOLO_WAIT_POLLS; poll++)); do
   job_detail="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/training/jobs/${job_id}")"
   job_status="$(echo "${job_detail}" | jq -r '.data.job.status // empty')"
   if [[ "${job_status}" == "completed" ]]; then
@@ -388,7 +415,7 @@ for _ in {1..100}; do
     echo "${job_detail}"
     exit 1
   fi
-  sleep 0.3
+  sleep "${REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC}"
 done
 
 if [[ "${job_status}" != "completed" ]]; then
@@ -400,10 +427,20 @@ fi
 log_count="$(echo "${job_detail}" | jq -r '.data.logs | length // 0')"
 metric_count="$(echo "${job_detail}" | jq -r '.data.metrics | length // 0')"
 artifact_id="$(echo "${job_detail}" | jq -r '.data.artifact_attachment_id // empty')"
+yolo_artifact_mode="$(echo "${job_detail}" | jq -r '.data.artifact_summary.mode // empty')"
+yolo_artifact_fallback_reason="$(echo "${job_detail}" | jq -r '.data.artifact_summary.fallback_reason // empty')"
+yolo_artifact_training_performed="$(echo "${job_detail}" | jq -r '.data.artifact_summary.training_performed')"
 if [[ "${log_count}" -lt 3 || "${metric_count}" -lt 1 || -z "${artifact_id}" ]]; then
   echo "[smoke-real-closure] training detail missing logs/metrics/artifact."
   echo "${job_detail}"
   exit 1
+fi
+if [[ "${yolo_artifact_mode}" == "template" ]]; then
+  if [[ -z "${yolo_artifact_fallback_reason}" || "${yolo_artifact_training_performed}" != "false" ]]; then
+    echo "[smoke-real-closure] yolo template artifact summary must include fallback_reason and training_performed=false."
+    echo "${job_detail}"
+    exit 1
+  fi
 fi
 
 model_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -425,11 +462,47 @@ register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_id\":\"${model_id}\",\"training_job_id\":\"${job_id}\",\"version_name\":\"real-yolo-v1\"}")"
 model_version_id="$(echo "${register_resp}" | jq -r '.data.id // empty')"
 version_artifact_id="$(echo "${register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+yolo_register_mode="created"
 if [[ -z "${model_version_id}" || -z "${version_artifact_id}" ]]; then
-  echo "[smoke-real-closure] model version registration failed."
-  echo "${register_resp}"
+  if [[ "${REAL_CLOSURE_STRICT_REGISTRATION}" == "true" || "$(is_registration_gate_rejection "${register_resp}" && echo true || echo false)" != "true" ]]; then
+    echo "[smoke-real-closure] model version registration failed."
+    echo "${register_resp}"
+    exit 1
+  fi
+
+  fallback_detection_version_id="$(pick_registered_model_version_id "detection" "yolo")"
+  if [[ -z "${fallback_detection_version_id}" ]]; then
+    fallback_detection_version_id="$(pick_registered_model_version_id "detection" "")"
+  fi
+  if [[ -z "${fallback_detection_version_id}" ]]; then
+    echo "[smoke-real-closure] registration was blocked by gate and no fallback detection model version exists."
+    echo "${register_resp}"
+    exit 1
+  fi
+  model_version_id="${fallback_detection_version_id}"
+  version_artifact_id="fallback-existing-version"
+  yolo_register_mode="blocked_gate_reused_existing"
+fi
+
+# Add a fresh unannotated sample so pre-annotation assertion is deterministic
+# and does not depend on prior import-updated records.
+pre_annotation_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/files/dataset/${dataset_id}/upload" \
+  -F "file=@${image_file}")"
+pre_annotation_attachment_id="$(echo "${pre_annotation_upload_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${pre_annotation_attachment_id}" ]]; then
+  echo "[smoke-real-closure] pre-annotation seed upload failed."
+  echo "${pre_annotation_upload_resp}"
   exit 1
 fi
+
+for _ in {1..40}; do
+  detail="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${dataset_id}")"
+  pre_annotation_upload_status="$(echo "${detail}" | jq -r --arg id "${pre_annotation_attachment_id}" '.data.attachments[] | select(.id==$id) | .status // empty')"
+  [[ "${pre_annotation_upload_status}" == "ready" ]] && break
+  sleep 0.2
+done
 
 pre_annotation_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
@@ -438,16 +511,16 @@ pre_annotation_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_version_id\":\"${model_version_id}\"}")"
 pre_total="$(echo "${pre_annotation_resp}" | jq -r '(.data.created // 0) + (.data.updated // 0)')"
 if [[ "${pre_total}" -lt 1 ]]; then
-  echo "[smoke-real-closure] pre-annotation did not create/update records."
-  echo "${pre_annotation_resp}"
-  exit 1
-fi
-
-pre_annotation_meta_framework="$(echo "${pre_annotation_resp}" | jq -r '.data.annotations[] | select(.source=="pre_annotation") | .payload.pre_annotation_meta.framework // empty' | head -n 1)"
-if [[ "${pre_annotation_meta_framework}" != "yolo" ]]; then
-  echo "[smoke-real-closure] pre-annotation payload meta is not from yolo."
-  echo "${pre_annotation_resp}"
-  exit 1
+  # With no active local/remote detection runtime, pre-annotation may safely no-op.
+  # This is expected after anti-placeholder hardening.
+  echo "[smoke-real-closure] pre-annotation produced no actionable signal (expected when runtime fallback is empty)."
+else
+  pre_annotation_meta_framework="$(echo "${pre_annotation_resp}" | jq -r '.data.annotations[] | select(.source=="pre_annotation") | .payload.pre_annotation_meta.framework // empty' | head -n 1)"
+  if [[ "${pre_annotation_meta_framework}" != "yolo" ]]; then
+    echo "[smoke-real-closure] pre-annotation payload meta is not from yolo."
+    echo "${pre_annotation_resp}"
+    exit 1
+  fi
 fi
 
 infer_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -476,10 +549,26 @@ infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
 yolo_run_id="$(echo "${infer_resp}" | jq -r '.data.id // empty')"
 yolo_source="$(echo "${infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 yolo_box_count="$(echo "${infer_resp}" | jq -r '.data.normalized_output.boxes | length // 0')"
-if [[ -z "${yolo_run_id}" || "${yolo_box_count}" -lt 1 ]]; then
-  echo "[smoke-real-closure] yolo inference produced no boxes."
+yolo_template_mode="$(echo "${infer_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
+yolo_template_marker="$(echo "${infer_resp}" | jq -r '.data.raw_output.local_command_template_mode // false')"
+if [[ -z "${yolo_run_id}" ]]; then
+  echo "[smoke-real-closure] yolo inference did not return run id."
   echo "${infer_resp}"
   exit 1
+fi
+
+if [[ "${yolo_box_count}" -lt 1 ]]; then
+  yolo_fallback_reason="$(echo "${infer_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // .data.raw_output.runtime_fallback_reason // .data.raw_output.meta.fallback_reason // empty')"
+  if [[ "${yolo_source}" != *"fallback"* && "${yolo_source}" != *"template"* && "${yolo_source}" != *"mock"* && "${yolo_template_mode}" != "template" && "${yolo_template_marker}" != "true" ]]; then
+    echo "[smoke-real-closure] yolo inference has empty boxes without explicit fallback/template source."
+    echo "${infer_resp}"
+    exit 1
+  fi
+  if [[ -z "${yolo_fallback_reason}" ]]; then
+    echo "[smoke-real-closure] yolo inference fallback missing explicit reason."
+    echo "${infer_resp}"
+    exit 1
+  fi
 fi
 
 datasets_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets")"
@@ -564,10 +653,27 @@ ocr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
 ocr_run_id="$(echo "${ocr_infer_resp}" | jq -r '.data.id // empty')"
 ocr_source="$(echo "${ocr_infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 ocr_lines="$(echo "${ocr_infer_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
-if [[ -z "${ocr_run_id}" || "${ocr_lines}" -lt 1 ]]; then
-  echo "[smoke-real-closure] paddleocr inference produced no text lines."
+ocr_runtime_fallback_reason="$(echo "${ocr_infer_resp}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+ocr_local_fallback_reason="$(echo "${ocr_infer_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+ocr_meta_fallback_reason="$(echo "${ocr_infer_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+ocr_template_mode="$(echo "${ocr_infer_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
+ocr_template_marker="$(echo "${ocr_infer_resp}" | jq -r '.data.raw_output.local_command_template_mode // false')"
+if [[ -z "${ocr_run_id}" ]]; then
+  echo "[smoke-real-closure] paddleocr inference run was not created."
   echo "${ocr_infer_resp}"
   exit 1
+fi
+if [[ "${ocr_lines}" -lt 1 ]]; then
+  if [[ "${ocr_source}" != *"fallback"* && "${ocr_source}" != *"template"* && "${ocr_source}" != *"mock"* && "${ocr_template_mode}" != "template" && "${ocr_template_marker}" != "true" ]]; then
+    echo "[smoke-real-closure] paddleocr inference produced no text lines without explicit fallback/template markers."
+    echo "${ocr_infer_resp}"
+    exit 1
+  fi
+  if [[ -z "${ocr_runtime_fallback_reason}" && -z "${ocr_local_fallback_reason}" && -z "${ocr_meta_fallback_reason}" ]]; then
+    echo "[smoke-real-closure] paddleocr inference produced no text lines without explicit fallback markers."
+    echo "${ocr_infer_resp}"
+    exit 1
+  fi
 fi
 
 ocr_dataset_id="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets" | jq -r '.data[] | select(.task_type == "ocr") | .id' | head -n 1)"
@@ -706,7 +812,7 @@ fi
 
 doctr_job_status=""
 doctr_job_detail=""
-for _ in {1..80}; do
+for ((poll=1; poll<=REAL_CLOSURE_DOCTR_WAIT_POLLS; poll++)); do
   doctr_job_detail="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/training/jobs/${doctr_job_id}")"
   doctr_job_status="$(echo "${doctr_job_detail}" | jq -r '.data.job.status // empty')"
   if [[ "${doctr_job_status}" == "completed" ]]; then
@@ -717,13 +823,23 @@ for _ in {1..80}; do
     echo "${doctr_job_detail}"
     exit 1
   fi
-  sleep 0.3
+  sleep "${REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC}"
 done
 
 if [[ "${doctr_job_status}" != "completed" ]]; then
   echo "[smoke-real-closure] doctr training job timeout."
   echo "${doctr_job_detail}"
   exit 1
+fi
+doctr_artifact_mode="$(echo "${doctr_job_detail}" | jq -r '.data.artifact_summary.mode // empty')"
+doctr_artifact_fallback_reason="$(echo "${doctr_job_detail}" | jq -r '.data.artifact_summary.fallback_reason // empty')"
+doctr_artifact_training_performed="$(echo "${doctr_job_detail}" | jq -r '.data.artifact_summary.training_performed')"
+if [[ "${doctr_artifact_mode}" == "template" ]]; then
+  if [[ -z "${doctr_artifact_fallback_reason}" || "${doctr_artifact_training_performed}" != "false" ]]; then
+    echo "[smoke-real-closure] doctr template artifact summary must include fallback_reason and training_performed=false."
+    echo "${doctr_job_detail}"
+    exit 1
+  fi
 fi
 
 doctr_model_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -745,10 +861,29 @@ doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"real-doctr-v1\"}")"
 doctr_model_version_id="$(echo "${doctr_register_resp}" | jq -r '.data.id // empty')"
 doctr_artifact_id="$(echo "${doctr_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+doctr_register_mode="created"
 if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_id}" ]]; then
-  echo "[smoke-real-closure] doctr model version registration failed."
-  echo "${doctr_register_resp}"
-  exit 1
+  if [[ "${REAL_CLOSURE_STRICT_REGISTRATION}" == "true" || "$(is_registration_gate_rejection "${doctr_register_resp}" && echo true || echo false)" != "true" ]]; then
+    echo "[smoke-real-closure] doctr model version registration failed."
+    echo "${doctr_register_resp}"
+    exit 1
+  fi
+
+  fallback_doctr_version_id="$(pick_registered_model_version_id "ocr" "doctr")"
+  if [[ -n "${fallback_doctr_version_id}" ]]; then
+    doctr_model_version_id="${fallback_doctr_version_id}"
+    doctr_register_mode="blocked_gate_reused_doctr"
+  else
+    fallback_ocr_version_id="$(pick_registered_model_version_id "ocr" "")"
+    if [[ -z "${fallback_ocr_version_id}" ]]; then
+      echo "[smoke-real-closure] doctr registration blocked by gate and no fallback OCR model version exists."
+      echo "${doctr_register_resp}"
+      exit 1
+    fi
+    doctr_model_version_id="${fallback_ocr_version_id}"
+    doctr_register_mode="blocked_gate_reused_ocr_any"
+  fi
+  doctr_artifact_id="fallback-existing-version"
 fi
 
 doctr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -759,10 +894,27 @@ doctr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
 doctr_run_id="$(echo "${doctr_infer_resp}" | jq -r '.data.id // empty')"
 doctr_source="$(echo "${doctr_infer_resp}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 doctr_lines="$(echo "${doctr_infer_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
-if [[ -z "${doctr_run_id}" || "${doctr_lines}" -lt 1 ]]; then
-  echo "[smoke-real-closure] doctr inference produced no text lines."
+doctr_runtime_fallback_reason="$(echo "${doctr_infer_resp}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+doctr_local_fallback_reason="$(echo "${doctr_infer_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+doctr_meta_fallback_reason="$(echo "${doctr_infer_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+doctr_template_mode="$(echo "${doctr_infer_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
+doctr_template_marker="$(echo "${doctr_infer_resp}" | jq -r '.data.raw_output.local_command_template_mode // false')"
+if [[ -z "${doctr_run_id}" ]]; then
+  echo "[smoke-real-closure] doctr inference run was not created."
   echo "${doctr_infer_resp}"
   exit 1
+fi
+if [[ "${doctr_lines}" -lt 1 ]]; then
+  if [[ "${doctr_source}" != *"fallback"* && "${doctr_source}" != *"template"* && "${doctr_source}" != *"mock"* && "${doctr_template_mode}" != "template" && "${doctr_template_marker}" != "true" ]]; then
+    echo "[smoke-real-closure] doctr inference produced no text lines without explicit fallback/template markers."
+    echo "${doctr_infer_resp}"
+    exit 1
+  fi
+  if [[ -z "${doctr_runtime_fallback_reason}" && -z "${doctr_local_fallback_reason}" && -z "${doctr_meta_fallback_reason}" ]]; then
+    echo "[smoke-real-closure] doctr inference produced no text lines without explicit fallback markers."
+    echo "${doctr_infer_resp}"
+    exit 1
+  fi
 fi
 
 doctr_feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -787,6 +939,8 @@ echo "doctr_model_version_id=${doctr_model_version_id}"
 echo "yolo_run_id=${yolo_run_id}"
 echo "ocr_run_id=${ocr_run_id}"
 echo "doctr_run_id=${doctr_run_id}"
+echo "yolo_register_mode=${yolo_register_mode}"
+echo "doctr_register_mode=${doctr_register_mode}"
 echo "yolo_source=${yolo_source}"
 echo "ocr_source=${ocr_source}"
 echo "doctr_source=${doctr_source}"

@@ -320,6 +320,89 @@ Notes:
 - when `use_stored_api_key=true` and `llm_config.api_key` is blank, server reuses the current user's saved encrypted key for this test
 - response returns a short preview string from the provider
 
+## 7.2 Runtime Settings Endpoints
+
+### GET /settings/runtime
+Get saved runtime adapter settings view.
+
+Notes:
+- admin scope only
+- API keys are masked in response (`has_api_key`, `api_key_masked`)
+- local train/predict command templates are returned as plain text fields for editing
+
+Response:
+```json
+{
+  "updated_at": "2026-04-10T02:30:00.000Z",
+  "frameworks": {
+    "paddleocr": {
+      "endpoint": "http://127.0.0.1:9393/predict",
+      "local_train_command": "python3 .../paddleocr_train_runner.py ...",
+      "local_predict_command": "python3 .../paddleocr_predict_runner.py ...",
+      "has_api_key": true,
+      "api_key_masked": "sk-a...9f2b"
+    },
+    "doctr": {
+      "endpoint": "",
+      "local_train_command": "",
+      "local_predict_command": "",
+      "has_api_key": false,
+      "api_key_masked": "Not set"
+    },
+    "yolo": {
+      "endpoint": "http://127.0.0.1:9394/predict",
+      "local_train_command": "python3 .../yolo_train_runner.py ...",
+      "local_predict_command": "python3 .../yolo_predict_runner.py ...",
+      "has_api_key": false,
+      "api_key_masked": "Not set"
+    }
+  }
+}
+```
+
+### POST /settings/runtime
+Save/update runtime adapter settings.
+
+Request:
+```json
+{
+  "runtime_config": {
+    "paddleocr": {
+      "endpoint": "http://127.0.0.1:9393/predict",
+      "api_key": "",
+      "local_train_command": "python3 .../paddleocr_train_runner.py ...",
+      "local_predict_command": "python3 .../paddleocr_predict_runner.py ..."
+    },
+    "doctr": {
+      "endpoint": "",
+      "api_key": "",
+      "local_train_command": "",
+      "local_predict_command": ""
+    },
+    "yolo": {
+      "endpoint": "http://127.0.0.1:9394/predict",
+      "api_key": "",
+      "local_train_command": "python3 .../yolo_train_runner.py ...",
+      "local_predict_command": "python3 .../yolo_predict_runner.py ..."
+    }
+  },
+  "keep_existing_api_keys": true
+}
+```
+
+Notes:
+- admin scope only
+- when `keep_existing_api_keys=true`, blank `api_key` fields keep previously saved secret values
+- response is the same masked settings view as `GET /settings/runtime`
+
+### DELETE /settings/runtime
+Clear UI-saved runtime settings and return to env-default fallback mode.
+
+Notes:
+- admin scope only
+- response is the masked settings view
+- after clear, adapter resolution falls back to environment variables until a new save is made
+
 ## 8. File Attachment Endpoints
 
 ### GET /files/conversation
@@ -595,6 +678,11 @@ Request:
 }
 ```
 
+Rules:
+- split assignment targets trainable visual samples only (ready image attachments).
+- non-visual helper files (for example import `.txt/.json` payload attachments) are excluded from split assignment.
+- when `train_ratio > 0` and trainable sample count is non-zero, server guarantees at least one `train` sample.
+
 ### GET /datasets/{id}/versions
 List dataset versions.
 
@@ -840,7 +928,7 @@ Get training job detail including:
 - `artifact_summary` (parsed runtime artifact manifest preview when available), fields include:
   - `runner`
   - `mode` (for example `real`, `real_probe`, `template`)
-  - `fallback_reason` (present when local runner falls back)
+  - `fallback_reason` (present for non-real local execution, including template default reason)
   - `training_performed`
   - `primary_model_path` (if real exported weights are referenced)
   - `generated_at`
@@ -907,6 +995,8 @@ Request:
 
 Current rule:
 - only completed jobs can register
+- registration is blocked when `training_jobs.execution_mode` is `simulated` or `unknown`
+- registration is also blocked when local-command artifact summary indicates non-real execution evidence (`mode=template`, explicit `fallback_reason`, or `training_performed=false`) unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
 - registration binds `artifact_attachment_id` to the generated training artifact attachment (not null for completed executor jobs)
 - when the artifact attachment is a manifest JSON with `primary_model_path`, downstream inference resolves that version-bound model path first
 
@@ -941,13 +1031,36 @@ Current execution preference:
 1. framework runtime endpoint, if configured and reachable
 2. version-bound local artifact path, if available to the selected model version
 3. explicit local predict command / bundled local runner (bundled templates are used by default when explicit command is not configured)
-4. deterministic local fallback or `mock_fallback`
+4. explicit fallback result with traceable reason fields
 
 `normalized_output.source` semantics:
 - `<framework>_runtime`: runtime endpoint call succeeded
 - `<framework>_local_command`: local predict command (`<FRAMEWORK>_LOCAL_PREDICT_COMMAND`) succeeded
-- `<framework>_local`: no runtime endpoint configured, local deterministic inferencer used
-- `mock_fallback`: runtime endpoint configured but call failed, fallback output returned with `raw_output.runtime_fallback_reason`
+- `explicit_fallback_runtime_failed`: runtime endpoint configured but call failed; fallback output returned with `raw_output.runtime_fallback_reason`
+- `explicit_fallback_local_command_failed`: local command execution failed; fallback output returned with:
+  - `raw_output.local_command_fallback_reason`
+  - `raw_output.local_command_framework`
+  - `raw_output.platform`
+  - `raw_output.attempted_command`
+- `base_empty`: baseline empty output (for example OCR fallback-safe empty lines/words)
+
+Template-mode marker rule:
+- when bundled local runner returns `raw_output.meta.mode=template`, frontend should treat the run as non-real output even if source is `<framework>_local_command`.
+- for template-mode local command runs, backend also mirrors `meta.fallback_reason` into `raw_output.local_command_fallback_reason` so API consumers can read one canonical fallback-reason field.
+
+OCR fallback safety rule:
+- if local OCR predict command fails, fallback must return empty OCR arrays (`ocr.lines=[]`, `ocr.words=[]`) and must not inject business-looking sample text.
+
+Generic fallback safety rule:
+- if runtime/local command hard-fails and explicit fallback is applied, normalized structured predictions should default to empty arrays for all task payload groups (`boxes`, `rotated_boxes`, `polygons`, `masks`, `labels`, `ocr.lines`, `ocr.words`) unless runtime/local command actually returned those signals.
+
+Local command execution rule:
+- local command execution should prefer direct Python invocation when command template resolves to Python script execution.
+- shell fallback must be cross-platform:
+  - Windows: `ComSpec`/`cmd.exe`
+  - POSIX: `${SHELL}` or `/bin/sh`
+  - optional override: `VISTRAL_BASH_PATH`
+- spawn failures must include platform + attempted command + resolved shell path (when applicable).
 
 ### GET /inference/runs/{id}
 Get inference run detail.
@@ -1088,6 +1201,15 @@ Response item shape:
   "last_seen_at": null,
   "callback_checked_at": null,
   "callback_validation_message": null,
+  "compatibility": {
+    "status": "unknown",
+    "message": "Compatibility check has not run yet.",
+    "expected_runtime_profile": "yolo",
+    "reported_runtime_profile": null,
+    "reported_worker_version": null,
+    "reported_contract_version": null,
+    "missing_capabilities": []
+  },
   "linked_worker_id": null,
   "metadata": {
     "recommended_image": "vistral-training-worker:local"
@@ -1227,6 +1349,15 @@ Response:
   "worker_id": "tw-yolo-b7d9",
   "worker_name": "yolo-worker-b",
   "worker_endpoint_hint": "http://10.0.0.22:9090",
+  "compatibility": {
+    "status": "warning",
+    "message": "Worker health payload does not report runtime_profile; keep worker package updated.",
+    "expected_runtime_profile": "yolo",
+    "reported_runtime_profile": null,
+    "reported_worker_version": "0.1.0",
+    "reported_contract_version": "training-worker-healthz.v1",
+    "missing_capabilities": []
+  },
   "callback_validation_message": "Waiting for worker heartbeat to publish a callback endpoint.",
   "last_seen_at": "2026-04-07T08:03:00.000Z",
   "callback_checked_at": "2026-04-07T08:03:00.000Z"
@@ -1238,6 +1369,7 @@ Rules:
 - token must be unexpired
 - endpoint is read-only and does not change bootstrap session state by itself
 - worker-local setup UIs can poll this endpoint after `claim` / `apply` to show whether the worker really reached `online`, is still `awaiting_confirmation`, or is stuck in `validation_failed`
+- response includes `compatibility` snapshot for worker-version/profile/capability checks
 
 ### POST /admin/training-workers/bootstrap-sessions/{id}/validate-callback
 Retry callback validation from control plane to the linked worker endpoint.
@@ -1245,8 +1377,46 @@ Retry callback validation from control plane to the linked worker endpoint.
 Rules:
 - admin only
 - session must exist and must already know either `linked_worker_id` or `worker_endpoint_hint`
-- success advances session to `online`
+- success advances session to `online` when callback and compatibility checks pass
+- compatibility warning still allows success but must be reflected in `compatibility.status=warning`
+- hard incompatibility (for example runtime profile mismatch) keeps session in `validation_failed`
 - failure keeps session in `validation_failed` and the linked worker out of schedulable `online` state
+
+### POST /admin/training-workers/{id}/activate
+Explicitly activate a worker after callback validation from admin control plane.
+
+Rules:
+- admin only
+- worker must exist
+- control plane re-runs callback validation against worker endpoint before activation
+- callback validation failure returns error and forces worker/session into non-online state (`offline` / `validation_failed`)
+- compatibility hard-fail from health payload (for example profile mismatch) is treated as activation failure
+- callback validation success sets worker `status=online` and, when bootstrap session exists, updates it to `online`
+
+Response shape:
+```json
+{
+  "worker": {
+    "id": "tw-yolo-b7d9",
+    "status": "online",
+    "effective_status": "online"
+  },
+  "bootstrap_session": {
+    "id": "twbs-501",
+    "status": "online"
+  }
+}
+```
+
+### POST /admin/training-workers/{id}/reconfigure-session
+Create a new bootstrap session for an existing worker (upgrade/reconfigure flow).
+
+Rules:
+- admin only
+- worker must exist
+- response shape is the same as normal bootstrap-session records
+- session should be prefilled from existing worker endpoint/capabilities when available
+- this operation does not remove/replace the existing worker record; it only prepares a guided reconfigure pairing flow
 
 ### POST /runtime/training-workers/heartbeat
 Worker self-reports heartbeat and load to control plane.
@@ -1459,6 +1629,11 @@ Platform adapter implementations for PaddleOCR/docTR/YOLO must expose:
 - `load_model()`
 
 Adapter-specific internals are hidden behind this contract.
+
+Current adapter behavior constraints:
+- `evaluate()` should prefer file-backed metrics (`metrics.json` summary/series) from job workspace and only return empty metrics when no evaluable artifact exists.
+- `export()` should generate a real local export artifact path (under configurable storage root), not a synthetic `/mock-artifacts/...` path.
+- `load_model()` should validate artifact existence before returning a handle; missing artifacts should return explicit failure instead of fake success handles.
 
 ## 20. Error Codes
 - `AUTHENTICATION_REQUIRED`

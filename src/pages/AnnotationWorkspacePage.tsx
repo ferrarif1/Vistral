@@ -25,7 +25,7 @@ import {
   WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
-  WorkspaceSplit
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import {
   annotationQueueFilters,
@@ -37,6 +37,7 @@ import {
   summarizeAnnotationQueues,
   type AnnotationQueueFilter
 } from '../features/annotationQueue';
+import { matchesMetadataFilter } from '../features/metadataFilter';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -505,7 +506,6 @@ export default function AnnotationWorkspacePage() {
   }, [predictionConfidenceThreshold]);
   const filteredItems = useMemo(() => {
     const normalizedSearch = queueSearchText.trim().toLowerCase();
-    const normalizedMetadataFilter = queueMetadataFilter.trim().toLowerCase();
     return queueItems.filter((item) => {
       if (queueSplitFilter !== 'all' && item.split !== queueSplitFilter) {
         return false;
@@ -522,23 +522,8 @@ export default function AnnotationWorkspacePage() {
         }
       }
 
-      if (normalizedMetadataFilter) {
-        const metadataEntries = Object.entries(item.metadata);
-        if (metadataEntries.length === 0) {
-          return false;
-        }
-
-        const hasMetadataHit = metadataEntries.some(([key, value]) => {
-          const normalizedKey = key.toLowerCase();
-          const normalizedValue = String(value).toLowerCase();
-          return (
-            normalizedKey.includes(normalizedMetadataFilter) ||
-            normalizedValue.includes(normalizedMetadataFilter)
-          );
-        });
-        if (!hasMetadataHit) {
-          return false;
-        }
+      if (!matchesMetadataFilter(item.metadata, queueMetadataFilter)) {
+        return false;
       }
 
       if (onlyLowConfidenceCandidates) {
@@ -561,6 +546,83 @@ export default function AnnotationWorkspacePage() {
     queueSearchText,
     queueSplitFilter
   ]);
+  const activeQueueFilters = useMemo(() => {
+    const filters = [
+      queueFilter !== 'all'
+        ? `${t('Queue')}: ${queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}`
+        : '',
+      queueSearchText.trim() ? `${t('Search')}: ${queueSearchText.trim()}` : '',
+      queueSplitFilter !== 'all' ? `${t('Split')}: ${t(queueSplitFilter)}` : '',
+      queueItemStatusFilter !== 'all' ? `${t('Status')}: ${t(queueItemStatusFilter)}` : '',
+      queueMetadataFilter.trim() ? `${t('Metadata')}: ${queueMetadataFilter.trim()}` : '',
+      onlyLowConfidenceCandidates ? t('Only low-confidence') : ''
+    ].filter(Boolean);
+
+    return filters;
+  }, [
+    onlyLowConfidenceCandidates,
+    queueFilter,
+    queueItemStatusFilter,
+    queueMetadataFilter,
+    queueSearchText,
+    queueSplitFilter,
+    t
+  ]);
+  const queueMetadataQuickFilters = useMemo(() => {
+    const lowConfidenceTaggedCount = items.filter(
+      (item) => item.metadata['tag:low_confidence'] === 'true'
+    ).length;
+    const feedbackReturnedCount = items.filter((item) => {
+      const runId = item.metadata.inference_run_id;
+      return typeof runId === 'string' && runId.trim().length > 0;
+    }).length;
+    const feedbackReasonCounts = new Map<string, number>();
+    for (const item of items) {
+      const reason = item.metadata.feedback_reason;
+      if (!reason || !reason.trim()) {
+        continue;
+      }
+      const key = reason.trim().toLowerCase();
+      feedbackReasonCounts.set(key, (feedbackReasonCounts.get(key) ?? 0) + 1);
+    }
+    const topFeedbackReason = [...feedbackReasonCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+
+    const presets: Array<{ key: string; label: string; value: string; count: number }> = [];
+    if (lowConfidenceTaggedCount > 0) {
+      presets.push({
+        key: 'low_confidence',
+        label: t('Tag · low_confidence'),
+        value: 'tag:low_confidence=true',
+        count: lowConfidenceTaggedCount
+      });
+    }
+    if (feedbackReturnedCount > 0) {
+      presets.push({
+        key: 'feedback_return',
+        label: t('Feedback Return'),
+        value: 'inference_run_id',
+        count: feedbackReturnedCount
+      });
+    }
+    if (topFeedbackReason && topFeedbackReason[1] > 0) {
+      presets.push({
+        key: `feedback_reason_${topFeedbackReason[0]}`,
+        label: t('Feedback reason · {value}', { value: topFeedbackReason[0] }),
+        value: `feedback_reason=${topFeedbackReason[0]}`,
+        count: topFeedbackReason[1]
+      });
+    }
+    return presets;
+  }, [items, t]);
+  const clearQueueFilters = useCallback(() => {
+    setQueueFilter('all');
+    setQueueSearchText('');
+    setQueueSplitFilter('all');
+    setQueueItemStatusFilter('all');
+    setQueueMetadataFilter('');
+    setOnlyLowConfidenceCandidates(false);
+    setPredictionConfidenceThreshold('0.50');
+  }, []);
   const shouldVirtualizeQueueList = filteredItems.length > 10;
   const selectedQueueIndex = useMemo(
     () => filteredItems.findIndex((item) => item.id === selectedItemId),
@@ -1559,28 +1621,6 @@ export default function AnnotationWorkspacePage() {
           ? `${dataset.name} · ${t('task')} ${t(dataset.task_type)}`
           : t('Review queue status, annotate items, and complete approvals in one flow.')
       }
-      actions={
-        dataset ? (
-          <div className="row gap wrap">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                load('manual').catch((error) => {
-                  setFeedback({ variant: 'error', text: (error as Error).message });
-                });
-              }}
-              disabled={busy || refreshing}
-            >
-              {refreshing ? t('Refreshing...') : t('Refresh')}
-            </Button>
-            <ButtonLink to={`/datasets/${dataset.id}`} variant="ghost" size="sm">
-              {t('Back to Dataset Detail')}
-            </ButtonLink>
-          </div>
-        ) : null
-      }
       stats={[
         { label: t('Items'), value: items.length },
         { label: t('Visible'), value: filteredItems.length },
@@ -1665,6 +1705,8 @@ export default function AnnotationWorkspacePage() {
         ]}
       />
 
+      <section className="annotation-studio-layout">
+      <div className="annotation-studio-queue">
       <Card as="section">
         <WorkspaceSectionHeader
           title={t('Annotation Queue')}
@@ -1672,32 +1714,21 @@ export default function AnnotationWorkspacePage() {
             visible: filteredItems.length,
             total: items.length
           })}
-          actions={
-            <div className="row gap wrap align-center annotation-queue-controls">
-              <label className="annotation-toolbar-field">
-                {t('Model Version')}
-                <Select
-                  value={selectedModelVersionId}
-                  onChange={(event) => setSelectedModelVersionId(event.target.value)}
-                >
-                  {modelVersions.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      {version.version_name} ({t(version.framework)})
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <Button
-                onClick={runPreAnnotation}
-                variant="secondary"
-                size="sm"
-                disabled={busy || items.length === 0 || modelVersions.length === 0}
-              >
-                {t('Run Pre-Annotation')}
-              </Button>
-            </div>
-          }
         />
+        <div className="row gap wrap align-center">
+          <Badge tone="neutral">{t('Queue')}: {queueFilter === 'all' ? t('All items') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}</Badge>
+          <Badge tone="info">{t('Visible items')}: {filteredItems.length}</Badge>
+          <Badge tone="neutral">{t('Dataset')}: {dataset.name}</Badge>
+          {scopedDatasetVersionId ? (
+            <Badge tone="info">{t('Version')}: {scopedDatasetVersionId}</Badge>
+          ) : null}
+          {selectedItem ? (
+            <Badge tone="neutral">{t('Selected')}: {selectedFilename}</Badge>
+          ) : null}
+        </div>
+        <small className="muted">
+          {t('Queue summary')}: {annotationSummary.needs_work} {t('needs_work')} / {annotationSummary.in_review} {t('in_review')} / {annotationSummary.approved} {t('approved')} / {annotationSummary.rejected} {t('rejected')}
+        </small>
         <div className="annotation-filter-row">
           {annotationQueueFilters.map((filter) => {
             const count =
@@ -1763,12 +1794,55 @@ export default function AnnotationWorkspacePage() {
             <option value="uploading">{t('uploading')}</option>
             <option value="error">{t('error')}</option>
           </Select>
-          <Input
-            value={queueMetadataFilter}
-            onChange={(event) => setQueueMetadataFilter(event.target.value)}
-            placeholder={t('Filter metadata/tag')}
-          />
+                <Input
+                  value={queueMetadataFilter}
+                  onChange={(event) => setQueueMetadataFilter(event.target.value)}
+                  placeholder={t('Filter metadata/tag (supports key=value)')}
+                />
         </div>
+        <div className="annotation-queue-filter-summary">
+          <div className="row gap wrap">
+            {activeQueueFilters.length > 0 ? (
+              activeQueueFilters.map((filter) => (
+                <Badge key={`queue-filter-${filter}`} tone="neutral">
+                  {filter}
+                </Badge>
+              ))
+            ) : (
+              <small className="muted">{t('No active queue filters')}</small>
+            )}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={clearQueueFilters}
+            disabled={busy || activeQueueFilters.length === 0}
+          >
+            {t('Clear filters')}
+          </Button>
+        </div>
+        {queueMetadataQuickFilters.length > 0 ? (
+          <div className="annotation-queue-filter-summary">
+            <div className="row gap wrap align-center">
+              <small className="muted">{t('Metadata quick filters')}:</small>
+              {queueMetadataQuickFilters.map((preset) => (
+                <Button
+                  key={preset.key}
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  trailing={<Badge tone="info">{preset.count}</Badge>}
+                  onClick={() => {
+                    setQueueMetadataFilter(preset.value);
+                  }}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="annotation-queue-lowconf-row">
           <div className="row gap wrap align-center">
             <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
@@ -1962,10 +2036,81 @@ export default function AnnotationWorkspacePage() {
           )
         }
       </Card>
+      </div>
 
-      <WorkspaceSplit
+      <WorkspaceWorkbench
+        className="annotation-studio-workbench"
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Annotation Controls')}</h3>
+                <small className="muted">
+                  {t('Keep queue prep, pre-annotation, and workspace navigation together before entering the review lane.')}
+                </small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <label className="stack tight">
+                  <small className="muted">{t('Model Version')}</small>
+                  <Select
+                    value={selectedModelVersionId}
+                    onChange={(event) => setSelectedModelVersionId(event.target.value)}
+                  >
+                    {modelVersions.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        {version.version_name} ({t(version.framework)})
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <Button
+                  onClick={runPreAnnotation}
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy || items.length === 0 || modelVersions.length === 0}
+                >
+                  {t('Run Pre-Annotation')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    load('manual').catch((loadError) => {
+                      setFeedback({ variant: 'error', text: (loadError as Error).message });
+                    });
+                  }}
+                  disabled={busy || refreshing}
+                >
+                  {refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
+                <ButtonLink size="sm" variant="ghost" to={`/datasets/${dataset.id}`}>
+                  {t('Back to Dataset')}
+                </ButtonLink>
+                <ButtonLink size="sm" variant="ghost" to={scopedInferenceValidationPath}>
+                  {t('Validate Inference')}
+                </ButtonLink>
+              </div>
+            </div>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <Badge tone="neutral">
+                  {t('Queue')}: {queueFilter === 'all' ? t('All items') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}
+                </Badge>
+                <Badge tone="info">{t('Visible items')}: {filteredItems.length}</Badge>
+                <Badge tone="neutral">{t('Dataset')}: {dataset.name}</Badge>
+                {scopedDatasetVersionId ? (
+                  <Badge tone="info">{t('Version')}: {scopedDatasetVersionId}</Badge>
+                ) : null}
+                {selectedItem ? (
+                  <Badge tone="neutral">{t('Selected')}: {selectedFilename}</Badge>
+                ) : null}
+              </div>
+            </div>
+          </Card>
+        }
         main={
-          <>
+          <div className="workspace-main-stack">
           <section className="stack">
             <Suspense
               fallback={
@@ -2102,89 +2247,98 @@ export default function AnnotationWorkspacePage() {
               </div>
             )}
           </Card>
-          </>
+          </div>
         }
         side={
-          <>
-          <SampleReviewWorkbench
-            t={t}
-            selectedFilename={selectedFilename}
-            selectedItem={selectedItem}
-            selectedAnnotation={selectedAnnotation}
-            selectedItemTagEntries={selectedItemTagEntries}
-            selectedItemOperationalMetadataEntries={selectedItemOperationalMetadataEntries}
-          />
+          <div className="workspace-inspector-rail">
+            <SampleReviewWorkbench
+              t={t}
+              selectedFilename={selectedFilename}
+              selectedItem={selectedItem}
+              selectedAnnotation={selectedAnnotation}
+              selectedItemTagEntries={selectedItemTagEntries}
+              selectedItemOperationalMetadataEntries={selectedItemOperationalMetadataEntries}
+              className="workspace-inspector-card"
+            />
 
-          <PredictionOverlayControls
-            t={t}
-            busy={busy}
-            hasPredictionOverlay={hasPredictionOverlay}
-            showAnnotationOverlay={showAnnotationOverlay}
-            showPredictionOverlay={showPredictionOverlay}
-            onlyLowConfidenceCandidates={onlyLowConfidenceCandidates}
-            predictionConfidenceThreshold={predictionConfidenceThreshold}
-            predictionCandidateCount={predictionCandidateCount}
-            lowConfidencePredictionCount={lowConfidencePredictionCount}
-            selectedItemHasLowConfidenceTag={selectedItemHasLowConfidenceTag}
-            predictionCandidates={predictionCandidates}
-            numericPredictionConfidenceThreshold={numericPredictionConfidenceThreshold}
-            canUsePredictionInOcrEditor={canUsePredictionInOcrEditor}
-            nextLowConfidenceQueueItemId={nextLowConfidenceQueueItemId}
-            hasSelectedItem={Boolean(selectedItem)}
-            scopedInferenceValidationPath={scopedInferenceValidationPath}
-            onShowAnnotationOverlayChange={setShowAnnotationOverlay}
-            onShowPredictionOverlayChange={setShowPredictionOverlay}
-            onOnlyLowConfidenceChange={setOnlyLowConfidenceCandidates}
-            onPredictionConfidenceThresholdChange={setPredictionConfidenceThreshold}
-            onUsePredictionCandidate={applyPredictionCandidateToOcrEditor}
-            onFocusNextLowConfidence={focusNextLowConfidenceQueueItem}
-            onToggleLowConfidenceTag={() => {
-              void toggleLowConfidenceTagForSelectedItem();
-            }}
-          />
+            <PredictionOverlayControls
+              t={t}
+              className="workspace-inspector-card"
+              busy={busy}
+              hasPredictionOverlay={hasPredictionOverlay}
+              showAnnotationOverlay={showAnnotationOverlay}
+              showPredictionOverlay={showPredictionOverlay}
+              onlyLowConfidenceCandidates={onlyLowConfidenceCandidates}
+              predictionConfidenceThreshold={predictionConfidenceThreshold}
+              predictionCandidateCount={predictionCandidateCount}
+              lowConfidencePredictionCount={lowConfidencePredictionCount}
+              selectedItemHasLowConfidenceTag={selectedItemHasLowConfidenceTag}
+              predictionCandidates={predictionCandidates}
+              numericPredictionConfidenceThreshold={numericPredictionConfidenceThreshold}
+              canUsePredictionInOcrEditor={canUsePredictionInOcrEditor}
+              nextLowConfidenceQueueItemId={nextLowConfidenceQueueItemId}
+              hasSelectedItem={Boolean(selectedItem)}
+              scopedInferenceValidationPath={scopedInferenceValidationPath}
+              onShowAnnotationOverlayChange={setShowAnnotationOverlay}
+              onShowPredictionOverlayChange={setShowPredictionOverlay}
+              onOnlyLowConfidenceChange={setOnlyLowConfidenceCandidates}
+              onPredictionConfidenceThresholdChange={setPredictionConfidenceThreshold}
+              onUsePredictionCandidate={applyPredictionCandidateToOcrEditor}
+              onFocusNextLowConfidence={focusNextLowConfidenceQueueItem}
+              onToggleLowConfidenceTag={() => {
+                void toggleLowConfidenceTagForSelectedItem();
+              }}
+            />
 
-          <Card as="section">
-            <div className="stack tight">
-              <h3>{t('Queue Focus')}</h3>
-              <small className="muted">
-                {selectedQueueIndex >= 0
-                  ? t('Queue position {current} / {total}', {
-                      current: selectedQueueIndex + 1,
-                      total: filteredItems.length
-                    })
-                  : t('No item selected in current queue.')}
-              </small>
-            </div>
-            <div className="row gap wrap">
-              <Badge tone="neutral">{t('queue')}: {queueFilter === 'all' ? t('All items') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}</Badge>
-              {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
-              {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : null}
-            </div>
-            <small className="muted">{selectedFilename}</small>
-            <small className="muted">{t('Queue shortcuts: J next · K previous')}</small>
-            <div className="workspace-button-stack">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => focusAdjacentQueueItem(-1)}
-                disabled={busy || !canMoveToPreviousQueueItem}
-              >
-                {t('Previous Item')}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => focusAdjacentQueueItem(1)}
-                disabled={busy || !canMoveToNextQueueItem}
-              >
-                {t('Next Item')}
-              </Button>
-            </div>
-          </Card>
+            <Card as="section" className="workspace-inspector-card">
+              <div className="stack tight">
+                <h3>{t('Queue Focus')}</h3>
+                <small className="muted">
+                  {selectedQueueIndex >= 0
+                    ? t('Queue position {current} / {total}', {
+                        current: selectedQueueIndex + 1,
+                        total: filteredItems.length
+                      })
+                    : t('No item selected in current queue.')}
+                </small>
+              </div>
+              <div className="row gap wrap">
+                <Badge tone="neutral">
+                  {t('queue')}:{' '}
+                  {queueFilter === 'all'
+                    ? t('All items')
+                    : queueFilter === 'needs_work'
+                      ? t('Needs Work')
+                      : t(queueFilter)}
+                </Badge>
+                {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
+                {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : null}
+              </div>
+              <small className="muted">{selectedFilename}</small>
+              <small className="muted">{t('Queue shortcuts: J next · K previous')}</small>
+              <div className="workspace-button-stack">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => focusAdjacentQueueItem(-1)}
+                  disabled={busy || !canMoveToPreviousQueueItem}
+                >
+                  {t('Previous Item')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => focusAdjacentQueueItem(1)}
+                  disabled={busy || !canMoveToNextQueueItem}
+                >
+                  {t('Next Item')}
+                </Button>
+              </div>
+            </Card>
 
-          <Card as="section">
+          <Card as="section" className="workspace-inspector-card">
             <div className="row between gap wrap align-center">
               <h3>{t('Low-confidence Radar')}</h3>
               <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
@@ -2232,7 +2386,7 @@ export default function AnnotationWorkspacePage() {
           </Card>
 
           {selectedAnnotation?.latest_review ? (
-            <Card as="section">
+            <Card as="section" className="workspace-inspector-card">
               <div className="row between gap wrap align-center">
                 <h3>{t('Latest Review Context')}</h3>
                 <StatusTag status={selectedAnnotation.latest_review.status}>
@@ -2257,7 +2411,7 @@ export default function AnnotationWorkspacePage() {
             </Card>
           ) : null}
 
-          <Card as="section">
+          <Card as="section" className="workspace-inspector-card">
             <div className="row between gap wrap align-center">
               <h3>{t('Review')}</h3>
               {inReviewQueueContext ? (
@@ -2354,9 +2508,10 @@ export default function AnnotationWorkspacePage() {
               </Button>
             ) : null}
           </Card>
-          </>
+          </div>
         }
       />
+      </section>
     </WorkspacePage>
   );
 }

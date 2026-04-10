@@ -84,7 +84,11 @@ interface UnifiedInferenceOutput {
   - YOLO: `YOLO_RUNTIME_ENDPOINT`, `YOLO_RUNTIME_API_KEY`
 - Request payload includes `framework`, `model_id`, `model_version_id`, `input_attachment_id`, `filename`, `task_type`.
 - Response is normalized into the unified inference contract (`boxes` / `rotated_boxes` / `polygons` / `masks` / `labels` / `ocr`).
-- If runtime call fails or endpoint is unset, adapter falls back to mock output to keep prototype loop unblocked (`normalized_output.source = mock_fallback`).
+- If runtime call or local command fails, adapter falls back to explicit-safe output to keep prototype loop unblocked:
+  - runtime failure: `normalized_output.source = explicit_fallback_runtime_failed`
+  - local command failure: `normalized_output.source = explicit_fallback_local_command_failed`
+  - baseline empty output: `normalized_output.source = base_empty`
+- OCR fallback-safe output keeps `ocr.lines=[]` / `ocr.words=[]` unless real OCR content is returned from runtime/local command.
 - This bridge is still predict-path only; train/evaluate/export/load remain mock in current phase.
 - Runtime diagnostics endpoint: `GET /api/runtime/connectivity` for in-app connectivity checks.
   - Includes structured `error_kind` (`none|timeout|network|http_status|invalid_payload|unknown`) for faster troubleshooting.
@@ -97,7 +101,7 @@ interface UnifiedInferenceOutput {
 
 ## 8. Phase Scope
 - Phase 1: define interfaces and mock adapters
-- Phase 2.5: optional runtime bridge (predict path) with mock fallback
+- Phase 2.5: optional runtime bridge (predict path) with explicit fallback markers
 - Phase 3: connect real framework runtimes
 - Phase 4: run OCR and detection loops on unified contracts
 

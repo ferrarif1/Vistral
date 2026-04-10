@@ -1,4 +1,5 @@
 import type {
+  ActivateTrainingWorkerResult,
   AnnotationWithReview,
   ApprovalRequest,
   AuditLogRecord,
@@ -16,6 +17,8 @@ import type {
   InferenceRunRecord,
   LlmConfig,
   LlmConfigView,
+  RuntimeSettingsRecord,
+  RuntimeSettingsView,
   LoginInput,
   MessageRecord,
   ModelRecord,
@@ -323,6 +326,20 @@ export const api = {
   validateTrainingWorkerBootstrapCallback: (sessionId: string) =>
     request<TrainingWorkerBootstrapSessionRecord>(
       `/api/admin/training-workers/bootstrap-sessions/${encodeURIComponent(sessionId)}/validate-callback`,
+      {
+        method: 'POST'
+      }
+    ),
+  activateTrainingWorker: (workerId: string) =>
+    request<ActivateTrainingWorkerResult>(
+      `/api/admin/training-workers/${encodeURIComponent(workerId)}/activate`,
+      {
+        method: 'POST'
+      }
+    ),
+  createTrainingWorkerReconfigureSession: (workerId: string) =>
+    request<TrainingWorkerBootstrapSessionRecord>(
+      `/api/admin/training-workers/${encodeURIComponent(workerId)}/reconfigure-session`,
       {
         method: 'POST'
       }
@@ -808,5 +825,24 @@ export const api = {
         llm_config: llmConfig,
         use_stored_api_key: useStoredApiKey
       })
+    }),
+
+  getRuntimeSettings: () => request<RuntimeSettingsView>('/api/settings/runtime'),
+
+  saveRuntimeSettings: (
+    runtimeConfig: RuntimeSettingsRecord['frameworks'],
+    keepExistingApiKeys = true
+  ) =>
+    request<RuntimeSettingsView>('/api/settings/runtime', {
+      method: 'POST',
+      body: JSON.stringify({
+        runtime_config: runtimeConfig,
+        keep_existing_api_keys: keepExistingApiKeys
+      })
+    }),
+
+  clearRuntimeSettings: () =>
+    request<RuntimeSettingsView>('/api/settings/runtime', {
+      method: 'DELETE'
     })
 };

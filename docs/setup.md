@@ -65,6 +65,10 @@ Useful deployment helpers:
 npm run docker:healthcheck
 npm run docker:verify:full
 npm run data:cleanup-test
+npm run data:reset:foundation
+npm run smoke:foundation-reset
+npm run smoke:adapter-no-placeholder
+npm run smoke:training-template-guard
 npm run smoke:account-governance
 npm run smoke:admin:verification-reports
 npm run smoke:conversation-actions
@@ -81,6 +85,7 @@ npm run smoke:runner-real-fallback
 npm run smoke:runner-real-upload
 npm run smoke:runner-real-positive
 npm run smoke:runtime-metrics-retention
+npm run smoke:ocr-fallback-guard
 npm run smoke:training-metrics-export
 npm run smoke:training-metrics-export-csv
 npm run smoke:dataset-export-roundtrip
@@ -121,6 +126,12 @@ Persistence-related env vars (prototype):
 - `TRAINING_WORKDIR_ROOT` (default `.data/training-jobs`)
 - `APP_STATE_STORE_PATH` (default `.data/app-state.json`)
 - `APP_STATE_PERSIST_INTERVAL_MS` (default `1200`, min `400`)
+- `APP_STATE_BOOTSTRAP_MODE` (`full` default | `minimal`)
+  - `minimal` only affects first bootstrap when `APP_STATE_STORE_PATH` does not exist yet
+  - for existing state files, use `npm run data:reset:foundation` to clean test/seed runtime records while keeping account + curated foundation model baseline
+- `RESET_FOUNDATION_PURGE_STORAGE` (default `1` for `data:reset:foundation`)
+  - `1`: reset state and purge local runtime storage roots
+  - `0`: reset state only (keep local files)
 - `VERIFICATION_REPORTS_DIR` (default `.data/verify-reports`)
 - `TRAINING_METRICS_MAX_POINTS_PER_JOB` (default `180`)
 - `TRAINING_METRICS_MAX_TOTAL_ROWS` (default `20000`)
@@ -129,6 +140,7 @@ Persistence-related env vars (prototype):
 - `LOCAL_RUNNER_TIMEOUT_MS` (default `1800000`)
 - bundled runner templates under `scripts/local-runners/` are used by default when explicit local command env vars are not set
 - `VISTRAL_RUNNER_ENABLE_REAL` (set `1` to attempt dependency-backed real framework branch in local runners; default keeps template mode)
+- `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND` (default `0`; when `0`, model-version registration rejects local-command jobs with template/fallback/non-real artifact evidence)
 - `VISTRAL_YOLO_MODEL_PATH`
 - `VISTRAL_PADDLEOCR_LANG` / `VISTRAL_PADDLEOCR_USE_GPU`
 - `VISTRAL_DOCTR_DET_ARCH` / `VISTRAL_DOCTR_RECO_ARCH`
@@ -142,13 +154,20 @@ Persistence-related env vars (prototype):
 - placeholder examples: `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 
 `docker:verify:full` writes audit-style reports to `.data/verify-reports/`.
-It now also validates account governance, conversation operational actions, phase2 annotation/review + launch-readiness gates (including dataset-version ownership under the selected dataset), dataset export/import roundtrip (detection/ocr/segmentation), dedicated training-worker auth dispatch/cancel flow, and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
+It now also validates account governance, conversation operational actions, phase2 annotation/review + launch-readiness gates (including dataset-version ownership under the selected dataset), dataset export/import roundtrip (detection/ocr/segmentation), dedicated training-worker auth dispatch/cancel flow, OCR fallback safety guard (no misleading default OCR business text on fallback), and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
 By default it runs OCR closure in non-strict mode (`OCR_CLOSURE_STRICT_LOCAL_COMMAND=false`) so deployment verification can tolerate simulated fallback when local commands are unavailable.
+It also runs real closure with registration-gate tolerant mode (`REAL_CLOSURE_STRICT_REGISTRATION=false`):
+- smoke still attempts model-version registration first;
+- when registration is rejected by non-real gate evidence (`execution_mode` mismatch or template/fallback artifact evidence), closure logs `*_register_mode=blocked_gate_*` and continues with existing registered versions for downstream inference checks.
+This keeps production gate strictness while reducing deployment-verify false negatives on environments without full local-training dependencies.
 If your deployment environment cannot resolve `host.docker.internal`, set `DEDICATED_AUTH_WORKER_PUBLIC_HOST` (and optionally `DEDICATED_AUTH_WORKER_BIND_HOST`) before running full verify.
 
 Strict OCR closure options:
 - `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run smoke:ocr-closure`
 - `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run docker:verify:full`
+
+Strict real-closure registration option:
+- `REAL_CLOSURE_STRICT_REGISTRATION=true npm run smoke:real-closure`
 
 ## 6) Baseline Validation
 For docs-focused changes, run at least:

@@ -19,7 +19,7 @@ import {
   WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
-  WorkspaceSplit
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
@@ -262,7 +262,7 @@ export default function InferenceValidationPage() {
   }, [selectedRun]);
   const scopedAnnotationPath = scopedDatasetId
     ? buildScopedAnnotationPath(scopedDatasetId, scopedAnnotationQueue, scopedVersionId, {
-        metadataFilter: selectedRun?.id
+        metadataFilter: selectedRun ? `inference_run_id=${selectedRun.id}` : ''
       })
     : '/datasets';
   const hasPrefilledContext = Boolean(preferredDatasetId || preferredVersionId);
@@ -289,7 +289,7 @@ export default function InferenceValidationPage() {
     const source =
       typeof normalizedMeta.source === 'string' && normalizedMeta.source.trim()
         ? normalizedMeta.source
-        : 'mock_default';
+        : 'base_empty';
     const runnerMode =
       rawMeta && typeof rawMeta.mode === 'string' && rawMeta.mode.trim() ? rawMeta.mode.trim() : '';
 
@@ -305,16 +305,17 @@ export default function InferenceValidationPage() {
       typeof selectedRun.raw_output.runtime_framework === 'string'
         ? selectedRun.raw_output.runtime_framework
         : selectedRun.framework;
+    const normalizedSource = source.toLowerCase();
     const sourceKind =
-      source === 'mock_fallback'
-        ? 'mock_fallback'
-        : source.endsWith('_runtime')
-          ? 'runtime'
-          : source.endsWith('_local_command')
-            ? 'local_command'
-            : source.endsWith('_local')
-              ? 'local'
-              : 'unknown';
+      normalizedSource.includes('fallback') || normalizedSource.includes('mock')
+        ? 'fallback'
+        : normalizedSource.includes('template')
+          ? 'template'
+          : normalizedSource.endsWith('_runtime')
+            ? 'runtime'
+            : normalizedSource.endsWith('_local_command')
+              ? 'local_command'
+                : 'unknown';
 
     const title =
       sourceKind === 'runtime'
@@ -323,8 +324,6 @@ export default function InferenceValidationPage() {
           ? t('Local Runner Active')
           : sourceKind === 'local_command'
             ? t('Template Runner Fallback')
-            : sourceKind === 'local'
-              ? t('Deterministic Local Fallback')
               : t('Runtime Fallback Active');
     const description =
       sourceKind === 'runtime'
@@ -337,21 +336,15 @@ export default function InferenceValidationPage() {
                   reason: fallbackReason
                 })
               : t('Prediction output is coming from bundled template runner because real framework execution is unavailable.')
-            : sourceKind === 'local'
-              ? fallbackReason
-                ? t('Prediction output is coming from deterministic local fallback: {reason}', {
-                    reason: fallbackReason
-                  })
-                : t('Prediction output is coming from deterministic local fallback, not framework runtime.')
               : fallbackReason
-                ? t('Using mock fallback because runtime call failed: {reason}', {
+                ? t('Using explicit fallback because runtime or local command failed: {reason}', {
                     reason: fallbackReason
                   })
-                : t('Using mock fallback because runtime endpoint is unavailable.');
+                : t('Using explicit fallback because runtime endpoint is unavailable.');
     const variant: 'success' | 'error' | 'empty' =
       sourceKind === 'runtime' || (sourceKind === 'local_command' && runnerMode === 'real')
         ? 'success'
-        : sourceKind === 'mock_fallback'
+        : sourceKind === 'fallback'
           ? 'error'
           : 'empty';
 
@@ -366,6 +359,52 @@ export default function InferenceValidationPage() {
       variant
     };
   }, [selectedRun, t]);
+
+  const selectedRunFallbackWarning = useMemo(() => {
+    if (!selectedRun) {
+      return null;
+    }
+
+    const normalizedMeta = selectedRun.normalized_output.normalized_output as Record<string, unknown>;
+    const rawMeta =
+      selectedRun.raw_output.meta && typeof selectedRun.raw_output.meta === 'object' && !Array.isArray(selectedRun.raw_output.meta)
+        ? (selectedRun.raw_output.meta as Record<string, unknown>)
+        : null;
+    const source =
+      typeof normalizedMeta.source === 'string' && normalizedMeta.source.trim()
+        ? normalizedMeta.source.toLowerCase()
+        : '';
+    const sourceIndicatesFallback =
+      source.includes('mock') || source.includes('template') || source.includes('fallback');
+    const templateMode =
+      rawMeta && typeof rawMeta.mode === 'string' ? rawMeta.mode.toLowerCase() === 'template' : false;
+    const localFallbackReason =
+      typeof selectedRun.raw_output.local_command_fallback_reason === 'string'
+        ? selectedRun.raw_output.local_command_fallback_reason
+        : '';
+    const runtimeFallbackReason =
+      typeof selectedRun.raw_output.runtime_fallback_reason === 'string'
+        ? selectedRun.raw_output.runtime_fallback_reason
+        : '';
+    const templateFallbackReason =
+      rawMeta && typeof rawMeta.fallback_reason === 'string' ? rawMeta.fallback_reason : '';
+
+    if (!sourceIndicatesFallback && !localFallbackReason && !runtimeFallbackReason && !templateMode) {
+      return null;
+    }
+
+    return {
+      reason: localFallbackReason || runtimeFallbackReason || templateFallbackReason
+    };
+  }, [selectedRun]);
+
+  const selectedRunHasEmptyOcrResult = useMemo(() => {
+    if (!selectedRun || selectedRun.task_type !== 'ocr') {
+      return false;
+    }
+
+    return (selectedRun.normalized_output.ocr?.lines ?? []).length === 0;
+  }, [selectedRun]);
 
   const runtimeByFramework = useMemo(
     () => new Map(runtimeChecks.map((item) => [item.framework, item])),
@@ -627,6 +666,24 @@ export default function InferenceValidationPage() {
           description={feedback.text}
         />
       ) : null}
+      {selectedRunFallbackWarning ? (
+        <StateBlock
+          variant="error"
+          title={t('当前结果为回退/模板结果，不是真实 OCR 识别')}
+          description={
+            selectedRunFallbackWarning.reason
+              ? selectedRunFallbackWarning.reason
+              : t('请先修复 runtime 或本地预测命令配置，再使用该结果做业务判断。')
+          }
+        />
+      ) : null}
+      {selectedRunHasEmptyOcrResult ? (
+        <StateBlock
+          variant="empty"
+          title={t('未识别到文本 / 本次运行未产生真实 OCR 结果')}
+          description={t('请检查 runtime 或本地命令配置后重试。')}
+        />
+      ) : null}
 
       <WorkspaceMetricGrid
         items={[
@@ -675,26 +732,44 @@ export default function InferenceValidationPage() {
         />
       ) : null}
 
-      <WorkspaceSplit
-        main={
-          <>
-          <AttachmentUploader
-            title={t('Inference Inputs')}
-            items={attachments}
-            onUpload={uploadInput}
-            onUploadFiles={uploadInputFiles}
-            contentUrlBuilder={api.attachmentContentUrl}
-            onDelete={removeInput}
-            emptyDescription={t('Upload image inputs for inference validation.')}
-            uploadButtonLabel={t('Upload Inference Input')}
-            disabled={busy}
-          />
-
-            <Card as="article">
-              <WorkspaceSectionHeader
-                title={t('Run Inference')}
-                description={t('Pick one registered version and one ready attachment, then execute a validation run.')}
-              />
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Validation Controls')}</h3>
+                <small className="muted">
+                  {t('Pick a version and input, run one validation pass, and keep feedback routing in the same lane.')}
+                </small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={loadRuntimeConnectivity}
+                  disabled={runtimeLoading || busy}
+                >
+                  {runtimeLoading ? t('Checking...') : t('Refresh Runtime Status')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    loadAll('manual').catch((error) => {
+                      setFeedback({ variant: 'error', text: (error as Error).message });
+                    });
+                  }}
+                  disabled={busy || refreshing}
+                >
+                  {refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
+                <Button onClick={runInference} disabled={busy || !selectedVersionId || !selectedAttachmentId}>
+                  {t('Run Inference')}
+                </Button>
+              </div>
+            </div>
 
             {versions.length === 0 ? (
               <StateBlock
@@ -702,57 +777,88 @@ export default function InferenceValidationPage() {
                 title={t('No Model Versions Yet')}
                 description={t('Register or train a model version before running validation.')}
               />
-            ) : null}
-
-            {readyAttachmentCount === 0 ? (
+            ) : readyAttachmentCount === 0 ? (
               <StateBlock
                 variant="empty"
                 title={t('No Ready Inputs Yet')}
                 description={t('Upload at least one ready input attachment before running inference.')}
               />
-            ) : null}
-
-            <div className="workspace-form-grid">
-              <label>
-                {t('Model Version')}
-                <Select
-                  value={selectedVersionId}
-                  onChange={(event) => setSelectedVersionId(event.target.value)}
-                >
-                  {versions.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      {version.version_name} ({t(version.task_type)} / {t(version.framework)})
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label>
-                {t('Input Attachment')}
-                <Select
-                  value={selectedAttachmentId}
-                  onChange={(event) => setSelectedAttachmentId(event.target.value)}
-                >
-                  {attachments
-                    .filter((attachment) => attachment.status === 'ready')
-                    .map((attachment) => (
-                      <option key={attachment.id} value={attachment.id}>
-                        {attachment.filename}
+            ) : (
+              <div className="workspace-filter-grid">
+                <label className="stack tight">
+                  <small className="muted">{t('Model Version')}</small>
+                  <Select
+                    value={selectedVersionId}
+                    onChange={(event) => setSelectedVersionId(event.target.value)}
+                  >
+                    {versions.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        {version.version_name} ({t(version.task_type)} / {t(version.framework)})
                       </option>
                     ))}
-                </Select>
-              </label>
-            </div>
-            {selectedDataset ? (
-              <small className="muted">
-                {t('Scoped dataset context')}: {selectedDataset.name} ({t(selectedDataset.task_type)})
-              </small>
-            ) : null}
-            <div className="row gap wrap">
-              <Button onClick={runInference} disabled={busy || !selectedVersionId || !selectedAttachmentId}>
-                {t('Run Inference')}
-              </Button>
+                  </Select>
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Input Attachment')}</small>
+                  <Select
+                    value={selectedAttachmentId}
+                    onChange={(event) => setSelectedAttachmentId(event.target.value)}
+                  >
+                    {attachments
+                      .filter((attachment) => attachment.status === 'ready')
+                      .map((attachment) => (
+                        <option key={attachment.id} value={attachment.id}>
+                          {attachment.filename}
+                        </option>
+                      ))}
+                  </Select>
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Select Run')}</small>
+                  <Select
+                    value={selectedRun?.id ?? ''}
+                    onChange={(event) => setSelectedRunId(event.target.value)}
+                    disabled={runs.length === 0}
+                  >
+                    {runs.length === 0 ? (
+                      <option value="">{t('No Runs Yet')}</option>
+                    ) : (
+                      runs.map((run) => (
+                        <option key={run.id} value={run.id}>
+                          {describeRun(run)} · {formatCompactTimestamp(run.updated_at, t('n/a'))} · {t(run.status)}
+                        </option>
+                      ))
+                    )}
+                  </Select>
+                </label>
+              </div>
+            )}
+
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <Badge tone="neutral">{t('Version')}: {selectedVersion?.version_name ?? t('n/a')}</Badge>
+                <Badge tone="info">{t('Dataset')}: {selectedDataset?.name ?? t('n/a')}</Badge>
+                <Badge tone="neutral">{t('Ready inputs')}: {readyAttachmentCount}</Badge>
+                <Badge tone={selectedRun ? 'info' : 'neutral'}>
+                  {t('Selected run')}: {selectedRun ? formatCompactTimestamp(selectedRun.updated_at, t('n/a')) : t('No Runs Yet')}
+                </Badge>
+              </div>
             </div>
           </Card>
+        }
+        main={
+          <div className="workspace-main-stack">
+            <AttachmentUploader
+              title={t('Inference Inputs')}
+              items={attachments}
+              onUpload={uploadInput}
+              onUploadFiles={uploadInputFiles}
+              contentUrlBuilder={api.attachmentContentUrl}
+              onDelete={removeInput}
+              emptyDescription={t('Upload image inputs for inference validation.')}
+              uploadButtonLabel={t('Upload Inference Input')}
+              disabled={busy}
+            />
 
             <Card as="article">
               <WorkspaceSectionHeader
@@ -773,139 +879,112 @@ export default function InferenceValidationPage() {
                 }
               />
 
-            {!selectedRun ? (
-              <StateBlock variant="empty" title={t('No Runs Yet')} description={t('Run inference to inspect outputs.')} />
-            ) : (
-              <>
-                {selectedRunError ? (
-                  <StateBlock variant="error" title={t('Run detail unavailable')} description={selectedRunError} />
-                ) : null}
-                <label>
-                  {t('Select Run')}
-                  <Select value={selectedRun.id} onChange={(event) => setSelectedRunId(event.target.value)}>
-                    {runs.map((run) => (
-                    <option key={run.id} value={run.id}>
-                        {describeRun(run) +
-                          ' · ' +
-                          formatCompactTimestamp(run.updated_at, t('n/a')) +
-                          ' · ' +
-                          t(run.status)}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <small className="muted">
-                  {t('Run {runId} · Task {task} · Framework {framework}', {
-                    runId: selectedRunVersion?.version_name ?? t('Recent run'),
-                    task: t(selectedRun.task_type),
-                    framework: t(selectedRun.framework)
-                  })}
-                </small>
-                <small className="muted">
-                  {t('Last updated')}: {formatCompactTimestamp(selectedRun.updated_at, t('n/a'))}
-                </small>
-                <div className="row gap wrap">
-                  <Badge tone="neutral">
-                    {t('runtime source')}: {runtimeInsight?.source ? t(runtimeInsight.source) : t('unknown')}
-                  </Badge>
-                  <Badge tone="info">
-                    {t('runtime framework')}: {runtimeInsight?.runtimeFramework ? t(runtimeInsight.runtimeFramework) : t('unknown')}
-                  </Badge>
-                  <Badge tone="neutral">
-                    {t('runner mode')}: {runtimeInsight?.runnerMode ? t(runtimeInsight.runnerMode) : t('n/a')}
-                  </Badge>
-                  {attachmentById.get(selectedRun.input_attachment_id) ? (
-                    <Badge tone="info">
-                      {t('Input Attachment')}: {selectedRunInputAttachment?.filename}
-                    </Badge>
+              {!selectedRun ? (
+                <StateBlock variant="empty" title={t('No Runs Yet')} description={t('Run inference to inspect outputs.')} />
+              ) : (
+                <>
+                  {selectedRunError ? (
+                    <StateBlock variant="error" title={t('Run detail unavailable')} description={selectedRunError} />
                   ) : null}
-                  {selectedRun.feedback_dataset_id ? (
+                  <small className="muted">
+                    {t('Run {runId} · Task {task} · Framework {framework}', {
+                      runId: selectedRunVersion?.version_name ?? t('Recent run'),
+                      task: t(selectedRun.task_type),
+                      framework: t(selectedRun.framework)
+                    })}
+                  </small>
+                  <small className="muted">
+                    {t('Last updated')}: {formatCompactTimestamp(selectedRun.updated_at, t('n/a'))}
+                  </small>
+                  <div className="row gap wrap">
                     <Badge tone="neutral">
-                      {t('Target Dataset')}:{' '}
-                      {datasetsById.get(selectedRun.feedback_dataset_id)?.name ??
-                        t('Selected dataset record unavailable')}
+                      {t('runtime source')}: {runtimeInsight?.source ? t(runtimeInsight.source) : t('unknown')}
                     </Badge>
-                  ) : null}
-                </div>
-                <StateBlock
-                  variant={runtimeInsight?.variant ?? 'empty'}
-                  title={runtimeInsight?.title ?? t('Runtime Fallback Active')}
-                  description={runtimeInsight?.description ?? t('Using mock fallback because runtime endpoint is unavailable.')}
-                />
-                <Suspense
-                  fallback={
-                    <StateBlock
-                      variant="loading"
-                      title={t('Loading')}
-                      description={t('Preparing prediction visualization.')}
-                    />
-                  }
-                >
-                  <PredictionVisualizer
-                    output={selectedRun.normalized_output}
-                    imageUrl={selectedRunPreviewUrl}
+                    <Badge tone="info">
+                      {t('runtime framework')}: {runtimeInsight?.runtimeFramework ? t(runtimeInsight.runtimeFramework) : t('unknown')}
+                    </Badge>
+                    <Badge tone="neutral">
+                      {t('runner mode')}: {runtimeInsight?.runnerMode ? t(runtimeInsight.runnerMode) : t('n/a')}
+                    </Badge>
+                    {attachmentById.get(selectedRun.input_attachment_id) ? (
+                      <Badge tone="info">
+                        {t('Input Attachment')}: {selectedRunInputAttachment?.filename}
+                      </Badge>
+                    ) : null}
+                    {selectedRun.feedback_dataset_id ? (
+                      <Badge tone="neutral">
+                        {t('Target Dataset')}:{' '}
+                        {datasetsById.get(selectedRun.feedback_dataset_id)?.name ??
+                          t('Selected dataset record unavailable')}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <StateBlock
+                    variant={runtimeInsight?.variant ?? 'empty'}
+                    title={runtimeInsight?.title ?? t('Runtime Fallback Active')}
+                    description={runtimeInsight?.description ?? t('Using explicit fallback because runtime endpoint is unavailable.')}
                   />
-                </Suspense>
-                <details className="workspace-details">
-                  <summary>{t('Raw Output')}</summary>
-                  <pre className="code-block">{JSON.stringify(selectedRun.raw_output, null, 2)}</pre>
-                </details>
-                <details className="workspace-details">
-                  <summary>{t('Normalized Output')}</summary>
-                  <pre className="code-block">{JSON.stringify(selectedRun.normalized_output, null, 2)}</pre>
-                </details>
-              </>
-            )}
+                  <Suspense
+                    fallback={
+                      <StateBlock
+                        variant="loading"
+                        title={t('Loading')}
+                        description={t('Preparing prediction visualization.')}
+                      />
+                    }
+                  >
+                    <PredictionVisualizer
+                      output={selectedRun.normalized_output}
+                      imageUrl={selectedRunPreviewUrl}
+                    />
+                  </Suspense>
+                  <details className="workspace-details">
+                    <summary>{t('Raw Output')}</summary>
+                    <pre className="code-block">{JSON.stringify(selectedRun.raw_output, null, 2)}</pre>
+                  </details>
+                  <details className="workspace-details">
+                    <summary>{t('Normalized Output')}</summary>
+                    <pre className="code-block">{JSON.stringify(selectedRun.normalized_output, null, 2)}</pre>
+                  </details>
+                </>
+              )}
             </Card>
-          </>
+          </div>
         }
         side={
-          <>
-            <Card as="article">
+          <div className="workspace-inspector-rail">
+            <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
                 title={t('Current status')}
                 description={t(
                   'Run validation, inspect normalized output, and route failure samples back into dataset workflows.'
                 )}
               />
-              <ul className="workspace-record-list compact">
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Model Version')}</strong>
-                    <Badge tone="neutral">{selectedVersion?.version_name ?? t('n/a')}</Badge>
-                  </div>
-                  <small className="muted">
-                    {selectedVersion ? `${t(selectedVersion.task_type)} · ${t(selectedVersion.framework)}` : t('No Model Versions Yet')}
-                  </small>
-                </Panel>
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Input Attachment')}</strong>
-                    <Badge tone={selectedAttachment ? 'info' : 'neutral'}>
-                      {selectedAttachment?.filename ?? t('n/a')}
-                    </Badge>
-                  </div>
-                  <small className="muted">{t('Ready files')}: {readyAttachmentCount}</small>
-                </Panel>
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Target Dataset')}</strong>
-                    <Badge tone={selectedFeedbackDataset ? 'neutral' : 'warning'}>
-                      {selectedFeedbackDataset?.name ?? t('n/a')}
-                    </Badge>
-                  </div>
-                  <small className="muted">
-                    {feedbackTaskType
-                      ? t('Only datasets with task {taskType} are shown for feedback.', {
-                          taskType: t(feedbackTaskType)
-                        })
-                      : t('No Runs Yet')}
-                  </small>
-                </Panel>
-              </ul>
+              <div className="workspace-keyline-list">
+                <div className="workspace-keyline-item">
+                  <span>{t('Model Version')}</span>
+                  <small>{selectedVersion?.version_name ?? t('n/a')}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Input Attachment')}</span>
+                  <small>{selectedAttachment?.filename ?? t('n/a')}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Target Dataset')}</span>
+                  <small>{selectedFeedbackDataset?.name ?? t('n/a')}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Reachable runtimes')}</span>
+                  <strong>{runtimeChecks.length === 0 && runtimeLoading ? t('Checking...') : reachableRuntimeCount}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Feedback sent')}</span>
+                  <strong>{feedbackRunCount}</strong>
+                </div>
+              </div>
             </Card>
 
-            <Card as="article">
+            <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
                 title={t('Runtime Connectivity')}
                 description={t('Refresh framework diagnostics on demand without interrupting the validation lane.')}
@@ -915,133 +994,133 @@ export default function InferenceValidationPage() {
                   </Button>
                 }
               />
-            {runtimeError ? (
-              <StateBlock variant="error" title={t('Runtime Check Failed')} description={runtimeError} />
-            ) : null}
-            <ul className="workspace-record-list compact">
-              {(['paddleocr', 'doctr', 'yolo'] as const).map((framework) => {
-                const item = runtimeByFramework.get(framework);
-                const source = item?.source ?? 'not_configured';
-                const tone = source === 'reachable' ? 'success' : source === 'unreachable' ? 'warning' : 'neutral';
-                const sourceLabel =
-                  source === 'reachable'
-                    ? t('reachable')
-                    : source === 'unreachable'
-                      ? t('unreachable')
-                      : t('not configured');
-                const sourceDescription =
-                  source === 'reachable'
-                    ? t('Runtime endpoint is healthy and can serve prediction calls.')
-                    : source === 'unreachable'
-                      ? t('Runtime endpoint is configured but currently unreachable. Inference falls back until recovered.')
-                      : t('Runtime endpoint is not configured. Inference uses fallback mode by default.');
+              {runtimeError ? (
+                <StateBlock variant="error" title={t('Runtime Check Failed')} description={runtimeError} />
+              ) : null}
+              <ul className="workspace-record-list compact">
+                {(['paddleocr', 'doctr', 'yolo'] as const).map((framework) => {
+                  const item = runtimeByFramework.get(framework);
+                  const source = item?.source ?? 'not_configured';
+                  const tone = source === 'reachable' ? 'success' : source === 'unreachable' ? 'warning' : 'neutral';
+                  const sourceLabel =
+                    source === 'reachable'
+                      ? t('reachable')
+                      : source === 'unreachable'
+                        ? t('unreachable')
+                        : t('not configured');
+                  const sourceDescription =
+                    source === 'reachable'
+                      ? t('Runtime endpoint is healthy and can serve prediction calls.')
+                      : source === 'unreachable'
+                        ? t('Runtime endpoint is configured but currently unreachable. Inference falls back until recovered.')
+                        : t('Runtime endpoint is not configured. Inference uses fallback mode by default.');
 
-                return (
-                  <Panel key={framework} as="li" className="workspace-record-item compact" tone="soft">
-                    <div className="row between gap wrap">
-                      <strong>{t(framework)}</strong>
-                      <Badge tone={tone}>{sourceLabel}</Badge>
-                    </div>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">{t('endpoint')}: {item?.endpoint ?? t('not set')}</Badge>
-                      <Badge tone={item?.error_kind ? 'warning' : 'neutral'}>
-                        {t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}
-                      </Badge>
-                    </div>
-                    <small className="muted">
-                      {t('checked at')}: {formatCompactTimestamp(item?.checked_at ?? null, t('n/a'))}
-                    </small>
-                    <small className="muted">{item?.message ?? t('No check data yet.')}</small>
-                    <small className="muted">{sourceDescription}</small>
-                  </Panel>
-                );
-              })}
-            </ul>
+                  return (
+                    <Panel key={framework} as="li" className="workspace-record-item compact" tone="soft">
+                      <div className="row between gap wrap">
+                        <strong>{t(framework)}</strong>
+                        <Badge tone={tone}>{sourceLabel}</Badge>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t('endpoint')}: {item?.endpoint ?? t('not set')}</Badge>
+                        <Badge tone={item?.error_kind ? 'warning' : 'neutral'}>
+                          {t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}
+                        </Badge>
+                      </div>
+                      <small className="muted">
+                        {t('checked at')}: {formatCompactTimestamp(item?.checked_at ?? null, t('n/a'))}
+                      </small>
+                      <small className="muted">{item?.message ?? t('No check data yet.')}</small>
+                      <small className="muted">{sourceDescription}</small>
+                    </Panel>
+                  );
+                })}
+              </ul>
             </Card>
 
-            <Card as="article">
+            <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
                 title={t('Feedback to Dataset')}
                 description={t('Push the selected failure sample back into a dataset so the next training loop can absorb it.')}
               />
 
-            {!selectedRun ? (
-              <StateBlock
-                variant="empty"
-                title={t('No Runs Yet')}
-                description={t('Run inference to inspect outputs.')}
-              />
-            ) : null}
-            {selectedRun && datasets.length === 0 ? (
-              <StateBlock
-                variant="empty"
-                title={t('No Datasets Yet')}
-                description={t('Create or import a dataset before sending failure samples back.')}
-              />
-            ) : null}
-            {selectedRun && datasets.length > 0 && feedbackDatasets.length === 0 ? (
-              <StateBlock
-                variant="empty"
-                title={t('No Matching Datasets')}
-                description={t('Create a dataset with task type {taskType} before sending feedback from this run.', {
-                  taskType: feedbackTaskType ? t(feedbackTaskType) : t('unknown')
-                })}
-              />
-            ) : null}
-            {feedbackTaskType ? (
-              <small className="muted">
-                {t('Only datasets with task {taskType} are shown for feedback.', {
-                  taskType: t(feedbackTaskType)
-                })}
-              </small>
-            ) : null}
-
-            <div className="workspace-form-grid">
-              <label>
-                {t('Target Dataset')}
-                <Select
-                  value={selectedDatasetId}
-                  onChange={(event) => setSelectedDatasetId(event.target.value)}
-                >
-                  {feedbackDatasets.map((dataset) => (
-                    <option key={dataset.id} value={dataset.id}>
-                      {dataset.name} ({t(dataset.task_type)})
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label>
-                {t('Feedback Reason')}
-                <Input
-                  value={feedbackReason}
-                  onChange={(event) => setFeedbackReason(event.target.value)}
-                  placeholder={t('for example: missing_detection')}
+              {!selectedRun ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('No Runs Yet')}
+                  description={t('Run inference to inspect outputs.')}
                 />
-              </label>
-            </div>
-            <div className="row gap wrap">
-              <Button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>
-                {t('Send to Dataset')}
-              </Button>
-              <ButtonLink to={scopedDatasetDetailPath} variant="ghost" size="sm">
-                {t('Open scoped dataset')}
-              </ButtonLink>
-              <ButtonLink to={scopedAnnotationPath} variant="ghost" size="sm">
-                {t('Open scoped annotation')}
-              </ButtonLink>
-              <ButtonLink to={scopedTrainingJobsPath} variant="ghost" size="sm">
-                {t('Open scoped jobs')}
-              </ButtonLink>
-            </div>
-            {selectedRun ? (
-              <small className="muted">
-                {t('Annotation quick link keeps queue scope and applies metadata filter for run {runId}.', {
-                  runId: selectedRun.id
-                })}
-              </small>
-            ) : null}
+              ) : null}
+              {selectedRun && datasets.length === 0 ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('No Datasets Yet')}
+                  description={t('Create or import a dataset before sending failure samples back.')}
+                />
+              ) : null}
+              {selectedRun && datasets.length > 0 && feedbackDatasets.length === 0 ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('No Matching Datasets')}
+                  description={t('Create a dataset with task type {taskType} before sending feedback from this run.', {
+                    taskType: feedbackTaskType ? t(feedbackTaskType) : t('unknown')
+                  })}
+                />
+              ) : null}
+              {feedbackTaskType ? (
+                <small className="muted">
+                  {t('Only datasets with task {taskType} are shown for feedback.', {
+                    taskType: t(feedbackTaskType)
+                  })}
+                </small>
+              ) : null}
+
+              <div className="workspace-form-grid">
+                <label>
+                  {t('Target Dataset')}
+                  <Select
+                    value={selectedDatasetId}
+                    onChange={(event) => setSelectedDatasetId(event.target.value)}
+                  >
+                    {feedbackDatasets.map((dataset) => (
+                      <option key={dataset.id} value={dataset.id}>
+                        {dataset.name} ({t(dataset.task_type)})
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <label>
+                  {t('Feedback Reason')}
+                  <Input
+                    value={feedbackReason}
+                    onChange={(event) => setFeedbackReason(event.target.value)}
+                    placeholder={t('for example: missing_detection')}
+                  />
+                </label>
+              </div>
+              <div className="workspace-action-cluster">
+                <Button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>
+                  {t('Send to Dataset')}
+                </Button>
+                <ButtonLink to={scopedDatasetDetailPath} variant="ghost" size="sm" block>
+                  {t('Open scoped dataset')}
+                </ButtonLink>
+                <ButtonLink to={scopedAnnotationPath} variant="ghost" size="sm" block>
+                  {t('Open scoped annotation')}
+                </ButtonLink>
+                <ButtonLink to={scopedTrainingJobsPath} variant="ghost" size="sm" block>
+                  {t('Open scoped jobs')}
+                </ButtonLink>
+              </div>
+              {selectedRun ? (
+                <small className="muted">
+                  {t('Annotation quick link keeps queue scope and applies metadata filter for run {runId}.', {
+                    runId: selectedRun.id
+                  })}
+                </small>
+              ) : null}
             </Card>
-          </>
+          </div>
         }
       />
     </WorkspacePage>

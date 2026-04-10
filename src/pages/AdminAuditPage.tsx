@@ -9,7 +9,7 @@ import {
   WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
-  WorkspaceSplit
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -176,21 +176,6 @@ export default function AdminAuditPage() {
       eyebrow={t('Governance Trail')}
       title={t('Admin Audit Logs')}
       description={t('Review policy-sensitive events across model, dataset, and training workflows.')}
-      actions={
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={() => {
-            load('manual').catch(() => {
-              // handled by local state
-            });
-          }}
-          disabled={loading || refreshing}
-        >
-          {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
-        </Button>
-      }
       stats={[
         { label: t('Total records'), value: summary.total },
         { label: t('User triggered'), value: summary.userTriggered },
@@ -242,13 +227,23 @@ export default function AdminAuditPage() {
             ]}
           />
 
-          <WorkspaceSplit
-            main={
-              <Card as="article">
-                <WorkspaceSectionHeader
-                  title={t('Recent audit timeline')}
-                  description={t('Newest records first so governance follow-up stays easy to trace.')}
-                  actions={
+          <WorkspaceWorkbench
+            toolbar={
+              <Card as="section" className="workspace-toolbar-card">
+                <div className="workspace-toolbar-head">
+                  <div className="workspace-toolbar-copy">
+                    <h3>{t('Audit Controls')}</h3>
+                    <small className="muted">
+                      {t('Keep refresh and adjacent governance surfaces in one stable strip while reviewing the timeline.')}
+                    </small>
+                  </div>
+                  <div className="workspace-toolbar-actions">
+                    <ButtonLink to="/admin/models/pending" variant="ghost" size="sm">
+                      {t('Approval Queue')}
+                    </ButtonLink>
+                    <ButtonLink to="/admin/verification-reports" variant="ghost" size="sm">
+                      {t('Verification Reports')}
+                    </ButtonLink>
                     <Button
                       type="button"
                       variant="secondary"
@@ -262,17 +257,38 @@ export default function AdminAuditPage() {
                     >
                       {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
                     </Button>
-                  }
-                />
-
-                <ul className="workspace-record-list">
-                  {sortedItems.map((item) => renderAuditRecord(item, 'li'))}
-                </ul>
+                  </div>
+                </div>
+                <div className="workspace-toolbar-meta">
+                  <div className="workspace-segmented-actions">
+                    <Badge tone="neutral">{t('Total records')}: {summary.total}</Badge>
+                    <Badge tone="info">{t('User triggered')}: {summary.userTriggered}</Badge>
+                    <Badge tone="neutral">{t('System events')}: {summary.systemTriggered}</Badge>
+                    <Badge tone="neutral">{t('Entity types')}: {summary.entityTypes}</Badge>
+                  </div>
+                </div>
               </Card>
             }
-            side={
-              <>
+            main={
+              <div className="workspace-main-stack">
                 <Card as="article">
+                  <WorkspaceSectionHeader
+                    title={t('Recent audit timeline')}
+                    description={t('Newest records first so governance follow-up stays easy to trace.')}
+                  />
+                  <small className="muted">
+                    {t('Audit timeline is ordered newest-first to support fast governance triage.')}
+                  </small>
+
+                  <ul className="workspace-record-list">
+                    {sortedItems.map((item) => renderAuditRecord(item, 'li'))}
+                  </ul>
+                </Card>
+              </div>
+            }
+            side={
+              <div className="workspace-inspector-rail">
+                <Card as="article" className="workspace-inspector-card">
                   <div className="stack tight">
                     <h3>{t('Top entity types')}</h3>
                     <small className="muted">
@@ -297,26 +313,34 @@ export default function AdminAuditPage() {
                         </Panel>
                       ))}
                     </ul>
-                  )}
-                </Card>
+                    )}
+                  </Card>
 
-                <Card as="article">
-                  <div className="stack tight">
-                    <h3>{t('Admin actions')}</h3>
-                    <small className="muted">
-                      {t('Jump from audit review into the next governance surface without losing context.')}
-                    </small>
-                  </div>
-                  <div className="workspace-button-stack">
-                    <ButtonLink to="/admin/models/pending" variant="secondary">
-                      {t('Open approval queue')}
-                    </ButtonLink>
-                    <ButtonLink to="/admin/verification-reports" variant="secondary">
-                      {t('Open verification reports')}
-                    </ButtonLink>
+                <Card as="article" className="workspace-inspector-card">
+                  <WorkspaceSectionHeader
+                    title={t('Audit summary')}
+                    description={t('Compact timeline stats for governance review.')}
+                  />
+                  <div className="workspace-keyline-list">
+                    <div className="workspace-keyline-item">
+                      <span>{t('Total records')}</span>
+                      <strong>{summary.total}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('User triggered')}</span>
+                      <strong>{summary.userTriggered}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('System events')}</span>
+                      <strong>{summary.systemTriggered}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Entity types')}</span>
+                      <strong>{summary.entityTypes}</strong>
+                    </div>
                   </div>
                 </Card>
-              </>
+              </div>
             }
           />
         </>

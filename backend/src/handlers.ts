@@ -24,6 +24,8 @@ import {
   models,
   modelVersions,
   persistLlmConfigs,
+  persistRuntimeSettings,
+  runtimeSettings,
   trainingJobs,
   trainingWorkerAuthTokensByWorkerId,
   trainingWorkerBootstrapSessions,
@@ -35,6 +37,7 @@ import {
 import { hashPassword, verifyPassword } from './auth';
 import { checkRuntimeConnectivity, getTrainerByFramework } from './runtimeAdapters';
 import type {
+  ActivateTrainingWorkerResult,
   AnnotationRecord,
   AnnotationReviewReasonCode,
   AnnotationReviewRecord,
@@ -63,6 +66,9 @@ import type {
   InferenceRunRecord,
   LlmConfig,
   LlmConfigView,
+  RuntimeFrameworkConfig,
+  RuntimeSettingsRecord,
+  RuntimeSettingsView,
   LoginInput,
   MessageRecord,
   MessageMetadata,
@@ -80,6 +86,7 @@ import type {
   RunInferenceInput,
   TrainingSchedulerDecision,
   TrainingWorkerBootstrapSessionRecord,
+  TrainingWorkerCompatibilitySnapshot,
   TrainingWorkerDeploymentMode,
   TrainingWorkerHeartbeatInput,
   TrainingWorkerNodeRecord,
@@ -105,6 +112,26 @@ import type {
 const delay = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
 const normalizeUsername = (value: string) => value.trim().toLowerCase();
+const toEnvFlagBoolean = (value: string | undefined, fallback: boolean): boolean => {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+};
+const allowNonRealLocalCommandModelVersionRegistration = toEnvFlagBoolean(
+  process.env.MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND,
+  false
+);
 const verificationReportsDir = path.resolve(
   process.cwd(),
   (process.env.VERIFICATION_REPORTS_DIR ?? '.data/verify-reports').trim()
@@ -286,6 +313,72 @@ const normalizeLlmConfig = (input: Partial<LlmConfig>): LlmConfig => {
     temperature: Math.max(0, Math.min(2, safeTempRaw))
   };
 };
+
+const runtimeFrameworks: ModelFramework[] = ['paddleocr', 'doctr', 'yolo'];
+
+const emptyRuntimeFrameworkConfig: RuntimeFrameworkConfig = {
+  endpoint: '',
+  api_key: '',
+  local_train_command: '',
+  local_predict_command: ''
+};
+
+const getEnvRuntimeFrameworkConfig = (framework: ModelFramework): RuntimeFrameworkConfig => {
+  if (framework === 'paddleocr') {
+    return {
+      endpoint: (process.env.PADDLEOCR_RUNTIME_ENDPOINT ?? '').trim(),
+      api_key: (process.env.PADDLEOCR_RUNTIME_API_KEY ?? '').trim(),
+      local_train_command: (process.env.PADDLEOCR_LOCAL_TRAIN_COMMAND ?? '').trim(),
+      local_predict_command: (process.env.PADDLEOCR_LOCAL_PREDICT_COMMAND ?? '').trim()
+    };
+  }
+
+  if (framework === 'doctr') {
+    return {
+      endpoint: (process.env.DOCTR_RUNTIME_ENDPOINT ?? '').trim(),
+      api_key: (process.env.DOCTR_RUNTIME_API_KEY ?? '').trim(),
+      local_train_command: (process.env.DOCTR_LOCAL_TRAIN_COMMAND ?? '').trim(),
+      local_predict_command: (process.env.DOCTR_LOCAL_PREDICT_COMMAND ?? '').trim()
+    };
+  }
+
+  return {
+    endpoint: (process.env.YOLO_RUNTIME_ENDPOINT ?? '').trim(),
+    api_key: (process.env.YOLO_RUNTIME_API_KEY ?? '').trim(),
+    local_train_command: (process.env.YOLO_LOCAL_TRAIN_COMMAND ?? '').trim(),
+    local_predict_command: (process.env.YOLO_LOCAL_PREDICT_COMMAND ?? '').trim()
+  };
+};
+
+const normalizeRuntimeFrameworkConfig = (
+  input: Partial<RuntimeFrameworkConfig> | null | undefined,
+  fallback: RuntimeFrameworkConfig
+): RuntimeFrameworkConfig => ({
+  endpoint: typeof input?.endpoint === 'string' ? input.endpoint.trim() : fallback.endpoint,
+  api_key: typeof input?.api_key === 'string' ? input.api_key.trim() : fallback.api_key,
+  local_train_command:
+    typeof input?.local_train_command === 'string'
+      ? input.local_train_command.trim()
+      : fallback.local_train_command,
+  local_predict_command:
+    typeof input?.local_predict_command === 'string'
+      ? input.local_predict_command.trim()
+      : fallback.local_predict_command
+});
+
+const getStoredRuntimeFrameworkConfig = (framework: ModelFramework): RuntimeFrameworkConfig => {
+  const fallback = runtimeSettings.updated_at ? emptyRuntimeFrameworkConfig : getEnvRuntimeFrameworkConfig(framework);
+  return normalizeRuntimeFrameworkConfig(runtimeSettings.frameworks[framework], fallback);
+};
+
+const getCurrentRuntimeSettingsRecord = (): RuntimeSettingsRecord => ({
+  updated_at: runtimeSettings.updated_at,
+  frameworks: {
+    paddleocr: getStoredRuntimeFrameworkConfig('paddleocr'),
+    doctr: getStoredRuntimeFrameworkConfig('doctr'),
+    yolo: getStoredRuntimeFrameworkConfig('yolo')
+  }
+});
 
 const getStoredLlmConfigByUser = (userId: string): LlmConfig => {
   const fromStore = llmConfigsByUser[userId];
@@ -923,6 +1016,36 @@ const getCurrentUserLlmConfigView = (): LlmConfigView => {
     temperature: config.temperature,
     has_api_key: Boolean(config.api_key),
     api_key_masked: maskApiKey(config.api_key)
+  };
+};
+
+const getCurrentRuntimeSettingsView = (): RuntimeSettingsView => {
+  const record = getCurrentRuntimeSettingsRecord();
+  return {
+    updated_at: record.updated_at,
+    frameworks: {
+      paddleocr: {
+        endpoint: record.frameworks.paddleocr.endpoint,
+        local_train_command: record.frameworks.paddleocr.local_train_command,
+        local_predict_command: record.frameworks.paddleocr.local_predict_command,
+        has_api_key: Boolean(record.frameworks.paddleocr.api_key),
+        api_key_masked: maskApiKey(record.frameworks.paddleocr.api_key)
+      },
+      doctr: {
+        endpoint: record.frameworks.doctr.endpoint,
+        local_train_command: record.frameworks.doctr.local_train_command,
+        local_predict_command: record.frameworks.doctr.local_predict_command,
+        has_api_key: Boolean(record.frameworks.doctr.api_key),
+        api_key_masked: maskApiKey(record.frameworks.doctr.api_key)
+      },
+      yolo: {
+        endpoint: record.frameworks.yolo.endpoint,
+        local_train_command: record.frameworks.yolo.local_train_command,
+        local_predict_command: record.frameworks.yolo.local_predict_command,
+        has_api_key: Boolean(record.frameworks.yolo.api_key),
+        api_key_masked: maskApiKey(record.frameworks.yolo.api_key)
+      }
+    }
   };
 };
 
@@ -1847,8 +1970,57 @@ const logAudit = (
   markAppStateDirty();
 };
 
+const imageAttachmentExtensionSet = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.bmp',
+  '.webp',
+  '.gif',
+  '.tif',
+  '.tiff'
+]);
+
+const isImageAttachment = (attachment: FileAttachment | null | undefined): boolean => {
+  if (!attachment) {
+    return false;
+  }
+  if (typeof attachment.mime_type === 'string' && attachment.mime_type.toLowerCase().startsWith('image/')) {
+    return true;
+  }
+  const ext = path.extname(attachment.filename || '').toLowerCase();
+  return imageAttachmentExtensionSet.has(ext);
+};
+
+const isTrainableDatasetItem = (item: DatasetItemRecord): boolean => {
+  if (item.status !== 'ready') {
+    return false;
+  }
+  const attachment = attachments.find((entry) => entry.id === item.attachment_id);
+  return isImageAttachment(attachment);
+};
+
+const seedStableScore = (value: string, seed: number): number => {
+  let hash = (seed >>> 0) || 1;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (((hash << 5) - hash + value.charCodeAt(index)) >>> 0);
+  }
+  return hash;
+};
+
+const sortItemsBySeed = (items: DatasetItemRecord[], seed: number): DatasetItemRecord[] => {
+  return [...items].sort((left, right) => {
+    const leftScore = seedStableScore(left.id, seed);
+    const rightScore = seedStableScore(right.id, seed);
+    if (leftScore !== rightScore) {
+      return leftScore - rightScore;
+    }
+    return left.id.localeCompare(right.id);
+  });
+};
+
 const annotationCoverageForDataset = (datasetId: string): number => {
-  const items = datasetItems.filter((item) => item.dataset_id === datasetId);
+  const items = datasetItems.filter((item) => item.dataset_id === datasetId && isTrainableDatasetItem(item));
   if (items.length === 0) {
     return 0;
   }
@@ -1862,8 +2034,12 @@ const annotationCoverageForDataset = (datasetId: string): number => {
   return Number((coveredCount / items.length).toFixed(2));
 };
 
-const computeSplitSummary = (datasetId: string) => {
-  const items = datasetItems.filter((item) => item.dataset_id === datasetId);
+const computeSplitSummary = (datasetId: string, options?: { trainableOnly?: boolean }) => {
+  const items = datasetItems.filter(
+    (item) =>
+      item.dataset_id === datasetId &&
+      (!options?.trainableOnly || isTrainableDatasetItem(item))
+  );
   return {
     train: items.filter((item) => item.split === 'train').length,
     val: items.filter((item) => item.split === 'val').length,
@@ -3154,7 +3330,15 @@ const materializeYoloDetectionDataset = async (
   const rootDir = path.join(workspaceDir, 'materialized-dataset', 'yolo');
   const manifestPath = path.join(rootDir, 'manifest.json');
   const datasetYamlPath = path.join(rootDir, 'dataset.yaml');
-  const items = datasetItems.filter((item) => item.dataset_id === dataset.id && item.status === 'ready');
+  await Promise.all([
+    fs.mkdir(path.join(rootDir, 'train', 'images'), { recursive: true }),
+    fs.mkdir(path.join(rootDir, 'train', 'labels'), { recursive: true }),
+    fs.mkdir(path.join(rootDir, 'val', 'images'), { recursive: true }),
+    fs.mkdir(path.join(rootDir, 'val', 'labels'), { recursive: true }),
+    fs.mkdir(path.join(rootDir, 'test', 'images'), { recursive: true }),
+    fs.mkdir(path.join(rootDir, 'test', 'labels'), { recursive: true })
+  ]);
+  const items = datasetItems.filter((item) => item.dataset_id === dataset.id && isTrainableDatasetItem(item));
 
   const classNames = uniqueStrings([
     ...dataset.label_schema.classes,
@@ -3177,6 +3361,14 @@ const materializeYoloDetectionDataset = async (
   let labeledItemCount = 0;
   let missingImageCount = 0;
   let missingDimensionCount = 0;
+  const baseTrainSplitCount = items.filter((item) => resolveMaterializedSplit(item.split) === 'train').length;
+  const forcedTrainItemId =
+    baseTrainSplitCount > 0
+      ? null
+      : items.find((item) => resolveMaterializedSplit(item.split) === 'val')?.id ??
+        items.find((item) => resolveMaterializedSplit(item.split) === 'test')?.id ??
+        items[0]?.id ??
+        null;
 
   for (const item of items) {
     const attachment = attachments.find((entry) => entry.id === item.attachment_id);
@@ -3185,7 +3377,7 @@ const materializeYoloDetectionDataset = async (
       continue;
     }
 
-    const split = resolveMaterializedSplit(item.split);
+    const split = forcedTrainItemId === item.id ? 'train' : resolveMaterializedSplit(item.split);
     splitCounts[split] += 1;
 
     const safeFilename = `${item.id}__${sanitizeFilename(attachment.filename)}`;
@@ -3714,6 +3906,48 @@ const buildWorkerProfileCapabilities = (profile: TrainingWorkerProfile): string[
 const buildWorkerRuntimeProfile = (profile: TrainingWorkerProfile): string =>
   profile === 'mixed' ? 'all' : profile;
 
+const inferWorkerProfileFromCapabilities = (capabilities: string[]): TrainingWorkerProfile => {
+  const normalized = capabilities.map((item) => item.trim().toLowerCase());
+  const hasYolo = normalized.includes('framework:yolo');
+  const hasPaddle = normalized.includes('framework:paddleocr');
+  const hasDoctr = normalized.includes('framework:doctr');
+  const hasDetection = normalized.includes('task:detection');
+  const hasOcr = normalized.includes('task:ocr');
+  const hasOcrRuntime = hasPaddle || hasDoctr || hasOcr;
+  const hasDetectionRuntime = hasYolo || hasDetection;
+
+  if (hasDetectionRuntime && hasOcrRuntime) {
+    return 'mixed';
+  }
+  if (hasPaddle && !hasDoctr) {
+    return 'paddleocr';
+  }
+  if (hasDoctr && !hasPaddle) {
+    return 'doctr';
+  }
+  return 'yolo';
+};
+
+const parseWorkerPublicHostAndPortFromEndpoint = (
+  endpoint: string | null
+): { workerPublicHost: string | null; workerBindPort: number } => {
+  if (!endpoint) {
+    return { workerPublicHost: null, workerBindPort: 9090 };
+  }
+  try {
+    const parsed = new URL(endpoint);
+    const workerPublicHost = parsed.hostname?.trim() || null;
+    const parsedPort = Number.parseInt(parsed.port, 10);
+    if (Number.isFinite(parsedPort) && parsedPort > 0) {
+      return { workerPublicHost, workerBindPort: parsedPort };
+    }
+    const defaultPort = parsed.protocol === 'https:' ? 443 : 80;
+    return { workerPublicHost, workerBindPort: defaultPort };
+  } catch {
+    return { workerPublicHost: null, workerBindPort: 9090 };
+  }
+};
+
 const buildBootstrapTokenPreview = (token: string): string => {
   if (token.length <= 14) {
     return token;
@@ -3946,6 +4180,35 @@ const findBootstrapSessionById = (
 ): TrainingWorkerBootstrapSessionRecord | null =>
   trainingWorkerBootstrapSessions.find((session) => session.id === sessionId) ?? null;
 
+const findLatestBootstrapSessionByWorkerId = (
+  workerId: string
+): TrainingWorkerBootstrapSessionRecord | null =>
+  trainingWorkerBootstrapSessions
+    .filter(
+      (session) =>
+        session.status !== 'expired' &&
+        (session.worker_id === workerId || session.linked_worker_id === workerId)
+    )
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))[0] ?? null;
+
+const resolveControlPlaneBaseUrlForWorkerReconfigure = (workerId: string): string => {
+  const fromRecentSession = findLatestBootstrapSessionByWorkerId(workerId)?.control_plane_base_url;
+  if (typeof fromRecentSession === 'string' && fromRecentSession.trim()) {
+    return normalizeControlPlaneBaseUrl(fromRecentSession);
+  }
+  const fromEnv = (
+    process.env.TRAINING_WORKER_DISPATCH_BASE_URL ??
+    process.env.CONTROL_PLANE_BASE_URL ??
+    ''
+  ).trim();
+  if (fromEnv) {
+    return normalizeControlPlaneBaseUrl(fromEnv);
+  }
+  throw new Error(
+    'Control plane base URL is unavailable for worker reconfigure. Create an Add Worker session first or set TRAINING_WORKER_DISPATCH_BASE_URL.'
+  );
+};
+
 const buildWorkerCallbackHealthUrls = (endpoint: string): string[] => {
   const normalized = endpoint.trim().replace(/\/+$/, '');
   if (!normalized) {
@@ -3954,14 +4217,161 @@ const buildWorkerCallbackHealthUrls = (endpoint: string): string[] => {
   return [`${normalized}/api/worker/healthz`, `${normalized}/healthz`];
 };
 
+const workerHealthContractVersion = 'training-worker-healthz.v1';
+
+type WorkerHealthSnapshot = {
+  reported_runtime_profile: string | null;
+  reported_worker_version: string | null;
+  reported_contract_version: string | null;
+  reported_capabilities: string[];
+};
+
+type WorkerCallbackProbeExpectation = {
+  expected_runtime_profile?: string | null;
+  expected_capabilities?: string[] | null;
+};
+
+const asObject = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+
+const readStringField = (source: Record<string, unknown> | null, key: string): string | null => {
+  const raw = source?.[key];
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const normalized = raw.trim();
+  return normalized || null;
+};
+
+const readStringArrayField = (source: Record<string, unknown> | null, key: string): string[] => {
+  const raw = source?.[key];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.trim());
+};
+
+const parseWorkerHealthSnapshot = (payload: unknown): WorkerHealthSnapshot => {
+  const root = asObject(payload);
+  const workerNode = asObject(root?.worker) ?? asObject(root?.runtime);
+  const primary = workerNode ?? root;
+  const reported_runtime_profile =
+    readStringField(primary, 'runtime_profile') ?? readStringField(root, 'worker_runtime_profile');
+  const reported_worker_version =
+    readStringField(primary, 'worker_version') ?? readStringField(root, 'worker_version');
+  const reported_contract_version =
+    readStringField(primary, 'contract_version') ?? readStringField(root, 'contract_version');
+  const reported_capabilities = [
+    ...readStringArrayField(primary, 'capabilities'),
+    ...readStringArrayField(root, 'capabilities')
+  ];
+  const dedupedCapabilities = Array.from(new Set(reported_capabilities));
+  return {
+    reported_runtime_profile,
+    reported_worker_version,
+    reported_contract_version,
+    reported_capabilities: dedupedCapabilities
+  };
+};
+
+const buildCompatibilitySnapshot = (
+  expected: WorkerCallbackProbeExpectation,
+  reported: WorkerHealthSnapshot
+): { compatibility: TrainingWorkerCompatibilitySnapshot; hard_incompatible: boolean } => {
+  const expectedRuntimeProfile = expected.expected_runtime_profile?.trim() || null;
+  const expectedCapabilities = Array.isArray(expected.expected_capabilities)
+    ? Array.from(
+        new Set(
+          expected.expected_capabilities
+            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            .map((value) => value.trim())
+        )
+      )
+    : [];
+  const reportedCapabilities = reported.reported_capabilities;
+  const missingCapabilities = expectedCapabilities.filter(
+    (capability) => !reportedCapabilities.includes(capability)
+  );
+
+  const warnings: string[] = [];
+  let incompatibleReason: string | null = null;
+
+  if (
+    expectedRuntimeProfile &&
+    expectedRuntimeProfile !== 'all' &&
+    reported.reported_runtime_profile &&
+    reported.reported_runtime_profile !== expectedRuntimeProfile
+  ) {
+    incompatibleReason = `Runtime profile mismatch (expected ${expectedRuntimeProfile}, reported ${reported.reported_runtime_profile}).`;
+  }
+
+  if (expectedRuntimeProfile && !reported.reported_runtime_profile) {
+    warnings.push('Worker health payload does not report runtime_profile; keep worker package updated.');
+  }
+  if (!reported.reported_contract_version) {
+    warnings.push('Worker health payload does not report contract_version.');
+  } else if (reported.reported_contract_version !== workerHealthContractVersion) {
+    warnings.push(
+      `Worker contract version ${reported.reported_contract_version} is different from expected ${workerHealthContractVersion}.`
+    );
+  }
+  if (!reported.reported_worker_version) {
+    warnings.push('Worker health payload does not report worker_version.');
+  }
+  if (expectedCapabilities.length > 0) {
+    if (reportedCapabilities.length === 0) {
+      warnings.push('Worker health payload does not report capabilities.');
+    } else if (missingCapabilities.length > 0) {
+      warnings.push(`Worker capabilities missing: ${missingCapabilities.join(', ')}.`);
+    }
+  }
+
+  const status: TrainingWorkerCompatibilitySnapshot['status'] = incompatibleReason
+    ? 'incompatible'
+    : warnings.length > 0
+      ? 'warning'
+      : 'compatible';
+  const message = incompatibleReason ?? warnings[0] ?? 'Worker callback and compatibility checks passed.';
+
+  return {
+    hard_incompatible: Boolean(incompatibleReason),
+    compatibility: {
+      status,
+      message,
+      expected_runtime_profile: expectedRuntimeProfile,
+      reported_runtime_profile: reported.reported_runtime_profile,
+      reported_worker_version: reported.reported_worker_version,
+      reported_contract_version: reported.reported_contract_version,
+      missing_capabilities: missingCapabilities
+    }
+  };
+};
+
 const probeWorkerCallback = async (
-  endpoint: string
-): Promise<{ ok: boolean; message: string }> => {
+  endpoint: string,
+  expected: WorkerCallbackProbeExpectation = {}
+): Promise<{ ok: boolean; message: string; compatibility: TrainingWorkerCompatibilitySnapshot }> => {
+  const unknownCompatibility: TrainingWorkerCompatibilitySnapshot = {
+    status: 'unknown',
+    message: 'Compatibility check has not run yet.',
+    expected_runtime_profile: expected.expected_runtime_profile?.trim() || null,
+    reported_runtime_profile: null,
+    reported_worker_version: null,
+    reported_contract_version: null,
+    missing_capabilities: []
+  };
   const urls = buildWorkerCallbackHealthUrls(endpoint);
   if (urls.length === 0) {
     return {
       ok: false,
-      message: 'Worker endpoint is missing; callback validation cannot run.'
+      message: 'Worker endpoint is missing; callback validation cannot run.',
+      compatibility: {
+        ...unknownCompatibility,
+        status: 'incompatible',
+        message: 'Worker endpoint is missing; callback validation cannot run.'
+      }
     };
   }
 
@@ -3973,9 +4383,28 @@ const probeWorkerCallback = async (
         signal: AbortSignal.timeout(4000)
       });
       if (response.ok) {
+        const rawBody = await response.text();
+        let parsedBody: unknown = null;
+        if (rawBody.trim()) {
+          try {
+            parsedBody = JSON.parse(rawBody);
+          } catch {
+            parsedBody = null;
+          }
+        }
+        const reported = parseWorkerHealthSnapshot(parsedBody);
+        const { compatibility, hard_incompatible } = buildCompatibilitySnapshot(expected, reported);
+        if (hard_incompatible) {
+          return {
+            ok: false,
+            message: `Worker callback compatibility check failed at ${url}: ${compatibility.message}`,
+            compatibility
+          };
+        }
         return {
           ok: true,
-          message: `Control plane reached worker health endpoint: ${url}`
+          message: `Control plane reached worker health endpoint: ${url}`,
+          compatibility
         };
       }
       lastFailureMessage = `Worker callback returned HTTP ${response.status} at ${url}`;
@@ -3986,7 +4415,12 @@ const probeWorkerCallback = async (
 
   return {
     ok: false,
-    message: lastFailureMessage
+    message: lastFailureMessage,
+    compatibility: {
+      ...unknownCompatibility,
+      status: 'incompatible',
+      message: lastFailureMessage
+    }
   };
 };
 
@@ -7100,13 +7534,24 @@ export async function splitDataset(input: {
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(input.dataset_id, currentUser);
 
-  const relevantItems = datasetItems.filter((item) => item.dataset_id === dataset.id);
+  const relevantItems = sortItemsBySeed(
+    datasetItems.filter((item) => item.dataset_id === dataset.id && isTrainableDatasetItem(item)),
+    input.seed
+  );
   if (relevantItems.length === 0) {
     return { split_summary: { train: 0, val: 0, test: 0, unassigned: 0 } };
   }
 
-  const trainLimit = Math.floor(relevantItems.length * input.train_ratio);
-  const valLimit = Math.floor(relevantItems.length * input.val_ratio);
+  let trainLimit = Math.floor(relevantItems.length * input.train_ratio);
+  if (input.train_ratio > 0 && trainLimit === 0) {
+    trainLimit = 1;
+  }
+  trainLimit = Math.min(trainLimit, relevantItems.length);
+
+  let valLimit = Math.floor(relevantItems.length * input.val_ratio);
+  if (trainLimit + valLimit > relevantItems.length) {
+    valLimit = Math.max(0, relevantItems.length - trainLimit);
+  }
 
   relevantItems.forEach((item, index) => {
     if (index < trainLimit) {
@@ -7121,7 +7566,7 @@ export async function splitDataset(input: {
 
   dataset.updated_at = now();
 
-  const splitSummary = computeSplitSummary(dataset.id);
+  const splitSummary = computeSplitSummary(dataset.id, { trainableOnly: true });
   logAudit('dataset_split_updated', 'Dataset', dataset.id, {
     train: String(splitSummary.train),
     val: String(splitSummary.val),
@@ -7147,13 +7592,13 @@ export async function createDatasetVersion(input: {
   const currentUser = findCurrentUser();
   const dataset = assertDatasetAccess(input.dataset_id, currentUser);
 
-  const splitSummary = computeSplitSummary(dataset.id);
+  const splitSummary = computeSplitSummary(dataset.id, { trainableOnly: true });
   const version: DatasetVersionRecord = {
     id: nextId('dv'),
     dataset_id: dataset.id,
     version_name: input.version_name?.trim() || `v${datasetVersions.filter((item) => item.dataset_id === dataset.id).length + 1}`,
     split_summary: splitSummary,
-    item_count: datasetItems.filter((item) => item.dataset_id === dataset.id).length,
+    item_count: datasetItems.filter((item) => item.dataset_id === dataset.id && isTrainableDatasetItem(item)).length,
     annotation_coverage: annotationCoverageForDataset(dataset.id),
     created_by: currentUser.id,
     created_at: now()
@@ -7775,7 +8220,7 @@ const applyBootstrapCallbackOutcome = (
   session: TrainingWorkerBootstrapSessionRecord,
   worker: TrainingWorkerNodeRecord | null,
   requestedStatus: TrainingWorkerNodeRecord['status'],
-  validation: { ok: boolean; message: string },
+  validation: { ok: boolean; message: string; compatibility: TrainingWorkerCompatibilitySnapshot },
   endpoint: string | null
 ): void => {
   const checkedAt = now();
@@ -7783,6 +8228,7 @@ const applyBootstrapCallbackOutcome = (
   session.last_seen_at = checkedAt;
   session.callback_checked_at = checkedAt;
   session.callback_validation_message = validation.message;
+  session.compatibility = validation.compatibility;
   session.worker_endpoint_hint = endpoint ?? session.worker_endpoint_hint;
   if (worker) {
     session.linked_worker_id = worker.id;
@@ -7836,13 +8282,25 @@ const reconcileBootstrapSessionFromHeartbeat = async (
     session.status = 'awaiting_confirmation';
     session.callback_checked_at = checkedAt;
     session.callback_validation_message = 'Waiting for worker heartbeat to publish a callback endpoint.';
+    session.compatibility = {
+      status: 'unknown',
+      message: 'Waiting for worker endpoint to run callback and compatibility checks.',
+      expected_runtime_profile: session.worker_runtime_profile,
+      reported_runtime_profile: null,
+      reported_worker_version: null,
+      reported_contract_version: null,
+      missing_capabilities: []
+    };
     worker.status = 'offline';
     worker.updated_at = checkedAt;
     markAppStateDirty();
     return;
   }
 
-  const validation = await probeWorkerCallback(worker.endpoint);
+  const validation = await probeWorkerCallback(worker.endpoint, {
+    expected_runtime_profile: session.worker_runtime_profile,
+    expected_capabilities: session.capabilities
+  });
   applyBootstrapCallbackOutcome(session, worker, requestedStatus, validation, worker.endpoint);
 };
 
@@ -7906,6 +8364,15 @@ export async function createTrainingWorkerBootstrapSessionByAdmin(
     last_seen_at: null,
     callback_checked_at: null,
     callback_validation_message: null,
+    compatibility: {
+      status: 'unknown',
+      message: 'Compatibility check has not run yet.',
+      expected_runtime_profile: workerRuntimeProfile,
+      reported_runtime_profile: null,
+      reported_worker_version: null,
+      reported_contract_version: null,
+      missing_capabilities: []
+    },
     linked_worker_id: null,
     metadata: {
       recommended_image: trainingWorkerRecommendedImage
@@ -8029,14 +8496,195 @@ export async function validateTrainingWorkerBootstrapCallbackByAdmin(
     session.callback_checked_at = now();
     session.callback_validation_message =
       'Waiting for worker callback endpoint. Start the worker and complete local /setup first.';
+    session.compatibility = {
+      status: 'unknown',
+      message: 'Waiting for worker endpoint to run callback and compatibility checks.',
+      expected_runtime_profile: session.worker_runtime_profile,
+      reported_runtime_profile: null,
+      reported_worker_version: null,
+      reported_contract_version: null,
+      missing_capabilities: []
+    };
     markAppStateDirty();
     return applyBootstrapSessionAuthPresentation(session);
   }
 
   const requestedStatus = worker && worker.status === 'offline' ? 'online' : worker?.status ?? 'online';
-  const validation = await probeWorkerCallback(endpoint);
+  const validation = await probeWorkerCallback(endpoint, {
+    expected_runtime_profile: session.worker_runtime_profile,
+    expected_capabilities: session.capabilities
+  });
   applyBootstrapCallbackOutcome(session, worker, requestedStatus, validation, endpoint);
   return applyBootstrapSessionAuthPresentation(session);
+}
+
+export async function activateTrainingWorkerByAdmin(
+  workerId: string
+): Promise<ActivateTrainingWorkerResult> {
+  await delay(40);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can activate training workers.');
+  cleanupExpiredBootstrapSessions();
+
+  const worker = trainingWorkerNodes.find((item) => item.id === workerId);
+  if (!worker) {
+    throw new Error('Training worker not found.');
+  }
+
+  const session = findLatestBootstrapSessionByWorkerId(worker.id);
+  const endpoint = worker.endpoint ?? session?.worker_endpoint_hint ?? null;
+  if (!endpoint) {
+    if (session) {
+      session.compatibility = {
+        status: 'incompatible',
+        message: 'Worker endpoint is missing; callback validation cannot run.',
+        expected_runtime_profile: session.worker_runtime_profile,
+        reported_runtime_profile: null,
+        reported_worker_version: null,
+        reported_contract_version: null,
+        missing_capabilities: []
+      };
+      session.callback_checked_at = now();
+      session.callback_validation_message = 'Worker endpoint is missing; callback validation cannot run.';
+      markAppStateDirty();
+    }
+    throw new Error('Worker endpoint is missing; callback validation cannot run.');
+  }
+
+  const checkedAt = now();
+  const validation = await probeWorkerCallback(endpoint, {
+    expected_runtime_profile: session?.worker_runtime_profile ?? null,
+    expected_capabilities: session?.capabilities ?? worker.capabilities
+  });
+  if (!validation.ok) {
+    worker.status = 'offline';
+    worker.updated_at = checkedAt;
+    if (session) {
+      session.status = 'validation_failed';
+      session.claimed_at = session.claimed_at ?? checkedAt;
+      session.last_seen_at = checkedAt;
+      session.callback_checked_at = checkedAt;
+      session.callback_validation_message = validation.message;
+      session.compatibility = validation.compatibility;
+      session.worker_endpoint_hint = endpoint;
+      session.linked_worker_id = worker.id;
+      session.worker_name = worker.name.trim() || session.worker_name;
+    }
+    markAppStateDirty();
+    throw new Error(validation.message);
+  }
+
+  const previousStatus = worker.status;
+  worker.endpoint = endpoint;
+  worker.status = 'online';
+  worker.updated_at = checkedAt;
+  if (session) {
+    session.status = 'online';
+    session.claimed_at = session.claimed_at ?? checkedAt;
+    session.last_seen_at = checkedAt;
+    session.callback_checked_at = checkedAt;
+    session.callback_validation_message = `Activated by admin after callback validation: ${validation.message}`;
+    session.compatibility = validation.compatibility;
+    session.worker_endpoint_hint = endpoint;
+    session.linked_worker_id = worker.id;
+    session.worker_name = worker.name.trim() || session.worker_name;
+  }
+  markAppStateDirty();
+
+  logAudit('training_worker_activated', 'TrainingWorkerNode', worker.id, {
+    endpoint,
+    previous_status: previousStatus
+  });
+
+  return {
+    worker: serializeTrainingWorker(worker),
+    bootstrap_session: session ? applyBootstrapSessionAuthPresentation(session) : null
+  };
+}
+
+export async function createTrainingWorkerReconfigureSessionByAdmin(
+  workerId: string
+): Promise<TrainingWorkerBootstrapSessionRecord> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can create training worker reconfigure sessions.');
+  cleanupExpiredBootstrapSessions();
+
+  const worker = trainingWorkerNodes.find((item) => item.id === workerId);
+  if (!worker) {
+    throw new Error('Training worker not found.');
+  }
+
+  const workerProfile = inferWorkerProfileFromCapabilities(worker.capabilities);
+  const workerRuntimeProfile = buildWorkerRuntimeProfile(workerProfile);
+  const maxConcurrency = normalizeWorkerConcurrency(worker.max_concurrency);
+  const pairingToken = `vtw_${randomBytes(12).toString('hex')}`;
+  const dedicatedToken = issueDedicatedTrainingWorkerToken(worker.id);
+  const fallbackCapabilities = buildWorkerProfileCapabilities(workerProfile);
+  const capabilities =
+    worker.capabilities.length > 0 ? normalizeWorkerCapabilities(worker.capabilities) : fallbackCapabilities;
+  const { workerPublicHost, workerBindPort } = parseWorkerPublicHostAndPortFromEndpoint(worker.endpoint);
+  const endpointHint =
+    worker.endpoint ??
+    buildWorkerEndpointHint(workerPublicHost, workerBindPort) ??
+    buildWorkerEndpointHint(null, workerBindPort);
+
+  const created: TrainingWorkerBootstrapSessionRecord = {
+    id: nextId('twbs'),
+    status: 'bootstrap_created',
+    deployment_mode: 'docker',
+    worker_profile: workerProfile,
+    pairing_token: pairingToken,
+    token_preview: buildBootstrapTokenPreview(pairingToken),
+    control_plane_base_url: resolveControlPlaneBaseUrlForWorkerReconfigure(worker.id),
+    worker_id: worker.id,
+    worker_name: worker.name,
+    worker_public_host: workerPublicHost,
+    worker_bind_port: workerBindPort,
+    worker_endpoint_hint: endpointHint,
+    worker_runtime_profile: workerRuntimeProfile,
+    capabilities,
+    max_concurrency: maxConcurrency,
+    issued_auth_mode: 'dedicated',
+    issued_auth_token_preview: buildWorkerAuthTokenPreview(dedicatedToken),
+    docker_command: '',
+    script_command: '',
+    setup_url_hint: buildWorkerSetupUrlHint(workerPublicHost, workerBindPort),
+    claimed_at: null,
+    last_seen_at: null,
+    callback_checked_at: null,
+    callback_validation_message: `Reconfigure session created from existing worker ${worker.id}.`,
+    compatibility: {
+      status: 'unknown',
+      message: 'Compatibility check has not run yet.',
+      expected_runtime_profile: workerRuntimeProfile,
+      reported_runtime_profile: null,
+      reported_worker_version: null,
+      reported_contract_version: null,
+      missing_capabilities: []
+    },
+    linked_worker_id: worker.id,
+    metadata: {
+      recommended_image: trainingWorkerRecommendedImage,
+      source: 'reconfigure'
+    },
+    created_at: now(),
+    expires_at: new Date(Date.now() + trainingWorkerBootstrapTtlMs).toISOString()
+  };
+
+  const commands = buildTrainingWorkerCommands(created);
+  created.docker_command = commands.dockerCommand;
+  created.script_command = commands.scriptCommand;
+
+  trainingWorkerBootstrapSessions.unshift(created);
+  markAppStateDirty();
+  logAudit('training_worker_reconfigure_session_created', 'TrainingWorkerBootstrapSession', created.id, {
+    worker_id: worker.id,
+    worker_profile: created.worker_profile,
+    deployment_mode: created.deployment_mode
+  });
+
+  return applyBootstrapSessionAuthPresentation(created);
 }
 
 export async function downloadTrainingWorkerBootstrapBundleByAdmin(
@@ -8799,9 +9447,34 @@ export async function registerModelVersion(
     throw new Error('Only completed training jobs can register model versions.');
   }
 
+  if (job.execution_mode !== 'local_command') {
+    throw new Error(
+      `Model version registration requires execution_mode=local_command; received ${job.execution_mode}.`
+    );
+  }
+
   const metrics = trainingMetrics.filter((item) => item.training_job_id === job.id);
   const numericMetrics = pickLatestMetrics(metrics);
   const artifactAttachment = await ensureTrainingArtifactAttachment(job, numericMetrics);
+  const artifactSummary = await readTrainingArtifactSummary(artifactAttachment);
+  const artifactMode = toOptionalTrimmedString(artifactSummary?.mode)?.toLowerCase() ?? null;
+  const artifactFallbackReason = toOptionalTrimmedString(artifactSummary?.fallback_reason);
+  const artifactTrainingPerformed = artifactSummary?.training_performed ?? null;
+  const localExecutionLooksNonReal =
+    artifactMode === 'template' ||
+    Boolean(artifactFallbackReason) ||
+    artifactTrainingPerformed === false;
+
+  if (localExecutionLooksNonReal && !allowNonRealLocalCommandModelVersionRegistration) {
+    const modeLabel = artifactMode ?? 'unknown';
+    const fallbackLabel = artifactFallbackReason ?? 'none';
+    const trainingPerformedLabel =
+      artifactTrainingPerformed === null ? 'unknown' : artifactTrainingPerformed ? 'true' : 'false';
+    throw new Error(
+      `Model version registration rejected for non-real local execution evidence (mode=${modeLabel}, fallback_reason=${fallbackLabel}, training_performed=${trainingPerformedLabel}). Set MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 only for explicit non-production compatibility.`
+    );
+  }
+
   artifactAttachment.attached_to_type = 'Model';
   artifactAttachment.attached_to_id = model.id;
   artifactAttachment.updated_at = now();
@@ -9285,6 +9958,65 @@ export async function testLlmConnection(input: {
     used_stored_api_key: input.use_stored_api_key && !normalized.api_key.trim() ? 'true' : 'false'
   });
   return { preview };
+}
+
+export async function getRuntimeSettings(): Promise<RuntimeSettingsView> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can access runtime settings.');
+  return getCurrentRuntimeSettingsView();
+}
+
+export async function saveRuntimeSettings(input: {
+  runtime_config: RuntimeSettingsRecord['frameworks'];
+  keep_existing_api_keys?: boolean;
+}): Promise<RuntimeSettingsView> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can update runtime settings.');
+
+  const existing = getCurrentRuntimeSettingsRecord();
+  const keepExistingApiKeys = input.keep_existing_api_keys !== false;
+
+  runtimeFrameworks.forEach((framework) => {
+    const submitted = normalizeRuntimeFrameworkConfig(
+      input.runtime_config?.[framework],
+      emptyRuntimeFrameworkConfig
+    );
+    const previous = existing.frameworks[framework];
+    runtimeSettings.frameworks[framework] = {
+      endpoint: submitted.endpoint,
+      local_train_command: submitted.local_train_command,
+      local_predict_command: submitted.local_predict_command,
+      api_key:
+        keepExistingApiKeys && !submitted.api_key.trim() ? previous.api_key : submitted.api_key
+    };
+  });
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  logAudit('runtime_settings_saved', 'System', 'runtime-settings', {
+    keep_existing_api_keys: keepExistingApiKeys ? 'true' : 'false',
+    updated_by: currentUser.id
+  });
+  return getCurrentRuntimeSettingsView();
+}
+
+export async function clearRuntimeSettings(): Promise<RuntimeSettingsView> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can clear runtime settings.');
+
+  runtimeFrameworks.forEach((framework) => {
+    runtimeSettings.frameworks[framework] = getEnvRuntimeFrameworkConfig(framework);
+  });
+  runtimeSettings.updated_at = null;
+  await persistRuntimeSettings();
+
+  logAudit('runtime_settings_cleared', 'System', 'runtime-settings', {
+    updated_by: currentUser.id
+  });
+  return getCurrentRuntimeSettingsView();
 }
 
 export async function submitApprovalRequest(

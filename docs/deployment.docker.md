@@ -13,6 +13,11 @@ cp .env.example .env
 npm run docker:up
 ```
 
+`docker:up` remains the only supported run path and now adds two stability guards automatically:
+- pre-pulls a reachable base image before building
+- reuses a cached local base image when the registry is temporarily unreachable
+- forces classic `docker compose build` (`DOCKER_BUILDKIT=0`, `COMPOSE_DOCKER_CLI_BUILD=0`) to avoid local Docker Desktop `buildx activity` permission failures
+
 Open:
 - Web: `http://127.0.0.1:8080`
 - API health (via nginx): `http://127.0.0.1:8080/api/health`
@@ -34,6 +39,7 @@ npm run smoke:admin:verification-reports
 - dataset export/import roundtrip (detection/ocr/segmentation)
 - detection real-closure smoke
 - dedicated OCR closure smoke
+- OCR fallback guard smoke (ensures failed local OCR command returns empty OCR output with explicit fallback markers, never hardcoded business text)
 
 OCR closure strictness:
 - default deployment verify is non-strict for compatibility:
@@ -41,6 +47,13 @@ OCR closure strictness:
 - strict local-command-only OCR closure:
   - `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run smoke:ocr-closure`
   - `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run docker:verify:full`
+
+Real-closure registration strictness:
+- default deployment verify sets `REAL_CLOSURE_STRICT_REGISTRATION=false`
+  - registration is still attempted first;
+  - if blocked by non-real gate evidence, smoke output records `*_register_mode=blocked_gate_*` and continues with an existing registered version for downstream inference checks.
+- strict registration behavior:
+  - `REAL_CLOSURE_STRICT_REGISTRATION=true npm run smoke:real-closure`
 
 `docker:verify:full` writes reports by default:
 - `.data/verify-reports/docker-verify-full-<timestamp>.json`
@@ -55,10 +68,22 @@ Set in `.env` (or CI/CD secrets):
 - `PADDLEOCR_RUNTIME_ENDPOINT`, `PADDLEOCR_RUNTIME_API_KEY`
 - `DOCTR_RUNTIME_ENDPOINT`, `DOCTR_RUNTIME_API_KEY`
 - `YOLO_RUNTIME_ENDPOINT`, `YOLO_RUNTIME_API_KEY`
-- `NODE_BASE_IMAGE` (default `docker.m.daocloud.io/library/node:20-alpine`)
-- `NGINX_BASE_IMAGE` (default `docker.m.daocloud.io/library/nginx:1.27-alpine`)
+- `APP_STATE_BOOTSTRAP_MODE` (`minimal` recommended for fresh deployments)
+- `RESET_FOUNDATION_PURGE_STORAGE` (used by `npm run data:reset:foundation`)
+- `NODE_BASE_IMAGE`
+- `NGINX_BASE_IMAGE`
 - `VISTRAL_WEB_IMAGE`
 - `VISTRAL_API_IMAGE`
+
+Data hygiene recommendation before acceptance:
+```bash
+npm run data:reset:foundation
+npm run smoke:foundation-reset
+```
+
+Fallback order when a base image env var is not set explicitly:
+- `NODE_BASE_IMAGE`: `docker.m.daocloud.io/library/node:20-alpine` -> `node:20-alpine`
+- `NGINX_BASE_IMAGE`: `docker.m.daocloud.io/library/nginx:1.27-alpine` -> `nginx:1.27-alpine`
 
 Runtime options for verify script:
 - `BASE_URL`
@@ -68,6 +93,7 @@ Runtime options for verify script:
 - `PROBE_PASSWORD`
 - `VERIFY_SKIP_HEALTHZ`
 - `OCR_CLOSURE_STRICT_LOCAL_COMMAND`
+- `REAL_CLOSURE_STRICT_REGISTRATION`
 
 ## Runtime Notes
 - Backend session cookie is issued by same origin (`127.0.0.1:8080`) through nginx reverse proxy.

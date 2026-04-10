@@ -12,6 +12,7 @@ POLL_MAX_TRIES="${POLL_MAX_TRIES:-20}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-0.3}"
 VERIFY_SKIP_HEALTHZ="${VERIFY_SKIP_HEALTHZ:-0}"
 OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND:-false}"
+REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION:-false}"
 RUN_TAG="$(date +%Y%m%d%H%M%S)"
 REPORT_DIR="${REPORT_DIR:-.data/verify-reports}"
 REPORT_BASENAME="${REPORT_BASENAME:-docker-verify-full-${RUN_TAG}}"
@@ -200,7 +201,7 @@ get_csrf_token() {
 }
 
 CURRENT_STEP='infrastructure health checks'
-echo "[docker-verify-full] 1/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 1/18 ${CURRENT_STEP}"
 if [[ "${VERIFY_SKIP_HEALTHZ}" != "1" ]]; then
   curl -fsS "${BASE_URL}/healthz" >/dev/null
 fi
@@ -212,7 +213,7 @@ else
 fi
 
 CURRENT_STEP='probe login'
-echo "[docker-verify-full] 2/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 2/18 ${CURRENT_STEP}"
 curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -231,7 +232,7 @@ curl -fsS -c "${PROBE_COOKIE}" -b "${PROBE_COOKIE}" \
 append_check "${CURRENT_STEP}" "passed" "probe user login/me succeeded and wrong-password was rejected"
 
 CURRENT_STEP='business account login'
-echo "[docker-verify-full] 3/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 3/18 ${CURRENT_STEP}"
 curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -246,7 +247,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "business user login and csrf succeeded"
 
 CURRENT_STEP='resolve conversation model'
-echo "[docker-verify-full] 4/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 4/18 ${CURRENT_STEP}"
 CONVERSATION_MODEL_ID="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/models" | jq -r '.data[0].id // empty')"
 if [[ -z "${CONVERSATION_MODEL_ID}" ]]; then
@@ -264,7 +265,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "conversation_model=${CONVERSATION_MODEL_ID}"
 
 CURRENT_STEP='account governance'
-echo "[docker-verify-full] 5/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 5/18 ${CURRENT_STEP}"
 ACCOUNT_GOVERNANCE_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" ADMIN_USERNAME="${ADMIN_USERNAME}" ADMIN_PASSWORD="${ADMIN_PASSWORD}" bash scripts/smoke-account-governance.sh)"
 echo "${ACCOUNT_GOVERNANCE_OUTPUT}"
 ACCOUNT_GOVERNANCE_CREATED_USER_ID="$(echo "${ACCOUNT_GOVERNANCE_OUTPUT}" | awk -F= '/^created_user_id=/{print $2; exit}')"
@@ -277,7 +278,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "created_user=${ACCOUNT_GOVERNANCE_CREATED_USERNAME}(${ACCOUNT_GOVERNANCE_CREATED_USER_ID}), admin=${ACCOUNT_GOVERNANCE_ADMIN_ID}"
 
 CURRENT_STEP='conversation attachment upload lifecycle'
-echo "[docker-verify-full] 6/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 6/18 ${CURRENT_STEP}"
 printf 'docker verify conversation upload payload (%s)\n' "${RUN_TAG}" >"${CONVERSATION_UPLOAD_FILE}"
 ATTACHMENT_UPLOAD_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/files/conversation/upload" \
@@ -309,7 +310,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "attachment ${ATTACHMENT_ID} reached ready state"
 
 CURRENT_STEP='start conversation with attachment'
-echo "[docker-verify-full] 7/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 7/18 ${CURRENT_STEP}"
 CONVERSATION_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/conversations/start" \
   -H 'Content-Type: application/json' \
@@ -327,7 +328,7 @@ echo "${CONVERSATION_RESPONSE}" | jq -e '.success == true and (.data.messages | 
 append_check "${CURRENT_STEP}" "passed" "conversation ${CONVERSATION_ID} created with assistant reply"
 
 CURRENT_STEP='conversation operational actions'
-echo "[docker-verify-full] 8/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 8/18 ${CURRENT_STEP}"
 CONVERSATION_ACTIONS_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-conversation-actions.sh)"
 echo "${CONVERSATION_ACTIONS_OUTPUT}"
 CONVERSATION_ACTIONS_DATASET_ID="$(echo "${CONVERSATION_ACTIONS_OUTPUT}" | awk -F= '/^dataset_id=/{print $2; exit}')"
@@ -342,7 +343,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "dataset=${CONVERSATION_ACTIONS_DATASET_ID}, model_draft=${CONVERSATION_ACTIONS_MODEL_DRAFT_ID}, training_job=${CONVERSATION_ACTIONS_TRAINING_JOB_ID}, training_dataset=${CONVERSATION_ACTIONS_TRAINING_DATASET_ID}, training_dataset_version=${CONVERSATION_ACTIONS_TRAINING_DATASET_VERSION_ID}"
 
 CURRENT_STEP='model draft -> model file -> approval submit'
-echo "[docker-verify-full] 9/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 9/18 ${CURRENT_STEP}"
 MODEL_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/models/draft" \
   -H 'Content-Type: application/json' \
@@ -395,7 +396,7 @@ APPROVAL_ID="$(echo "${APPROVAL_RESPONSE}" | jq -r '.data.id')"
 append_check "${CURRENT_STEP}" "passed" "model ${MODEL_ID} submitted as approval ${APPROVAL_ID}"
 
 CURRENT_STEP='runtime connectivity contract'
-echo "[docker-verify-full] 10/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 10/18 ${CURRENT_STEP}"
 RUNTIME_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/runtime/connectivity")"
 echo "${RUNTIME_RESPONSE}" | jq -e '.success == true and (.data | length) >= 3 and ([.data[].error_kind] | all(. != null))' >/dev/null
@@ -406,7 +407,7 @@ RUNTIME_METRICS_RETENTION_JSON="$(echo "${RUNTIME_METRICS_RETENTION_RESPONSE}" |
 append_check "${CURRENT_STEP}" "passed" "runtime connectivity + metrics retention summary available"
 
 CURRENT_STEP='detection + ocr inference'
-echo "[docker-verify-full] 11/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 11/18 ${CURRENT_STEP}"
 MODEL_VERSIONS_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/model-versions")"
 DETECTION_MODEL_VERSION_ID="$(echo "${MODEL_VERSIONS_RESPONSE}" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
@@ -431,7 +432,25 @@ if [[ -z "${DETECTION_RUN_ID}" || "${DETECTION_RUN_ID}" == 'null' ]]; then
   echo "${DETECTION_RESPONSE}"
   exit 1
 fi
-echo "${DETECTION_RESPONSE}" | jq -e '.success == true and (.data.normalized_output.boxes | length) >= 1' >/dev/null
+DETECTION_SOURCE_VALUE="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
+DETECTION_BOX_COUNT="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.normalized_output.boxes | length // 0')"
+DETECTION_RUNTIME_FALLBACK_REASON="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+DETECTION_LOCAL_FALLBACK_REASON="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+DETECTION_TEMPLATE_MODE="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.raw_output.meta.mode // empty')"
+DETECTION_TEMPLATE_MARKER="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.raw_output.local_command_template_mode // false')"
+DETECTION_TEMPLATE_REASON="$(echo "${DETECTION_RESPONSE}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+if [[ "${DETECTION_BOX_COUNT}" -lt 1 ]]; then
+  if [[ "${DETECTION_SOURCE_VALUE}" != *"fallback"* && "${DETECTION_SOURCE_VALUE}" != *"template"* && "${DETECTION_SOURCE_VALUE}" != *"mock"* && "${DETECTION_TEMPLATE_MODE}" != "template" && "${DETECTION_TEMPLATE_MARKER}" != "true" ]]; then
+    echo "[docker-verify-full] detection inference returned empty boxes without explicit fallback/template markers"
+    echo "${DETECTION_RESPONSE}"
+    exit 1
+  fi
+  if [[ -z "${DETECTION_RUNTIME_FALLBACK_REASON}" && -z "${DETECTION_LOCAL_FALLBACK_REASON}" && -z "${DETECTION_TEMPLATE_REASON}" ]]; then
+    echo "[docker-verify-full] detection inference returned empty boxes without explicit fallback markers"
+    echo "${DETECTION_RESPONSE}"
+    exit 1
+  fi
+fi
 
 OCR_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   -X POST "${BASE_URL}/api/inference/runs" \
@@ -444,11 +463,29 @@ if [[ -z "${OCR_RUN_ID}" || "${OCR_RUN_ID}" == 'null' ]]; then
   echo "${OCR_RESPONSE}"
   exit 1
 fi
-echo "${OCR_RESPONSE}" | jq -e '.success == true and (.data.normalized_output.ocr.lines | length) >= 1' >/dev/null
-append_check "${CURRENT_STEP}" "passed" "detection run ${DETECTION_RUN_ID} (${DETECTION_MODEL_VERSION_ID}) and ocr run ${OCR_RUN_ID} (${OCR_MODEL_VERSION_ID}) succeeded"
+OCR_SOURCE_VALUE="$(echo "${OCR_RESPONSE}" | jq -r '.data.normalized_output.normalized_output.source // empty')"
+OCR_LINE_COUNT="$(echo "${OCR_RESPONSE}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
+OCR_RUNTIME_FALLBACK_REASON="$(echo "${OCR_RESPONSE}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+OCR_LOCAL_FALLBACK_REASON="$(echo "${OCR_RESPONSE}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+OCR_TEMPLATE_MODE="$(echo "${OCR_RESPONSE}" | jq -r '.data.raw_output.meta.mode // empty')"
+OCR_TEMPLATE_MARKER="$(echo "${OCR_RESPONSE}" | jq -r '.data.raw_output.local_command_template_mode // false')"
+OCR_TEMPLATE_REASON="$(echo "${OCR_RESPONSE}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+if [[ "${OCR_LINE_COUNT}" -lt 1 ]]; then
+  if [[ "${OCR_SOURCE_VALUE}" != *"fallback"* && "${OCR_SOURCE_VALUE}" != *"template"* && "${OCR_SOURCE_VALUE}" != *"mock"* && "${OCR_TEMPLATE_MODE}" != "template" && "${OCR_TEMPLATE_MARKER}" != "true" ]]; then
+    echo "[docker-verify-full] ocr inference returned empty lines without explicit fallback/template markers"
+    echo "${OCR_RESPONSE}"
+    exit 1
+  fi
+  if [[ -z "${OCR_RUNTIME_FALLBACK_REASON}" && -z "${OCR_LOCAL_FALLBACK_REASON}" && -z "${OCR_TEMPLATE_REASON}" ]]; then
+    echo "[docker-verify-full] ocr inference returned empty lines without explicit fallback markers"
+    echo "${OCR_RESPONSE}"
+    exit 1
+  fi
+fi
+append_check "${CURRENT_STEP}" "passed" "detection run ${DETECTION_RUN_ID} (${DETECTION_MODEL_VERSION_ID}) source=${DETECTION_SOURCE_VALUE} and ocr run ${OCR_RUN_ID} (${OCR_MODEL_VERSION_ID}) source=${OCR_SOURCE_VALUE} succeeded"
 
 CURRENT_STEP='inference feedback to dataset'
-echo "[docker-verify-full] 12/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 12/18 ${CURRENT_STEP}"
 DATASETS_RESPONSE="$(curl -fsS -c "${BUSINESS_COOKIE}" -b "${BUSINESS_COOKIE}" \
   "${BASE_URL}/api/datasets")"
 DETECTION_FEEDBACK_DATASET_ID="$(echo "${DATASETS_RESPONSE}" | jq -r '.data[] | select(.task_type=="detection") | .id' | head -n 1)"
@@ -706,7 +743,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "detection mismatch->${MISMATCH_DETECTION_DATASET_ID} rejected and linked->${DETECTION_FEEDBACK_DATASET_ID}; ocr mismatch->${MISMATCH_OCR_DATASET_ID} rejected and linked->${OCR_FEEDBACK_DATASET_ID}; reuse dataset=${REUSE_FEEDBACK_DATASET_ID} run=${REUSE_RUN_ID}"
 
 CURRENT_STEP='phase2 annotation/review + launch-readiness guards'
-echo "[docker-verify-full] 13/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 13/18 ${CURRENT_STEP}"
 PHASE2_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" EXPECT_RUNTIME_FALLBACK=false bash scripts/smoke-phase2.sh)"
 echo "${PHASE2_OUTPUT}"
 PHASE2_DATASET_ID="$(echo "${PHASE2_OUTPUT}" | awk -F= '/^dataset_id=/{print $2; exit}')"
@@ -718,7 +755,7 @@ fi
 append_check "${CURRENT_STEP}" "passed" "phase2 dataset=${PHASE2_DATASET_ID}, no-train gate version=${PHASE2_NO_TRAIN_VERSION_ID}"
 
 CURRENT_STEP='dataset export/import roundtrip'
-echo "[docker-verify-full] 14/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 14/18 ${CURRENT_STEP}"
 DATASET_ROUNDTRIP_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-dataset-export-roundtrip.sh)"
 echo "${DATASET_ROUNDTRIP_OUTPUT}"
 
@@ -732,21 +769,23 @@ fi
 append_check "${CURRENT_STEP}" "passed" "roundtrip targets: det=${ROUNDTRIP_DET_TARGET}, ocr=${ROUNDTRIP_OCR_TARGET}, seg=${ROUNDTRIP_SEG_TARGET}"
 
 CURRENT_STEP='real closure smoke (yolo + paddleocr + doctr)'
-echo "[docker-verify-full] 15/17 ${CURRENT_STEP}"
-REAL_CLOSURE_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-real-closure.sh)"
+echo "[docker-verify-full] 15/18 ${CURRENT_STEP}"
+REAL_CLOSURE_OUTPUT="$(START_API=false REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION}" BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-real-closure.sh)"
 echo "${REAL_CLOSURE_OUTPUT}"
 
 REAL_CLOSURE_YOLO_SOURCE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^yolo_source=/{print $2; exit}')"
 REAL_CLOSURE_OCR_SOURCE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^ocr_source=/{print $2; exit}')"
 REAL_CLOSURE_DOCTR_SOURCE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^doctr_source=/{print $2; exit}')"
+REAL_CLOSURE_YOLO_REGISTER_MODE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^yolo_register_mode=/{print $2; exit}')"
+REAL_CLOSURE_DOCTR_REGISTER_MODE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^doctr_register_mode=/{print $2; exit}')"
 if [[ -z "${REAL_CLOSURE_YOLO_SOURCE}" || -z "${REAL_CLOSURE_OCR_SOURCE}" || -z "${REAL_CLOSURE_DOCTR_SOURCE}" ]]; then
   echo "[docker-verify-full] real closure output missing inference sources"
   exit 1
 fi
-append_check "${CURRENT_STEP}" "passed" "sources: yolo=${REAL_CLOSURE_YOLO_SOURCE}, paddleocr=${REAL_CLOSURE_OCR_SOURCE}, doctr=${REAL_CLOSURE_DOCTR_SOURCE}"
+append_check "${CURRENT_STEP}" "passed" "sources: yolo=${REAL_CLOSURE_YOLO_SOURCE}, paddleocr=${REAL_CLOSURE_OCR_SOURCE}, doctr=${REAL_CLOSURE_DOCTR_SOURCE}; register_modes: yolo=${REAL_CLOSURE_YOLO_REGISTER_MODE:-unknown}, doctr=${REAL_CLOSURE_DOCTR_REGISTER_MODE:-unknown}"
 
 CURRENT_STEP='ocr closure smoke (paddleocr + doctr)'
-echo "[docker-verify-full] 16/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 16/18 ${CURRENT_STEP}"
 OCR_CLOSURE_OUTPUT="$(START_API=false OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-ocr-closure.sh)"
 echo "${OCR_CLOSURE_OUTPUT}"
 
@@ -755,6 +794,8 @@ OCR_CLOSURE_DOCTR_SOURCE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^doctr_exec
 OCR_CLOSURE_PADDLE_ACCURACY="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^paddle_accuracy=/{print $2; exit}')"
 OCR_CLOSURE_DOCTR_PRIMARY_NAME="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^doctr_primary_metric_name=/{print $2; exit}')"
 OCR_CLOSURE_DOCTR_PRIMARY_VALUE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^doctr_primary_metric_value=/{print $2; exit}')"
+OCR_CLOSURE_PADDLE_REGISTER_MODE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^paddle_register_mode=/{print $2; exit}')"
+OCR_CLOSURE_DOCTR_REGISTER_MODE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^doctr_register_mode=/{print $2; exit}')"
 if [[ -z "${OCR_CLOSURE_PADDLE_SOURCE}" || -z "${OCR_CLOSURE_DOCTR_SOURCE}" ]]; then
   echo "[docker-verify-full] ocr closure output missing execution sources."
   exit 1
@@ -767,10 +808,10 @@ if [[ -z "${OCR_CLOSURE_DOCTR_PRIMARY_NAME}" || -z "${OCR_CLOSURE_DOCTR_PRIMARY_
   echo "[docker-verify-full] ocr closure output missing docTR primary metric."
   exit 1
 fi
-append_check "${CURRENT_STEP}" "passed" "execution_sources: paddleocr=${OCR_CLOSURE_PADDLE_SOURCE}, doctr=${OCR_CLOSURE_DOCTR_SOURCE}; metrics: paddle_accuracy=${OCR_CLOSURE_PADDLE_ACCURACY}, doctr_${OCR_CLOSURE_DOCTR_PRIMARY_NAME}=${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}"
+append_check "${CURRENT_STEP}" "passed" "execution_sources: paddleocr=${OCR_CLOSURE_PADDLE_SOURCE}, doctr=${OCR_CLOSURE_DOCTR_SOURCE}; metrics: paddle_accuracy=${OCR_CLOSURE_PADDLE_ACCURACY}, doctr_${OCR_CLOSURE_DOCTR_PRIMARY_NAME}=${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}; register_modes: paddle=${OCR_CLOSURE_PADDLE_REGISTER_MODE:-unknown}, doctr=${OCR_CLOSURE_DOCTR_REGISTER_MODE:-unknown}"
 
 CURRENT_STEP='training worker dedicated auth smoke'
-echo "[docker-verify-full] 17/17 ${CURRENT_STEP}"
+echo "[docker-verify-full] 17/18 ${CURRENT_STEP}"
 DEDICATED_AUTH_WORKER_PUBLIC_HOST="${DEDICATED_AUTH_WORKER_PUBLIC_HOST:-host.docker.internal}"
 DEDICATED_AUTH_WORKER_BIND_HOST="${DEDICATED_AUTH_WORKER_BIND_HOST:-0.0.0.0}"
 DEDICATED_AUTH_OUTPUT="$(
@@ -797,6 +838,21 @@ if [[ -z "${DEDICATED_REFERENCE_WORKER_ID}" || -z "${DEDICATED_REFERENCE_JOB_ID}
   exit 1
 fi
 append_check "${CURRENT_STEP}" "passed" "reference_worker=${DEDICATED_REFERENCE_WORKER_ID}, reference_job=${DEDICATED_REFERENCE_JOB_ID}, reference_logs=${DEDICATED_REFERENCE_LOG_COUNT}, reference_inline_logs=${DEDICATED_REFERENCE_INLINE_LOG_COUNT:-0}, cancel_worker=${DEDICATED_CANCEL_WORKER_ID}, cancel_job=${DEDICATED_CANCEL_JOB_ID}, cancel_logs=${DEDICATED_CANCEL_LOG_COUNT}, training_dataset=${DEDICATED_TRAINING_DATASET_ID:-unknown}, training_dataset_version=${DEDICATED_TRAINING_DATASET_VERSION_ID:-unknown}"
+
+CURRENT_STEP='ocr fallback guard smoke'
+echo "[docker-verify-full] 18/18 ${CURRENT_STEP}"
+OCR_FALLBACK_GUARD_OUTPUT="$(
+  AUTH_USERNAME="${BUSINESS_USERNAME}" \
+  AUTH_PASSWORD="${BUSINESS_PASSWORD}" \
+  bash scripts/smoke-ocr-fallback-guard.sh
+)"
+echo "${OCR_FALLBACK_GUARD_OUTPUT}"
+OCR_FALLBACK_GUARD_SOURCE="$(echo "${OCR_FALLBACK_GUARD_OUTPUT}" | awk -F= '/^[[:space:]]*source=/{print $2; exit}')"
+if [[ -z "${OCR_FALLBACK_GUARD_SOURCE}" ]]; then
+  echo "[docker-verify-full] ocr fallback guard output missing source marker"
+  exit 1
+fi
+append_check "${CURRENT_STEP}" "passed" "source=${OCR_FALLBACK_GUARD_SOURCE}"
 
 finalize_report "passed" "full deployment verification succeeded"
 

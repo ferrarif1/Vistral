@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -10,30 +9,6 @@ def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-def ratio_from_seed(seed: int, lower: float, upper: float) -> float:
-    bucket = abs(seed % 10000) / 10000.0
-    return lower + (upper - lower) * bucket
-
-
-def file_hash(path: str) -> bytes:
-    hasher = hashlib.sha256()
-    if not path:
-        hasher.update(b'no-input-path')
-        return hasher.digest()
-
-    try:
-        with open(path, 'rb') as fp:
-            while True:
-                chunk = fp.read(1024 * 1024)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-    except Exception:
-        hasher.update(path.encode('utf-8'))
-
-    return hasher.digest()
-
-
 def write_json(path: str, payload: dict) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as fp:
@@ -41,82 +16,30 @@ def write_json(path: str, payload: dict) -> None:
 
 
 def build_template_payload(args, fallback_reason: str = '') -> dict:
-    digest = file_hash(args.input_path)
-    seed = int.from_bytes(digest[:4], byteorder='big', signed=False)
-
-    width = int(ratio_from_seed(seed, 960, 1920))
-    height = int(ratio_from_seed(seed >> 3, 540, 1080))
+    template_reason = fallback_reason if fallback_reason else 'template_mode_default'
+    normalized_fallback_reason = fallback_reason if fallback_reason else 'template_mode_default'
 
     payload = {
         'image': {
             'filename': args.filename,
-            'width': width,
-            'height': height,
+            'width': 1280,
+            'height': 720,
         },
         'meta': {
             'runner': 'yolo_predict_runner',
             'task_type': args.task_type,
             'mode': 'template',
+            'fallback_reason': normalized_fallback_reason,
+            'template_reason': template_reason,
+            'template_payload': 'empty_structured_output',
             'generated_at': datetime.now(timezone.utc).isoformat(),
         },
+        'boxes': [],
+        'rotated_boxes': [],
+        'polygons': [],
+        'masks': [],
+        'labels': [],
     }
-
-    if fallback_reason:
-        payload['meta']['fallback_reason'] = fallback_reason
-
-    if args.task_type == 'detection':
-        x = int(ratio_from_seed(seed >> 5, 40, 460))
-        y = int(ratio_from_seed(seed >> 7, 40, 280))
-        box_w = int(ratio_from_seed(seed >> 9, 120, 320))
-        box_h = int(ratio_from_seed(seed >> 11, 80, 220))
-        score = round(clamp(ratio_from_seed(seed >> 13, 0.72, 0.99), 0.0, 1.0), 4)
-        payload['boxes'] = [
-            {
-                'x': x,
-                'y': y,
-                'width': box_w,
-                'height': box_h,
-                'label': 'detected_object',
-                'score': score,
-            }
-        ]
-    elif args.task_type == 'segmentation':
-        payload['polygons'] = [
-            {
-                'label': 'region',
-                'score': round(ratio_from_seed(seed >> 5, 0.72, 0.95), 4),
-                'points': [
-                    {'x': 80, 'y': 90},
-                    {'x': 260, 'y': 120},
-                    {'x': 240, 'y': 320},
-                    {'x': 60, 'y': 300},
-                ],
-            }
-        ]
-        payload['masks'] = [
-            {
-                'label': 'region',
-                'score': round(ratio_from_seed(seed >> 8, 0.7, 0.94), 4),
-                'encoding': 'template-rle',
-            }
-        ]
-    elif args.task_type == 'obb':
-        payload['rotated_boxes'] = [
-            {
-                'cx': round(ratio_from_seed(seed >> 4, 220, 560), 2),
-                'cy': round(ratio_from_seed(seed >> 8, 160, 420), 2),
-                'width': round(ratio_from_seed(seed >> 11, 80, 240), 2),
-                'height': round(ratio_from_seed(seed >> 13, 40, 140), 2),
-                'angle': round(ratio_from_seed(seed >> 16, -25, 25), 2),
-                'label': 'rotated_target',
-                'score': round(ratio_from_seed(seed >> 18, 0.75, 0.97), 4),
-            }
-        ]
-    else:
-        payload['labels'] = [
-            {'label': 'normal', 'score': round(ratio_from_seed(seed >> 5, 0.5, 0.95), 4)},
-            {'label': 'abnormal', 'score': round(ratio_from_seed(seed >> 9, 0.05, 0.5), 4)},
-        ]
 
     return payload
 

@@ -54,6 +54,19 @@ def write_json(path: str, payload: dict) -> None:
 
 def resolve_base_model(base_model: str) -> str:
     candidate = (base_model or '').strip()
+    configured_model_path = (
+        os.getenv('VISTRAL_YOLO_MODEL_PATH', '').strip()
+        or os.getenv('REAL_YOLO_MODEL_PATH', '').strip()
+    )
+
+    # For catalog aliases such as "yolo11n", prefer the explicitly configured local
+    # weight file so real training stays deterministic in intranet / offline setups.
+    if configured_model_path and os.path.isfile(configured_model_path):
+        if not candidate:
+            return configured_model_path
+        if os.path.sep not in candidate and not candidate.endswith('.pt') and not candidate.endswith('.yaml'):
+            return configured_model_path
+
     if not candidate:
         return 'yolo11n.pt'
     if os.path.sep not in candidate and not candidate.endswith('.pt') and not candidate.endswith('.yaml'):
@@ -294,6 +307,7 @@ def try_real_train(args, config: dict, summary: dict):
         artifact_payload = {
             'runner': 'yolo_train_runner',
             'mode': 'real',
+            'training_performed': True,
             'job_id': args.job_id,
             'dataset_id': args.dataset_id,
             'task_type': args.task_type,
@@ -338,6 +352,7 @@ def main() -> int:
     real_payload, reason = try_real_train(args, config, summary)
     if real_payload is None:
         metrics, metric_series = build_template_metrics(args, summary, config)
+        template_reason = reason if reason else 'template_mode_default'
         metrics_payload = {
             'summary': metrics,
             'metric_series': metric_series,
@@ -348,6 +363,7 @@ def main() -> int:
             artifact_payload = {
                 'runner': 'yolo_train_runner',
                 'mode': 'template',
+                'training_performed': False,
                 'job_id': args.job_id,
                 'dataset_id': args.dataset_id,
                 'task_type': args.task_type,
@@ -355,11 +371,11 @@ def main() -> int:
                 'epochs': epochs,
                 'metrics': metrics,
                 'metric_series': metric_series,
+                'fallback_reason': template_reason,
+                'template_reason': template_reason,
                 'materialized_dataset': extract_materialized_dataset(config),
                 'generated_at': datetime.now(timezone.utc).isoformat(),
             }
-            if reason:
-                artifact_payload['fallback_reason'] = reason
             write_json(args.artifact_path, artifact_payload)
 
         print(f"[yolo-runner] workspace={args.workspace_dir}")

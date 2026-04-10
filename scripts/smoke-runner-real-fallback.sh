@@ -149,6 +149,12 @@ yolo_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
 yolo_source="$(echo "${yolo_resp}" | jq -r '.data.execution_source // empty')"
 yolo_mode="$(echo "${yolo_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 yolo_reason="$(echo "${yolo_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+yolo_reason_unified="$(echo "${yolo_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+yolo_boxes_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.boxes // []) | if type=="array" then length else -1 end')"
+yolo_rotated_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.rotated_boxes // []) | if type=="array" then length else -1 end')"
+yolo_polygon_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.polygons // []) | if type=="array" then length else -1 end')"
+yolo_mask_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.masks // []) | if type=="array" then length else -1 end')"
+yolo_label_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.labels // []) | if type=="array" then length else -1 end')"
 if [[ "${yolo_source}" != "yolo_local_command" ]]; then
   echo "[smoke-runner-real-fallback] expected yolo_local_command source, got ${yolo_source}."
   echo "${yolo_resp}"
@@ -164,6 +170,16 @@ if [[ -z "${yolo_reason}" ]]; then
   echo "${yolo_resp}"
   exit 1
 fi
+if [[ -z "${yolo_reason_unified}" ]]; then
+  echo "[smoke-runner-real-fallback] expected YOLO fallback reason in unified field."
+  echo "${yolo_resp}"
+  exit 1
+fi
+if [[ "${yolo_boxes_count}" != "0" || "${yolo_rotated_count}" != "0" || "${yolo_polygon_count}" != "0" || "${yolo_mask_count}" != "0" || "${yolo_label_count}" != "0" ]]; then
+  echo "[smoke-runner-real-fallback] expected YOLO template fallback to return empty structured predictions."
+  echo "${yolo_resp}"
+  exit 1
+fi
 
 paddle_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
@@ -173,6 +189,7 @@ paddle_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
 paddle_source="$(echo "${paddle_resp}" | jq -r '.data.execution_source // empty')"
 paddle_mode="$(echo "${paddle_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 paddle_reason="$(echo "${paddle_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+paddle_reason_unified="$(echo "${paddle_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
 if [[ "${paddle_source}" != "paddleocr_local_command" ]]; then
   echo "[smoke-runner-real-fallback] expected paddleocr_local_command source, got ${paddle_source}."
   echo "${paddle_resp}"
@@ -185,6 +202,11 @@ if [[ "${paddle_mode}" != "template" ]]; then
 fi
 if [[ -z "${paddle_reason}" ]]; then
   echo "[smoke-runner-real-fallback] expected PaddleOCR fallback reason in meta."
+  echo "${paddle_resp}"
+  exit 1
+fi
+if [[ -z "${paddle_reason_unified}" ]]; then
+  echo "[smoke-runner-real-fallback] expected PaddleOCR fallback reason in unified field."
   echo "${paddle_resp}"
   exit 1
 fi

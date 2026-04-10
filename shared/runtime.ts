@@ -63,6 +63,7 @@ export interface PredictInput {
 
 export interface ExportInput {
   modelVersionId: string;
+  modelArtifactPath?: string | null;
 }
 
 export interface ExportResult {
@@ -71,6 +72,7 @@ export interface ExportResult {
 
 export interface LoadModelInput {
   modelVersionId: string;
+  modelArtifactPath?: string | null;
 }
 
 export interface LoadedModelRef {

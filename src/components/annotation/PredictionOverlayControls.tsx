@@ -17,6 +17,7 @@ export interface PredictionCandidateView {
 
 interface PredictionOverlayControlsProps {
   t: TranslateFn;
+  className?: string;
   busy: boolean;
   hasPredictionOverlay: boolean;
   showAnnotationOverlay: boolean;
@@ -43,6 +44,7 @@ interface PredictionOverlayControlsProps {
 
 export default function PredictionOverlayControls({
   t,
+  className,
   busy,
   hasPredictionOverlay,
   showAnnotationOverlay,
@@ -67,7 +69,7 @@ export default function PredictionOverlayControls({
   onToggleLowConfidenceTag
 }: PredictionOverlayControlsProps) {
   return (
-    <Card as="section">
+    <Card as="section" className={className}>
       <div className="row between gap wrap align-center">
         <h3>{t('Prediction Compare')}</h3>
         <Badge tone={hasPredictionOverlay ? 'info' : 'neutral'}>

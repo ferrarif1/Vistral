@@ -240,6 +240,100 @@ wait_bootstrap_online() {
   exit 1
 }
 
+assert_bootstrap_compatibility_snapshot() {
+  local status_resp compatibility_status reported_contract_version reported_worker_version bootstrap_status callback_validation_message
+  status_resp="$(curl -sS \
+    -H "Content-Type: application/json" \
+    -X POST "${BASE_URL}/api/runtime/training-workers/bootstrap-sessions/status" \
+    -d "{\"pairing_token\":\"${CURRENT_PAIRING_TOKEN}\"}")"
+  if [[ "$(echo "${status_resp}" | jq -r '.success // false')" != "true" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] bootstrap compatibility query failed."
+    echo "${status_resp}"
+    exit 1
+  fi
+
+  compatibility_status="$(echo "${status_resp}" | jq -r '.data.compatibility.status // empty')"
+  reported_contract_version="$(echo "${status_resp}" | jq -r '.data.compatibility.reported_contract_version // empty')"
+  reported_worker_version="$(echo "${status_resp}" | jq -r '.data.compatibility.reported_worker_version // empty')"
+  bootstrap_status="$(echo "${status_resp}" | jq -r '.data.status // empty')"
+  callback_validation_message="$(echo "${status_resp}" | jq -r '.data.callback_validation_message // empty')"
+
+  if [[ -z "${compatibility_status}" ]]; then
+    # Compatibility fields may be absent on older deploy snapshots; in that case
+    # accept an explicit online status + callback validation as minimum evidence.
+    if [[ "${bootstrap_status}" == "online" && -n "${callback_validation_message}" ]]; then
+      return 0
+    fi
+    echo "[smoke-training-worker-dedicated-auth] bootstrap compatibility payload is missing."
+    echo "${status_resp}"
+    exit 1
+  fi
+  if [[ "${compatibility_status}" == "incompatible" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] bootstrap compatibility status is incompatible."
+    echo "${status_resp}"
+    exit 1
+  fi
+  if [[ -n "${reported_contract_version}" && "${reported_contract_version}" != "training-worker-healthz.v1" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] unexpected worker contract version in compatibility payload."
+    echo "${status_resp}"
+    exit 1
+  fi
+  if [[ -n "${reported_contract_version}" && -z "${reported_worker_version}" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] worker compatibility payload missing worker version."
+    echo "${status_resp}"
+    exit 1
+  fi
+}
+
+activate_worker_via_admin() {
+  local worker_id="$1"
+  local csrf="$2"
+  local activate_resp activated_worker_id
+  activate_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf}" \
+    -X POST "${BASE_URL}/api/admin/training-workers/${worker_id}/activate")"
+  if [[ "$(echo "${activate_resp}" | jq -r '.success // false')" != "true" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] worker activate endpoint failed."
+    echo "${activate_resp}"
+    exit 1
+  fi
+  activated_worker_id="$(echo "${activate_resp}" | jq -r '.data.worker.id // empty')"
+  if [[ "${activated_worker_id}" != "${worker_id}" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] activate endpoint returned unexpected worker id."
+    echo "${activate_resp}"
+    exit 1
+  fi
+}
+
+create_reconfigure_session() {
+  local worker_id="$1"
+  local csrf="$2"
+  local reconfigure_resp reconfigure_worker_id reconfigure_linked_worker_id reconfigure_status
+  reconfigure_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: ${csrf}" \
+    -X POST "${BASE_URL}/api/admin/training-workers/${worker_id}/reconfigure-session")"
+  if [[ "$(echo "${reconfigure_resp}" | jq -r '.success // false')" != "true" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] worker reconfigure-session endpoint failed."
+    echo "${reconfigure_resp}"
+    exit 1
+  fi
+  reconfigure_worker_id="$(echo "${reconfigure_resp}" | jq -r '.data.worker_id // empty')"
+  reconfigure_linked_worker_id="$(echo "${reconfigure_resp}" | jq -r '.data.linked_worker_id // empty')"
+  reconfigure_status="$(echo "${reconfigure_resp}" | jq -r '.data.status // empty')"
+  if [[ "${reconfigure_worker_id}" != "${worker_id}" || "${reconfigure_linked_worker_id}" != "${worker_id}" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] reconfigure-session response worker mapping is invalid."
+    echo "${reconfigure_resp}"
+    exit 1
+  fi
+  if [[ "${reconfigure_status}" != "bootstrap_created" ]]; then
+    echo "[smoke-training-worker-dedicated-auth] reconfigure-session status should be bootstrap_created."
+    echo "${reconfigure_resp}"
+    exit 1
+  fi
+}
+
 disable_worker() {
   local worker_id="$1"
   local csrf="$2"
@@ -265,6 +359,9 @@ run_reference_package_flow() {
   start_worker_process "${worker_port}" "${APP_DATA_DIR}/worker-runs-reference"
   send_heartbeat
   wait_bootstrap_online
+  assert_bootstrap_compatibility_snapshot
+  activate_worker_via_admin "${CURRENT_WORKER_ID}" "${csrf}"
+  create_reconfigure_session "${CURRENT_WORKER_ID}" "${csrf}"
 
   create_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
     -H "Content-Type: application/json" \
@@ -337,6 +434,7 @@ run_cancel_flow() {
   start_worker_process "${worker_port}" "${APP_DATA_DIR}/worker-runs-cancel" 'python3 -c "import time; time.sleep(30)"'
   send_heartbeat
   wait_bootstrap_online
+  assert_bootstrap_compatibility_snapshot
 
   create_job_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
     -H "Content-Type: application/json" \

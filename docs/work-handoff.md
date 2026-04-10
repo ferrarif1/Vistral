@@ -219,6 +219,38 @@ Rules:
 - verification:
   - `npm run typecheck`
 
+## 2026-04-10 04:20 (Asia/Shanghai)
+- context: Runtime 图形化配置进行中；被“直接验证当前是否已真正支持模型训练与验证”这一新任务打断。
+- done:
+  - 已先补合同文档：
+    - `docs/api-contract.md` / `docs/api-contract.zh-CN.md`
+    - `docs/data-model.md` / `docs/data-model.zh-CN.md`
+    - 新增 `GET/POST/DELETE /settings/runtime` 约定，以及 `RuntimeSettings` 持久化语义
+  - 后端已起步接入 runtime 设置持久化骨架：
+    - `shared/domain.ts` 增加 runtime settings 类型
+    - `backend/src/store.ts` 增加 encrypted runtime settings store 读写基础
+    - `backend/src/server.ts` 已挂载 `/api/settings/runtime` 路由入口
+    - `backend/src/handlers.ts` 已补 runtime settings 读写/清空 handler 基础
+    - `backend/src/runtimeAdapters.ts` 已改为准备走“动态读取 runtime settings + env 兜底”
+  - 前端 `RuntimeSettingsPage.tsx` 已开始接入运行时配置表单状态，但尚未收口到可用 UI。
+- next:
+  1. 收口 `RuntimeSettingsPage.tsx`，补全图形化表单、保存/重载/清空交互，并消除 lint/typecheck 风险。
+  2. 跑 `npm run typecheck && npm run lint && npm run build`，确认 runtime 设置这条线不影响主分支可运行性。
+  3. 补 runtime settings 最小 smoke（保存/读取/清空后 adapter 生效）。
+  4. 若用户继续优先“真实训练闭环”，则在上述可编译前提下继续做 doctor + smoke 闭环验证。
+- risks:
+  - 当前工作区存在未收口的 runtime settings 改动，若直接跑 lint/build 可能暴露未使用状态或接口对齐问题。
+  - 当前真实训练闭环是否通过，仍取决于本机 Python 依赖、权重文件、local runner、以及 worker/runtime 可达性。
+- verification:
+  - 建议后续先执行：
+    - `npm run typecheck`
+    - `npm run lint`
+    - `npm run build`
+  - 然后执行真实性闭环检查：
+    - `npm run doctor:real-training-readiness`
+    - `npm run smoke:real-closure`
+    - `npm run smoke:ocr-closure`
+
 ## 2026-04-04 15:55 (Asia/Shanghai)
 - context: Chat-style conversation history refinement was in progress; interrupted to prioritize mainline product closure on dataset -> annotation/review -> training workflow.
 - done:

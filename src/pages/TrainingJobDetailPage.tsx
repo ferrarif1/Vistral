@@ -16,8 +16,10 @@ import {
   WorkspaceHero,
   WorkspaceMetricGrid,
   WorkspacePage,
-  WorkspaceSplit
+  WorkspaceSectionHeader,
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
+import { deriveTrainingExecutionInsight } from '../features/trainingExecutionInsight';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -481,6 +483,19 @@ export default function TrainingJobDetailPage() {
     return t('Awaiting worker assignment');
   };
   const latestUpdateLabel = formatCompactTimestamp(job.updated_at, t('n/a'));
+  const executionInsight = deriveTrainingExecutionInsight({
+    status: job.status,
+    executionMode: job.execution_mode,
+    artifactSummary
+  });
+  const executionRealityLabel =
+    executionInsight.reality === 'real'
+      ? t('Real execution')
+      : executionInsight.reality === 'template'
+        ? t('Template execution')
+        : executionInsight.reality === 'simulated'
+          ? t('Simulated execution')
+          : t('Unknown execution');
   const trimmedLogExcerpt = job.log_excerpt.trim();
   const hasTechnicalContext = Boolean(
     workspaceDir ||
@@ -525,6 +540,29 @@ export default function TrainingJobDetailPage() {
         <StateBlock variant="success" title={t('Training Completed')} description={t('Job reached completed state.')} />
       ) : null}
 
+      {executionInsight.showWarning ? (
+        <StateBlock
+          variant={executionInsight.reality === 'simulated' ? 'error' : 'empty'}
+          title={t('Template/Simulated Training Result')}
+          description={
+            executionInsight.fallbackReason
+              ? t(
+                  'Current training output is not produced by a fully real framework run. Verify runtime dependencies before publishing this version. Fallback reason from runner: {reason}',
+                  {
+                    reason: executionInsight.fallbackReason
+                  }
+                )
+              : executionInsight.reality === 'unknown'
+                ? t(
+                    'Execution detail is still incomplete for this terminal run. Verify runtime dependencies and artifact metadata before publishing this version.'
+                  )
+                : t(
+                    'Current training output is not produced by a fully real framework run. Verify runtime dependencies before publishing this version.'
+                  )
+          }
+        />
+      ) : null}
+
       <WorkspaceMetricGrid
         items={[
           {
@@ -551,16 +589,99 @@ export default function TrainingJobDetailPage() {
         ]}
       />
 
-      <WorkspaceSplit
-        main={
-          <>
-            <Card as="section" className="stack">
-              <div className="stack tight">
-                <h3>{t('Run summary')}</h3>
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Run Controls')}</h3>
                 <small className="muted">
-                  {t('Dataset, launch state, and handoff readiness for this run.')}
+                  {t('Keep operator actions, exports, and scoped navigation in one stable control strip.')}
                 </small>
               </div>
+              <div className="workspace-toolbar-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={refreshDetail}
+                  disabled={loading || refreshing || busy}
+                >
+                  {refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
+                {canCancel ? (
+                  <Button type="button" variant="danger" size="sm" onClick={cancelJob} disabled={busy}>
+                    {t('Cancel')}
+                  </Button>
+                ) : null}
+                {canRetry ? (
+                  <Button type="button" variant="secondary" size="sm" onClick={retryJob} disabled={busy}>
+                    {t('Retry')}
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={downloadMetricsJson}
+                  disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
+                  title={t('Export all metrics timeline in JSON format.')}
+                >
+                  {exportingMetrics ? t('Exporting...') : t('Metrics JSON')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={downloadMetricsCsv}
+                  disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
+                  title={t('Export all metrics timeline in CSV format.')}
+                >
+                  {exportingMetricsCsv ? t('Exporting...') : t('Metrics CSV')}
+                </Button>
+                {artifactAttachmentId ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={downloadArtifact}>
+                    {t('Download Artifact')}
+                  </Button>
+                ) : null}
+                <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
+                  {t('Jobs List')}
+                </ButtonLink>
+                <ButtonLink to={scopedDatasetDetailPath} variant="ghost" size="sm">
+                  {t('Dataset')}
+                </ButtonLink>
+                <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
+                  {t('Validate')}
+                </ButtonLink>
+                <ButtonLink to="/models/versions" variant="ghost" size="sm">
+                  {t('Model Versions')}
+                </ButtonLink>
+              </div>
+            </div>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <Badge tone="neutral">{t('Dataset')}: {datasetDisplayName}</Badge>
+                <Badge tone={job.dataset_version_id ? 'info' : 'warning'}>
+                  {t('Version snapshot')}: {versionSnapshotLabel}
+                </Badge>
+                <Badge tone={job.execution_target === 'worker' ? 'info' : 'warning'}>
+                  {t('Execution target')}: {executionTargetLabel}
+                </Badge>
+                <Badge tone="neutral">{t('Last updated')}: {latestUpdateLabel}</Badge>
+                <Badge tone={artifactAttachmentId ? 'success' : 'neutral'}>
+                  {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('pending')}
+                </Badge>
+              </div>
+            </div>
+          </Card>
+        }
+        main={
+          <div className="workspace-main-stack">
+            <Card as="section" className="stack">
+              <WorkspaceSectionHeader
+                title={t('Run Summary')}
+                description={t('Dataset, launch state, scheduler trace, and handoff readiness for this run.')}
+              />
               <div className="row gap wrap">
                 <StatusTag status={job.status}>{t(job.status)}</StatusTag>
                 <Badge tone="neutral">{t('Dataset')}: {datasetDisplayName}</Badge>
@@ -798,12 +919,10 @@ export default function TrainingJobDetailPage() {
             </Card>
 
             <Card as="section" className="stack">
-              <div className="stack tight">
-                <h3>{t('Metrics')}</h3>
-                <small className="muted">
-                  {t('Use JSON for structured integrations and CSV for spreadsheet analysis.')}
-                </small>
-              </div>
+              <WorkspaceSectionHeader
+                title={t('Metrics')}
+                description={t('Use JSON for structured integrations and CSV for spreadsheet analysis.')}
+              />
               {metrics.length === 0 ? (
                 <StateBlock
                   variant="empty"
@@ -890,12 +1009,10 @@ export default function TrainingJobDetailPage() {
             ) : null}
 
             <Card as="section" className="stack">
-              <div className="stack tight">
-                <h3>{t('Training Logs')}</h3>
-                <small className="muted">
-                  {t('Latest execution logs are shown here with optional backfill for earlier lines.')}
-                </small>
-              </div>
+              <WorkspaceSectionHeader
+                title={t('Training Logs')}
+                description={t('Latest execution logs are shown here with optional backfill for earlier lines.')}
+              />
               {logs.length === 0 ? (
                 <StateBlock
                   variant="empty"
@@ -920,149 +1037,170 @@ export default function TrainingJobDetailPage() {
                 </div>
               )}
             </Card>
-          </>
+          </div>
         }
         side={
-          <>
-            <Card as="section">
-              <div className="stack tight">
-                <h3>{t('Run actions')}</h3>
+          <div className="workspace-inspector-rail">
+            <Card as="section" className="workspace-inspector-card">
+              <WorkspaceSectionHeader
+                title={t('Run Inspector')}
+                description={t('Selected run identity, scope, and current execution state.')}
+              />
+              <Panel as="section" className="stack tight" tone="soft">
+                <div className="row between gap wrap align-center">
+                  <strong>{job.name}</strong>
+                  <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+                </div>
+                <div className="row gap wrap">
+                  <Badge tone="neutral">{t(job.task_type)}</Badge>
+                  <Badge tone="neutral">{t(job.framework)}</Badge>
+                  <Badge tone="info">{describeSelectedWorker(job.execution_target, job.scheduled_worker_id)}</Badge>
+                  <Badge tone={executionInsight.reality === 'real' ? 'success' : 'warning'}>
+                    {t('Result authenticity')}: {executionRealityLabel}
+                  </Badge>
+                </div>
                 <small className="muted">
-                  {t('Primary controls for this run are grouped here to keep the detail surface quiet.')}
+                  {t('Execution mode')}: {t(job.execution_mode)} · {t('Last updated')}: {latestUpdateLabel}
                 </small>
+              </Panel>
+              <div className="workspace-keyline-list">
+                <div className="workspace-keyline-item">
+                  <span>{t('Dataset')}</span>
+                  <small>{datasetDisplayName}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Version snapshot')}</span>
+                  <strong>{versionSnapshotLabel}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Base model')}</span>
+                  <small>{job.base_model}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Execution target')}</span>
+                  <small>{executionTargetLabel}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Artifact')}</span>
+                  <strong>{artifactAttachmentId ? t('Ready') : t('pending')}</strong>
+                </div>
               </div>
-              <div className="workspace-button-stack">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={refreshDetail}
-                  disabled={loading || refreshing || busy}
-                >
-                  {refreshing ? t('Refreshing...') : t('Refresh')}
-                </Button>
-                <Button onClick={cancelJob} variant="danger" disabled={busy || !canCancel}>
-                  {t('Cancel')}
-                </Button>
-                <Button onClick={retryJob} variant="secondary" disabled={busy || !canRetry}>
-                  {t('Retry')}
-                </Button>
-              </div>
+              <small className="muted">
+                {linkedDataset
+                  ? t('Dataset scope stays pinned so downstream validation and version lookup remain reproducible.')
+                  : t('Dataset record is unavailable, but run scope remains preserved from persisted job metadata.')}
+              </small>
             </Card>
 
-            <Card as="section">
-              <div className="stack tight">
-                <h3>{t('Exports')}</h3>
-                <small className="muted">
-                  {t('Download timeline metrics or continue to adjacent training surfaces.')}
-                </small>
-              </div>
-              <div className="workspace-button-stack">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={downloadMetricsJson}
-                  disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
-                  title={t('Export all metrics timeline in JSON format.')}
-                >
-                  {exportingMetrics ? t('Exporting...') : t('Download Metrics JSON')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={downloadMetricsCsv}
-                  disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
-                  title={t('Export all metrics timeline in CSV format.')}
-                >
-                  {exportingMetricsCsv ? t('Exporting...') : t('Download Metrics CSV')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={downloadArtifact}
-                  disabled={!artifactAttachmentId}
-                  title={t('Download artifact attachment generated by this run.')}
-                >
-                  {t('Download Artifact')}
-                </Button>
-                <ButtonLink to={scopedJobsPath} variant="secondary">
-                  {t('Back to jobs list')}
-                </ButtonLink>
-                <ButtonLink to={scopedInferencePath} variant="secondary">
-                  {t('Open scoped inference')}
-                </ButtonLink>
-                <ButtonLink to="/models/versions" variant="secondary">
-                  {t('Open model versions')}
-                </ButtonLink>
-              </div>
+            <Card as="section" className="workspace-inspector-card">
+              <WorkspaceSectionHeader
+                title={t('Scheduler Snapshot')}
+                description={t('Compact worker-routing context for quick operational triage.')}
+              />
+              {job.scheduler_decision ? (
+                <>
+                  <Panel as="section" className="stack tight" tone="soft">
+                    <div className="row between gap wrap align-center">
+                      <strong>{t(job.scheduler_decision.trigger)}</strong>
+                      <Badge tone={job.scheduler_decision.execution_target === 'worker' ? 'info' : 'warning'}>
+                        {t(job.scheduler_decision.execution_target)}
+                      </Badge>
+                    </div>
+                    <small className="muted">
+                      {formatCompactTimestamp(job.scheduler_decision.decided_at, t('n/a'))}
+                    </small>
+                    <small className="muted">{job.scheduler_decision.note}</small>
+                  </Panel>
+                  <div className="workspace-keyline-list">
+                    <div className="workspace-keyline-item">
+                      <span>{t('Attempt')}</span>
+                      <strong>{job.scheduler_decision.attempt}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Selected worker')}</span>
+                      <small>
+                        {describeSelectedWorker(
+                          job.scheduler_decision.execution_target,
+                          job.scheduler_decision.selected_worker_id
+                        )}
+                      </small>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Score')}</span>
+                      <small>{job.scheduler_decision.selected_worker_score?.toFixed(4) ?? t('n/a')}</small>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Excluded')}</span>
+                      <small>{job.scheduler_decision.excluded_worker_ids.length}</small>
+                    </div>
+                  </div>
+                  {job.scheduler_decision.fallback_reason ? (
+                    <small className="muted">
+                      {t('Fallback reason')}: {job.scheduler_decision.fallback_reason}
+                    </small>
+                  ) : null}
+                </>
+              ) : (
+                <StateBlock
+                  variant="empty"
+                  title={t('No scheduler snapshot')}
+                  description={t('Scheduler context will appear after the job enters a dispatchable state.')}
+                />
+              )}
             </Card>
 
-            <Card as="section">
-              <div className="stack tight">
-                <h3>{t('Execution summary')}</h3>
-                <small className="muted">
-                  {t('Compact view of launch, runtime, and artifact status for quick triage.')}
-                </small>
+            <Card as="section" className="workspace-inspector-card">
+              <WorkspaceSectionHeader
+                title={t('Outputs')}
+                description={t('Artifact and runner metadata without leaving the detail lane.')}
+              />
+              <div className="workspace-keyline-list">
+                <div className="workspace-keyline-item">
+                  <span>{t('Metrics points')}</span>
+                  <strong>{metrics.length}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Log lines')}</span>
+                  <strong>{logs.length}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Artifact')}</span>
+                  <small>{artifactAttachmentId ? t('Attached') : t('Pending')}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Workspace')}</span>
+                  <small>{workspaceDir ?? '—'}</small>
+                </div>
               </div>
-              <ul className="workspace-record-list compact">
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Dataset')}</strong>
-                    <Badge tone="info">{datasetDisplayName}</Badge>
+              {artifactSummary ? (
+                <Panel as="section" className="stack tight" tone="soft">
+                  <div className="row gap wrap">
+                    <Badge tone="neutral">{t('Runner mode')}: {artifactSummary.mode || t('pending')}</Badge>
+                    <Badge tone="neutral">{t('Runner')}: {artifactSummary.runner || t('pending')}</Badge>
+                    {artifactSummary.sampled_items !== null ? (
+                      <Badge tone="info">{t('Sampled items')}: {artifactSummary.sampled_items}</Badge>
+                    ) : null}
                   </div>
-                  <small className="muted">
-                    {t('Task')}: {t(job.task_type)} · {t('Version snapshot')}: {versionSnapshotLabel}
-                  </small>
-                  {linkedDataset ? (
-                    <div className="workspace-button-stack">
-                      <ButtonLink to={scopedDatasetDetailPath} variant="ghost" size="sm">
-                        {t('Open dataset')}
-                      </ButtonLink>
-                      <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
-                        {t('Validate inference')}
-                      </ButtonLink>
+                  {artifactSummary.metrics_keys.length > 0 ? (
+                    <div className="row gap wrap">
+                      {artifactSummary.metrics_keys.map((metricKey) => (
+                        <Badge key={metricKey} tone="neutral">
+                          {metricKey}
+                        </Badge>
+                      ))}
                     </div>
                   ) : null}
-                </Panel>
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Framework')}</strong>
-                    <Badge tone="neutral">{t(job.framework)}</Badge>
-                  </div>
-                  <small className="muted">{t('Base model')}: {job.base_model}</small>
-                  <small className="muted">{t('Execution target')}: {executionTargetLabel}</small>
-                </Panel>
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Status')}</strong>
-                    <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-                  </div>
-                  <small className="muted">
-                    {t('Execution mode')}: {t(job.execution_mode)} · {t('Last updated')}: {latestUpdateLabel}
-                  </small>
-                </Panel>
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Artifact')}</strong>
-                    <StatusTag status={artifactAttachmentId ? 'ready' : 'draft'}>
-                      {artifactAttachmentId ? t('Ready') : t('pending')}
-                    </StatusTag>
-                  </div>
-                  <small className="muted">
-                    {artifactAttachmentId
-                      ? t('Artifact linked and ready for downstream use.')
-                      : t('Artifact not generated yet.')}
-                  </small>
-                  {artifactAttachmentId ? (
-                    <div className="workspace-button-stack">
-                      <ButtonLink to="/models/versions" variant="ghost" size="sm">
-                        {t('Open model versions')}
-                      </ButtonLink>
-                    </div>
+                  {artifactSummary.fallback_reason ? (
+                    <small className="muted">
+                      {t('Fallback reason')}: {artifactSummary.fallback_reason}
+                    </small>
                   ) : null}
                 </Panel>
-              </ul>
+              ) : (
+                <small className="muted">{t('Artifact summary will appear after runner output is captured.')}</small>
+              )}
             </Card>
-          </>
+          </div>
         }
       />
     </WorkspacePage>

@@ -126,6 +126,8 @@ Vistral must provide one closed-loop platform where engineers can:
 - detection metrics: mAP/precision/recall
 - store error sample analysis
 - register model version with training linkage
+- register model version must reject jobs with `execution_mode=simulated|unknown`
+- register model version must reject local-command jobs with template/fallback artifact evidence (`mode=template`, explicit `fallback_reason`, or `training_performed=false`) unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
 - compare model versions
 - administrators can remove non-foundation model records from the catalog when those models have no dependent model versions or conversations
 - curated foundation/base models remain protected from deletion so the training entry catalog always keeps the intended baseline choices

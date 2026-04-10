@@ -11,6 +11,10 @@ run_step() {
 }
 
 run_step "smoke:no-seed-hardcoding"
+run_step "smoke:foundation-reset"
+run_step "smoke:adapter-no-placeholder"
+run_step "smoke:training-template-guard"
+run_step "smoke:model-version-register-gate"
 run_step "smoke:account-governance"
 run_step "smoke:phase2"
 run_step "smoke:conversation-actions"

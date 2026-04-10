@@ -3,7 +3,9 @@ import type {
   CreateTrainingWorkerInput,
   ModelFramework,
   RuntimeConnectivityRecord,
+  RuntimeFrameworkConfigView,
   RuntimeMetricsRetentionSummary,
+  RuntimeSettingsView,
   TrainingArtifactSummary,
   TrainingJobRecord,
   TrainingWorkerBootstrapSessionRecord,
@@ -25,7 +27,7 @@ import {
   WorkspaceHero,
   WorkspaceMetricGrid,
   WorkspacePage,
-  WorkspaceSplit
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -63,6 +65,17 @@ type WorkerRegistryDraft = {
   metadata_text: string;
 };
 
+type RuntimeFrameworkDraft = {
+  endpoint: string;
+  api_key: string;
+  local_train_command: string;
+  local_predict_command: string;
+  has_api_key: boolean;
+  api_key_masked: string;
+};
+
+type RuntimeFrameworkDraftMap = Record<ModelFramework, RuntimeFrameworkDraft>;
+
 const endpointEnvByFramework: Record<ModelFramework, { endpoint: string; apiKey: string }> = {
   paddleocr: {
     endpoint: 'PADDLEOCR_RUNTIME_ENDPOINT',
@@ -77,6 +90,32 @@ const endpointEnvByFramework: Record<ModelFramework, { endpoint: string; apiKey:
     apiKey: 'YOLO_RUNTIME_API_KEY'
   }
 };
+
+const buildDefaultRuntimeFrameworkDraft = (): RuntimeFrameworkDraft => ({
+  endpoint: '',
+  api_key: '',
+  local_train_command: '',
+  local_predict_command: '',
+  has_api_key: false,
+  api_key_masked: ''
+});
+
+const buildDefaultRuntimeFrameworkDraftMap = (): RuntimeFrameworkDraftMap => ({
+  paddleocr: buildDefaultRuntimeFrameworkDraft(),
+  doctr: buildDefaultRuntimeFrameworkDraft(),
+  yolo: buildDefaultRuntimeFrameworkDraft()
+});
+
+const mergeRuntimeFrameworkDraft = (
+  view: RuntimeFrameworkConfigView
+): RuntimeFrameworkDraft => ({
+  endpoint: view.endpoint,
+  api_key: '',
+  local_train_command: view.local_train_command,
+  local_predict_command: view.local_predict_command,
+  has_api_key: view.has_api_key,
+  api_key_masked: view.api_key_masked
+});
 
 const sampleInputByFramework: Record<ModelFramework, Record<string, unknown>> = {
   paddleocr: {
@@ -109,26 +148,26 @@ const sampleOutputByFramework: Record<ModelFramework, Record<string, unknown>> =
   paddleocr: {
     image: { filename: 'invoice-sample.jpg', width: 1280, height: 720 },
     lines: [
-      { text: 'Invoice No. 2026-0402', confidence: 0.95 },
-      { text: 'Total: 458.30', confidence: 0.92 }
+      { text: 'TEMPLATE_OCR_LINE_1', confidence: 0.95 },
+      { text: 'TEMPLATE_OCR_LINE_2', confidence: 0.92 }
     ],
     words: [
-      { text: 'Invoice', confidence: 0.96 },
-      { text: 'Total', confidence: 0.93 }
+      { text: 'TEMPLATE', confidence: 0.96 },
+      { text: 'OCR', confidence: 0.93 }
     ]
   },
   doctr: {
     image: { filename: 'invoice-sample.jpg', width: 1280, height: 720 },
     ocr: {
-      lines: [{ text: 'docTR line output', confidence: 0.94 }],
-      words: [{ text: 'docTR', confidence: 0.91 }]
+      lines: [{ text: 'TEMPLATE_OCR_LINE_1', confidence: 0.94 }],
+      words: [{ text: 'TEMPLATE', confidence: 0.91 }]
     }
   },
   yolo: {
     image: { filename: 'defect-sample.jpg', width: 1280, height: 720 },
     boxes: [
-      { x: 180, y: 210, width: 170, height: 110, label: 'defect', score: 0.91 },
-      { x: 540, y: 360, width: 200, height: 120, label: 'scratch', score: 0.87 }
+      { x: 180, y: 210, width: 170, height: 110, label: 'TEMPLATE_DETECTION_OBJECT', score: 0.91 },
+      { x: 540, y: 360, width: 200, height: 120, label: 'TEMPLATE_DETECTION_OBJECT', score: 0.87 }
     ]
   }
 };
@@ -313,12 +352,50 @@ const workerBootstrapStatusTone = (
   return 'draft';
 };
 
+const resolveSessionCompatibility = (
+  session: TrainingWorkerBootstrapSessionRecord
+): NonNullable<TrainingWorkerBootstrapSessionRecord['compatibility']> =>
+  session.compatibility ?? {
+    status: 'unknown',
+    message: 'Compatibility check has not run yet.',
+    expected_runtime_profile: session.worker_runtime_profile,
+    reported_runtime_profile: null,
+    reported_worker_version: null,
+    reported_contract_version: null,
+    missing_capabilities: []
+  };
+
+const workerCompatibilityBadgeTone = (
+  status: NonNullable<TrainingWorkerBootstrapSessionRecord['compatibility']>['status']
+): 'success' | 'warning' | 'danger' | 'neutral' => {
+  if (status === 'compatible') {
+    return 'success';
+  }
+  if (status === 'warning') {
+    return 'warning';
+  }
+  if (status === 'incompatible') {
+    return 'danger';
+  }
+  return 'neutral';
+};
+
 export default function RuntimeSettingsPage() {
   const { t } = useI18n();
   const [checks, setChecks] = useState<RuntimeConnectivityRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
+  const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
+  const [runtimeSettingsSaving, setRuntimeSettingsSaving] = useState(false);
+  const [runtimeSettingsClearing, setRuntimeSettingsClearing] = useState(false);
+  const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
+  const [runtimeSettingsMessage, setRuntimeSettingsMessage] = useState('');
+  const [runtimeSettingsUpdatedAt, setRuntimeSettingsUpdatedAt] = useState<string | null>(null);
+  const [keepExistingApiKeys, setKeepExistingApiKeys] = useState(true);
+  const [runtimeDrafts, setRuntimeDrafts] = useState<RuntimeFrameworkDraftMap>(() =>
+    buildDefaultRuntimeFrameworkDraftMap()
+  );
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [workersLoading, setWorkersLoading] = useState(true);
   const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
@@ -341,6 +418,8 @@ export default function RuntimeSettingsPage() {
   const [creatingBootstrapSession, setCreatingBootstrapSession] = useState(false);
   const [downloadingBootstrapSessionId, setDownloadingBootstrapSessionId] = useState<string | null>(null);
   const [validatingBootstrapSessionId, setValidatingBootstrapSessionId] = useState<string | null>(null);
+  const [activatingBootstrapWorkerId, setActivatingBootstrapWorkerId] = useState<string | null>(null);
+  const [reconfiguringWorkerId, setReconfiguringWorkerId] = useState<string | null>(null);
   const [workerOnboardingDraft, setWorkerOnboardingDraft] = useState<WorkerOnboardingDraft>(
     () => buildDefaultWorkerOnboardingDraft()
   );
@@ -390,6 +469,100 @@ export default function RuntimeSettingsPage() {
     }
 
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const applyRuntimeSettingsView = (view: RuntimeSettingsView) => {
+    setRuntimeSettingsUpdatedAt(view.updated_at);
+    setRuntimeDrafts({
+      paddleocr: mergeRuntimeFrameworkDraft(view.frameworks.paddleocr),
+      doctr: mergeRuntimeFrameworkDraft(view.frameworks.doctr),
+      yolo: mergeRuntimeFrameworkDraft(view.frameworks.yolo)
+    });
+  };
+
+  const refreshRuntimeSettings = async () => {
+    setRuntimeSettingsError('');
+    try {
+      const view = await api.getRuntimeSettings();
+      applyRuntimeSettingsView(view);
+    } catch (runtimeConfigError) {
+      setRuntimeSettingsError((runtimeConfigError as Error).message);
+    } finally {
+      setRuntimeSettingsLoading(false);
+    }
+  };
+
+  const updateRuntimeDraft = (
+    framework: ModelFramework,
+    field: 'endpoint' | 'api_key' | 'local_train_command' | 'local_predict_command',
+    value: string
+  ) => {
+    setRuntimeDrafts((prev) => ({
+      ...prev,
+      [framework]: {
+        ...prev[framework],
+        [field]: value
+      }
+    }));
+  };
+
+  const saveRuntimeSettingsConfig = async () => {
+    setRuntimeSettingsSaving(true);
+    setRuntimeSettingsError('');
+    setRuntimeSettingsMessage('');
+    try {
+      const nextConfig = {
+        paddleocr: {
+          endpoint: runtimeDrafts.paddleocr.endpoint.trim(),
+          api_key: runtimeDrafts.paddleocr.api_key.trim(),
+          local_train_command: runtimeDrafts.paddleocr.local_train_command.trim(),
+          local_predict_command: runtimeDrafts.paddleocr.local_predict_command.trim()
+        },
+        doctr: {
+          endpoint: runtimeDrafts.doctr.endpoint.trim(),
+          api_key: runtimeDrafts.doctr.api_key.trim(),
+          local_train_command: runtimeDrafts.doctr.local_train_command.trim(),
+          local_predict_command: runtimeDrafts.doctr.local_predict_command.trim()
+        },
+        yolo: {
+          endpoint: runtimeDrafts.yolo.endpoint.trim(),
+          api_key: runtimeDrafts.yolo.api_key.trim(),
+          local_train_command: runtimeDrafts.yolo.local_train_command.trim(),
+          local_predict_command: runtimeDrafts.yolo.local_predict_command.trim()
+        }
+      };
+      const saved = await api.saveRuntimeSettings(nextConfig, keepExistingApiKeys);
+      applyRuntimeSettingsView(saved);
+      setRuntimeSettingsMessage(t('Runtime settings saved.'));
+      void refresh();
+    } catch (runtimeConfigError) {
+      setRuntimeSettingsError((runtimeConfigError as Error).message);
+    } finally {
+      setRuntimeSettingsSaving(false);
+    }
+  };
+
+  const clearRuntimeSettingsConfig = async () => {
+    const confirmed = window.confirm(
+      t('Clear UI-saved runtime settings and switch back to environment-variable fallback mode?')
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setRuntimeSettingsClearing(true);
+    setRuntimeSettingsError('');
+    setRuntimeSettingsMessage('');
+    try {
+      const cleared = await api.clearRuntimeSettings();
+      applyRuntimeSettingsView(cleared);
+      setRuntimeSettingsMessage(t('Runtime settings cleared. Environment defaults now apply.'));
+      void refresh();
+    } catch (runtimeConfigError) {
+      setRuntimeSettingsError((runtimeConfigError as Error).message);
+    } finally {
+      setRuntimeSettingsClearing(false);
+    }
   };
 
   const refresh = async (framework?: ModelFramework) => {
@@ -655,6 +828,53 @@ export default function RuntimeSettingsPage() {
     }
   };
 
+  const activateBootstrapWorker = async (workerId: string) => {
+    setActivatingBootstrapWorkerId(workerId);
+    setBootstrapSessionsError('');
+    try {
+      const result = await api.activateTrainingWorker(workerId);
+      setWorkers((prev) =>
+        [...prev.map((item) => (item.id === result.worker.id ? result.worker : item))].sort(
+          (left, right) => left.name.localeCompare(right.name)
+        )
+      );
+      if (result.bootstrap_session) {
+        const updatedSession = result.bootstrap_session;
+        setBootstrapSessions((prev) =>
+          prev.map((item) =>
+            item.id === updatedSession.id ? updatedSession : item
+          )
+        );
+      }
+      setCopyMessage(t('Worker activation succeeded.'));
+      await refreshTrainingWorkers();
+      await refreshBootstrapSessions();
+    } catch (bootstrapError) {
+      setBootstrapSessionsError((bootstrapError as Error).message);
+    } finally {
+      setActivatingBootstrapWorkerId(null);
+    }
+  };
+
+  const createWorkerReconfigureSession = async (worker: TrainingWorkerNodeView) => {
+    setReconfiguringWorkerId(worker.id);
+    setBootstrapSessionsError('');
+    try {
+      const session = await api.createTrainingWorkerReconfigureSession(worker.id);
+      setBootstrapSessions((prev) => [session, ...prev.filter((item) => item.id !== session.id)]);
+      setActiveBootstrapSessionId(session.id);
+      setWorkerOnboardingOpen(true);
+      setCopyMessage(
+        t('Worker reconfiguration session created for {name}.', { name: worker.name })
+      );
+      await refreshBootstrapSessions();
+    } catch (workerError) {
+      setBootstrapSessionsError((workerError as Error).message);
+    } finally {
+      setReconfiguringWorkerId(null);
+    }
+  };
+
   const downloadBootstrapBundle = async (sessionId: string) => {
     setDownloadingBootstrapSessionId(sessionId);
     setBootstrapSessionsError('');
@@ -675,12 +895,14 @@ export default function RuntimeSettingsPage() {
     }
   };
 
+  // Run one-time bootstrap pulls for diagnostics and worker/runtime summaries.
   useEffect(() => {
     void refresh();
+    void refreshRuntimeSettings();
     void refreshExecutionSummary();
     void refreshTrainingWorkers();
     void refreshBootstrapSessions();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const checkByFramework = useMemo(
     () => new Map(checks.map((item) => [item.framework, item])),
@@ -731,6 +953,9 @@ export default function RuntimeSettingsPage() {
   );
   const activeBootstrapSetupUrl = activeBootstrapSession?.setup_url_hint ?? null;
   const activeBootstrapEndpointHint = activeBootstrapSession?.worker_endpoint_hint ?? null;
+  const activeBootstrapCompatibility = activeBootstrapSession
+    ? resolveSessionCompatibility(activeBootstrapSession)
+    : null;
   const activeBootstrapSetupUrlReady = isConcreteWorkerUrl(activeBootstrapSession?.setup_url_hint);
   const activeBootstrapEndpointReady = isConcreteWorkerUrl(activeBootstrapSession?.worker_endpoint_hint);
   const formatPercent = (value: number | null | undefined) => {
@@ -754,9 +979,6 @@ export default function RuntimeSettingsPage() {
           <StatusTag status={checking ? 'running' : 'ready'}>
             {checking ? t('Checking...') : t('Ready')}
           </StatusTag>
-          <Button type="button" variant="secondary" onClick={() => setWorkerOnboardingOpen(true)}>
-            {t('Add Worker')}
-          </Button>
         </div>
       }
       stats={[
@@ -831,9 +1053,240 @@ export default function RuntimeSettingsPage() {
         ]}
       />
 
-      <WorkspaceSplit
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Runtime Controls')}</h3>
+                <small className="muted">
+                  {t('Keep framework filtering, connectivity refresh, and worker follow-up in one stable strip.')}
+                </small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <Button type="button" size="sm" onClick={() => setWorkerOnboardingOpen(true)}>
+                  {t('Add Worker')}
+                </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={() => void refresh()} disabled={checking}>
+                  {checking && frameworkFilter === 'all' ? t('Checking...') : t('Refresh All')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void refresh(frameworkFilter === 'all' ? undefined : frameworkFilter)}
+                  disabled={checking || frameworkFilter === 'all'}
+                >
+                  {checking && frameworkFilter !== 'all' ? t('Checking...') : t('Check Selected')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void refreshExecutionSummary()}
+                  disabled={summaryLoading}
+                >
+                  {summaryLoading ? t('Refreshing...') : t('Refresh Summary')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void refreshTrainingWorkers()}
+                  disabled={workersLoading}
+                >
+                  {workersLoading ? t('Refreshing workers...') : t('Refresh Workers')}
+                </Button>
+              </div>
+            </div>
+            <div className="workspace-filter-grid">
+              <label className="stack tight">
+                <small className="muted">{t('Framework')}</small>
+                <Select
+                  value={frameworkFilter}
+                  onChange={(event) => setFrameworkFilter(event.target.value as 'all' | ModelFramework)}
+                >
+                  <option value="all">{t('all')}</option>
+                  <option value="paddleocr">{t('paddleocr')}</option>
+                  <option value="doctr">{t('doctr')}</option>
+                  <option value="yolo">{t('yolo')}</option>
+                </Select>
+              </label>
+              <label className="stack tight">
+                <small className="muted">{t('Template framework')}</small>
+                <Select
+                  value={templateFramework}
+                  onChange={(event) => setTemplateFramework(event.target.value as ModelFramework)}
+                >
+                  <option value="paddleocr">{t('paddleocr')}</option>
+                  <option value="doctr">{t('doctr')}</option>
+                  <option value="yolo">{t('yolo')}</option>
+                </Select>
+              </label>
+              <div className="stack tight">
+                <small className="muted">{t('Configured')}</small>
+                <div className="row gap wrap">
+                  <Badge tone="neutral">
+                    {configuredCount} / {FRAMEWORKS.length}
+                  </Badge>
+                </div>
+              </div>
+              <div className="stack tight">
+                <small className="muted">{t('Pairing')}</small>
+                <div className="row gap wrap">
+                  <Badge tone="info">{t('Pending')}: {pendingBootstrapCount}</Badge>
+                </div>
+              </div>
+            </div>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <Badge tone="neutral">{t('Reachable frameworks')}: {reachableCount}</Badge>
+                <Badge tone={unreachableCount > 0 ? 'warning' : 'neutral'}>
+                  {t('Unreachable frameworks')}: {unreachableCount}
+                </Badge>
+                <Badge tone="neutral">{t('Not Configured')}: {notConfiguredCount}</Badge>
+                <Badge tone="info">{t('Online workers')}: {workersLoading ? t('...') : onlineWorkerCount}</Badge>
+              </div>
+            </div>
+          </Card>
+        }
         main={
-          <div>
+          <div className="workspace-main-stack">
+          <Card as="article">
+            <div className="workspace-section-header">
+              <div className="stack tight">
+                <h3>{t('Runtime configuration')}</h3>
+                <small className="muted">
+                  {t('Configure runtime endpoint, API key, and local command templates directly from UI.')}
+                </small>
+              </div>
+              <div className="row gap wrap align-center">
+                <Badge tone="neutral">
+                  {t('Last updated')}: {formatTimestamp(runtimeSettingsUpdatedAt)}
+                </Badge>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void saveRuntimeSettingsConfig()}
+                  disabled={runtimeSettingsLoading || runtimeSettingsSaving || runtimeSettingsClearing}
+                >
+                  {runtimeSettingsSaving ? t('Saving...') : t('Save runtime settings')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void refreshRuntimeSettings()}
+                  disabled={runtimeSettingsLoading || runtimeSettingsSaving || runtimeSettingsClearing}
+                >
+                  {runtimeSettingsLoading ? t('Loading...') : t('Reload settings')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void clearRuntimeSettingsConfig()}
+                  disabled={runtimeSettingsLoading || runtimeSettingsSaving || runtimeSettingsClearing}
+                >
+                  {runtimeSettingsClearing ? t('Clearing...') : t('Clear UI settings')}
+                </Button>
+              </div>
+            </div>
+
+            {runtimeSettingsError ? (
+              <StateBlock variant="error" title={t('Runtime settings unavailable')} description={runtimeSettingsError} />
+            ) : null}
+            {runtimeSettingsMessage ? (
+              <StateBlock variant="success" title={t('Runtime settings')} description={runtimeSettingsMessage} />
+            ) : null}
+
+            <label className="row gap wrap align-center">
+              <input
+                type="checkbox"
+                className="ui-checkbox"
+                checked={keepExistingApiKeys}
+                onChange={(event) => setKeepExistingApiKeys(event.target.checked)}
+              />
+              <span>{t('Keep existing API keys when key field is left blank')}</span>
+            </label>
+
+            {runtimeSettingsLoading ? (
+              <StateBlock
+                variant="loading"
+                title={t('Loading runtime settings')}
+                description={t('Fetching saved runtime configuration from backend.')}
+              />
+            ) : (
+              <div className="three-col">
+                {FRAMEWORKS.map((framework) => {
+                  const draft = runtimeDrafts[framework];
+                  return (
+                    <Panel key={framework} as="section" className="workspace-record-item" tone="soft">
+                      <div className="row between gap wrap align-center">
+                        <strong>{t(framework)}</strong>
+                        {draft.has_api_key ? (
+                          <Badge tone="success">{t('API key saved')}</Badge>
+                        ) : (
+                          <Badge tone="neutral">{t('No API key')}</Badge>
+                        )}
+                      </div>
+
+                      <label className="stack tight">
+                        <small className="muted">{t('Runtime endpoint')}</small>
+                        <Input
+                          value={draft.endpoint}
+                          onChange={(event) => updateRuntimeDraft(framework, 'endpoint', event.target.value)}
+                          placeholder={`http://127.0.0.1:9393/predict`}
+                        />
+                      </label>
+
+                      <label className="stack tight">
+                        <small className="muted">{t('Runtime API key (optional)')}</small>
+                        <Input
+                          type="password"
+                          value={draft.api_key}
+                          onChange={(event) => updateRuntimeDraft(framework, 'api_key', event.target.value)}
+                          placeholder={
+                            draft.api_key_masked
+                              ? t('Stored key: {masked}', {
+                                  masked: draft.api_key_masked
+                                })
+                              : t('Leave blank if runtime endpoint has no key')
+                          }
+                        />
+                      </label>
+
+                      <label className="stack tight">
+                        <small className="muted">{t('Local train command')}</small>
+                        <Textarea
+                          value={draft.local_train_command}
+                          onChange={(event) =>
+                            updateRuntimeDraft(framework, 'local_train_command', event.target.value)
+                          }
+                          rows={4}
+                          placeholder={t('Optional. Leave empty to use bundled local runner template.')}
+                        />
+                      </label>
+
+                      <label className="stack tight">
+                        <small className="muted">{t('Local predict command')}</small>
+                        <Textarea
+                          value={draft.local_predict_command}
+                          onChange={(event) =>
+                            updateRuntimeDraft(framework, 'local_predict_command', event.target.value)
+                          }
+                          rows={4}
+                          placeholder={t('Optional. Leave empty to use bundled local runner template.')}
+                        />
+                      </label>
+                    </Panel>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+
           <Card as="article">
             <div className="workspace-section-header">
               <div className="stack tight">
@@ -989,63 +1442,32 @@ export default function RuntimeSettingsPage() {
           </div>
         }
         side={
-          <div>
-          <Card as="article">
+          <div className="workspace-inspector-rail">
+          <Card as="article" className="workspace-inspector-card">
             <div className="workspace-section-header">
               <div className="stack tight">
-                <h3>{t('Quick Actions')}</h3>
+                <h3>{t('Runtime Summary')}</h3>
                 <small className="muted">
-                  {t('Filter the diagnostics surface and rerun selected checks without leaving the page.')}
+                  {t('Keep current framework scope, connectivity mix, and worker readiness visible at a glance.')}
                 </small>
               </div>
               <Badge tone="neutral">{frameworkFilter === 'all' ? t('all') : t(frameworkFilter)}</Badge>
             </div>
-
-            <label>
-              {t('Framework')}
-              <Select
-                value={frameworkFilter}
-                onChange={(event) => setFrameworkFilter(event.target.value as 'all' | ModelFramework)}
-              >
-                <option value="all">{t('all')}</option>
-                <option value="paddleocr">{t('paddleocr')}</option>
-                <option value="doctr">{t('doctr')}</option>
-                <option value="yolo">{t('yolo')}</option>
-              </Select>
-            </label>
-
-            <div className="workspace-button-stack">
-              <Button type="button" onClick={() => void refresh()} disabled={checking}>
-                {checking && frameworkFilter === 'all' ? t('Checking...') : t('Refresh All')}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => void refresh(frameworkFilter === 'all' ? undefined : frameworkFilter)}
-                disabled={checking || frameworkFilter === 'all'}
-              >
-                {checking && frameworkFilter !== 'all' ? t('Checking...') : t('Check Selected')}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => void refreshExecutionSummary()}
-                disabled={summaryLoading}
-              >
-                {summaryLoading ? t('Refreshing...') : t('Refresh Summary')}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => void refreshTrainingWorkers()}
-                disabled={workersLoading}
-              >
-                {workersLoading ? t('Refreshing workers...') : t('Refresh Workers')}
-              </Button>
+            <div className="row gap wrap">
+              <Badge tone="neutral">{t('Reachable frameworks')}: {reachableCount}</Badge>
+              <Badge tone={unreachableCount > 0 ? 'warning' : 'neutral'}>
+                {t('Unreachable frameworks')}: {unreachableCount}
+              </Badge>
+              <Badge tone="info">{t('Online workers')}: {workersLoading ? t('...') : onlineWorkerCount}</Badge>
+              <Badge tone="neutral">{t('Pending pairing')}: {bootstrapSessionsLoading ? t('...') : pendingBootstrapCount}</Badge>
             </div>
+            <small className="muted">
+              {t('Framework filter')}: {frameworkFilter === 'all' ? t('all') : t(frameworkFilter)} · {t('Configured')}:{' '}
+              {configuredCount} / {FRAMEWORKS.length}
+            </small>
           </Card>
 
-          <Card as="article">
+          <Card as="article" className="workspace-inspector-card">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Worker setup')}</h3>
@@ -1102,8 +1524,10 @@ export default function RuntimeSettingsPage() {
               />
             ) : (
               <ul className="workspace-record-list compact">
-                {bootstrapSessions.slice(0, 5).map((session) => (
-                  <Panel key={session.id} as="li" className="workspace-record-item compact" tone="soft">
+                {bootstrapSessions.slice(0, 5).map((session) => {
+                  const compatibility = resolveSessionCompatibility(session);
+                  return (
+                    <Panel key={session.id} as="li" className="workspace-record-item compact" tone="soft">
                     <div className="row between gap wrap align-center">
                       <strong>{session.worker_name}</strong>
                       <StatusTag status={workerBootstrapStatusTone(session.status)}>
@@ -1114,6 +1538,9 @@ export default function RuntimeSettingsPage() {
                       <Badge tone="neutral">{t(session.worker_profile)}</Badge>
                       <Badge tone="neutral">{t(session.deployment_mode)}</Badge>
                       <Badge tone="info">{t('token')}: {session.token_preview}</Badge>
+                      <Badge tone={workerCompatibilityBadgeTone(compatibility.status)}>
+                        {t('Compatibility')}: {t(compatibility.status)}
+                      </Badge>
                       {session.linked_worker_id ? <Badge tone="success">{t('linked worker')}</Badge> : null}
                     </div>
                     <small className="muted">
@@ -1131,6 +1558,20 @@ export default function RuntimeSettingsPage() {
                     <small className="muted">
                       {t('expires')}: {formatTimestamp(session.expires_at)}
                     </small>
+                    <small className="muted">
+                      {t('expected profile')}: {compatibility.expected_runtime_profile ?? t('n/a')} · {t('reported profile')}:{' '}
+                      {compatibility.reported_runtime_profile ?? t('n/a')}
+                    </small>
+                    <small className="muted">
+                      {t('worker version')}: {compatibility.reported_worker_version ?? t('n/a')} · {t('contract version')}:{' '}
+                      {compatibility.reported_contract_version ?? t('n/a')}
+                    </small>
+                    {compatibility.missing_capabilities.length > 0 ? (
+                      <small className="muted">
+                        {t('missing capabilities')}: {compatibility.missing_capabilities.join(', ')}
+                      </small>
+                    ) : null}
+                    <small className="muted">{compatibility.message}</small>
                     {session.callback_validation_message ? (
                       <small className="muted">{session.callback_validation_message}</small>
                     ) : null}
@@ -1190,13 +1631,14 @@ export default function RuntimeSettingsPage() {
                         {validatingBootstrapSessionId === session.id ? t('Validating...') : t('Retry callback')}
                       </Button>
                     </div>
-                  </Panel>
-                ))}
+                    </Panel>
+                  );
+                })}
               </ul>
             )}
           </Card>
 
-          <Card as="article">
+          <Card as="article" className="workspace-inspector-card">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Worker availability')}</h3>
@@ -1285,6 +1727,15 @@ export default function RuntimeSettingsPage() {
                         type="button"
                         variant="ghost"
                         size="sm"
+                        disabled={reconfiguringWorkerId === worker.id}
+                        onClick={() => void createWorkerReconfigureSession(worker)}
+                      >
+                        {reconfiguringWorkerId === worker.id ? t('Creating...') : t('Reconfigure')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
                         disabled={workerMutationTargetId === worker.id}
                         onClick={() =>
                           void patchWorker(
@@ -1337,7 +1788,7 @@ export default function RuntimeSettingsPage() {
             )}
           </Card>
 
-          <Card as="article">
+          <Card as="article" className="workspace-inspector-card">
             <div className="workspace-section-header">
               <div className="stack tight">
                 <h3>{t('Recent activity')}</h3>
@@ -1703,6 +2154,11 @@ export default function RuntimeSettingsPage() {
                   <Badge tone="warning">
                     {t('issued auth mode')}: {t(activeBootstrapSession.issued_auth_mode)}
                   </Badge>
+                  {activeBootstrapCompatibility ? (
+                    <Badge tone={workerCompatibilityBadgeTone(activeBootstrapCompatibility.status)}>
+                      {t('Compatibility')}: {t(activeBootstrapCompatibility.status)}
+                    </Badge>
+                  ) : null}
                   {activeBootstrapSession.worker_public_host ? (
                     <Badge tone="info">{t('host')}: {activeBootstrapSession.worker_public_host}</Badge>
                   ) : null}
@@ -1724,6 +2180,24 @@ export default function RuntimeSettingsPage() {
                 <small className="muted">
                   {t('endpoint hint')}: {activeBootstrapEndpointHint ?? t('to be confirmed in /setup')}
                 </small>
+                {activeBootstrapCompatibility ? (
+                  <>
+                    <small className="muted">
+                      {t('expected profile')}: {activeBootstrapCompatibility.expected_runtime_profile ?? t('n/a')} ·{' '}
+                      {t('reported profile')}: {activeBootstrapCompatibility.reported_runtime_profile ?? t('n/a')}
+                    </small>
+                    <small className="muted">
+                      {t('worker version')}: {activeBootstrapCompatibility.reported_worker_version ?? t('n/a')} ·{' '}
+                      {t('contract version')}: {activeBootstrapCompatibility.reported_contract_version ?? t('n/a')}
+                    </small>
+                    {activeBootstrapCompatibility.missing_capabilities.length > 0 ? (
+                      <small className="muted">
+                        {t('missing capabilities')}: {activeBootstrapCompatibility.missing_capabilities.join(', ')}
+                      </small>
+                    ) : null}
+                    <small className="muted">{activeBootstrapCompatibility.message}</small>
+                  </>
+                ) : null}
                 <small className="muted">
                   {t('claimed at')}: {formatTimestamp(activeBootstrapSession.claimed_at)}
                 </small>
@@ -1793,6 +2267,27 @@ export default function RuntimeSettingsPage() {
                       ? t('Validating...')
                       : t('Retry callback')}
                   </Button>
+                  {activeBootstrapSession.status !== 'online' ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        void activateBootstrapWorker(
+                          activeBootstrapSession.linked_worker_id ?? activeBootstrapSession.worker_id
+                        )
+                      }
+                      disabled={
+                        activatingBootstrapWorkerId ===
+                        (activeBootstrapSession.linked_worker_id ?? activeBootstrapSession.worker_id)
+                      }
+                    >
+                      {activatingBootstrapWorkerId ===
+                      (activeBootstrapSession.linked_worker_id ?? activeBootstrapSession.worker_id)
+                        ? t('Activating...')
+                        : t('Activate Worker')}
+                    </Button>
+                  ) : null}
                 </div>
                 {activeBootstrapSession.callback_validation_message ? (
                   <small className="muted">{activeBootstrapSession.callback_validation_message}</small>
@@ -1887,11 +2382,19 @@ export default function RuntimeSettingsPage() {
                   />
                 ) : null}
                 {activeBootstrapSession.status === 'online' ? (
-                  <StateBlock
-                    variant="success"
-                    title={t('Worker online')}
-                    description={t('Heartbeat has been accepted by the control plane and the worker can now join scheduling.')}
-                  />
+                  activeBootstrapCompatibility?.status === 'warning' ? (
+                    <StateBlock
+                      variant="error"
+                      title={t('Compatibility warning')}
+                      description={activeBootstrapCompatibility.message}
+                    />
+                  ) : (
+                    <StateBlock
+                      variant="success"
+                      title={t('Worker online')}
+                      description={t('Heartbeat has been accepted by the control plane and the worker can now join scheduling.')}
+                    />
+                  )
                 ) : activeBootstrapSession.status === 'validation_failed' ? (
                   <StateBlock
                     variant="error"

@@ -34,6 +34,7 @@ This document is the execution baseline for subsequent implementation rounds.
 2. Queue-oriented review ergonomics.
    - "needs_work / in_review / rejected / approved" queues behave as first-class workflow lanes
    - keyboard shortcuts and queue progression remain stable during background refresh
+   - active queue filters stay visible as chips with one-click reset, plus metadata quick-filter presets for high-frequency triage patterns
 
 ### P2 (scale-up after core closure)
 1. Saved views (filter presets) for repeated triage sessions.
@@ -102,7 +103,11 @@ Reason:
 ### Phase 3 (workflow intelligence)
 1. Saved filters/presets
    - first iteration landed: dataset sample browser can save/apply/delete local view presets
+   - active filter state is now visible in-browser with one-click clear to reduce filter drift during long curation sessions
+   - error/metadata slice cards now support `Save as view` so high-value triage slices can be persisted and reused later
 2. metadata/tag-driven sampling utilities
+   - first iteration landed: dataset detail side rail now provides metadata/tag signal slices (top tags, source values, feedback reasons) with one-click browser focus and queue deep links
+   - metadata filter input now supports `key=value` query syntax in both dataset browser and annotation queue
 3. Error pattern slices for active-learning style loops
    - first iteration landed: dataset detail side rail now exposes quick slices (rejected reason buckets, low-confidence tags, feedback-return samples, unassigned-ready bucket) with one-click focus actions
 4. compact cross-version outcome comparison blocks

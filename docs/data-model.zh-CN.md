@@ -77,15 +77,104 @@
   - 所选数据集必须为 `ready`
   - 所选数据集版本 `split_summary.train > 0`
   - 所选数据集版本 `annotation_coverage > 0`
+  - `split_summary` 与 `annotation_coverage` 的训练就绪计算应基于“可训练视觉样本”（ready 图片附件），不应把导入辅助 `.txt/.json` 文件计入训练样本
 - `training_jobs.execution_mode`：
   - `simulated`
   - `local_command`
   - `unknown`
+- 模型版本注册约束：
+  - `execution_mode=simulated|unknown` 的训练任务禁止注册模型版本
+  - `execution_mode=local_command` 时，若产物摘要存在非真实证据（`mode=template`、存在 `fallback_reason`、或 `training_performed=false`）也必须拒绝注册，除非显式设置 `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
+- app 状态初始化模式可通过 `APP_STATE_BOOTSTRAP_MODE` 配置：
+  - `full`（默认）：保留当前原型种子数据基线
+  - `minimal`：当不存在持久化 app-state 时，仅初始化账号与基座模型，不注入数据集/训练/推理种子记录
 - `inference_runs.execution_source`：
-  - 保存当前推理来源标记（例如 `yolo_runtime`、`yolo_local_command`、`mock_fallback`）
+  - 保存当前推理来源标记（例如 `yolo_runtime`、`yolo_local_command`、`explicit_fallback_runtime_failed`、`explicit_fallback_local_command_failed`、`base_empty`）
+- template 标记规则：
+  - 当 `raw_output.meta.mode=template` 时，即使 `execution_source=<framework>_local_command`，也应按非真实推理结果处理。
+- OCR 回退安全约束：
+  - 当 OCR 推理走回退路径时，`ocr.lines` 与 `ocr.words` 默认应为空数组；
+  - 禁止在回退结果中注入业务化示例文本。
+- 通用回退安全约束：
+  - 当 runtime/local command 硬失败并触发显式回退时，各任务结构化输出默认应为空数组（`boxes`、`rotated_boxes`、`polygons`、`masks`、`labels`、`ocr.lines`、`ocr.words`），除非 runtime/local command 实际返回有效信号。
 - 推理反馈规则：
   - `POST /inference/runs/{id}/feedback` 的目标数据集 `task_type` 必须与推理任务 `task_type` 一致
   - 不允许跨任务类型（例如 detection 结果回流到 ocr 数据集）
+
+### RuntimeSettings（补充）
+- 作用域：`设置 > Runtime` 的全局 runtime 适配器配置（管理员范围）
+- 字段：
+  - `updated_at`（可空；为空表示尚未通过 UI 保存覆盖）
+  - `frameworks.paddleocr.endpoint`
+  - `frameworks.paddleocr.api_key`（服务端密钥，不可明文返回）
+  - `frameworks.paddleocr.local_train_command`
+  - `frameworks.paddleocr.local_predict_command`
+  - `frameworks.doctr.*`（同上）
+  - `frameworks.yolo.*`（同上）
+- 规则：
+  - runtime 适配器应在执行时动态读取配置，而不是只在进程启动时读取一次
+  - 当不存在 UI 保存配置时，允许按环境变量做兜底
+  - 一旦从 UI 保存，保存值即成为主配置来源，直到显式清空
+  - 对外接口仅返回 `has_api_key` 与 `api_key_masked`，不得返回明文 key
+  - 保存时支持 `keep_existing_api_keys=true`，空 key 输入可保留已存密钥
+
+### TrainingWorkerNode（补充）
+- `id`
+- `name`
+- `endpoint`（可空 URL，用于回调/分发）
+- `status`：`online | offline | draining`
+- `enabled`（bool）
+- `max_concurrency`（int > 0）
+- `last_heartbeat_at`（可空时间戳）
+- `last_reported_load`（可空 float，范围 0..1）
+- `capabilities`（JSON 数组，示例：`framework:yolo`、`task:detection`）
+- `auth_mode`：`shared | dedicated`
+- `auth_token_preview`（可空，掩码预览，不返回明文）
+- `registration_source`：`seed | admin | heartbeat`
+- `metadata`（JSON）
+- `created_at` / `updated_at`
+
+规则：
+- worker 可以由管理员增删改，也可通过 heartbeat 动态注册。
+- 调度优先选择 `online && enabled`，并综合 in-flight 和 `last_reported_load` 做负载评估。
+- 心跳超过 TTL 视为 stale，调度时按离线处理。
+
+### TrainingWorkerBootstrapSession（补充）
+- `id`
+- `status`：`bootstrap_created | pairing | validation_failed | awaiting_confirmation | online | expired`
+- `deployment_mode`：`docker | script`
+- `worker_profile`：`yolo | paddleocr | doctr | mixed`
+- `pairing_token`
+- `control_plane_base_url`
+- `worker_id` / `worker_name`
+- `worker_public_host`（可空）
+- `worker_bind_port`（默认 `9090`）
+- `worker_endpoint_hint`（可空）
+- `worker_runtime_profile`
+- `capabilities`
+- `max_concurrency`
+- `issued_auth_mode`：`shared | dedicated`
+- `issued_auth_token_preview`（可空）
+- `claimed_at` / `last_seen_at` / `callback_checked_at`（均可空）
+- `callback_validation_message`（可空）
+- `compatibility`（可空对象）：
+  - `status`：`compatible | warning | incompatible | unknown`
+  - `message`
+  - `expected_runtime_profile`
+  - `reported_runtime_profile`
+  - `reported_worker_version`
+  - `reported_contract_version`
+  - `missing_capabilities`
+- `linked_worker_id`（可空）
+- `metadata`
+- `created_at` / `expires_at`
+
+规则：
+- bootstrap session 是配对临时对象，不直接参与调度。
+- 回调连通性和兼容性检查通过前，不得进入可调度 `online`。
+- 管理员可对现有 worker 发起 `POST /admin/training-workers/{id}/reconfigure-session`，生成新的重配会话而不替换原 worker 记录。
+- 若出现硬不兼容（例如 runtime profile 与期望不一致），状态应保持 `validation_failed`，对应 worker 也必须保持不可调度。
+- 告警级兼容问题（例如缺失可选版本字段）可允许上线，但必须在 Runtime 配对界面清晰提示。
 
 ### Dataset / Annotation（补充）
 - `DatasetItem`

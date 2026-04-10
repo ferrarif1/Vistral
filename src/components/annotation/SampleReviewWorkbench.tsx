@@ -12,6 +12,7 @@ interface SampleReviewWorkbenchProps {
   selectedAnnotation: AnnotationWithReview | null;
   selectedItemTagEntries: string[];
   selectedItemOperationalMetadataEntries: Array<[string, string]>;
+  className?: string;
 }
 
 export default function SampleReviewWorkbench({
@@ -20,10 +21,11 @@ export default function SampleReviewWorkbench({
   selectedItem,
   selectedAnnotation,
   selectedItemTagEntries,
-  selectedItemOperationalMetadataEntries
+  selectedItemOperationalMetadataEntries,
+  className
 }: SampleReviewWorkbenchProps) {
   return (
-    <Card as="section">
+    <Card as="section" className={className}>
       <div className="stack tight">
         <h3>{t('Sample Review Workbench')}</h3>
         <small className="muted">{selectedFilename}</small>

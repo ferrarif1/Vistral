@@ -221,7 +221,7 @@
 - 新建训练任务时，`dataset_version_id` 必填
 - `dataset_version_id` 必须属于所选 `dataset_id`
 - 所选数据集必须已处于 `ready`
-- 所选数据集版本的 `split_summary.train` 必须大于 0，确保训练有可用训练切分
+- 所选数据集版本的 `split_summary.train` 必须大于 0，确保训练有可用训练切分（该计数按“可训练视觉样本”计算，不包含导入辅助 txt/json 文件）
 - 所选数据集版本的 `annotation_coverage` 必须大于 0
 
 ## 标注接口（补充）
@@ -299,6 +299,29 @@
     - 当 `use_stored_api_key=true` 且 `llm_config.api_key` 为空时，服务端复用当前用户已保存的加密 key 做测试
     - 响应返回提供商短预览文本
 
+## Runtime 设置接口
+- `GET /settings/runtime`：获取已保存 runtime 配置视图
+  - 仅管理员可访问
+  - API key 只返回掩码信息（`has_api_key`、`api_key_masked`）
+  - 返回各 framework 的 `endpoint`、`local_train_command`、`local_predict_command`
+
+- `POST /settings/runtime`：保存或更新 runtime 配置
+  - 请求体包含：
+    - `runtime_config.paddleocr|doctr|yolo.endpoint`
+    - `runtime_config.paddleocr|doctr|yolo.api_key`
+    - `runtime_config.paddleocr|doctr|yolo.local_train_command`
+    - `runtime_config.paddleocr|doctr|yolo.local_predict_command`
+    - `keep_existing_api_keys`
+  - 规则：
+    - 仅管理员可访问
+    - 当 `keep_existing_api_keys=true` 且某 framework 的 `api_key` 为空时，保留该 framework 已保存 key
+    - 响应返回 masked 视图（不含明文 key）
+
+- `DELETE /settings/runtime`：清空 UI 保存的 runtime 配置
+  - 仅管理员可访问
+  - 清空后回到“环境变量兜底”模式，直到下一次 UI 保存
+  - 响应返回 masked 视图
+
 ## 文件附件接口（补充）
 - `GET /files/conversation`：获取当前用户会话附件列表
 - `POST /files/conversation/upload`：上传会话附件
@@ -347,16 +370,57 @@
   - `simulated`（模拟执行）
   - `local_command`（本地命令执行）
   - `unknown`
+- 模型版本注册接口（`POST /model-versions/register`）约束：
+  - 仅 `status=completed` 的训练任务可注册
+  - `execution_mode=simulated|unknown` 的训练任务必须拒绝注册
+  - 对 `execution_mode=local_command` 的任务，若产物摘要出现非真实证据（`mode=template`、存在 `fallback_reason`、或 `training_performed=false`）也必须拒绝注册；仅在显式设置 `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1` 时可放开
+  - 对非真实本地执行产物（例如 `mode=template`），应显式携带 `fallback_reason` 与 `training_performed=false`，避免被误判为真实训练输出
 - OCR 本地训练 runner 允许在 `metrics.json` 与 `artifact_summary` 中附带额外的 OCR 风格指标键（例如 `norm_edit_distance`、`word_accuracy`），同时保持训练任务详情接口外层结构不变
 - 新增 `GET /training/jobs/{id}/metrics-export`：
   - 返回任务指标导出 JSON（`latest_metrics` + `metrics_by_name` 序列）
   - 供训练详情页下载排障
   - 支持 `?format=csv`，返回 CSV 下载（`training_job_id, metric_name, step, metric_value, recorded_at`）
+- 运行时适配器行为约束：
+  - `evaluate()`：优先读取训练工作目录中的真实指标产物（如 `metrics.json`）；没有可评估产物时返回空指标，而不是按任务名猜测固定值。
+  - `export()`：必须生成真实本地导出文件路径（可配置根目录），禁止返回伪路径（如 `/mock-artifacts/...`）。
+  - `load_model()`：必须先校验模型产物存在，再返回 handle；产物缺失时应显式失败，禁止伪成功。
 - 推理结果显式返回 `execution_source`，与 `normalized_output.source` 一致，用于区分：
   - `<framework>_runtime`
   - `<framework>_local_command`
-  - `<framework>_local`
-  - `mock_fallback`
+  - `explicit_fallback_runtime_failed`
+  - `explicit_fallback_local_command_failed`
+  - `base_empty`
+
+- template 模式标记规则：
+  - 当本地 runner 返回 `raw_output.meta.mode=template` 时，即使 `source` 是 `<framework>_local_command`，前端也必须按“非真实结果”处理并提示。
+  - template 模式下，后端会把 `meta.fallback_reason` 同步写入 `raw_output.local_command_fallback_reason`，便于 API 调用方统一读取回退原因字段。
+
+- OCR 回退安全规则：
+  - 当本地命令或 runtime 调用失败并触发回退时，OCR 返回必须为：
+    - `ocr.lines = []`
+    - `ocr.words = []`
+  - 不允许注入看起来像真实业务数据的默认文本。
+
+- 通用回退安全规则：
+  - 当 runtime/local command 硬失败并进入显式回退时，各任务结构化输出默认应为空数组（`boxes`、`rotated_boxes`、`polygons`、`masks`、`labels`、`ocr.lines`、`ocr.words`），除非 runtime/local command 实际返回了这些信号。
+
+- 本地命令执行规则：
+  - 优先直接执行 Python 脚本，不依赖 `bash -c`。
+  - shell 回退必须跨平台（Windows 使用 `ComSpec/cmd.exe`，POSIX 使用 `${SHELL}` 或 `/bin/sh`）。
+  - 支持 `VISTRAL_BASH_PATH` 覆盖 shell 路径。
+  - spawn 失败信息需包含 `platform / attempted_command / shell_path`（若存在）。
+- 新增 `POST /admin/training-workers/{id}/activate`：
+  - 仅管理员可调用
+  - 激活前会再次执行 worker 回调连通性校验
+  - 会同时读取 worker `healthz` 的兼容性信号（`worker_version`、`contract_version`、`runtime_profile`、`capabilities`）
+  - 校验成功后将 worker 置为 `online`，并同步更新关联 bootstrap session（若存在）
+  - 若出现硬不兼容（例如 runtime profile 不匹配），激活按失败处理并保持 `validation_failed`
+  - 校验失败则返回错误，并保持 worker/session 不可调度状态（`offline` / `validation_failed`）
+  - bootstrap session 会返回 `compatibility` 字段，便于前端显示 `compatible | warning | incompatible | unknown`
+- 新增 `POST /admin/training-workers/{id}/reconfigure-session`：
+  - 仅管理员可调用
+  - 基于已有 worker 生成新的引导式重配会话（bootstrap session）
+  - 不会删除或替换已有 worker 记录，仅用于升级/重配流程
 - 新增 `GET /runtime/metrics-retention`：
   - 返回当前用户可见训练任务范围内的指标保留摘要
   - 包含 `max_points_per_job`、`max_total_rows`、`current_total_rows`、`near_total_cap`、`top_jobs`

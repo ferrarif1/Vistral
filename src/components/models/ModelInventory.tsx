@@ -29,9 +29,11 @@ interface ModelInventoryProps {
   loading: boolean;
   refreshing: boolean;
   onRefresh: () => void;
+  showRefreshAction?: boolean;
   canAdminDelete?: boolean;
   deletingModelId?: string | null;
   onDeleteModel?: (model: ModelRecord) => Promise<void> | void;
+  modelAuthenticityById?: Record<string, { tone: 'neutral' | 'success' | 'warning'; label: string; hint?: string }>;
   t: (source: string, vars?: TranslateVars) => string;
 }
 
@@ -41,6 +43,7 @@ function ModelInventoryRow({
   canAdminDelete,
   deletingModelId,
   onRequestDelete,
+  authenticitySummary,
   className
 }: {
   model: ModelRecord;
@@ -48,6 +51,7 @@ function ModelInventoryRow({
   canAdminDelete?: boolean;
   deletingModelId?: string | null;
   onRequestDelete?: (model: ModelRecord) => void;
+  authenticitySummary?: { tone: 'neutral' | 'success' | 'warning'; label: string; hint?: string };
   className?: string;
 }) {
   const isProtectedFoundationModel = isCuratedFoundationModelName(model.name);
@@ -95,7 +99,9 @@ function ModelInventoryRow({
         {canAdminDelete && isProtectedFoundationModel ? (
           <Badge tone="info">{t('This curated base model stays available as a training foundation.')}</Badge>
         ) : null}
+        {authenticitySummary ? <Badge tone={authenticitySummary.tone}>{authenticitySummary.label}</Badge> : null}
       </div>
+      {authenticitySummary?.hint ? <small className="muted">{authenticitySummary.hint}</small> : null}
     </Panel>
   );
 }
@@ -111,9 +117,11 @@ export default function ModelInventory({
   loading,
   refreshing,
   onRefresh,
+  showRefreshAction = true,
   canAdminDelete = false,
   deletingModelId = null,
   onDeleteModel,
+  modelAuthenticityById,
   t
 }: ModelInventoryProps) {
   const shouldVirtualize = models.length > virtualizationThreshold;
@@ -134,7 +142,7 @@ export default function ModelInventory({
         <WorkspaceSectionHeader
           title={title}
           description={description}
-          actions={
+          actions={showRefreshAction ? (
             <Button
               type="button"
               variant="secondary"
@@ -144,7 +152,7 @@ export default function ModelInventory({
             >
               {refreshing ? t('Refreshing...') : t('Refresh')}
             </Button>
-          }
+          ) : undefined}
         />
 
         {loading ? (
@@ -167,6 +175,7 @@ export default function ModelInventory({
                 canAdminDelete={canAdminDelete}
                 deletingModelId={deletingModelId}
                 onRequestDelete={onDeleteModel ? (target) => setDeleteCandidate(target) : undefined}
+                authenticitySummary={modelAuthenticityById?.[model.id]}
                 className="workspace-record-item virtualized"
               />
             )}
@@ -181,6 +190,7 @@ export default function ModelInventory({
                 canAdminDelete={canAdminDelete}
                 deletingModelId={deletingModelId}
                 onRequestDelete={onDeleteModel ? (target) => setDeleteCandidate(target) : undefined}
+                authenticitySummary={modelAuthenticityById?.[model.id]}
               />
             ))}
           </ul>

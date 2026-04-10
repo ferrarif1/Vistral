@@ -24,7 +24,7 @@ import {
   WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
-  WorkspaceSplit
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import {
   filterItemsByAnnotationQueue,
@@ -34,6 +34,7 @@ import {
   summarizeAnnotationQueues,
   type AnnotationQueueFilter
 } from '../features/annotationQueue';
+import { matchesMetadataFilter } from '../features/metadataFilter';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -166,6 +167,14 @@ type ErrorPatternSlice = {
   splitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
   reviewReasonFilter: ReviewReasonFilter;
   metadataFilter: string;
+};
+type MetadataSignalSlice = {
+  id: string;
+  label: string;
+  description: string;
+  count: number;
+  metadataFilter: string;
+  queueFilter: AnnotationQueueFilter;
 };
 
 const buildDatasetDetailSignature = (detail: {
@@ -396,7 +405,6 @@ export default function DatasetDetailPage() {
   }, [annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected]);
   const filteredSampleItems = useMemo(() => {
     const normalizedSearch = sampleSearchText.trim().toLowerCase();
-    const normalizedMetadataFilter = sampleMetadataFilter.trim().toLowerCase();
     return items.filter((item) => {
       if (sampleSplitFilter !== 'all' && item.split !== sampleSplitFilter) {
         return false;
@@ -424,24 +432,8 @@ export default function DatasetDetailPage() {
         }
       }
 
-      if (normalizedMetadataFilter) {
-        const metadataEntries = Object.entries(item.metadata);
-        if (metadataEntries.length === 0) {
-          return false;
-        }
-
-        const hasMetadataHit = metadataEntries.some(([key, value]) => {
-          const normalizedKey = key.toLowerCase();
-          const normalizedValue = String(value).toLowerCase();
-          return (
-            normalizedKey.includes(normalizedMetadataFilter) ||
-            normalizedValue.includes(normalizedMetadataFilter)
-          );
-        });
-
-        if (!hasMetadataHit) {
-          return false;
-        }
+      if (!matchesMetadataFilter(item.metadata, sampleMetadataFilter)) {
+        return false;
       }
 
       return true;
@@ -668,6 +660,96 @@ export default function DatasetDetailPage() {
     },
     [t]
   );
+  const metadataSignalSlices = useMemo<MetadataSignalSlice[]>(() => {
+    const tagCounts = new Map<string, number>();
+    const sourceCounts = new Map<string, number>();
+    const feedbackReasonCounts = new Map<string, number>();
+
+    for (const item of items) {
+      const entries = Object.entries(item.metadata);
+      if (entries.length === 0) {
+        continue;
+      }
+
+      for (const [key, rawValue] of entries) {
+        const normalizedKey = key.trim().toLowerCase();
+        const value = String(rawValue).trim();
+        if (!normalizedKey) {
+          continue;
+        }
+
+        if (normalizedKey.startsWith('tag:')) {
+          tagCounts.set(normalizedKey, (tagCounts.get(normalizedKey) ?? 0) + 1);
+        }
+
+        if (normalizedKey === 'source' && value) {
+          const normalizedValue = value.toLowerCase();
+          sourceCounts.set(normalizedValue, (sourceCounts.get(normalizedValue) ?? 0) + 1);
+        }
+
+        if (normalizedKey === 'feedback_reason' && value) {
+          const normalizedValue = value.toLowerCase();
+          feedbackReasonCounts.set(
+            normalizedValue,
+            (feedbackReasonCounts.get(normalizedValue) ?? 0) + 1
+          );
+        }
+      }
+    }
+
+    const slices: MetadataSignalSlice[] = [];
+
+    for (const [tagKey, count] of [...tagCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 4)) {
+      slices.push({
+        id: `tag-${tagKey}`,
+        label: t('Tag · {tag}', { tag: tagKey.replace(/^tag:/, '') }),
+        description: t('Metadata tag slice for quick sampling and queue focus.'),
+        count,
+        metadataFilter: tagKey,
+        queueFilter: 'all'
+      });
+    }
+
+    for (const [sourceValue, count] of [...sourceCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 2)) {
+      slices.push({
+        id: `source-${sourceValue}`,
+        label: t('Source · {value}', { value: sourceValue }),
+        description: t('Samples grouped by metadata source value.'),
+        count,
+        metadataFilter: `source=${sourceValue}`,
+        queueFilter: 'all'
+      });
+    }
+
+    for (const [reasonValue, count] of [...feedbackReasonCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 2)) {
+      slices.push({
+        id: `feedback-${reasonValue}`,
+        label: t('Feedback reason · {value}', { value: reasonValue }),
+        description: t('Inference feedback reason slice for active rework routing.'),
+        count,
+        metadataFilter: `feedback_reason=${reasonValue}`,
+        queueFilter: 'needs_work'
+      });
+    }
+
+    return slices.filter((slice) => slice.count > 0).sort((left, right) => right.count - left.count).slice(0, 8);
+  }, [items, t]);
+  const applyMetadataSignalSlice = useCallback(
+    (slice: MetadataSignalSlice) => {
+      setSampleSearchText('');
+      setSampleSplitFilter('all');
+      setSampleStatusFilter('all');
+      setSampleQueueFilter(slice.queueFilter);
+      setSampleReviewReasonFilter('all');
+      setSampleMetadataFilter(slice.metadataFilter);
+      setSelectedSampleItemIds([]);
+      setFeedback({
+        variant: 'success',
+        text: t('Sample browser focused on metadata slice: {slice}', { slice: slice.label })
+      });
+    },
+    [t]
+  );
   const applySavedSampleView = useCallback(
     (viewId: string) => {
       setSelectedSavedSampleViewId(viewId);
@@ -692,13 +774,21 @@ export default function DatasetDetailPage() {
     },
     [savedSampleViews]
   );
+  const persistSampleView = useCallback((input: Omit<SavedSampleView, 'id'> & { id?: string }) => {
+    const nextId = input.id || `view-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const nextView: SavedSampleView = { ...input, id: nextId };
+    setSavedSampleViews((previous) => {
+      const withoutTarget = previous.filter((item) => item.id !== nextId);
+      return [nextView, ...withoutTarget].slice(0, 20);
+    });
+    setSelectedSavedSampleViewId(nextId);
+    setSavedSampleViewNameDraft(nextView.name);
+    return nextView;
+  }, []);
   const saveCurrentSampleView = useCallback(() => {
     const normalizedName = savedSampleViewNameDraft.trim() || t('View');
-    const nextId =
-      selectedSavedSampleViewId ||
-      `view-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const nextView: SavedSampleView = {
-      id: nextId,
+    persistSampleView({
+      id: selectedSavedSampleViewId || undefined,
       name: normalizedName,
       searchText: sampleSearchText,
       splitFilter: sampleSplitFilter,
@@ -707,16 +797,10 @@ export default function DatasetDetailPage() {
       reviewReasonFilter: sampleReviewReasonFilter,
       metadataFilter: sampleMetadataFilter,
       viewMode: sampleViewMode
-    };
-
-    setSavedSampleViews((previous) => {
-      const withoutTarget = previous.filter((item) => item.id !== nextId);
-      return [nextView, ...withoutTarget].slice(0, 20);
     });
-    setSelectedSavedSampleViewId(nextId);
-    setSavedSampleViewNameDraft(normalizedName);
     setFeedback({ variant: 'success', text: t('Saved current filter view.') });
   }, [
+    persistSampleView,
     sampleMetadataFilter,
     sampleQueueFilter,
     sampleReviewReasonFilter,
@@ -728,6 +812,36 @@ export default function DatasetDetailPage() {
     selectedSavedSampleViewId,
     t
   ]);
+  const saveSliceAsSampleView = useCallback(
+    (input: {
+      name: string;
+      splitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
+      queueFilter: AnnotationQueueFilter;
+      reviewReasonFilter: ReviewReasonFilter;
+      metadataFilter: string;
+    }) => {
+      const normalizedName = input.name.trim() || t('View');
+      const existingByName = savedSampleViews.find((view) => view.name === normalizedName);
+      persistSampleView({
+        id: existingByName?.id,
+        name: normalizedName,
+        searchText: '',
+        splitFilter: input.splitFilter,
+        statusFilter: 'all',
+        queueFilter: input.queueFilter,
+        reviewReasonFilter: input.reviewReasonFilter,
+        metadataFilter: input.metadataFilter,
+        viewMode: 'list'
+      });
+      setFeedback({
+        variant: 'success',
+        text: existingByName
+          ? t('Updated saved view from slice: {name}', { name: normalizedName })
+          : t('Saved new view from slice: {name}', { name: normalizedName })
+      });
+    },
+    [persistSampleView, savedSampleViews, t]
+  );
   const deleteSavedSampleView = useCallback(() => {
     if (!selectedSavedSampleViewId) {
       return;
@@ -1125,6 +1239,17 @@ export default function DatasetDetailPage() {
   const clearSelectedSampleItems = useCallback(() => {
     setSelectedSampleItemIds([]);
   }, []);
+  const clearSampleFilters = useCallback(() => {
+    setSampleSearchText('');
+    setSampleSplitFilter('all');
+    setSampleStatusFilter('all');
+    setSampleQueueFilter('all');
+    setSampleReviewReasonFilter('all');
+    setSampleMetadataFilter('');
+    setSelectedSavedSampleViewId('');
+    setSavedSampleViewNameDraft('');
+    setSelectedSampleItemIds([]);
+  }, []);
 
   const applyBatchItemUpdates = useCallback(async () => {
     if (!datasetId) {
@@ -1228,32 +1353,6 @@ export default function DatasetDetailPage() {
           ? `${dataset.name} · ${t(dataset.task_type)} · ${t(dataset.status)}`
           : t('Inspect dataset files, annotation readiness, and version snapshots in one place.')
       }
-      actions={
-        dataset ? (
-          <div className="row gap wrap">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                loadDetail('manual').catch((error) => {
-                  setFeedback({ variant: 'error', text: (error as Error).message });
-                });
-              }}
-              disabled={busy || refreshing}
-            >
-              {refreshing ? t('Refreshing...') : t('Refresh')}
-            </Button>
-            <ButtonLink
-              size="sm"
-              variant="ghost"
-              to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
-            >
-              {t('Open Annotation Workspace')}
-            </ButtonLink>
-          </div>
-        ) : null
-      }
       stats={[
         { label: t('Attachments'), value: attachments.length },
         { label: t('Items'), value: items.length },
@@ -1329,14 +1428,30 @@ export default function DatasetDetailPage() {
         ]}
       />
 
-      <WorkspaceSplit
-        main={
-          <>
-          <Card as="section">
-            <WorkspaceSectionHeader
-              title={t('Annotation Summary')}
-              description={t('Review annotation progress and jump directly into the next focused queue.')}
-              actions={
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Dataset Controls')}</h3>
+                <small className="muted">
+                  {t('Keep curation, queue entry, snapshot context, and downstream launch actions in one stable lane.')}
+                </small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    loadDetail('manual')
+                      .then(() => setFeedback(null))
+                      .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
+                  }}
+                  disabled={busy || refreshing}
+                >
+                  {refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
                 <ButtonLink
                   size="sm"
                   variant="ghost"
@@ -1344,8 +1459,56 @@ export default function DatasetDetailPage() {
                 >
                   {t('Open Annotation Workspace')}
                 </ButtonLink>
-              }
+                {selectedVersion ? (
+                  <>
+                    <ButtonLink
+                      size="sm"
+                      variant="ghost"
+                      to={buildInferenceValidationPath(dataset.id, selectedVersion.id)}
+                    >
+                      {t('Validate Inference')}
+                    </ButtonLink>
+                    <ButtonLink
+                      size="sm"
+                      variant="ghost"
+                      to={buildTrainingJobCreatePath(dataset.id, selectedVersion.id)}
+                    >
+                      {t('Create Training Job')}
+                    </ButtonLink>
+                  </>
+                ) : null}
+              </div>
+            </div>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <Badge tone="neutral">{t('Dataset')}: {dataset.name}</Badge>
+                <Badge tone="info">{t('Task Type')}: {t(dataset.task_type)}</Badge>
+                <Badge tone={selectedVersion ? 'info' : 'neutral'}>
+                  {selectedVersion ? `${t('Version')}: ${selectedVersion.version_name}` : t('Version') + ': ' + t('Latest')}
+                </Badge>
+                <Badge tone="neutral">{t('Ready files')}: {readyCount}</Badge>
+                <Badge tone="neutral">{t('Filtered samples')}: {filteredSampleItems.length}</Badge>
+              </div>
+            </div>
+          </Card>
+        }
+        main={
+          <div className="workspace-main-stack">
+          <Card as="section">
+            <WorkspaceSectionHeader
+              title={t('Annotation Summary')}
+              description={t('Review annotation progress and jump directly into the next focused queue.')}
             />
+            {selectedVersion ? (
+              <small className="muted">
+                {t('Selected version split')}: train {selectedVersion.split_summary.train} / val {selectedVersion.split_summary.val} / test{' '}
+                {selectedVersion.split_summary.test} · {t('coverage')} {formatCoveragePercent(selectedVersion.annotation_coverage)}
+              </small>
+            ) : (
+              <small className="muted">
+                {t('No explicit dataset version selected. Operations use current dataset context.')}
+              </small>
+            )}
 
             <div className="annotation-summary-grid">
               {queuePreviewEntries.map((entry) => (
@@ -1516,6 +1679,7 @@ export default function DatasetDetailPage() {
                   onDeleteSavedView={deleteSavedSampleView}
                   onSelectAllFiltered={selectAllFilteredItems}
                   onClearSelected={clearSelectedSampleItems}
+                  onClearFilters={clearSampleFilters}
                   onViewModeChange={setSampleViewMode}
                   onToggleSelection={toggleSampleItemSelection}
                   onEditItem={selectItemForEditing}
@@ -1606,28 +1770,112 @@ export default function DatasetDetailPage() {
               </div>
             )}
           </Card>
-          </>
+          </div>
         }
         side={
-          <>
-          <Card as="section">
+          <div className="workspace-inspector-rail">
+          <Card as="section" className="workspace-inspector-card">
             <WorkspaceSectionHeader
               title={t('Current status')}
               description={t('Inspect dataset files, annotation readiness, and version snapshots in one place.')}
             />
-            <div className="row gap wrap">
-              <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
-              <Badge tone="neutral">{t('Task Type')}: {t(dataset.task_type)}</Badge>
-              <Badge tone="neutral">{t('Classes')}: {dataset.label_schema.classes.length}</Badge>
-              <Badge tone="info">{t('Ready files')}: {readyCount}</Badge>
+            <Panel as="section" className="stack tight" tone="soft">
+              <div className="row between gap wrap align-center">
+                <strong>{dataset.name}</strong>
+                <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
+              </div>
+              <div className="row gap wrap">
+                <Badge tone="neutral">{t('Task Type')}: {t(dataset.task_type)}</Badge>
+                <Badge tone="neutral">{t('Classes')}: {dataset.label_schema.classes.length}</Badge>
+                <Badge tone="info">{t('Ready files')}: {readyCount}</Badge>
+              </div>
+            </Panel>
+            <div className="workspace-keyline-list">
+              <div className="workspace-keyline-item">
+                <span>{t('Last updated')}</span>
+                <small>{formatCompactTimestamp(dataset.updated_at, t('n/a'))}</small>
+              </div>
+              <div className="workspace-keyline-item">
+                <span>{t('Visible samples')}</span>
+                <strong>{filteredSampleItems.length}</strong>
+              </div>
+              <div className="workspace-keyline-item">
+                <span>{t('Queue focus')}</span>
+                <strong>{sampleQueueFilter === 'all' ? t('All items') : sampleQueueFilter === 'needs_work' ? t('Needs Work') : t(sampleQueueFilter)}</strong>
+              </div>
             </div>
             <small className="muted">
-              {t('Last updated')}: {formatCompactTimestamp(dataset.updated_at, t('n/a'))}
+              {selectedVersion
+                ? t('Selected version split') +
+                  `: train ${selectedVersion.split_summary.train} / val ${selectedVersion.split_summary.val} / test ${selectedVersion.split_summary.test}`
+                : t('No explicit dataset version selected. Operations use current dataset context.')}
             </small>
             {dataset.description ? <small className="muted">{dataset.description}</small> : null}
           </Card>
 
-          <Card as="section">
+          <DatasetVersionRail
+            t={t}
+            dataset={dataset}
+            versions={versions}
+            selectedVersionId={selectedVersionId}
+            selectedVersion={selectedVersion}
+            selectedVersionLaunchReady={selectedVersionLaunchReady}
+            selectedVersionHasTrainSplit={selectedVersionHasTrainSplit}
+            selectedVersionHasCoverage={selectedVersionHasCoverage}
+            preferredReviewQueueForSelectedVersion={preferredReviewQueueForSelectedVersion}
+            busy={busy}
+            isRefreshing={sectionRefreshing === 'versions'}
+            onRefresh={() => {
+              void refreshVersionSection();
+            }}
+            onSelectVersion={setSelectedVersionId}
+            formatCoveragePercent={formatCoveragePercent}
+            buildTrainingPath={(versionId) => buildTrainingJobCreatePath(dataset.id, versionId)}
+            buildReviewPath={(versionId, queue) =>
+              buildAnnotationWorkspacePath(dataset.id, queue, undefined, {
+                versionId
+              })
+            }
+            buildJobsPath={(versionId) => buildTrainingJobsPath(dataset.id, versionId)}
+            buildInferencePath={(versionId) => buildInferenceValidationPath(dataset.id, versionId)}
+          />
+
+          <Card as="section" className="workspace-inspector-card">
+            <WorkspaceSectionHeader
+              title={t('Dataset Workflow')}
+              description={t('Prepare split and snapshot actions without leaving the detail lane.')}
+            />
+            <div className="workspace-form-grid">
+              <label>
+                {t('Train Ratio')}
+                <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
+              </label>
+              <label>
+                {t('Val Ratio')}
+                <Input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
+              </label>
+              <label className="workspace-form-span-2">
+                {t('Test Ratio')}
+                <Input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
+              </label>
+            </div>
+            <Button onClick={runSplit} disabled={busy || items.length === 0} block>
+              {t('Apply Split')}
+            </Button>
+            <label>
+              {t('Version Name (optional)')}
+              <Input
+                value={versionName}
+                onChange={(event) => setVersionName(event.target.value)}
+                placeholder={t('for example: v2')}
+              />
+            </label>
+            <Button onClick={createVersion} disabled={busy || items.length === 0} block>
+              {t('Create Version Snapshot')}
+            </Button>
+          </Card>
+
+          <Card as="section" className="workspace-inspector-card">
             <WorkspaceSectionHeader
               title={t('Error Pattern Slices')}
               description={t('Quickly focus sample browser and review queue by frequent failure patterns.')}
@@ -1652,6 +1900,22 @@ export default function DatasetDetailPage() {
                       >
                         {t('Focus in browser')}
                       </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          saveSliceAsSampleView({
+                            name: slice.label,
+                            splitFilter: slice.splitFilter,
+                            queueFilter: slice.queueFilter,
+                            reviewReasonFilter: slice.reviewReasonFilter,
+                            metadataFilter: slice.metadataFilter
+                          })
+                        }
+                      >
+                        {t('Save as view')}
+                      </Button>
                       <ButtonLink
                         size="sm"
                         variant="ghost"
@@ -1669,44 +1933,67 @@ export default function DatasetDetailPage() {
             )}
           </Card>
 
-          <Card as="section">
+          <Card as="section" className="workspace-inspector-card">
             <WorkspaceSectionHeader
-              title={t('Step 2. Train/Val/Test Split')}
-              description={t('Adjust split ratios and apply when the dataset item set is ready.')}
+              title={t('Metadata / Tag Slices')}
+              description={t('One-click focus by high-frequency metadata and operational tags.')}
             />
-            <label>
-              {t('Train Ratio')}
-              <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
-            </label>
-            <label>
-              {t('Val Ratio')}
-              <Input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
-            </label>
-            <label>
-              {t('Test Ratio')}
-              <Input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
-            </label>
-            <Button onClick={runSplit} disabled={busy || items.length === 0}>
-              {t('Apply Split')}
-            </Button>
-          </Card>
-
-          <Card as="section">
-            <WorkspaceSectionHeader
-              title={t('Step 3. Dataset Version')}
-              description={t('Create immutable snapshots before training so runs stay reproducible.')}
-            />
-            <label>
-              {t('Version Name (optional)')}
-              <Input
-                value={versionName}
-                onChange={(event) => setVersionName(event.target.value)}
-                placeholder={t('for example: v2')}
-              />
-            </label>
-            <Button onClick={createVersion} disabled={busy || items.length === 0}>
-              {t('Create Version Snapshot')}
-            </Button>
+            {metadataSignalSlices.length === 0 ? (
+              <small className="muted">
+                {t('No metadata slices detected yet. Add metadata/tags in item editing or feedback loops.')}
+              </small>
+            ) : (
+              <ul className="workspace-record-list compact">
+                {metadataSignalSlices.map((slice) => (
+                  <Panel key={slice.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
+                    <div className="row between gap wrap align-center">
+                      <strong>{slice.label}</strong>
+                      <Badge tone={slice.count > 0 ? 'info' : 'neutral'}>{slice.count}</Badge>
+                    </div>
+                    <small className="muted">{slice.description}</small>
+                    <small className="muted">
+                      {t('Filter')}: {slice.metadataFilter}
+                    </small>
+                    <div className="row gap wrap">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => applyMetadataSignalSlice(slice)}
+                      >
+                        {t('Focus in browser')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          saveSliceAsSampleView({
+                            name: slice.label,
+                            splitFilter: 'all',
+                            queueFilter: slice.queueFilter,
+                            reviewReasonFilter: 'all',
+                            metadataFilter: slice.metadataFilter
+                          })
+                        }
+                      >
+                        {t('Save as view')}
+                      </Button>
+                      <ButtonLink
+                        size="sm"
+                        variant="ghost"
+                        to={buildAnnotationWorkspacePath(dataset.id, slice.queueFilter, undefined, {
+                          versionId: selectedVersionId,
+                          metadataFilter: slice.metadataFilter
+                        })}
+                      >
+                        {t('Open queue')}
+                      </ButtonLink>
+                    </div>
+                  </Panel>
+                ))}
+              </ul>
+            )}
           </Card>
 
           <AdvancedSection
@@ -1826,33 +2113,7 @@ export default function DatasetDetailPage() {
             </Card>
           </AdvancedSection>
 
-          <DatasetVersionRail
-            t={t}
-            dataset={dataset}
-            versions={versions}
-            selectedVersionId={selectedVersionId}
-            selectedVersion={selectedVersion}
-            selectedVersionLaunchReady={selectedVersionLaunchReady}
-            selectedVersionHasTrainSplit={selectedVersionHasTrainSplit}
-            selectedVersionHasCoverage={selectedVersionHasCoverage}
-            preferredReviewQueueForSelectedVersion={preferredReviewQueueForSelectedVersion}
-            busy={busy}
-            isRefreshing={sectionRefreshing === 'versions'}
-            onRefresh={() => {
-              void refreshVersionSection();
-            }}
-            onSelectVersion={setSelectedVersionId}
-            formatCoveragePercent={formatCoveragePercent}
-            buildTrainingPath={(versionId) => buildTrainingJobCreatePath(dataset.id, versionId)}
-            buildReviewPath={(versionId, queue) =>
-              buildAnnotationWorkspacePath(dataset.id, queue, undefined, {
-                versionId
-              })
-            }
-            buildJobsPath={(versionId) => buildTrainingJobsPath(dataset.id, versionId)}
-            buildInferencePath={(versionId) => buildInferenceValidationPath(dataset.id, versionId)}
-          />
-          </>
+          </div>
         }
       />
     </WorkspacePage>

@@ -12,7 +12,8 @@ import {
   WorkspaceHero,
   WorkspaceMetricGrid,
   WorkspacePage,
-  WorkspaceSplit
+  WorkspaceSectionHeader,
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
@@ -205,7 +206,7 @@ export default function CreateModelPage() {
     try {
       await api.submitApprovalRequest({
         model_id: draftModel.id,
-        review_notes: t('Round-1 mock submission from create wizard.'),
+        review_notes: t('Round-1 submission from create wizard.'),
         parameter_snapshot: {
           learning_rate: learningRate,
           batch_size: batchSize,
@@ -456,16 +457,55 @@ export default function CreateModelPage() {
         ]}
       />
 
-      <WorkspaceSplit
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Flow controls')}</h3>
+                <small className="muted">{stepDescriptions[step]}</small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || loading} size="sm">
+                  {t('Back')}
+                </Button>
+                <Button type="button" variant="secondary" onClick={nextStep} disabled={step === steps.length - 1 || loading} size="sm">
+                  {t('Next')}
+                </Button>
+                <Button type="button" onClick={submitApproval} disabled={step !== steps.length - 1 || loading} size="sm">
+                  {loading ? t('Submitting...') : t('Submit Approval')}
+                </Button>
+              </div>
+            </div>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <StatusTag status={draftModel?.status ?? 'draft'}>{draftStatusLabel}</StatusTag>
+                <StatusTag status="info">{t('Ready model files')}: {readyFileCount}</StatusTag>
+                <StatusTag status="info">
+                  {t('Current step')}: {step + 1}/{steps.length}
+                </StatusTag>
+                {draftModel ? <StatusTag status="info">{t('Model Type')}: {t(draftModel.model_type)}</StatusTag> : null}
+              </div>
+            </div>
+          </Card>
+        }
         main={
-          <div className="stack">
-            <StepIndicator steps={steps} current={step} />
+          <div className="workspace-main-stack">
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Current step')}
+                description={stepTitles[step]}
+                actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
+              />
+              <small className="muted">{stepDescriptions[step]}</small>
+              <StepIndicator steps={steps} current={step} />
+            </Card>
             {renderStage()}
           </div>
         }
         side={
-          <>
-            <Card className="stack">
+          <div className="workspace-inspector-rail">
+            <Card as="article" className="workspace-inspector-card">
               <div className="stack tight">
                 <h3>{t('Current draft')}</h3>
                 <small className="muted">{stepDescriptions[step]}</small>
@@ -500,7 +540,7 @@ export default function CreateModelPage() {
               )}
             </Card>
 
-            <Card className="stack">
+            <Card as="article" className="workspace-inspector-card">
               <div className="stack tight">
                 <h3>{t('Submission checklist')}</h3>
                 <small className="muted">{t('Keep the approval path visible while you finish the wizard.')}</small>
@@ -520,21 +560,12 @@ export default function CreateModelPage() {
               </ul>
             </Card>
 
-            <Panel className="stack">
+            <Panel as="article" className="workspace-inspector-card">
               <div className="stack tight">
                 <h3>{t('Review links')}</h3>
                 <small className="muted">{t('Track draft progress and approval results from the model workspace.')}</small>
               </div>
               <div className="workspace-button-stack">
-                <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || loading} block>
-                  {t('Back')}
-                </Button>
-                <Button type="button" variant="secondary" onClick={nextStep} disabled={step === steps.length - 1 || loading} block>
-                  {t('Next')}
-                </Button>
-                <Button type="button" onClick={submitApproval} disabled={step !== steps.length - 1 || loading} block>
-                  {loading ? t('Submitting...') : t('Submit Approval')}
-                </Button>
                 <ButtonLink to="/models/my-models" variant="secondary" block>
                   {t('Manage My Models')}
                 </ButtonLink>
@@ -543,7 +574,7 @@ export default function CreateModelPage() {
                 </ButtonLink>
               </div>
             </Panel>
-          </>
+          </div>
         }
       />
     </WorkspacePage>

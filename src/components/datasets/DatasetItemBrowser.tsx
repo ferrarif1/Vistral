@@ -56,6 +56,7 @@ export interface DatasetItemBrowserProps {
   onDeleteSavedView: () => void;
   onSelectAllFiltered: () => void;
   onClearSelected: () => void;
+  onClearFilters: () => void;
   onViewModeChange: (value: 'list' | 'grid') => void;
   onToggleSelection: (itemId: string) => void;
   onEditItem: (item: DatasetItemRecord) => void;
@@ -99,6 +100,7 @@ export default function DatasetItemBrowser({
   onDeleteSavedView,
   onSelectAllFiltered,
   onClearSelected,
+  onClearFilters,
   onViewModeChange,
   onToggleSelection,
   onEditItem,
@@ -107,6 +109,15 @@ export default function DatasetItemBrowser({
   resolveAnnotationStatus
 }: DatasetItemBrowserProps) {
   const shouldVirtualizeItemList = viewMode === 'list' && filteredItems.length > 10;
+  const activeFilters = [
+    searchText.trim() ? `${t('Search')}: ${searchText.trim()}` : '',
+    splitFilter !== 'all' ? `${t('Split')}: ${t(splitFilter)}` : '',
+    statusFilter !== 'all' ? `${t('Status')}: ${t(statusFilter)}` : '',
+    queueFilter !== 'all' ? `${t('Queue')}: ${queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}` : '',
+    reviewReasonFilter !== 'all' ? `${t('Review')}: ${t(reviewReasonFilter)}` : '',
+    metadataFilter.trim() ? `${t('Metadata')}: ${metadataFilter.trim()}` : ''
+  ].filter(Boolean);
+  const hasActiveFilters = activeFilters.length > 0;
 
   return (
     <div className="stack">
@@ -181,7 +192,7 @@ export default function DatasetItemBrowser({
           <Input
             value={metadataFilter}
             onChange={(event) => onMetadataFilterChange(event.target.value)}
-            placeholder={t('Filter metadata/tag')}
+            placeholder={t('Filter metadata/tag (supports key=value)')}
           />
         </div>
         <div className="dataset-item-browser-actions">
@@ -222,6 +233,33 @@ export default function DatasetItemBrowser({
               </Button>
             ))}
           </div>
+        </div>
+        <div className="dataset-item-browser-actions">
+          <div className="dataset-item-browser-active-filters">
+            {hasActiveFilters ? (
+              <>
+                <small className="muted">{t('Active filters')}:</small>
+                <div className="row gap wrap">
+                  {activeFilters.map((label) => (
+                    <Badge key={`active-filter-${label}`} tone="neutral">
+                      {label}
+                    </Badge>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <small className="muted">{t('No active filters')}</small>
+            )}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onClearFilters}
+            disabled={busy || !hasActiveFilters}
+          >
+            {t('Clear filters')}
+          </Button>
         </div>
         <div className="dataset-item-browser-actions">
           <div className="dataset-item-browser-toolbar">

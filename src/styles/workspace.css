@@ -163,6 +163,65 @@
   flex-wrap: wrap;
 }
 
+.dataset-workbench-filter-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) repeat(2, minmax(150px, 180px));
+  gap: var(--space-2);
+  align-items: end;
+  width: 100%;
+}
+
+.dataset-workbench-filter-row > label {
+  min-width: 0;
+}
+
+.dataset-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+.dataset-inventory-record {
+  padding: 0;
+}
+
+.dataset-inventory-record-btn {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  cursor: pointer;
+}
+
+.dataset-inventory-record-btn:focus-visible {
+  outline: 2px solid var(--color-border-strong);
+  outline-offset: -2px;
+  border-radius: inherit;
+}
+
+.annotation-studio-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+.annotation-studio-queue {
+  min-height: clamp(620px, 76vh, 980px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.annotation-studio-workbench {
+  min-height: clamp(620px, 76vh, 980px);
+}
+
 .workspace-workbench {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -174,6 +233,61 @@
   position: sticky;
   top: 0;
   z-index: 12;
+}
+
+.workspace-toolbar-card {
+  display: grid;
+  gap: var(--space-3);
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+}
+
+.workspace-toolbar-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.workspace-toolbar-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workspace-toolbar-copy h3 {
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.workspace-toolbar-actions,
+.workspace-toolbar-meta,
+.workspace-segmented-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.workspace-toolbar-actions {
+  justify-content: flex-end;
+}
+
+.workspace-toolbar-meta {
+  justify-content: space-between;
+}
+
+.workspace-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.5fr) repeat(3, minmax(140px, 0.85fr));
+  gap: var(--space-2);
+  align-items: end;
+}
+
+.workspace-filter-grid > * {
+  min-width: 0;
 }
 
 .workspace-workbench-grid {
@@ -204,6 +318,48 @@
 
 .workspace-section-header > * {
   min-width: 0;
+}
+
+.workspace-main-stack,
+.workspace-inspector-rail,
+.workspace-inspector-card,
+.workspace-action-cluster,
+.workspace-keyline-list {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.workspace-inspector-card {
+  align-content: start;
+}
+
+.workspace-action-cluster {
+  gap: var(--space-2);
+}
+
+.workspace-keyline-list {
+  gap: 10px;
+}
+
+.workspace-keyline-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.workspace-keyline-item > span {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.workspace-keyline-item > strong,
+.workspace-keyline-item > small {
+  text-align: right;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .settings-surface-nav {
@@ -558,6 +714,23 @@
     grid-template-columns: 1fr;
   }
 
+  .dataset-workbench-filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .annotation-studio-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .annotation-studio-queue,
+  .annotation-studio-workbench {
+    min-height: unset;
+  }
+
   .workspace-overview-signal-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -609,11 +782,19 @@
   }
 
   .workspace-section-header,
-  .workspace-record-item-top {
+  .workspace-record-item-top,
+  .workspace-toolbar-head,
+  .workspace-keyline-item,
+  .workspace-toolbar-meta {
     flex-direction: column;
   }
 
   .workspace-record-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .workspace-toolbar-actions {
     justify-content: flex-start;
     width: 100%;
   }
@@ -633,6 +814,10 @@
   }
 
   .three-col {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-filter-grid {
     grid-template-columns: 1fr;
   }
 }

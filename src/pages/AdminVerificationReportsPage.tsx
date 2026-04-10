@@ -11,7 +11,7 @@ import {
   WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
-  WorkspaceSplit
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -168,6 +168,16 @@ export default function AdminVerificationReportsPage() {
     return filtered;
   }, [baseUrlFilter, deferredSearchTerm, failedOnly, fromDate, items, sortMode, statusFilter, toDate]);
 
+  const hasActivePrimaryFilters =
+    searchTerm.trim().length > 0 ||
+    statusFilter !== 'all' ||
+    baseUrlFilter !== 'all' ||
+    failedOnly ||
+    fromDate.length > 0 ||
+    toDate.length > 0 ||
+    sortMode !== 'failed_first' ||
+    quickRange !== 'all';
+
   useEffect(() => {
     setCurrentPage(1);
   }, [deferredSearchTerm, statusFilter, baseUrlFilter, failedOnly, fromDate, toDate, sortMode, pageSize]);
@@ -245,6 +255,18 @@ export default function AdminVerificationReportsPage() {
     startDate.setDate(today.getDate() - days);
     setFromDate(toInputDate(startDate));
     setToDate(toInputDate(today));
+  }, []);
+
+  const resetFilters = useCallback(() => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setBaseUrlFilter('all');
+    setFailedOnly(false);
+    setFromDate('');
+    setToDate('');
+    setSortMode('failed_first');
+    setQuickRange('all');
+    setCurrentPage(1);
   }, []);
 
   const heroSection = (
@@ -339,26 +361,51 @@ export default function AdminVerificationReportsPage() {
         ]}
       />
 
-      <WorkspaceSplit
-        main={
-          <div className="stack">
-          <Card>
-            <WorkspaceSectionHeader
-              title={t('Report filters')}
-              description={t('Use primary filters first, then expand advanced options when triage needs more precision.')}
-            />
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('Verification Controls')}</h3>
+                <small className="muted">
+                  {t('Keep release triage filters, refresh, and export actions in one stable strip.')}
+                </small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <Button variant="secondary" size="sm" onClick={exportFilteredReports}>
+                  {t('Export Filtered JSON')}
+                </Button>
+                {hasActivePrimaryFilters ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                    {t('Clear filters')}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    loadReports('manual').catch(() => {
+                      // handled by local state
+                    });
+                  }}
+                  disabled={refreshing || loading}
+                >
+                  {refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
+              </div>
+            </div>
 
-            <div className="filters-grid">
-              <label>
-                {t('Search')}
+            <div className="workspace-filter-grid">
+              <label className="stack tight">
+                <small className="muted">{t('Search')}</small>
                 <Input
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
                   placeholder={t('filename, summary, username, base_url')}
                 />
               </label>
-              <label>
-                {t('Status')}
+              <label className="stack tight">
+                <small className="muted">{t('Status')}</small>
                 <Select
                   value={statusFilter}
                   onChange={(event) =>
@@ -371,8 +418,8 @@ export default function AdminVerificationReportsPage() {
                   <option value="unknown">{t('unknown')}</option>
                 </Select>
               </label>
-              <label>
-                {t('Target Base URL')}
+              <label className="stack tight">
+                <small className="muted">{t('Target Base URL')}</small>
                 <Select value={baseUrlFilter} onChange={(event) => setBaseUrlFilter(event.target.value)}>
                   <option value="all">{t('all')}</option>
                   {baseUrlOptions.map((item) => (
@@ -382,236 +429,284 @@ export default function AdminVerificationReportsPage() {
                   ))}
                 </Select>
               </label>
+              <label className="stack tight">
+                <small className="muted">{t('Triage mode')}</small>
+                <span className="row align-center gap workspace-checkbox-row">
+                  <Checkbox
+                    className="inline-checkbox"
+                    checked={failedOnly}
+                    onChange={(event) => setFailedOnly(event.target.checked)}
+                  />
+                  <span>{t('Only failed checks')}</span>
+                </span>
+              </label>
             </div>
 
-            <AdvancedSection
-              title={t('Advanced report filters')}
-              description={t('Date windows, failed-only mode, sorting, and pagination density controls.')}
-            >
-              <div className="filters-grid">
-                <label>
-                  {t('From Date')}
-                  <Input
-                    type="date"
-                    value={fromDate}
-                    onChange={(event) => {
-                      setQuickRange('all');
-                      setFromDate(event.target.value);
-                    }}
-                  />
-                </label>
-                <label>
-                  {t('To Date')}
-                  <Input
-                    type="date"
-                    value={toDate}
-                    onChange={(event) => {
-                      setQuickRange('all');
-                      setToDate(event.target.value);
-                    }}
-                  />
-                </label>
-                <label>
-                  {t('Sort')}
-                  <Select
-                    value={sortMode}
-                    onChange={(event) => setSortMode(event.target.value as ReportSortMode)}
-                  >
-                    <option value="latest">{t('latest first')}</option>
-                    <option value="oldest">{t('oldest first')}</option>
-                    <option value="failed_first">{t('failed first')}</option>
-                  </Select>
-                </label>
-                <label>
-                  {t('Page Size')}
-                  <Select
-                    value={pageSize}
-                    onChange={(event) =>
-                      setPageSize(Number(event.target.value) as (typeof PAGE_SIZE_OPTIONS)[number])
-                    }
-                  >
-                    {PAGE_SIZE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <Badge tone="info">{t('Matched')}: {filteredItems.length}</Badge>
+                <Badge tone={summary.failed > 0 ? 'warning' : 'neutral'}>
+                  {t('Failed reports')}: {summary.failed}
+                </Badge>
+                <Badge tone={summary.failedChecks > 0 ? 'warning' : 'neutral'}>
+                  {t('Failed checks')}: {summary.failedChecks}
+                </Badge>
+                <Badge tone="neutral">
+                  {t('Page')}: {safePage}/{totalPages}
+                </Badge>
               </div>
-              <div className="row gap wrap">
-                <Button
-                  variant={quickRange === '7d' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  className={`workspace-chip-toggle${quickRange === '7d' ? ' active' : ''}`}
-                  onClick={() => applyQuickRange('7d')}
-                >
-                  {t('Last 7 Days')}
-                </Button>
-                <Button
-                  variant={quickRange === '30d' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  className={`workspace-chip-toggle${quickRange === '30d' ? ' active' : ''}`}
-                  onClick={() => applyQuickRange('30d')}
-                >
-                  {t('Last 30 Days')}
-                </Button>
-                <Button
-                  variant={quickRange === 'all' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  className={`workspace-chip-toggle${quickRange === 'all' ? ' active' : ''}`}
-                  onClick={() => applyQuickRange('all')}
-                >
-                  {t('Clear Range')}
-                </Button>
-              </div>
-              <label className="row align-center gap workspace-checkbox-row">
-                <Checkbox
-                  className="inline-checkbox"
-                  checked={failedOnly}
-                  onChange={(event) => setFailedOnly(event.target.checked)}
-                />
-                <span>{t('Only show reports with failed checks')}</span>
-              </label>
-            </AdvancedSection>
+            </div>
           </Card>
+        }
+        main={
+          <div className="workspace-main-stack">
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Advanced report filters')}
+                description={t('Date windows, sort order, and density controls stay available without crowding the top toolbar.')}
+              />
+              <AdvancedSection
+                title={t('Expand advanced controls')}
+                description={t('Use these when release evidence triage needs date windows or alternate ordering.')}
+              >
+                <div className="filters-grid">
+                  <label>
+                    {t('From Date')}
+                    <Input
+                      type="date"
+                      value={fromDate}
+                      onChange={(event) => {
+                        setQuickRange('all');
+                        setFromDate(event.target.value);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    {t('To Date')}
+                    <Input
+                      type="date"
+                      value={toDate}
+                      onChange={(event) => {
+                        setQuickRange('all');
+                        setToDate(event.target.value);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    {t('Sort')}
+                    <Select
+                      value={sortMode}
+                      onChange={(event) => setSortMode(event.target.value as ReportSortMode)}
+                    >
+                      <option value="latest">{t('latest first')}</option>
+                      <option value="oldest">{t('oldest first')}</option>
+                      <option value="failed_first">{t('failed first')}</option>
+                    </Select>
+                  </label>
+                  <label>
+                    {t('Page Size')}
+                    <Select
+                      value={pageSize}
+                      onChange={(event) =>
+                        setPageSize(Number(event.target.value) as (typeof PAGE_SIZE_OPTIONS)[number])
+                      }
+                    >
+                      {PAGE_SIZE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                </div>
+                <div className="row gap wrap">
+                  <Button
+                    variant={quickRange === '7d' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className={`workspace-chip-toggle${quickRange === '7d' ? ' active' : ''}`}
+                    onClick={() => applyQuickRange('7d')}
+                  >
+                    {t('Last 7 Days')}
+                  </Button>
+                  <Button
+                    variant={quickRange === '30d' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className={`workspace-chip-toggle${quickRange === '30d' ? ' active' : ''}`}
+                    onClick={() => applyQuickRange('30d')}
+                  >
+                    {t('Last 30 Days')}
+                  </Button>
+                  <Button
+                    variant={quickRange === 'all' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className={`workspace-chip-toggle${quickRange === 'all' ? ' active' : ''}`}
+                    onClick={() => applyQuickRange('all')}
+                  >
+                    {t('Clear Range')}
+                  </Button>
+                </div>
+              </AdvancedSection>
+            </Card>
 
-          {filteredItems.length === 0 ? (
-            <StateBlock
-              variant="empty"
-              title={t('No Matching Reports')}
-              description={t('Adjust filters or run docker verification scripts to create new reports.')}
-            />
-          ) : (
-            <ul className="workspace-record-list">
-              {paginatedItems.map((item) => {
-                const visibleChecks = failedOnly
-                  ? item.checks.filter((check) => check.status !== 'passed')
-                  : item.checks;
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Verification reports')}
+                description={t('Review the filtered evidence set and expand individual reports only when you need deeper check context.')}
+                actions={
+                  <Badge tone="neutral">
+                    {t('Showing {count} items', { count: paginatedItems.length })}
+                  </Badge>
+                }
+              />
+              <small className="muted">
+                {t('Use filters to narrow release evidence and export the exact subset required for governance review.')}
+              </small>
 
-                return (
-                  <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
-                    <div className="row between gap wrap align-center">
-                      <strong>{item.filename}</strong>
-                      <StatusTag status={item.status}>{t(item.status)}</StatusTag>
-                    </div>
-                    <small className="muted">{item.summary || t('No summary provided.')}</small>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {t('finished')}: {formatCompactTimestamp(item.finished_at_utc, notAvailable)}
-                      </Badge>
-                      <Badge tone="info">
-                        {t('base_url')}: {item.target_base_url || notAvailable}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('business user')}: {item.business_username || notAvailable}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('probe user')}: {item.probe_username || notAvailable}
-                      </Badge>
-                      <Badge tone={item.checks_failed > 0 ? 'danger' : 'success'}>
-                        {t('checks')}: {item.checks_total} {t('total')}, {item.checks_failed} {t('failed')}
-                      </Badge>
-                    </div>
-                    {item.runtime_metrics_retention ? (
-                      <div className="row gap wrap">
-                        <Badge tone="neutral">
-                          {t('metrics rows')}: {item.runtime_metrics_retention.current_total_rows} /{' '}
-                          {item.runtime_metrics_retention.max_total_rows}
-                        </Badge>
-                        <Badge tone="warning">
-                          {t('Per-job cap')}: {item.runtime_metrics_retention.max_points_per_job}
-                        </Badge>
-                      </div>
-                    ) : null}
-                    <details className="workspace-details">
-                      <summary>{t('Checks detail ({count})', { count: visibleChecks.length })}</summary>
-                      {visibleChecks.length > 0 ? (
-                        <div className="stack tight">
-                          {visibleChecks.map((check) => (
-                            <Panel key={`${item.id}-${check.name}`} tone="soft">
-                              <div className="row gap wrap align-center">
-                                <StatusTag status={check.status}>{t(check.status)}</StatusTag>
-                                <strong>{check.name}</strong>
-                              </div>
-                              <small className="muted">{check.detail}</small>
-                            </Panel>
-                          ))}
+              {filteredItems.length === 0 ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('No Matching Reports')}
+                  description={t('Adjust filters or run docker verification scripts to create new reports.')}
+                />
+              ) : (
+                <ul className="workspace-record-list">
+                  {paginatedItems.map((item) => {
+                    const visibleChecks = failedOnly
+                      ? item.checks.filter((check) => check.status !== 'passed')
+                      : item.checks;
+
+                    return (
+                      <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
+                        <div className="row between gap wrap align-center">
+                          <strong>{item.filename}</strong>
+                          <StatusTag status={item.status}>{t(item.status)}</StatusTag>
                         </div>
-                      ) : (
-                        <small className="muted">{t('No checks to show for current filter.')}</small>
-                      )}
-                    </details>
-                  </Panel>
-                );
-              })}
-            </ul>
-          )}
+                        <small className="muted">{item.summary || t('No summary provided.')}</small>
+                        <div className="row gap wrap">
+                          <Badge tone="neutral">
+                            {t('finished')}: {formatCompactTimestamp(item.finished_at_utc, notAvailable)}
+                          </Badge>
+                          <Badge tone="info">
+                            {t('base_url')}: {item.target_base_url || notAvailable}
+                          </Badge>
+                          <Badge tone="neutral">
+                            {t('business user')}: {item.business_username || notAvailable}
+                          </Badge>
+                          <Badge tone="neutral">
+                            {t('probe user')}: {item.probe_username || notAvailable}
+                          </Badge>
+                          <Badge tone={item.checks_failed > 0 ? 'danger' : 'success'}>
+                            {t('checks')}: {item.checks_total} {t('total')}, {item.checks_failed} {t('failed')}
+                          </Badge>
+                        </div>
+                        {item.runtime_metrics_retention ? (
+                          <div className="row gap wrap">
+                            <Badge tone="neutral">
+                              {t('metrics rows')}: {item.runtime_metrics_retention.current_total_rows} /{' '}
+                              {item.runtime_metrics_retention.max_total_rows}
+                            </Badge>
+                            <Badge tone="warning">
+                              {t('Per-job cap')}: {item.runtime_metrics_retention.max_points_per_job}
+                            </Badge>
+                          </div>
+                        ) : null}
+                        <details className="workspace-details">
+                          <summary>{t('Checks detail ({count})', { count: visibleChecks.length })}</summary>
+                          {visibleChecks.length > 0 ? (
+                            <div className="stack tight">
+                              {visibleChecks.map((check) => (
+                                <Panel key={`${item.id}-${check.name}`} tone="soft">
+                                  <div className="row gap wrap align-center">
+                                    <StatusTag status={check.status}>{t(check.status)}</StatusTag>
+                                    <strong>{check.name}</strong>
+                                  </div>
+                                  <small className="muted">{check.detail}</small>
+                                </Panel>
+                              ))}
+                            </div>
+                          ) : (
+                            <small className="muted">{t('No checks to show for current filter.')}</small>
+                          )}
+                        </details>
+                      </Panel>
+                    );
+                  })}
+                </ul>
+              )}
+            </Card>
           </div>
         }
         side={
-          <>
-          <Card as="article">
-            <div className="stack tight">
-              <h3>{t('Report actions')}</h3>
-              <small className="muted">
-                {t('Keep data export and refresh controls grouped so governance triage stays predictable.')}
-              </small>
-            </div>
-            <div className="workspace-button-stack">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  loadReports('manual').catch(() => {
-                    // handled by local state
-                  });
-                }}
-                disabled={refreshing || loading}
-              >
-                {refreshing ? t('Refreshing...') : t('Refresh')}
-              </Button>
-              <Button variant="secondary" size="sm" onClick={exportFilteredReports}>
-                {t('Export Filtered JSON')}
-              </Button>
-            </div>
-          </Card>
+          <div className="workspace-inspector-rail">
+            <Card as="article" className="workspace-inspector-card">
+              <WorkspaceSectionHeader
+                title={t('Current scope')}
+                description={t('Keep the active triage context visible while scrolling through report evidence.')}
+              />
+              <div className="workspace-keyline-list">
+                <div className="workspace-keyline-item">
+                  <span>{t('Search')}</span>
+                  <strong>{searchTerm.trim() || t('all')}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Status')}</span>
+                  <strong>{statusFilter === 'all' ? t('all') : t(statusFilter)}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Base URL')}</span>
+                  <small>{baseUrlFilter === 'all' ? t('all') : baseUrlFilter}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Date range')}</span>
+                  <small>
+                    {fromDate || toDate ? `${fromDate || '...'} -> ${toDate || '...'}` : t('all')}
+                  </small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Sort')}</span>
+                  <strong>{sortMode === 'latest' ? t('latest first') : sortMode === 'oldest' ? t('oldest first') : t('failed first')}</strong>
+                </div>
+              </div>
+              <div className="row gap wrap">
+                <Badge tone={failedOnly ? 'warning' : 'neutral'}>
+                  {failedOnly ? t('Failed-only mode') : t('All checks visible')}
+                </Badge>
+                <Badge tone="neutral">{t('Quick range')}: {quickRange === 'all' ? t('none') : quickRange}</Badge>
+              </div>
+            </Card>
 
-          <Card as="article">
-            <div className="stack tight">
-              <h3>{t('Pagination')}</h3>
-              <small className="muted">{t('Move between pages without resetting current filters.')}</small>
-            </div>
-            <div className="row gap wrap">
-              <Badge tone="neutral">
-                {t('total')}: {items.length}
-              </Badge>
-              <Badge tone="info">
-                {t('matched')}: {filteredItems.length}
-              </Badge>
-              <Badge tone="neutral">
-                {t('page')}: {safePage}/{totalPages}
-              </Badge>
-            </div>
-            <div className="workspace-button-stack">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                disabled={safePage <= 1}
-              >
-                {t('Prev Page')}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                disabled={safePage >= totalPages}
-              >
-                {t('Next Page')}
-              </Button>
-            </div>
-          </Card>
-          </>
+            <Card as="article" className="workspace-inspector-card">
+              <WorkspaceSectionHeader
+                title={t('Pagination')}
+                description={t('Move between pages without resetting the current verification lens.')}
+              />
+              <div className="row gap wrap">
+                <Badge tone="neutral">{t('total')}: {items.length}</Badge>
+                <Badge tone="info">{t('matched')}: {filteredItems.length}</Badge>
+                <Badge tone="neutral">
+                  {t('page')}: {safePage}/{totalPages}
+                </Badge>
+              </div>
+              <div className="workspace-button-stack">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={safePage <= 1}
+                >
+                  {t('Prev Page')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={safePage >= totalPages}
+                >
+                  {t('Next Page')}
+                </Button>
+              </div>
+            </Card>
+          </div>
         }
       />
     </WorkspacePage>

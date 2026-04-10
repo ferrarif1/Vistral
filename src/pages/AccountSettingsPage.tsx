@@ -1,6 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { CreateUserInput, User } from '../../shared/domain';
-import AdvancedSection from '../components/AdvancedSection';
 import SettingsTabs from '../components/settings/SettingsTabs';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
@@ -11,7 +10,8 @@ import {
   WorkspaceHero,
   WorkspaceMetricGrid,
   WorkspacePage,
-  WorkspaceSplit
+  WorkspaceSectionHeader,
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -153,6 +153,10 @@ export default function AccountSettingsPage() {
     [filteredUsers, visibleDirectoryCount]
   );
   const hiddenFilteredUserCount = Math.max(0, filteredUsers.length - visibleFilteredUsers.length);
+  const hasDirectoryFilters =
+    directoryQuery.trim().length > 0 ||
+    directoryRoleFilter !== 'all' ||
+    directoryStatusFilter !== 'all';
 
   const authRequired = loadError === 'Authentication required.';
   const managedAccountCount = currentUser?.role === 'admin' ? users.length : currentUser ? 1 : 0;
@@ -323,6 +327,12 @@ export default function AccountSettingsPage() {
     );
   }, [filteredUsers.length]);
 
+  const resetDirectoryFilters = () => {
+    setDirectoryQuery('');
+    setDirectoryRoleFilter('all');
+    setDirectoryStatusFilter('all');
+  };
+
   return (
     <WorkspacePage>
       <SettingsTabs />
@@ -393,116 +403,436 @@ export default function AccountSettingsPage() {
       ) : null}
 
       {!authRequired ? (
-        <WorkspaceSplit
-          main={
-            <Card>
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h3>{t('Change Password')}</h3>
-                <small className="muted">
-                  {t('All authenticated users can update their own password from this tab.')}
-                </small>
-              </div>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  reload().catch(() => {
-                    // handled in helper
-                  });
-                }}
-                disabled={loading || refreshing || passwordSaving || creatingUser}
-              >
-                {loading || refreshing ? t('Refreshing...') : t('Refresh')}
-              </Button>
-            </div>
-
-            {loading ? (
-              <StateBlock
-                variant="loading"
-                title={t('Loading')}
-                description={t('Loading account settings and access scope.')}
-              />
-            ) : (
-              <form className="stack" onSubmit={submitPasswordChange}>
-                <div className="workspace-form-grid">
-                  <label>
-                    {t('Current Password')}
-                    <Input
-                      type="password"
-                      value={passwordForm.current_password}
-                      onChange={(event) =>
-                        setPasswordForm((previous) => ({
-                          ...previous,
-                          current_password: event.target.value
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    {t('New Password')}
-                    <Input
-                      type="password"
-                      value={passwordForm.new_password}
-                      onChange={(event) =>
-                        setPasswordForm((previous) => ({
-                          ...previous,
-                          new_password: event.target.value
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="workspace-form-span-2">
-                    {t('Confirm New Password')}
-                    <Input
-                      type="password"
-                      value={passwordForm.confirm_password}
-                      onChange={(event) =>
-                        setPasswordForm((previous) => ({
-                          ...previous,
-                          confirm_password: event.target.value
-                        }))
-                      }
-                    />
-                  </label>
+        <WorkspaceWorkbench
+          toolbar={
+            <Card as="section" className="workspace-toolbar-card">
+              <div className="workspace-toolbar-head">
+                <div className="workspace-toolbar-copy">
+                  <h3>{t('Account Controls')}</h3>
+                  <small className="muted">
+                    {t('Keep password rotation, account governance, and directory filtering in one steady control strip.')}
+                  </small>
                 </div>
-                <small className="muted">
-                  {t('Password updates require your current password plus a confirmed new password.')}
-                </small>
-                {!passwordConfirmationMatches ? (
-                  <small className="muted">{t('New password confirmation does not match.')}</small>
-                ) : null}
-                <div className="row gap wrap">
-                  <Button type="submit" disabled={!canSubmitPassword}>
-                    {passwordSaving ? t('Saving...') : t('Update Password')}
+                <div className="workspace-toolbar-actions">
+                  {currentUser?.role === 'admin' && hasDirectoryFilters ? (
+                    <Button type="button" variant="ghost" size="sm" onClick={resetDirectoryFilters}>
+                      {t('Clear filters')}
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      reload().catch(() => {
+                        // handled in helper
+                      });
+                    }}
+                    disabled={loading || refreshing || passwordSaving || creatingUser}
+                  >
+                    {loading || refreshing ? t('Refreshing...') : t('Refresh')}
                   </Button>
                 </div>
-              </form>
-            )}
-
-            {passwordStatus ? (
-              <StateBlock
-                variant={passwordStatus.variant}
-                title={
-                  passwordStatus.variant === 'success' ? t('Settings Updated') : t('Action Failed')
-                }
-                description={passwordStatus.text}
-              />
-            ) : null}
+              </div>
+              {currentUser?.role === 'admin' ? (
+                <div className="workspace-filter-grid">
+                  <label className="stack tight">
+                    <small className="muted">{t('Search accounts')}</small>
+                    <Input
+                      value={directoryQuery}
+                      onChange={(event) => setDirectoryQuery(event.target.value)}
+                      placeholder={t('Search by username')}
+                    />
+                  </label>
+                  <label className="stack tight">
+                    <small className="muted">{t('Role')}</small>
+                    <Select
+                      value={directoryRoleFilter}
+                      onChange={(event) =>
+                        setDirectoryRoleFilter(event.target.value as 'all' | User['role'])
+                      }
+                    >
+                      <option value="all">{t('All roles')}</option>
+                      <option value="admin">{t('Admin')}</option>
+                      <option value="user">{t('User')}</option>
+                    </Select>
+                  </label>
+                  <label className="stack tight">
+                    <small className="muted">{t('Status')}</small>
+                    <Select
+                      value={directoryStatusFilter}
+                      onChange={(event) =>
+                        setDirectoryStatusFilter(event.target.value as 'all' | User['status'])
+                      }
+                    >
+                      <option value="all">{t('All statuses')}</option>
+                      <option value="active">{t('active')}</option>
+                      <option value="disabled">{t('disabled')}</option>
+                    </Select>
+                  </label>
+                  <div className="stack tight">
+                    <small className="muted">{t('Directory scope')}</small>
+                    <div className="row gap wrap">
+                      <Badge tone="info">{t('Matched')}: {filteredUsers.length}</Badge>
+                      <Badge tone="neutral">{t('Total')}: {sortedUsers.length}</Badge>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="workspace-toolbar-meta">
+                <div className="workspace-segmented-actions">
+                  <Badge tone="neutral">
+                    {t('Current user')}: {currentUser?.username ?? t('guest')}
+                  </Badge>
+                  <Badge tone="neutral">
+                    {t('Role')}: {currentUser ? roleLabel(currentUser.role) : t('User')}
+                  </Badge>
+                  <Badge tone="info">{t('Managed accounts')}: {managedAccountCount}</Badge>
+                  {currentUser?.role === 'admin' ? (
+                    <Badge tone={directorySummary.disabledAccounts > 0 ? 'warning' : 'neutral'}>
+                      {t('Disabled accounts')}: {directorySummary.disabledAccounts}
+                    </Badge>
+                  ) : null}
+                </div>
+              </div>
             </Card>
           }
-          side={
-            <div>
-            <Card>
-              <div className="stack tight">
-                <h3>{t('Current account')}</h3>
+          main={
+            <div className="workspace-main-stack">
+              <Card>
+                <WorkspaceSectionHeader
+                  title={t('Change Password')}
+                  description={t('All authenticated users can update their own password from this tab.')}
+                />
                 <small className="muted">
-                  {t('Use this surface for password rotation and session-safe account operations.')}
+                  {t('Use this workbench to update your own password and manage account provisioning in one place.')}
                 </small>
-              </div>
-              <ul className="workspace-record-list compact">
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
+
+                {loading ? (
+                  <StateBlock
+                    variant="loading"
+                    title={t('Loading')}
+                    description={t('Loading account settings and access scope.')}
+                  />
+                ) : (
+                  <form className="stack" onSubmit={submitPasswordChange}>
+                    <div className="workspace-form-grid">
+                      <label>
+                        {t('Current Password')}
+                        <Input
+                          type="password"
+                          value={passwordForm.current_password}
+                          onChange={(event) =>
+                            setPasswordForm((previous) => ({
+                              ...previous,
+                              current_password: event.target.value
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        {t('New Password')}
+                        <Input
+                          type="password"
+                          value={passwordForm.new_password}
+                          onChange={(event) =>
+                            setPasswordForm((previous) => ({
+                              ...previous,
+                              new_password: event.target.value
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="workspace-form-span-2">
+                        {t('Confirm New Password')}
+                        <Input
+                          type="password"
+                          value={passwordForm.confirm_password}
+                          onChange={(event) =>
+                            setPasswordForm((previous) => ({
+                              ...previous,
+                              confirm_password: event.target.value
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <small className="muted">
+                      {t('Password updates require your current password plus a confirmed new password.')}
+                    </small>
+                    {!passwordConfirmationMatches ? (
+                      <small className="muted">{t('New password confirmation does not match.')}</small>
+                    ) : null}
+                    <div className="row gap wrap">
+                      <Button type="submit" disabled={!canSubmitPassword}>
+                        {passwordSaving ? t('Saving...') : t('Update Password')}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {passwordStatus ? (
+                  <StateBlock
+                    variant={passwordStatus.variant}
+                    title={
+                      passwordStatus.variant === 'success' ? t('Settings Updated') : t('Action Failed')
+                    }
+                    description={passwordStatus.text}
+                  />
+                ) : null}
+              </Card>
+
+              {currentUser?.role === 'admin' ? (
+                <Card>
+                  <WorkspaceSectionHeader
+                    title={t('Account Directory')}
+                    description={t('Review and narrow the account list before creating or auditing access.')}
+                    actions={
+                      <Badge tone="neutral">
+                        {t('Total')}: {sortedUsers.length}
+                      </Badge>
+                    }
+                  />
+                  <small className="muted">
+                    {t('Filter and review provisioned accounts before password reset or status changes.')} {t('Matched')}:{' '}
+                    {filteredUsers.length} · {t('Total')}: {sortedUsers.length}
+                  </small>
+                  <small className="muted">
+                    {t('Disabling an account signs out its active sessions immediately. Reactivated users must log in again.')}
+                  </small>
+
+                  {adminActionStatus ? (
+                    <StateBlock
+                      variant={adminActionStatus.variant}
+                      title={
+                        adminActionStatus.variant === 'success' ? t('Action Completed') : t('Action Failed')
+                      }
+                      description={adminActionStatus.text}
+                    />
+                  ) : null}
+
+                  {directoryError ? (
+                    <StateBlock variant="error" title={t('Load Failed')} description={directoryError} />
+                  ) : loading ? (
+                    <StateBlock
+                      variant="loading"
+                      title={t('Loading')}
+                      description={t('Loading provisioned accounts.')}
+                    />
+                  ) : sortedUsers.length === 0 ? (
+                    <StateBlock
+                      variant="empty"
+                      title={t('No accounts yet.')}
+                      description={t('Provisioned accounts will appear here after an administrator creates them.')}
+                    />
+                  ) : filteredUsers.length === 0 ? (
+                    <StateBlock
+                      variant="empty"
+                      title={t('No accounts match current filters.')}
+                      description={t('Try another keyword or reset the role filter.')}
+                    />
+                  ) : (
+                    <ul className="workspace-record-list">
+                      {visibleFilteredUsers.map((user) => (
+                        <Panel key={user.id} as="li" className="workspace-record-item" tone="soft">
+                          <div className="workspace-record-item-top">
+                            <div className="workspace-record-summary stack tight">
+                              <strong>{user.username}</strong>
+                              <small className="muted">
+                                {t('Created')}: {formatCompactTimestamp(user.created_at)}
+                              </small>
+                            </div>
+                            <div className="workspace-record-actions">
+                              <Badge tone={roleTone(user.role)}>{roleLabel(user.role)}</Badge>
+                              <StatusTag status={user.status}>
+                                {t('Status')}: {t(user.status)}
+                              </StatusTag>
+                            </div>
+                          </div>
+                          <div className="row gap wrap">
+                            {user.id === currentUser?.id ? (
+                              <Badge tone="info">{t('Current session')}</Badge>
+                            ) : null}
+                            <Badge tone={roleTone(user.role)}>
+                              {t('Role')}: {roleLabel(user.role)}
+                            </Badge>
+                          </div>
+                          <small className="muted">
+                            {t('Last updated')}: {formatCompactTimestamp(user.updated_at)} · {t('Last login')}:{' '}
+                            {user.last_login_at ? formatCompactTimestamp(user.last_login_at) : t('Never')}
+                          </small>
+                          {user.status === 'disabled' && user.status_reason ? (
+                            <small className="muted">
+                              {t('Disable reason')}: {user.status_reason}
+                            </small>
+                          ) : null}
+                          <div className="row gap wrap">
+                            <Button
+                              type="button"
+                              variant={passwordResetTargetId === user.id ? 'secondary' : 'ghost'}
+                              size="sm"
+                              onClick={() => {
+                                setAdminActionStatus(null);
+                                setDisableReasonTargetId(null);
+                                setDisableReasonValue('');
+                                setPasswordResetTargetId((previous) =>
+                                  previous === user.id ? null : user.id
+                                );
+                                setPasswordResetValue('');
+                              }}
+                              disabled={statusUpdatingUserId === user.id}
+                            >
+                              {passwordResetTargetId === user.id ? t('Cancel') : t('Reset Password')}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant={user.status === 'active' ? 'danger' : 'secondary'}
+                              size="sm"
+                              onClick={() => {
+                                if (user.status === 'active') {
+                                  const opening = disableReasonTargetId !== user.id;
+                                  setAdminActionStatus(null);
+                                  setPasswordResetTargetId(null);
+                                  setPasswordResetValue('');
+                                  setDisableReasonTargetId(opening ? user.id : null);
+                                  setDisableReasonValue(opening ? user.status_reason ?? '' : '');
+                                  return;
+                                }
+
+                                void updateUserStatus(user, 'active');
+                              }}
+                              disabled={
+                                statusUpdatingUserId !== null ||
+                                (user.status === 'active' &&
+                                  (user.id === currentUser?.id ||
+                                    (user.role === 'admin' && directorySummary.activeAdmins <= 1)))
+                              }
+                            >
+                              {statusUpdatingUserId === user.id
+                                ? t('Saving...')
+                                : user.status === 'active'
+                                  ? disableReasonTargetId === user.id
+                                    ? t('Cancel')
+                                    : t('Disable Account')
+                                  : t('Reactivate Account')}
+                            </Button>
+                          </div>
+                          {user.id === currentUser?.id && user.status === 'active' ? (
+                            <small className="muted">{t('Current admin session cannot be disabled from this directory.')}</small>
+                          ) : null}
+                          {user.role === 'admin' &&
+                          user.status === 'active' &&
+                          directorySummary.activeAdmins <= 1 ? (
+                            <small className="muted">{t('Last active admin account cannot be disabled.')}</small>
+                          ) : null}
+                          {disableReasonTargetId === user.id ? (
+                            <form
+                              className="stack"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void submitDisableUser(user);
+                              }}
+                            >
+                              <label>
+                                {t('Disable reason')}
+                                <Input
+                                  value={disableReasonValue}
+                                  onChange={(event) => setDisableReasonValue(event.target.value)}
+                                  placeholder={t('For example: Access paused during security review.')}
+                                />
+                              </label>
+                              <small className="muted">
+                                {t('Add a brief reason so future admins understand why access was paused.')}
+                              </small>
+                              <div className="row gap wrap">
+                                <Button type="submit" variant="danger" size="sm" disabled={!canSubmitDisableReason}>
+                                  {statusUpdatingUserId === user.id ? t('Saving...') : t('Confirm Disable')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setDisableReasonTargetId(null);
+                                    setDisableReasonValue('');
+                                  }}
+                                  disabled={statusUpdatingUserId === user.id}
+                                >
+                                  {t('Cancel')}
+                                </Button>
+                              </div>
+                            </form>
+                          ) : null}
+                          {passwordResetTargetId === user.id ? (
+                            <form
+                              className="stack"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void submitPasswordReset(user);
+                              }}
+                            >
+                              <label>
+                                {t('New temporary password')}
+                                <Input
+                                  type="password"
+                                  value={passwordResetValue}
+                                  onChange={(event) => setPasswordResetValue(event.target.value)}
+                                />
+                              </label>
+                              <small className="muted">
+                                {t('Use at least 8 characters, then share it securely with the account owner.')}
+                              </small>
+                              <div className="row gap wrap">
+                                <Button type="submit" size="sm" disabled={!canSubmitPasswordReset}>
+                                  {resettingUserId === user.id ? t('Saving...') : t('Confirm Password Reset')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setPasswordResetTargetId(null);
+                                    setPasswordResetValue('');
+                                  }}
+                                  disabled={resettingUserId === user.id}
+                                >
+                                  {t('Cancel')}
+                                </Button>
+                              </div>
+                            </form>
+                          ) : null}
+                        </Panel>
+                      ))}
+                    </ul>
+                  )}
+                  {hiddenFilteredUserCount > 0 ? (
+                    <div className="workspace-record-actions">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setVisibleDirectoryCount((previous) =>
+                            Math.min(filteredUsers.length, previous + accountDirectoryBatchSize)
+                          );
+                        }}
+                      >
+                        {t('Load More Users')} ({hiddenFilteredUserCount})
+                      </Button>
+                    </div>
+                  ) : null}
+                </Card>
+              ) : null}
+            </div>
+          }
+          side={
+            <div className="workspace-inspector-rail">
+              <Card className="workspace-inspector-card">
+                <WorkspaceSectionHeader
+                  title={t('Current account')}
+                  description={t('Use this surface for password rotation and session-safe account operations.')}
+                />
+                <Panel as="section" className="stack tight" tone="soft">
                   <div className="row between gap wrap">
                     <strong>{currentUser?.username ?? t('guest')}</strong>
                     <div className="workspace-record-actions">
@@ -526,423 +856,116 @@ export default function AccountSettingsPage() {
                     </small>
                   ) : null}
                 </Panel>
-              </ul>
-            </Card>
+              </Card>
 
-            <Card>
-              <div className="stack tight">
-                <h3>{t('Account Provisioning')}</h3>
-                <small className="muted">
-                  {currentUser?.role === 'admin'
-                    ? t('Administrators can create user or admin accounts from this tab.')
-                    : t('Ask an administrator to provision your account before first login.')}
-                </small>
-              </div>
-
-              {currentUser?.role !== 'admin' ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('Admin only')}
-                  description={t('Only administrators can create new accounts.')}
+              <Card className="workspace-inspector-card">
+                <WorkspaceSectionHeader
+                  title={t('Account Provisioning')}
+                  description={
+                    currentUser?.role === 'admin'
+                      ? t('Administrators can create user or admin accounts from this tab.')
+                      : t('Ask an administrator to provision your account before first login.')
+                  }
                 />
-              ) : (
-                <form className="stack" onSubmit={submitCreateUser}>
-                  <div className="workspace-form-grid">
-                    <label>
-                      {t('Username')}
-                      <Input
-                        value={createUserForm.username}
-                        onChange={(event) =>
-                          setCreateUserForm((previous) => ({
-                            ...previous,
-                            username: event.target.value
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t('Password')}
-                      <Input
-                        type="password"
-                        value={createUserForm.password}
-                        onChange={(event) =>
-                          setCreateUserForm((previous) => ({
-                            ...previous,
-                            password: event.target.value
-                          }))
-                        }
-                      />
-                    </label>
-                    <label className="workspace-form-span-2">
-                      {t('Role')}
-                      <Select
-                        value={createUserForm.role}
-                        onChange={(event) =>
-                          setCreateUserForm((previous) => ({
-                            ...previous,
-                            role: event.target.value as CreateUserInput['role']
-                          }))
-                        }
-                      >
-                        <option value="user">{t('User')}</option>
-                        <option value="admin">{t('Admin')}</option>
-                      </Select>
-                    </label>
-                  </div>
-                  <small className="muted">{t('Create passwords with at least 8 characters.')}</small>
-                  <div className="row gap wrap">
-                    <Button type="submit" disabled={!canCreateUser}>
-                      {creatingUser ? t('Creating...') : t('Create Account')}
-                    </Button>
-                  </div>
-                </form>
-              )}
 
-              {createStatus ? (
-                <StateBlock
-                  variant={createStatus.variant}
-                  title={createStatus.variant === 'success' ? t('Action Completed') : t('Action Failed')}
-                  description={createStatus.text}
-                />
-              ) : null}
-            </Card>
-            </div>
-          }
-        />
-      ) : null}
-
-      {!authRequired && currentUser?.role === 'admin' ? (
-        <WorkspaceSplit
-          main={
-            <Card>
-            <div className="workspace-section-header">
-              <div className="stack tight">
-                <h3>{t('Account Directory')}</h3>
-                <small className="muted">
-                  {t('Review and narrow the account list before creating or auditing access.')}
-                </small>
-              </div>
-              <Badge tone="neutral">
-                {t('Total')}: {sortedUsers.length}
-              </Badge>
-            </div>
-
-            <small className="muted">
-              {t('Disabling an account signs out its active sessions immediately. Reactivated users must log in again.')}
-            </small>
-
-            {adminActionStatus ? (
-              <StateBlock
-                variant={adminActionStatus.variant}
-                title={
-                  adminActionStatus.variant === 'success' ? t('Action Completed') : t('Action Failed')
-                }
-                description={adminActionStatus.text}
-              />
-            ) : null}
-
-            {directoryError ? (
-              <StateBlock variant="error" title={t('Load Failed')} description={directoryError} />
-            ) : loading ? (
-              <StateBlock
-                variant="loading"
-                title={t('Loading')}
-                description={t('Loading provisioned accounts.')}
-              />
-            ) : sortedUsers.length === 0 ? (
-              <StateBlock
-                variant="empty"
-                title={t('No accounts yet.')}
-                description={t('Provisioned accounts will appear here after an administrator creates them.')}
-              />
-            ) : filteredUsers.length === 0 ? (
-              <StateBlock
-                variant="empty"
-                title={t('No accounts match current filters.')}
-                description={t('Try another keyword or reset the role filter.')}
-              />
-            ) : (
-              <ul className="workspace-record-list">
-                {visibleFilteredUsers.map((user) => (
-                  <Panel key={user.id} as="li" className="workspace-record-item" tone="soft">
-                    <div className="workspace-record-item-top">
-                      <div className="workspace-record-summary stack tight">
-                        <strong>{user.username}</strong>
-                        <small className="muted">
-                          {t('Created')}: {formatCompactTimestamp(user.created_at)}
-                        </small>
-                      </div>
-                      <div className="workspace-record-actions">
-                        <Badge tone={roleTone(user.role)}>{roleLabel(user.role)}</Badge>
-                        <StatusTag status={user.status}>
-                          {t('Status')}: {t(user.status)}
-                        </StatusTag>
-                      </div>
-                    </div>
-                    <div className="row gap wrap">
-                      {user.id === currentUser?.id ? (
-                        <Badge tone="info">{t('Current session')}</Badge>
-                      ) : null}
-                      <Badge tone={roleTone(user.role)}>
-                        {t('Role')}: {roleLabel(user.role)}
-                      </Badge>
-                    </div>
-                    <small className="muted">
-                      {t('Last updated')}: {formatCompactTimestamp(user.updated_at)} · {t('Last login')}:{' '}
-                      {user.last_login_at ? formatCompactTimestamp(user.last_login_at) : t('Never')}
-                    </small>
-                    {user.status === 'disabled' && user.status_reason ? (
-                      <small className="muted">
-                        {t('Disable reason')}: {user.status_reason}
-                      </small>
-                    ) : null}
-                    <div className="row gap wrap">
-                      <Button
-                        type="button"
-                        variant={passwordResetTargetId === user.id ? 'secondary' : 'ghost'}
-                        size="sm"
-                        onClick={() => {
-                          setAdminActionStatus(null);
-                          setDisableReasonTargetId(null);
-                          setDisableReasonValue('');
-                          setPasswordResetTargetId((previous) =>
-                            previous === user.id ? null : user.id
-                          );
-                          setPasswordResetValue('');
-                        }}
-                        disabled={statusUpdatingUserId === user.id}
-                      >
-                        {passwordResetTargetId === user.id ? t('Cancel') : t('Reset Password')}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={user.status === 'active' ? 'danger' : 'secondary'}
-                        size="sm"
-                        onClick={() => {
-                          if (user.status === 'active') {
-                            const opening = disableReasonTargetId !== user.id;
-                            setAdminActionStatus(null);
-                            setPasswordResetTargetId(null);
-                            setPasswordResetValue('');
-                            setDisableReasonTargetId(opening ? user.id : null);
-                            setDisableReasonValue(opening ? user.status_reason ?? '' : '');
-                            return;
+                {currentUser?.role !== 'admin' ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Admin only')}
+                    description={t('Only administrators can create new accounts.')}
+                  />
+                ) : (
+                  <form className="stack" onSubmit={submitCreateUser}>
+                    <div className="workspace-form-grid">
+                      <label>
+                        {t('Username')}
+                        <Input
+                          value={createUserForm.username}
+                          onChange={(event) =>
+                            setCreateUserForm((previous) => ({
+                              ...previous,
+                              username: event.target.value
+                            }))
                           }
-
-                          void updateUserStatus(user, 'active');
-                        }}
-                        disabled={
-                          statusUpdatingUserId !== null ||
-                          (user.status === 'active' &&
-                            (user.id === currentUser?.id ||
-                              (user.role === 'admin' && directorySummary.activeAdmins <= 1)))
-                        }
-                      >
-                        {statusUpdatingUserId === user.id
-                          ? t('Saving...')
-                          : user.status === 'active'
-                            ? disableReasonTargetId === user.id
-                              ? t('Cancel')
-                              : t('Disable Account')
-                            : t('Reactivate Account')}
+                        />
+                      </label>
+                      <label>
+                        {t('Password')}
+                        <Input
+                          type="password"
+                          value={createUserForm.password}
+                          onChange={(event) =>
+                            setCreateUserForm((previous) => ({
+                              ...previous,
+                              password: event.target.value
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="workspace-form-span-2">
+                        {t('Role')}
+                        <Select
+                          value={createUserForm.role}
+                          onChange={(event) =>
+                            setCreateUserForm((previous) => ({
+                              ...previous,
+                              role: event.target.value as CreateUserInput['role']
+                            }))
+                          }
+                        >
+                          <option value="user">{t('User')}</option>
+                          <option value="admin">{t('Admin')}</option>
+                        </Select>
+                      </label>
+                    </div>
+                    <small className="muted">{t('Create passwords with at least 8 characters.')}</small>
+                    <div className="row gap wrap">
+                      <Button type="submit" disabled={!canCreateUser}>
+                        {creatingUser ? t('Creating...') : t('Create Account')}
                       </Button>
                     </div>
-                    {user.id === currentUser?.id && user.status === 'active' ? (
-                      <small className="muted">{t('Current admin session cannot be disabled from this directory.')}</small>
-                    ) : null}
-                    {user.role === 'admin' &&
-                    user.status === 'active' &&
-                    directorySummary.activeAdmins <= 1 ? (
-                      <small className="muted">{t('Last active admin account cannot be disabled.')}</small>
-                    ) : null}
-                    {disableReasonTargetId === user.id ? (
-                      <form
-                        className="stack"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void submitDisableUser(user);
-                        }}
-                      >
-                        <label>
-                          {t('Disable reason')}
-                          <Input
-                            value={disableReasonValue}
-                            onChange={(event) => setDisableReasonValue(event.target.value)}
-                            placeholder={t('For example: Access paused during security review.')}
-                          />
-                        </label>
-                        <small className="muted">
-                          {t('Add a brief reason so future admins understand why access was paused.')}
-                        </small>
-                        <div className="row gap wrap">
-                          <Button type="submit" variant="danger" size="sm" disabled={!canSubmitDisableReason}>
-                            {statusUpdatingUserId === user.id ? t('Saving...') : t('Confirm Disable')}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setDisableReasonTargetId(null);
-                              setDisableReasonValue('');
-                            }}
-                            disabled={statusUpdatingUserId === user.id}
-                          >
-                            {t('Cancel')}
-                          </Button>
-                        </div>
-                      </form>
-                    ) : null}
-                    {passwordResetTargetId === user.id ? (
-                      <form
-                        className="stack"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void submitPasswordReset(user);
-                        }}
-                      >
-                        <label>
-                          {t('New temporary password')}
-                          <Input
-                            type="password"
-                            value={passwordResetValue}
-                            onChange={(event) => setPasswordResetValue(event.target.value)}
-                          />
-                        </label>
-                        <small className="muted">
-                          {t('Use at least 8 characters, then share it securely with the account owner.')}
-                        </small>
-                        <div className="row gap wrap">
-                          <Button type="submit" size="sm" disabled={!canSubmitPasswordReset}>
-                            {resettingUserId === user.id ? t('Saving...') : t('Confirm Password Reset')}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setPasswordResetTargetId(null);
-                              setPasswordResetValue('');
-                            }}
-                            disabled={resettingUserId === user.id}
-                          >
-                            {t('Cancel')}
-                          </Button>
-                        </div>
-                      </form>
-                    ) : null}
-                  </Panel>
-                ))}
-              </ul>
-            )}
-            {hiddenFilteredUserCount > 0 ? (
-              <div className="workspace-record-actions">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    setVisibleDirectoryCount((previous) =>
-                      Math.min(filteredUsers.length, previous + accountDirectoryBatchSize)
-                    );
-                  }}
-                >
-                  {t('Load More Users')} ({hiddenFilteredUserCount})
-                </Button>
-              </div>
-            ) : null}
-            </Card>
-          }
-          side={
-            <div>
-            <Card>
-              <div className="stack tight">
-                <h3>{t('Directory filters')}</h3>
-                <small className="muted">
-                  {t('Use quick search first, then open advanced filters when triage scope narrows.')}
-                </small>
-              </div>
-              <label>
-                {t('Search accounts')}
-                <Input
-                  value={directoryQuery}
-                  onChange={(event) => setDirectoryQuery(event.target.value)}
-                  placeholder={t('Search by username')}
-                />
-              </label>
-              <AdvancedSection
-                title={t('Advanced directory filters')}
-                description={t('Role and status constraints for focused account governance review.')}
-              >
-                <div className="workspace-form-grid">
-                  <label>
-                    {t('Filter by role')}
-                    <Select
-                      value={directoryRoleFilter}
-                      onChange={(event) =>
-                        setDirectoryRoleFilter(event.target.value as 'all' | User['role'])
-                      }
-                    >
-                      <option value="all">{t('All roles')}</option>
-                      <option value="admin">{t('Admin')}</option>
-                      <option value="user">{t('User')}</option>
-                    </Select>
-                  </label>
-                  <label>
-                    {t('Filter by status')}
-                    <Select
-                      value={directoryStatusFilter}
-                      onChange={(event) =>
-                        setDirectoryStatusFilter(event.target.value as 'all' | User['status'])
-                      }
-                    >
-                      <option value="all">{t('All statuses')}</option>
-                      <option value="active">{t('active')}</option>
-                      <option value="disabled">{t('disabled')}</option>
-                    </Select>
-                  </label>
-                </div>
-              </AdvancedSection>
-              <div className="workspace-button-stack">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    reload().catch(() => {
-                      // handled in helper
-                    });
-                  }}
-                  disabled={loading || refreshing}
-                >
-                  {refreshing ? t('Refreshing...') : t('Refresh Directory')}
-                </Button>
-              </div>
-            </Card>
+                  </form>
+                )}
 
-            <Card>
-              <div className="stack tight">
-                <h3>{t('Directory summary')}</h3>
-                <small className="muted">{t('Quick account mix and current filter visibility in one panel.')}</small>
-              </div>
-              <div className="row gap wrap">
-                <Badge tone="neutral">
-                  {t('Admin accounts')}: {directorySummary.admins}
-                </Badge>
-                <Badge tone="neutral">
-                  {t('User accounts')}: {directorySummary.standardUsers}
-                </Badge>
-                <Badge tone="success">
-                  {t('Active accounts')}: {directorySummary.activeAccounts}
-                </Badge>
-                <Badge tone="danger">
-                  {t('Disabled accounts')}: {directorySummary.disabledAccounts}
-                </Badge>
-                <Badge tone="info">
-                  {t('Matched')}: {filteredUsers.length}
-                </Badge>
-              </div>
-            </Card>
+                {createStatus ? (
+                  <StateBlock
+                    variant={createStatus.variant}
+                    title={createStatus.variant === 'success' ? t('Action Completed') : t('Action Failed')}
+                    description={createStatus.text}
+                  />
+                ) : null}
+              </Card>
+
+              {currentUser?.role === 'admin' ? (
+                <Card className="workspace-inspector-card">
+                  <WorkspaceSectionHeader
+                    title={t('Directory Summary')}
+                    description={t('Quick account mix and current filter visibility in one panel.')}
+                  />
+                  <div className="workspace-keyline-list">
+                    <div className="workspace-keyline-item">
+                      <span>{t('Admin accounts')}</span>
+                      <strong>{directorySummary.admins}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('User accounts')}</span>
+                      <strong>{directorySummary.standardUsers}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Active accounts')}</span>
+                      <strong>{directorySummary.activeAccounts}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Disabled accounts')}</span>
+                      <strong>{directorySummary.disabledAccounts}</strong>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Matched')}</span>
+                      <strong>{filteredUsers.length}</strong>
+                    </div>
+                  </div>
+                </Card>
+              ) : null}
             </div>
           }
         />

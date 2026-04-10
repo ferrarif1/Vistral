@@ -73,6 +73,7 @@ License file is not yet added in this baseline; add one before production distri
 3. Open `http://127.0.0.1:8080`
 4. Run `npm run docker:healthcheck`
 5. Run `npm run docker:verify:full`
+   - includes OCR fallback safety guard: failed local OCR command must return empty OCR output + explicit fallback markers, never hardcoded invoice-like text
 
 Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:web` remain available only for repository maintenance and debugging. They are not the primary product run path.
 
@@ -103,6 +104,24 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 ### Validation Commands
 - `npm run data:cleanup-test`
   - safely prunes extra prototype test artifacts (stale verify reports/runtime caches/log noise) while keeping active app-state references
+- `npm run data:reset:foundation`
+  - rewrites persisted app-state to a minimal baseline: keep accounts + curated foundation models, drop seeded/test runtime entities (datasets/items/annotations/versions/training/inference/audit noise)
+  - also purges local runtime storage roots by default (`UPLOAD_STORAGE_ROOT`, `TRAINING_WORKDIR_ROOT`, `MODEL_EXPORT_ROOT`, `.data/runtime-local-predict`)
+  - set `RESET_FOUNDATION_PURGE_STORAGE=0` to keep local files while only resetting app-state
+- `npm run smoke:foundation-reset`
+  - verifies both reset and minimal-bootstrap guards:
+    - `data:reset:foundation` removes runtime seed/test entities while preserving curated foundation models
+    - `APP_STATE_BOOTSTRAP_MODE=minimal` first bootstrap does not create dataset/training/inference seed rows
+- `npm run smoke:adapter-no-placeholder`
+  - verifies adapter anti-placeholder guarantees:
+    - `evaluate()` reads file-backed metrics (or returns empty metrics when missing)
+    - `export()` writes real local artifact path (no `/mock-artifacts/...`)
+    - `load_model()` succeeds only with existing artifact and fails explicitly when missing
+- `npm run smoke:training-template-guard`
+  - verifies bundled local train runners (`yolo/paddleocr/doctr`) always emit explicit non-real evidence in template mode:
+    - `mode=template`
+    - `training_performed=false`
+    - non-empty `fallback_reason` and `template_reason`
 - `npm run typecheck`
 - `npm run lint`
 - `npm run build`
@@ -128,11 +147,17 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - `npm run smoke:no-seed-hardcoding`
   - guards against hardcoded seed entity ids (`d-*`, `dv-*`, `mv-*`, `f-*`, etc.) in smoke/verify scripts so deployment-mode tests stay portable
 - `npm run smoke:core-closure`
-  - runs the core closure suite (`no-seed-hardcoding` + `account-governance` + `phase2` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
+  - runs the core closure suite (`no-seed-hardcoding` + `foundation-reset` + `adapter-no-placeholder` + `training-template-guard` + `model-version-register-gate` + `account-governance` + `phase2` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
 - `npm run smoke:llm-settings`
   - verifies LLM settings save/edit/clear flow, including keeping the saved key while editing and loading encrypted config after API restart
 - `npm run smoke:runtime-success`
   - verifies YOLO/PaddleOCR/docTR runtime success path with a local runtime mock server
+- `npm run smoke:ocr-fallback-guard`
+  - verifies OCR fallback safety contract end-to-end:
+    - local command failure returns empty OCR lines/words (no hardcoded business text)
+    - fallback metadata includes reason/framework/platform/attempted command
+    - template runner emits explicit placeholder text (`TEMPLATE_OCR_LINE_1/2`) with fallback/template reasons
+    - inference validation page warning markers are present for fallback/template outputs
 - `npm run smoke:admin:verification-reports`
   - verifies `/api/admin/verification-reports` permission boundary (`user` denied, `admin` allowed)
 - `npm run smoke:demo:train-data`
@@ -154,6 +179,10 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - verifies real file upload path + YOLO real-runner fallback reason (`model_path_not_found`) under `VISTRAL_RUNNER_ENABLE_REAL=1`
 - `npm run smoke:runner-real-positive`
   - optional positive test for real YOLO branch (`meta.mode=real`); skips automatically when model/dependency prerequisites are missing
+- `npm run doctor:real-training-readiness`
+  - checks whether current machine is ready for real local training/inference branch (`ultralytics`/`paddleocr`/`doctr` + `VISTRAL_YOLO_MODEL_PATH`)
+- `npm run setup:real-training-env`
+  - bootstraps a local Python venv, installs real-branch deps, and tries to prepare a YOLO weight file for positive real-mode checks
 - `npm run smoke:runtime-metrics-retention`
   - verifies runtime metrics-retention summary endpoint and per-job series downsampling caps
 - `npm run smoke:training-metrics-export`
@@ -184,6 +213,9 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - Business state is persisted to local JSON snapshot file (`.data/app-state.json` by default).
 - Configure path with `APP_STATE_STORE_PATH`.
 - Flush interval is configurable with `APP_STATE_PERSIST_INTERVAL_MS` (minimum 400ms, default 1200ms).
+- Bootstrap seed mode is configurable with `APP_STATE_BOOTSTRAP_MODE`:
+  - `full` (default): prototype seed baseline
+  - `minimal`: first bootstrap without existing app-state keeps only accounts + curated foundation models
 - Verification report directory can be overridden by `VERIFICATION_REPORTS_DIR`.
 - Training metric retention controls:
   - `TRAINING_METRICS_MAX_POINTS_PER_JOB` (default `180`)

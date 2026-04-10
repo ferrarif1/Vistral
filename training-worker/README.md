@@ -265,6 +265,11 @@ Default endpoint:
 - `GET  http://<worker-host>:9090/api/local/setup/state`
 - `POST http://<worker-host>:9090/api/local/setup/pair`
 
+`/healthz` compatibility payload:
+- returns `worker.worker_version`, `worker.contract_version`, `worker.runtime_profile`, `worker.capabilities`
+- control plane uses these fields during callback validation / activation to mark `compatible | warning | incompatible`
+- when runtime profile is hard-mismatched with onboarding expectation, activation will be rejected until reconfigured
+
 Auth:
 - request header `X-Training-Worker-Token`
 - token should use `TRAINING_WORKER_AUTH_TOKEN`; legacy shared fallback remains accepted

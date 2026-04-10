@@ -24,6 +24,7 @@ SETUP_UI_FILE = WORKER_ROOT / "ui" / "setup.html"
 LAST_SETUP_VALIDATION: dict[str, Any] | None = None
 LAST_REMOTE_BOOTSTRAP_STATUS: dict[str, Any] | None = None
 LAST_REMOTE_BOOTSTRAP_STATUS_ERROR: str | None = None
+WORKER_HEALTH_CONTRACT_VERSION = "training-worker-healthz.v1"
 
 SETUP_FIELD_TO_ENV = {
     "control_plane_base_url": "CONTROL_PLANE_BASE_URL",
@@ -516,6 +517,37 @@ def build_setup_state() -> dict[str, Any]:
         "remote_bootstrap_status": LAST_REMOTE_BOOTSTRAP_STATUS,
         "remote_bootstrap_status_error": LAST_REMOTE_BOOTSTRAP_STATUS_ERROR,
         "last_validation": LAST_SETUP_VALIDATION,
+    }
+
+
+def parse_worker_capabilities(raw_value: str) -> list[str]:
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def build_worker_health_payload() -> dict[str, Any]:
+    config, _ = load_setup_config(include_secret=False)
+    runtime_profile_raw = (
+        config.get("worker_runtime_profile", "").strip()
+        or os.getenv("WORKER_RUNTIME_PROFILE", "").strip()
+    )
+    runtime_profile = "" if runtime_profile_raw.lower() in ("", "base") else runtime_profile_raw
+    capabilities_raw = (
+        config.get("worker_capabilities", "").strip()
+        or os.getenv("WORKER_CAPABILITIES", "").strip()
+    )
+    worker_version = os.getenv("VISTRAL_TRAINING_WORKER_VERSION", "0.1.0").strip() or "0.1.0"
+    return {
+        "ok": True,
+        "service": "training-worker-api",
+        "time": now_iso(),
+        "worker": {
+            "worker_id": config.get("worker_id", "").strip() or os.getenv("WORKER_ID", "").strip(),
+            "worker_name": config.get("worker_name", "").strip() or os.getenv("WORKER_NAME", "").strip(),
+            "runtime_profile": runtime_profile,
+            "capabilities": parse_worker_capabilities(capabilities_raw),
+            "worker_version": worker_version,
+            "contract_version": WORKER_HEALTH_CONTRACT_VERSION,
+        },
     }
 
 
@@ -1073,14 +1105,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
             return
 
         if self.path in ("/healthz", "/api/worker/healthz"):
-            self._write_json(
-                200,
-                {
-                    "ok": True,
-                    "service": "training-worker-api",
-                    "time": now_iso(),
-                },
-            )
+            self._write_json(200, build_worker_health_payload())
             return
 
         if self.path == "/api/local/setup/state":

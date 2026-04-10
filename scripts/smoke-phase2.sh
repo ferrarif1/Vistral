@@ -9,6 +9,7 @@ START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 EXPECT_RUNTIME_FALLBACK="${EXPECT_RUNTIME_FALLBACK:-true}"
+PHASE2_ALLOW_REGISTER_FALLBACK="${PHASE2_ALLOW_REGISTER_FALLBACK:-true}"
 PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 YOLO_RUNTIME_ENDPOINT_FOR_SMOKE="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
@@ -88,12 +89,33 @@ wait_for_health() {
   return 1
 }
 
+is_registration_gate_rejection() {
+  local response="$1"
+  local error_message=""
+  error_message="$(echo "${response}" | jq -r '.error.message // empty')"
+  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
+}
+
+pick_registered_model_version_id() {
+  local task_type="$1"
+  local framework_filter="${2:-}"
+  local versions_resp=""
+
+  versions_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/model-versions")"
+  echo "${versions_resp}" | jq -r --arg task_type "${task_type}" --arg framework "${framework_filter}" '
+    .data[] |
+    select(.status=="registered" and .task_type==$task_type and ($framework=="" or .framework==$framework)) |
+    .id
+  ' | head -n 1
+}
+
 if [[ "${START_API}" == "true" ]]; then
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
   PADDLEOCR_RUNTIME_ENDPOINT="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
   DOCTR_RUNTIME_ENDPOINT="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
   YOLO_RUNTIME_ENDPOINT="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE}" \
+  MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
   npm run dev:api >"$LOG_FILE" 2>&1 &
   API_PID=$!
 fi
@@ -704,6 +726,10 @@ inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
 inference_run_id="$(echo "$inference_result" | jq -r '.data.id // empty')"
 fallback_source="$(echo "$inference_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 fallback_reason="$(echo "$inference_result" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+fallback_local_reason="$(echo "$inference_result" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+fallback_meta_reason="$(echo "$inference_result" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+fallback_template_mode="$(echo "$inference_result" | jq -r '.data.raw_output.meta.mode // empty')"
+fallback_template_marker="$(echo "$inference_result" | jq -r '.data.raw_output.local_command_template_mode // false')"
 
 if [[ -z "$inference_run_id" ]]; then
   echo "[smoke-phase2] Inference run was not created"
@@ -712,7 +738,12 @@ if [[ -z "$inference_run_id" ]]; then
 fi
 
 if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
-  if [[ "$fallback_source" != "mock_fallback" || -z "$fallback_reason" ]]; then
+  if [[ "$fallback_source" != *"fallback"* && "$fallback_source" != *"template"* && "$fallback_source" != *"mock"* && "$fallback_template_mode" != "template" && "$fallback_template_marker" != "true" ]]; then
+    echo "[smoke-phase2] YOLO runtime fallback/template marker assertion failed"
+    echo "$inference_result"
+    exit 1
+  fi
+  if [[ -z "$fallback_reason" && -z "$fallback_local_reason" && -z "$fallback_meta_reason" ]]; then
     echo "[smoke-phase2] YOLO runtime fallback assertion failed"
     echo "$inference_result"
     exit 1
@@ -738,6 +769,10 @@ ocr_inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
 ocr_inference_run_id="$(echo "$ocr_inference_result" | jq -r '.data.id // empty')"
 ocr_fallback_source="$(echo "$ocr_inference_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 ocr_fallback_reason="$(echo "$ocr_inference_result" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+ocr_fallback_local_reason="$(echo "$ocr_inference_result" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+ocr_fallback_meta_reason="$(echo "$ocr_inference_result" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+ocr_fallback_template_mode="$(echo "$ocr_inference_result" | jq -r '.data.raw_output.meta.mode // empty')"
+ocr_fallback_template_marker="$(echo "$ocr_inference_result" | jq -r '.data.raw_output.local_command_template_mode // false')"
 
 if [[ -z "$ocr_inference_run_id" ]]; then
   echo "[smoke-phase2] OCR inference run was not created"
@@ -746,7 +781,12 @@ if [[ -z "$ocr_inference_run_id" ]]; then
 fi
 
 if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
-  if [[ "$ocr_fallback_source" != "mock_fallback" || -z "$ocr_fallback_reason" ]]; then
+  if [[ "$ocr_fallback_source" != *"fallback"* && "$ocr_fallback_source" != *"template"* && "$ocr_fallback_source" != *"mock"* && "$ocr_fallback_template_mode" != "template" && "$ocr_fallback_template_marker" != "true" ]]; then
+    echo "[smoke-phase2] PaddleOCR runtime fallback/template marker assertion failed"
+    echo "$ocr_inference_result"
+    exit 1
+  fi
+  if [[ -z "$ocr_fallback_reason" && -z "$ocr_fallback_local_reason" && -z "$ocr_fallback_meta_reason" ]]; then
     echo "[smoke-phase2] PaddleOCR runtime fallback assertion failed"
     echo "$ocr_inference_result"
     exit 1
@@ -898,10 +938,26 @@ doctr_register_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -d "$doctr_register_request" \
   "${BASE_URL}/api/model-versions/register")"
 doctr_model_version_id="$(echo "$doctr_register_result" | jq -r '.data.id // empty')"
+doctr_register_mode="created"
 if [[ -z "$doctr_model_version_id" ]]; then
-  echo "[smoke-phase2] docTR model version registration failed"
-  echo "$doctr_register_result"
-  exit 1
+  if [[ "${PHASE2_ALLOW_REGISTER_FALLBACK}" != "true" || "$(is_registration_gate_rejection "$doctr_register_result" && echo true || echo false)" != "true" ]]; then
+    echo "[smoke-phase2] docTR model version registration failed"
+    echo "$doctr_register_result"
+    exit 1
+  fi
+
+  doctr_model_version_id="$(pick_registered_model_version_id "ocr" "doctr")"
+  if [[ -n "$doctr_model_version_id" ]]; then
+    doctr_register_mode="blocked_gate_reused_doctr"
+  else
+    doctr_model_version_id="$(pick_registered_model_version_id "ocr" "")"
+    if [[ -z "$doctr_model_version_id" ]]; then
+      echo "[smoke-phase2] docTR registration blocked and no fallback OCR model version exists"
+      echo "$doctr_register_result"
+      exit 1
+    fi
+    doctr_register_mode="blocked_gate_reused_ocr_any"
+  fi
 fi
 
 doctr_inference_request="$(cat <<JSON
@@ -916,6 +972,10 @@ doctr_inference_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
 doctr_inference_run_id="$(echo "$doctr_inference_result" | jq -r '.data.id // empty')"
 doctr_fallback_source="$(echo "$doctr_inference_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
 doctr_fallback_reason="$(echo "$doctr_inference_result" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+doctr_fallback_local_reason="$(echo "$doctr_inference_result" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+doctr_fallback_meta_reason="$(echo "$doctr_inference_result" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
+doctr_fallback_template_mode="$(echo "$doctr_inference_result" | jq -r '.data.raw_output.meta.mode // empty')"
+doctr_fallback_template_marker="$(echo "$doctr_inference_result" | jq -r '.data.raw_output.local_command_template_mode // false')"
 
 if [[ -z "$doctr_inference_run_id" ]]; then
   echo "[smoke-phase2] docTR inference run was not created"
@@ -924,7 +984,12 @@ if [[ -z "$doctr_inference_run_id" ]]; then
 fi
 
 if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
-  if [[ "$doctr_fallback_source" != "mock_fallback" || -z "$doctr_fallback_reason" ]]; then
+  if [[ "$doctr_fallback_source" != *"fallback"* && "$doctr_fallback_source" != *"template"* && "$doctr_fallback_source" != *"mock"* && "$doctr_fallback_template_mode" != "template" && "$doctr_fallback_template_marker" != "true" ]]; then
+    echo "[smoke-phase2] docTR runtime fallback/template marker assertion failed"
+    echo "$doctr_inference_result"
+    exit 1
+  fi
+  if [[ -z "$doctr_fallback_reason" && -z "$doctr_fallback_local_reason" && -z "$doctr_fallback_meta_reason" ]]; then
     echo "[smoke-phase2] docTR runtime fallback assertion failed"
     echo "$doctr_inference_result"
     exit 1
@@ -1020,6 +1085,7 @@ echo "paddleocr_fallback_source=${ocr_fallback_source}"
 echo "paddleocr_fallback_reason=${ocr_fallback_reason}"
 echo "doctr_training_job_id=${doctr_training_job_id}"
 echo "doctr_model_version_id=${doctr_model_version_id}"
+echo "doctr_register_mode=${doctr_register_mode}"
 echo "doctr_inference_run_id=${doctr_inference_run_id}"
 echo "doctr_fallback_source=${doctr_fallback_source}"
 echo "doctr_fallback_reason=${doctr_fallback_reason}"

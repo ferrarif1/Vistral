@@ -5,7 +5,12 @@ import { URL } from 'node:url';
 import { UPLOAD_SOFT_LIMIT_BYTES, UPLOAD_SOFT_LIMIT_LABEL } from '../../shared/uploadLimits';
 import { normalizeApiError } from './apiError';
 import * as handlers from './handlers';
-import { loadPersistedAppState, loadPersistedLlmConfigs, persistAppState } from './store';
+import {
+  loadPersistedAppState,
+  loadPersistedLlmConfigs,
+  loadPersistedRuntimeSettings,
+  persistAppState
+} from './store';
 
 type ApiSuccess<T> = {
   success: true;
@@ -606,6 +611,29 @@ const server = createServer(async (req, res) => {
     }
 
     const adminTrainingWorkerDetailMatch = path.match(/^\/api\/admin\/training-workers\/([^/]+)$/);
+    const adminTrainingWorkerActivateMatch = path.match(
+      /^\/api\/admin\/training-workers\/([^/]+)\/activate$/
+    );
+    const adminTrainingWorkerReconfigureSessionMatch = path.match(
+      /^\/api\/admin\/training-workers\/([^/]+)\/reconfigure-session$/
+    );
+    if (adminTrainingWorkerActivateMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const workerId = decodeURIComponent(adminTrainingWorkerActivateMatch[1] ?? '');
+      return withUserMutation(req, res, () => handlers.activateTrainingWorkerByAdmin(workerId));
+    }
+    if (adminTrainingWorkerReconfigureSessionMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const workerId = decodeURIComponent(adminTrainingWorkerReconfigureSessionMatch[1] ?? '');
+      return withUserMutation(req, res, () =>
+        handlers.createTrainingWorkerReconfigureSessionByAdmin(workerId)
+      );
+    }
+
     if (adminTrainingWorkerDetailMatch) {
       const workerId = decodeURIComponent(adminTrainingWorkerDetailMatch[1] ?? '');
       if (req.method === 'PATCH') {
@@ -1396,6 +1424,42 @@ const server = createServer(async (req, res) => {
       return withUserMutation(req, res, () => handlers.testLlmConnection(body));
     }
 
+    if (path === '/api/settings/runtime' && req.method === 'GET') {
+      return withUser(req, res, () => handlers.getRuntimeSettings());
+    }
+
+    if (path === '/api/settings/runtime' && req.method === 'POST') {
+      const body = (await readBody(req)) as {
+        runtime_config: {
+          paddleocr: {
+            endpoint: string;
+            api_key: string;
+            local_train_command: string;
+            local_predict_command: string;
+          };
+          doctr: {
+            endpoint: string;
+            api_key: string;
+            local_train_command: string;
+            local_predict_command: string;
+          };
+          yolo: {
+            endpoint: string;
+            api_key: string;
+            local_train_command: string;
+            local_predict_command: string;
+          };
+        };
+        keep_existing_api_keys?: boolean;
+      };
+
+      return withUserMutation(req, res, () => handlers.saveRuntimeSettings(body));
+    }
+
+    if (path === '/api/settings/runtime' && req.method === 'DELETE') {
+      return withUserMutation(req, res, () => handlers.clearRuntimeSettings());
+    }
+
     return notFound(res);
   } catch (error) {
     return sendError(res, error);
@@ -1426,6 +1490,7 @@ const appStatePersistIntervalMs = (() => {
 
   await loadPersistedAppState();
   await loadPersistedLlmConfigs();
+  await loadPersistedRuntimeSettings();
   handlers.syncRuntimeIdSeed();
   const resumeSummary = handlers.resumePendingTrainingJobs();
   if (resumeSummary.resumed_job_ids.length > 0) {

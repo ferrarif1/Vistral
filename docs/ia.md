@@ -45,11 +45,13 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.4 Professional Console
 - `/workspace/console`
-  - immersive workspace shell aligned with chat workspace
-  - fixed left sidebar + independent right content scroll + floating bottom command/input bar
-  - sidebar keeps fixed viewport height and internal scrolling for grouped quick actions
-  - sidebar footer keeps account menu anchored at the bottom, consistent with chat workspace
-  - mobile sidebar uses drawer behavior with overlay-dismiss interaction
+  - shared app shell route (global left navigation + top context header), not chat-immersive layout
+  - professional workbench pages use a stable three-zone structure:
+    - top context toolbar (`WorkspaceContextBar`) for search/filter/batch actions
+    - middle main work area for operational lists/canvas/tables
+    - right inspector panel for selected-object details and primary follow-up actions
+  - left global nav, middle work area, and right inspector are independently scrollable within the shell
+  - operational pages should reuse `WorkspaceWorkbench` to keep control surfaces consistent across dataset/training/model lanes
 
 ### 3.5 Model Domain
 - `/models/explore`

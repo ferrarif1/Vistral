@@ -225,6 +225,8 @@ Current implementation status:
   - `POST /api/admin/training-workers/bootstrap-sessions`
   - `GET /api/admin/training-workers/bootstrap-sessions/{id}/bundle`
   - `POST /api/admin/training-workers/bootstrap-sessions/{id}/validate-callback`
+  - `POST /api/admin/training-workers/{id}/activate`
+  - `POST /api/admin/training-workers/{id}/reconfigure-session`
   - `POST /api/runtime/training-workers/bootstrap-sessions/claim`
   - `POST /api/runtime/training-workers/bootstrap-sessions/status`
   - `GET /api/local/setup/state`
@@ -233,8 +235,6 @@ Current implementation status:
   - `POST /api/local/setup/bootstrap-status`
   - `POST /api/local/setup/validate`
   - `POST /api/local/setup/apply`
-- still future:
-  - explicit activation endpoint after validation
 
 ### Control Plane
 
@@ -248,10 +248,21 @@ Current implementation status:
   - worker-local setup service claims bootstrap token and resolves config defaults
 - `POST /api/runtime/training-workers/bootstrap-sessions/status`
   - worker-local setup service reads the latest control-plane onboarding status for the pairing token
-- `POST /api/admin/training-workers/{id}/validate-callback`
-  - control plane verifies worker endpoint reachability
+- `POST /api/admin/training-workers/bootstrap-sessions/{id}/validate-callback`
+  - control plane verifies worker endpoint reachability + compatibility signals from health payload
 - `POST /api/admin/training-workers/{id}/activate`
   - final worker activation after validation
+  - hard compatibility mismatch keeps worker/session in non-online state
+- `POST /api/admin/training-workers/{id}/reconfigure-session`
+  - create a new bootstrap session from an existing worker for upgrade/reconfigure
+
+Compatibility snapshot notes:
+- bootstrap-session responses now include `compatibility`:
+  - `status`: `compatible | warning | incompatible | unknown`
+  - `expected_runtime_profile` vs `reported_runtime_profile`
+  - `reported_worker_version`, `reported_contract_version`
+  - `missing_capabilities`
+- onboarding UI should always display this snapshot so operators can decide whether they must upgrade/reconfigure before scheduling.
 
 ### Worker Local Service
 
@@ -320,6 +331,11 @@ Current status:
 2. downloadable worker bundle / QR code
 3. upgrade/reconfigure flow
 4. version compatibility checks
+
+Current status:
+- item 1 implemented
+- item 3 implemented (admin runtime can generate reconfigure bootstrap session for existing worker)
+- item 4 partially implemented (health payload compatibility snapshot + hard profile mismatch guard)
 
 ## 11. Definition of Done
 

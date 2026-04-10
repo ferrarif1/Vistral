@@ -3,7 +3,7 @@ import type { LlmConfig, LlmConfigView } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import SettingsTabs from '../components/settings/SettingsTabs';
-import { StatusTag } from '../components/ui/Badge';
+import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Checkbox, Input } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
@@ -12,7 +12,7 @@ import {
   WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
-  WorkspaceSplit
+  WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -304,142 +304,180 @@ export default function LlmSettingsPage() {
         ]}
       />
 
-      <WorkspaceSplit
-        main={
-          <Card className="stack">
-            <WorkspaceSectionHeader
-              title={t('Configuration')}
-              description={t('Update endpoint, key, model, and temperature in one place.')}
-            />
-
-          <div className="workspace-form-grid">
-            <label className="workspace-form-span-2">
-              {t('Provider')}
-              <Input value="chatanywhere (OpenAI compatible)" disabled />
-            </label>
-            <label className="workspace-form-span-2">
-              {t('Base URL')}
-              <Input
-                value={form.base_url}
-                onChange={(event) => update('base_url', event.target.value)}
-                placeholder="https://api.chatanywhere.tech/v1"
-              />
-            </label>
-            <label className="workspace-form-span-2">
-              {t('API Key')}
-              <Input
-                type="password"
-                value={form.api_key}
-                onChange={(event) => update('api_key', event.target.value)}
-                placeholder="sk-..."
-              />
-            </label>
-            <label>
-              {t('Model')}
-              <Input
-                value={form.model}
-                onChange={(event) => update('model', event.target.value)}
-                placeholder="gpt-4o-mini"
-              />
-            </label>
-            <label>
-              {t('Temperature (0-2)')}
-              <Input
-                type="number"
-                value={form.temperature}
-                min={0}
-                max={2}
-                step={0.1}
-                onChange={(event) => update('temperature', Number(event.target.value))}
-              />
-            </label>
-            <label className="workspace-form-span-2 row gap align-center workspace-checkbox-row">
-              <Checkbox
-                checked={form.enabled}
-                onChange={(event) => update('enabled', event.target.checked)}
-              />
-              {t('Enable custom LLM in conversation workspace')}
-            </label>
-          </div>
-
-          <Panel className="workspace-record-item compact" tone="soft">
-            <div className="stack tight">
-              <small className="muted">{t('Provider currently uses OpenAI-compatible mode.')}</small>
-              <small className="muted">{t('Leave API Key blank to keep using the saved key.')}</small>
-              <small className="muted">{keyHandlingText}</small>
+      <WorkspaceWorkbench
+        toolbar={
+          <Card as="section" className="workspace-toolbar-card">
+            <div className="workspace-toolbar-head">
+              <div className="workspace-toolbar-copy">
+                <h3>{t('LLM Controls')}</h3>
+                <small className="muted">
+                  {t('Keep reload, presets, and key handling in one stable strip before editing the form.')}
+                </small>
+              </div>
+              <div className="workspace-toolbar-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={reloadSavedConfig}
+                  disabled={refreshing || loading}
+                >
+                  {refreshing ? t('Loading') : t('Reload saved settings')}
+                </Button>
+                {hasTypedApiKey ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={discardTypedApiKey}
+                    disabled={busy}
+                  >
+                    {t('Discard typed key')}
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={applyChatAnywherePreset}
+                  disabled={busy}
+                >
+                  {t('Apply ChatAnywhere Preset')}
+                </Button>
+              </div>
             </div>
-          </Panel>
-
-          <div className="stack tight">
-            <strong>{t('Quick presets')}</strong>
-            <small className="muted">
-              {t('Use a preset button to move faster while keeping the underlying form editable.')}
-            </small>
-          </div>
-
-          <div className="workspace-action-grid">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={applyChatAnywherePreset}
-              disabled={busy}
-              block
-            >
-              {t('Apply ChatAnywhere Preset')}
-            </Button>
-            {CHATANYWHERE_MODEL_PRESETS.map((item) => (
-              <Button
-                key={item}
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => applyRecommendedModel(item)}
-                disabled={busy}
-                block
-              >
-                {t('Use {model}', { model: item })}
-              </Button>
-            ))}
-          </div>
-
-            <div className="workspace-button-stack">
-              <Button type="button" onClick={save} disabled={busy} block>
-                {t('Save')}
-              </Button>
-              <Button type="button" variant="secondary" onClick={testConnection} disabled={busy} block>
-                {testing ? t('Testing...') : t('Test Connection')}
-              </Button>
-              <Button type="button" variant="danger" onClick={clear} disabled={busy} block>
-                {t('Clear')}
-              </Button>
+            <div className="workspace-toolbar-meta">
+              <div className="workspace-segmented-actions">
+                <Badge tone={savedEnabled ? 'success' : 'neutral'}>
+                  {t('Mode')}: {savedEnabled ? t('enabled') : t('disabled')}
+                </Badge>
+                <Badge tone={hasApiKey ? 'success' : 'warning'}>
+                  {t('Stored key')}: {hasApiKey ? t('Ready') : t('not set')}
+                </Badge>
+                <Badge tone={hasUnsavedChanges ? 'warning' : 'neutral'}>
+                  {t('Pending changes')}: {hasUnsavedChanges ? t('Yes') : t('No')}
+                </Badge>
+                {connectionAdvice ? (
+                  <Badge tone="info">{t('Troubleshooting')}: {t('available')}</Badge>
+                ) : null}
+              </div>
             </div>
           </Card>
         }
+        main={
+          <div className="workspace-main-stack">
+            <Card as="article" className="stack">
+              <WorkspaceSectionHeader
+                title={t('Configuration')}
+                description={t('Update endpoint, key, model, and temperature in one place.')}
+              />
+              <small className="muted">
+                {t('Edit provider endpoint, key, model, and temperature, then save or test from the main panel.')} {' '}
+                {t('Saved key is reused automatically when API key input stays empty.')}
+              </small>
+
+              <div className="workspace-form-grid">
+                <label className="workspace-form-span-2">
+                  {t('Provider')}
+                  <Input value="chatanywhere (OpenAI compatible)" disabled />
+                </label>
+                <label className="workspace-form-span-2">
+                  {t('Base URL')}
+                  <Input
+                    value={form.base_url}
+                    onChange={(event) => update('base_url', event.target.value)}
+                    placeholder="https://api.chatanywhere.tech/v1"
+                  />
+                </label>
+                <label className="workspace-form-span-2">
+                  {t('API Key')}
+                  <Input
+                    type="password"
+                    value={form.api_key}
+                    onChange={(event) => update('api_key', event.target.value)}
+                    placeholder="sk-..."
+                  />
+                </label>
+                <label>
+                  {t('Model')}
+                  <Input
+                    value={form.model}
+                    onChange={(event) => update('model', event.target.value)}
+                    placeholder="gpt-4o-mini"
+                  />
+                </label>
+                <label>
+                  {t('Temperature (0-2)')}
+                  <Input
+                    type="number"
+                    value={form.temperature}
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    onChange={(event) => update('temperature', Number(event.target.value))}
+                  />
+                </label>
+                <label className="workspace-form-span-2 row gap align-center workspace-checkbox-row">
+                  <Checkbox
+                    checked={form.enabled}
+                    onChange={(event) => update('enabled', event.target.checked)}
+                  />
+                  {t('Enable custom LLM in conversation workspace')}
+                </label>
+              </div>
+
+              <Panel className="workspace-record-item compact" tone="soft">
+                <div className="stack tight">
+                  <small className="muted">{t('Provider currently uses OpenAI-compatible mode.')}</small>
+                  <small className="muted">{t('Leave API Key blank to keep using the saved key.')}</small>
+                  <small className="muted">{keyHandlingText}</small>
+                </div>
+              </Panel>
+
+              <div className="stack tight">
+                <strong>{t('Quick presets')}</strong>
+                <small className="muted">
+                  {t('Use a preset button to move faster while keeping the underlying form editable.')}
+                </small>
+              </div>
+
+              <div className="workspace-action-grid">
+                {CHATANYWHERE_MODEL_PRESETS.map((item) => (
+                  <Button
+                    key={item}
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => applyRecommendedModel(item)}
+                    disabled={busy}
+                    block
+                  >
+                    {t('Use {model}', { model: item })}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="workspace-button-stack">
+                <Button type="button" onClick={save} disabled={busy} block>
+                  {t('Save')}
+                </Button>
+                <Button type="button" variant="secondary" onClick={testConnection} disabled={busy} block>
+                  {testing ? t('Testing...') : t('Test Connection')}
+                </Button>
+                <Button type="button" variant="danger" onClick={clear} disabled={busy} block>
+                  {t('Clear')}
+                </Button>
+              </div>
+            </Card>
+          </div>
+        }
         side={
-          <>
-            <Card className="stack">
+          <div className="workspace-inspector-rail">
+            <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
                 title={t('Saved settings')}
                 description={t('Saved values stay visible here so you know what will be reused.')}
               />
-
-            <div className="workspace-button-stack">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={reloadSavedConfig}
-                disabled={refreshing || loading}
-              >
-                {refreshing ? t('Loading') : t('Reload saved settings')}
-              </Button>
-              {hasTypedApiKey ? (
-                <Button type="button" variant="secondary" size="sm" onClick={discardTypedApiKey} disabled={busy}>
-                  {t('Discard typed key')}
-                </Button>
-              ) : null}
-            </div>
 
             <ul className="workspace-record-list compact">
               <li className="workspace-record-item compact">
@@ -483,7 +521,7 @@ export default function LlmSettingsPage() {
                 </small>
               </li>
             </ul>
-          </Card>
+            </Card>
 
             <AdvancedSection
               title={t('Connection notes')}
@@ -516,7 +554,7 @@ export default function LlmSettingsPage() {
                 )}
               </small>
             </AdvancedSection>
-          </>
+          </div>
         }
       />
     </WorkspacePage>

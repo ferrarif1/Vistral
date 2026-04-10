@@ -3,7 +3,6 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import type { User } from '../../shared/domain';
 import Sidebar from '../components/layout/Sidebar';
 import SessionMenu from '../components/SessionMenu';
-import TopBar from '../components/layout/TopBar';
 import { ButtonLink } from '../components/ui/Button';
 import useCompactViewport from '../hooks/useCompactViewport';
 import { useI18n } from '../i18n/I18nProvider';
@@ -358,64 +357,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
     [t]
   );
 
-  const activeContext = useMemo(() => {
-    const pathname = location.pathname;
-
-    if (pathname.startsWith('/workspace/console')) {
-      return { section: t('Workspaces'), label: t('Professional Console') };
-    }
-
-    if (pathname.startsWith('/models/explore')) {
-      return { section: t('Model Build'), label: t('Models Explore') };
-    }
-
-    if (pathname.startsWith('/models/my-models')) {
-      return { section: t('Model Build'), label: t('My Models') };
-    }
-
-    if (pathname.startsWith('/models/create')) {
-      return { section: t('Model Build'), label: t('Create Model') };
-    }
-
-    if (pathname.startsWith('/models/versions')) {
-      return { section: t('Model Build'), label: t('Model Versions') };
-    }
-
-    if (pathname.startsWith('/datasets')) {
-      return { section: t('Data & Run'), label: t('Datasets') };
-    }
-
-    if (pathname.startsWith('/training/jobs')) {
-      return { section: t('Data & Run'), label: t('Training Jobs') };
-    }
-
-    if (pathname.startsWith('/inference/validate')) {
-      return { section: t('Data & Run'), label: t('Inference Validate') };
-    }
-
-    if (pathname.startsWith('/admin/models/pending')) {
-      return { section: t('Governance'), label: t('Admin Approvals') };
-    }
-
-    if (pathname.startsWith('/admin/audit')) {
-      return { section: t('Governance'), label: t('Admin Audit') };
-    }
-
-    if (pathname.startsWith('/admin/verification-reports')) {
-      return { section: t('Governance'), label: t('Admin Verify Reports') };
-    }
-
-    if (pathname.startsWith('/settings')) {
-      return { section: t('Settings'), label: t('Settings') };
-    }
-
-    if (pathname.startsWith('/auth/login')) {
-      return { section: t('Workspaces'), label: t('Login') };
-    }
-
-    return { section: t('Workspaces'), label: t('Conversation Workspace') };
-  }, [location.pathname, t]);
-
   const toggleNavGroup = useCallback((groupKey: AppNavGroupKey) => {
     setCollapsedNavGroups((previous) =>
       previous.includes(groupKey)
@@ -427,6 +368,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
   const shellClassName = [
     'app-shell',
+    'no-topbar',
     isDesktopSidebarCollapsed ? 'sidebar-collapsed' : '',
     isCompactViewport ? 'sidebar-compact' : '',
     mobileSidebarOpen ? 'mobile-sidebar-open' : ''
@@ -448,6 +390,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className={shellClassName}>
+      {isCompactViewport && !mobileSidebarOpen ? (
+        <button
+          type="button"
+          className="app-mobile-sidebar-trigger"
+          onClick={toggleSidebar}
+          aria-label={t('Open navigation')}
+          title={t('Open navigation')}
+        >
+          =
+        </button>
+      ) : null}
+
       {isCompactViewport ? (
         <button
           type="button"
@@ -456,51 +410,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
           aria-label={t('Close navigation')}
         />
       ) : null}
-
-      <TopBar
-        className="topbar"
-        leading={
-          <div className="topbar-leading">
-            <button
-              type="button"
-              className="app-sidebar-toggle"
-              onClick={toggleSidebar}
-              aria-label={sidebarToggleLabel}
-              title={sidebarToggleLabel}
-            >
-              {sidebarToggleToken}
-            </button>
-            <Link to="/workspace/chat" className="topbar-brand-link" aria-label={t('Go to home')}>
-              Vistral
-            </Link>
-            <div className="topbar-page-context">
-              <small className="muted">{activeContext.section}</small>
-              <strong>{activeContext.label}</strong>
-            </div>
-          </div>
-        }
-        actions={
-          <nav className="topbar-actions row gap wrap">
-            {!currentUser && isCompactViewport ? (
-              <div className="topbar-auth-links">
-                <ButtonLink to="/auth/login" variant="ghost" size="sm" className="topbar-login-link">
-                  {t('Login')}
-                </ButtonLink>
-              </div>
-            ) : null}
-            {currentUser && isCompactViewport ? (
-              <SessionMenu
-                currentUser={currentUser}
-                items={sessionMenuItems}
-                languageControl={{
-                  value: language,
-                  onChange: (nextLanguage) => setLanguage(nextLanguage)
-                }}
-              />
-            ) : null}
-          </nav>
-        }
-      />
 
       <Sidebar className="sidebar" ariaHidden={isCompactViewport && !mobileSidebarOpen} rail={
         <div className="sidebar-collapsed-rail">
@@ -567,6 +476,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 <small className="muted">{t('AI-native workspace')}</small>
               </div>
             </Link>
+            <button
+              type="button"
+              className="app-sidebar-toggle"
+              onClick={toggleSidebar}
+              aria-label={sidebarToggleLabel}
+              title={sidebarToggleLabel}
+            >
+              {sidebarToggleToken}
+            </button>
           </div>
 
           <nav className="sidebar-nav" aria-label={t('Navigation')}>

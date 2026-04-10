@@ -343,6 +343,7 @@ def main() -> int:
     real_payload, reason = try_real_train(args, config)
     if real_payload is None:
         metrics, metric_series = build_template_metrics(args, summary, config)
+        template_reason = reason if reason else 'template_mode_default'
         metrics_payload = {
             'summary': metrics,
             'metric_series': metric_series,
@@ -353,6 +354,7 @@ def main() -> int:
             artifact_payload = {
                 'runner': 'doctr_train_runner',
                 'mode': 'template',
+                'training_performed': False,
                 'job_id': args.job_id,
                 'dataset_id': args.dataset_id,
                 'task_type': args.task_type,
@@ -360,11 +362,11 @@ def main() -> int:
                 'epochs': epochs,
                 'metrics': metrics,
                 'metric_series': metric_series,
+                'fallback_reason': template_reason,
+                'template_reason': template_reason,
                 'materialized_dataset': extract_materialized_dataset(config),
                 'generated_at': datetime.now(timezone.utc).isoformat(),
             }
-            if reason:
-                artifact_payload['fallback_reason'] = reason
             write_json(args.artifact_path, artifact_payload)
 
         print(f"[doctr-runner] workspace={args.workspace_dir}")

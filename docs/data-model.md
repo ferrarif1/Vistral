@@ -260,6 +260,7 @@ Launch readiness rules:
 - selected dataset must be `ready`
 - selected dataset version must include at least one `train` item (`split_summary.train > 0`)
 - selected dataset version must have positive annotation coverage (`annotation_coverage > 0`)
+- `split_summary` and `annotation_coverage` readiness checks should be computed from trainable visual samples (ready image attachments), excluding non-visual helper imports (for example annotation import `.txt/.json` files)
 
 Relationships:
 - has many `TrainingMetric`
@@ -273,6 +274,9 @@ Runtime notes (current implementation):
   - OCR baseline: `materialized-dataset/ocr/` with manifest entries pointing to ready image/text pairs
 - `train.log` lines are exposed via training detail API
 - app state snapshots are persisted to `APP_STATE_STORE_PATH` (default `.data/app-state.json`)
+- app bootstrap seed mode is configurable by `APP_STATE_BOOTSTRAP_MODE`:
+  - `full` (default): keep existing prototype seed baseline
+  - `minimal`: when no persisted app-state exists, bootstrap only account + curated foundation model baseline (no seeded dataset/training/inference rows)
 - after API restart, non-terminal jobs (`queued`, `preparing`, `running`, `evaluating`) are re-queued and resumed automatically
 - local training defaults to bundled runner templates (`scripts/local-runners/*_train_runner.py`) and runs as `execution_mode=local_command` when runner invocation succeeds
 - `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` can override bundled runner command templates
@@ -356,6 +360,14 @@ Attributes:
 - `last_seen_at` (nullable timestamp)
 - `callback_checked_at` (nullable timestamp)
 - `callback_validation_message` (nullable string)
+- `compatibility` (nullable JSON snapshot)
+  - `status` (`compatible` | `warning` | `incompatible` | `unknown`)
+  - `message` (string)
+  - `expected_runtime_profile` (nullable string)
+  - `reported_runtime_profile` (nullable string)
+  - `reported_worker_version` (nullable string)
+  - `reported_contract_version` (nullable string)
+  - `missing_capabilities` (JSON string array)
 - `linked_worker_id` (nullable FK `TrainingWorkerNode`)
 - `metadata` (JSON)
 - `created_at`
@@ -369,6 +381,11 @@ Rules:
 - normal bootstrap-created workers should prefer per-worker dedicated auth; control-plane shared token remains as a backward-compatible fallback for legacy/manual workers
 - once the claimed worker heartbeat is accepted, control plane should validate worker callback reachability before session advances to `online`
 - callback validation failure should keep the linked worker out of scheduling eligibility until a later heartbeat or explicit retry passes
+- admin-side explicit activation (`POST /admin/training-workers/{id}/activate`) must re-run callback validation and only switch worker/session to `online` after validation succeeds
+- admin can create an upgrade/reconfigure session for an existing worker (`POST /admin/training-workers/{id}/reconfigure-session`) without replacing the worker record
+- callback validation should also evaluate worker compatibility signals from health payload (`worker_version`, `contract_version`, `runtime_profile`, `capabilities`)
+- hard incompatibility (for example runtime profile mismatch against requested worker profile) must keep session in `validation_failed` and worker out of schedulable `online`
+- warning-level compatibility gaps (for example missing optional version metadata) may still allow activation but must be visible in runtime onboarding UI
 - current implementation persists bootstrap sessions into local app-state storage so restart does not lose active pairing context
 
 ### 4.14 TrainingMetric
@@ -406,7 +423,8 @@ Attributes:
 - `task_type` (TaskType)
 - `framework` (Framework)
 - `status` (`queued` | `running` | `completed` | `failed`)
-- `execution_source` (for example `yolo_runtime`, `yolo_local_command`, `yolo_local`, `mock_fallback`)
+- `execution_source` (for example `yolo_runtime`, `yolo_local_command`, `explicit_fallback_runtime_failed`, `explicit_fallback_local_command_failed`, `base_empty`)
+  - local deterministic pseudo inferencer source (`<framework>_local`) is retired; use explicit fallback markers instead.
 - `raw_output` (JSON)
 - `normalized_output` (JSON)
 - `feedback_dataset_id` (FK Dataset, nullable)
@@ -417,6 +435,26 @@ Runtime rule (current implementation):
 - `POST /inference/runs/{id}/feedback` binds `feedback_dataset_id` and guarantees a dataset item trace for the run in target dataset.
 - target dataset `task_type` must equal inference run `task_type`; cross-task feedback is rejected.
 - feedback item metadata stores `inference_run_id`, `feedback_reason`, and `source_attachment_id` for loop traceability.
+
+### 4.17 RuntimeSettings
+Global runtime adapter settings managed from `Settings > Runtime` (admin scope).
+
+Attributes:
+- `updated_at` (nullable timestamp; null means no UI-saved override yet)
+- `frameworks` (object keyed by framework id)
+  - `paddleocr.endpoint`
+  - `paddleocr.api_key` (server-side secret; never returned in plain text)
+  - `paddleocr.local_train_command`
+  - `paddleocr.local_predict_command`
+  - `doctr.*` (same fields)
+  - `yolo.*` (same fields)
+
+Rules:
+- runtime adapters should read effective config dynamically at execution time (not only on process boot).
+- when no UI-saved runtime settings exist, adapters can use environment-variable defaults as fallback.
+- once runtime settings are saved from UI, saved values become the primary source of truth until cleared.
+- API responses expose masked key metadata (`has_api_key`, `api_key_masked`) and must not leak raw secrets.
+- save operation supports `keep_existing_api_keys=true` so blank key inputs keep previously saved secrets.
 
 ## 5. State Transition Rules
 
@@ -434,6 +472,8 @@ Runtime rule (current implementation):
 
 ### 5.3 ModelVersion
 - register path: training/evaluation completion creates `registered`
+- registration must reject jobs with `execution_mode=simulated|unknown`
+- for `execution_mode=local_command`, registration must also reject artifact summaries that indicate non-real execution (`mode=template`, explicit `fallback_reason`, or `training_performed=false`) unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
 - lifecycle can move to `deprecated`
 
 ## 6. Unified Inference Output Storage
@@ -448,8 +488,19 @@ Runtime rule (current implementation):
 `normalized_output.source` currently distinguishes:
 - `<framework>_runtime` (external runtime endpoint result)
 - `<framework>_local_command` (local predict command result via `<FRAMEWORK>_LOCAL_PREDICT_COMMAND`)
-- `<framework>_local` (local deterministic inferencer result)
-- `mock_fallback` (runtime endpoint configured but failed, fallback applied)
+- `explicit_fallback_runtime_failed` (runtime endpoint configured but failed, fallback applied)
+- `explicit_fallback_local_command_failed` (local predict command failed, fallback applied)
+- `base_empty` (baseline empty output)
+
+Template marker rule:
+- when `raw_output.meta.mode=template`, the run should be treated as non-real template output even if `normalized_output.source=<framework>_local_command`.
+
+OCR fallback safety contract:
+- when OCR local command/runtime execution fails and fallback is applied, `ocr.lines` and `ocr.words` must remain empty arrays unless runtime/local command explicitly returned real OCR content.
+- fallback payload must not include business-looking placeholder OCR text.
+
+Generic fallback safety contract:
+- explicit runtime/local-command fallback should default to empty structured prediction arrays for all task heads unless runtime/local command returned valid payload.
 
 Inference rule (current implementation):
 - when a model version has an artifact attachment with resolvable `primary_model_path`, local inference prefers that version-bound artifact path over global fallback env vars.

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { hashPassword } from './auth';
 import {
+  isCuratedFoundationModelName,
   isFixtureAttachmentFilename,
   isFixtureDatasetRecord,
   isFixtureModelRecord,
@@ -24,6 +25,7 @@ import type {
   MessageRecord,
   ModelRecord,
   ModelVersionRecord,
+  RuntimeSettingsRecord,
   TrainingJobRecord,
   TrainingExecutionTarget,
   TrainingSchedulerDecision,
@@ -37,10 +39,15 @@ import type {
 const now = () => new Date().toISOString();
 
 const llmConfigDataFile = path.resolve(process.cwd(), '.data', 'llm-config.enc.json');
+const runtimeSettingsDataFile = path.resolve(process.cwd(), '.data', 'runtime-settings.enc.json');
 const appStateDataFile = path.resolve(
   process.cwd(),
   (process.env.APP_STATE_STORE_PATH ?? '.data/app-state.json').trim()
 );
+const appStateBootstrapMode: 'full' | 'minimal' = (() => {
+  const raw = (process.env.APP_STATE_BOOTSTRAP_MODE ?? 'full').trim().toLowerCase();
+  return raw === 'minimal' ? 'minimal' : 'full';
+})();
 const devFallbackSecret = 'vistral-dev-only-secret-change-me';
 
 interface EncryptedPayload {
@@ -71,6 +78,33 @@ interface AppStatePayload {
   approvalRequests: ApprovalRequest[];
   auditLogs: AuditLogRecord[];
 }
+
+const normalizeRuntimeSettingField = (value: string | undefined): string =>
+  (value ?? '').trim();
+
+const buildDefaultRuntimeSettingsFromEnv = (): RuntimeSettingsRecord => ({
+  updated_at: null,
+  frameworks: {
+    paddleocr: {
+      endpoint: normalizeRuntimeSettingField(process.env.PADDLEOCR_RUNTIME_ENDPOINT),
+      api_key: normalizeRuntimeSettingField(process.env.PADDLEOCR_RUNTIME_API_KEY),
+      local_train_command: normalizeRuntimeSettingField(process.env.PADDLEOCR_LOCAL_TRAIN_COMMAND),
+      local_predict_command: normalizeRuntimeSettingField(process.env.PADDLEOCR_LOCAL_PREDICT_COMMAND)
+    },
+    doctr: {
+      endpoint: normalizeRuntimeSettingField(process.env.DOCTR_RUNTIME_ENDPOINT),
+      api_key: normalizeRuntimeSettingField(process.env.DOCTR_RUNTIME_API_KEY),
+      local_train_command: normalizeRuntimeSettingField(process.env.DOCTR_LOCAL_TRAIN_COMMAND),
+      local_predict_command: normalizeRuntimeSettingField(process.env.DOCTR_LOCAL_PREDICT_COMMAND)
+    },
+    yolo: {
+      endpoint: normalizeRuntimeSettingField(process.env.YOLO_RUNTIME_ENDPOINT),
+      api_key: normalizeRuntimeSettingField(process.env.YOLO_RUNTIME_API_KEY),
+      local_train_command: normalizeRuntimeSettingField(process.env.YOLO_LOCAL_TRAIN_COMMAND),
+      local_predict_command: normalizeRuntimeSettingField(process.env.YOLO_LOCAL_PREDICT_COMMAND)
+    }
+  }
+});
 
 const deriveKey = (): Buffer => {
   const secret = process.env.LLM_CONFIG_SECRET ?? devFallbackSecret;
@@ -291,7 +325,7 @@ export const annotations: AnnotationRecord[] = [
     source: 'manual',
     status: 'approved',
     payload: {
-      lines: [{ text: 'Invoice No. 2026-0402', confidence: 0.99 }]
+      lines: [{ text: 'SEED_OCR_LINE_001', confidence: 0.99 }]
     },
     annotated_by: 'u-1',
     created_at: now(),
@@ -506,12 +540,78 @@ export const approvalRequests: ApprovalRequest[] = [];
 export const auditLogs: AuditLogRecord[] = [];
 
 export const llmConfigsByUser: Record<string, LlmConfig> = {};
+export const runtimeSettings: RuntimeSettingsRecord = buildDefaultRuntimeSettingsFromEnv();
 
 let appStateDirty = false;
 let appStatePersistPromise: Promise<void> | null = null;
 
 const replaceArray = <T>(target: T[], incoming: T[]): void => {
   target.splice(0, target.length, ...incoming);
+};
+
+const buildMinimalFoundationModels = (): ModelRecord[] => {
+  const timestamp = now();
+  return [
+    {
+      id: 'm-foundation-yolo',
+      name: 'Road Damage Detector',
+      description: 'Curated foundation model baseline for detection workflows.',
+      model_type: 'detection',
+      owner_user_id: 'u-1',
+      visibility: 'workspace',
+      status: 'published',
+      metadata: { framework: 'yolo', foundation: 'true' },
+      created_at: timestamp,
+      updated_at: timestamp
+    },
+    {
+      id: 'm-foundation-ocr',
+      name: 'Invoice OCR Assistant',
+      description: 'Curated foundation model baseline for OCR workflows.',
+      model_type: 'ocr',
+      owner_user_id: 'u-1',
+      visibility: 'workspace',
+      status: 'published',
+      metadata: { framework: 'paddleocr', foundation: 'true' },
+      created_at: timestamp,
+      updated_at: timestamp
+    }
+  ];
+};
+
+const applyMinimalBootstrapState = (): void => {
+  const foundationModels = models
+    .filter((model) => isCuratedFoundationModelName(model.name))
+    .map((model) => ({
+      ...model,
+      metadata: {
+        ...(model.metadata ?? {}),
+        foundation: 'true'
+      }
+    }));
+  const nextModels =
+    foundationModels.length > 0 ? foundationModels : buildMinimalFoundationModels();
+
+  replaceArray(models, nextModels);
+  replaceArray(conversations, []);
+  replaceArray(messages, []);
+  replaceArray(attachments, []);
+  replaceArray(datasets, []);
+  replaceArray(datasetItems, []);
+  replaceArray(annotations, []);
+  replaceArray(annotationReviews, []);
+  replaceArray(datasetVersions, []);
+  replaceArray(trainingJobs, []);
+  replaceArray(trainingWorkerNodes, []);
+  replaceArray(trainingWorkerBootstrapSessions, []);
+  Object.keys(trainingWorkerAuthTokensByWorkerId).forEach((key) => {
+    delete trainingWorkerAuthTokensByWorkerId[key];
+  });
+  replaceArray(trainingMetrics, []);
+  replaceArray(modelVersions, []);
+  replaceArray(inferenceRuns, []);
+  replaceArray(approvalRequests, []);
+  replaceArray(auditLogs, []);
 };
 
 const normalizeUser = (entry: User): User => {
@@ -764,6 +864,20 @@ const normalizeTrainingWorkerBootstrapSession = (
   const workerBindPort = Number.isFinite(workerBindPortRaw)
     ? Math.min(65535, Math.max(1, Math.round(workerBindPortRaw)))
     : 9090;
+  const compatibility = (
+    entry.compatibility &&
+    typeof entry.compatibility === 'object' &&
+    !Array.isArray(entry.compatibility)
+      ? entry.compatibility
+      : null
+  ) as TrainingWorkerBootstrapSessionRecord['compatibility'];
+  const compatibilityStatus = compatibility?.status;
+  const normalizedCompatibilityStatus =
+    compatibilityStatus === 'compatible' ||
+    compatibilityStatus === 'warning' ||
+    compatibilityStatus === 'incompatible'
+      ? compatibilityStatus
+      : 'unknown';
 
   return {
     ...entry,
@@ -819,6 +933,51 @@ const normalizeTrainingWorkerBootstrapSession = (
       typeof entry.callback_validation_message === 'string' && entry.callback_validation_message.trim()
         ? entry.callback_validation_message.trim()
         : null,
+    compatibility: compatibility
+      ? {
+          status: normalizedCompatibilityStatus,
+          message:
+            typeof compatibility.message === 'string' && compatibility.message.trim()
+              ? compatibility.message.trim()
+              : 'Compatibility check is not available.',
+          expected_runtime_profile:
+            typeof compatibility.expected_runtime_profile === 'string' &&
+            compatibility.expected_runtime_profile.trim()
+              ? compatibility.expected_runtime_profile.trim()
+              : null,
+          reported_runtime_profile:
+            typeof compatibility.reported_runtime_profile === 'string' &&
+            compatibility.reported_runtime_profile.trim()
+              ? compatibility.reported_runtime_profile.trim()
+              : null,
+          reported_worker_version:
+            typeof compatibility.reported_worker_version === 'string' &&
+            compatibility.reported_worker_version.trim()
+              ? compatibility.reported_worker_version.trim()
+              : null,
+          reported_contract_version:
+            typeof compatibility.reported_contract_version === 'string' &&
+            compatibility.reported_contract_version.trim()
+              ? compatibility.reported_contract_version.trim()
+              : null,
+          missing_capabilities: Array.isArray(compatibility.missing_capabilities)
+            ? compatibility.missing_capabilities
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                .map((value) => value.trim())
+            : []
+        }
+      : {
+          status: 'unknown',
+          message: 'Compatibility check has not run yet.',
+          expected_runtime_profile:
+            typeof entry.worker_runtime_profile === 'string' && entry.worker_runtime_profile.trim()
+              ? entry.worker_runtime_profile.trim()
+              : null,
+          reported_runtime_profile: null,
+          reported_worker_version: null,
+          reported_contract_version: null,
+          missing_capabilities: []
+        },
     linked_worker_id:
       typeof entry.linked_worker_id === 'string' && entry.linked_worker_id.trim()
         ? entry.linked_worker_id.trim()
@@ -1259,6 +1418,10 @@ export const loadPersistedAppState = async (): Promise<void> => {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') {
+      if (appStateBootstrapMode === 'minimal') {
+        applyMinimalBootstrapState();
+        loadedDirty = true;
+      }
       return;
     }
     console.warn('[vistral-api] Failed to load app state store:', (error as Error).message);
@@ -1315,10 +1478,81 @@ export const loadPersistedLlmConfigs = async (): Promise<void> => {
   }
 };
 
+const normalizeRuntimeFrameworkConfig = (
+  raw: unknown,
+  fallback: RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']]
+): RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']] => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ...fallback };
+  }
+
+  const entry = raw as Partial<RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']]>;
+  return {
+    endpoint:
+      typeof entry.endpoint === 'string' ? entry.endpoint.trim() : fallback.endpoint,
+    api_key:
+      typeof entry.api_key === 'string' ? entry.api_key.trim() : fallback.api_key,
+    local_train_command:
+      typeof entry.local_train_command === 'string'
+        ? entry.local_train_command.trim()
+        : fallback.local_train_command,
+    local_predict_command:
+      typeof entry.local_predict_command === 'string'
+        ? entry.local_predict_command.trim()
+        : fallback.local_predict_command
+  };
+};
+
+export const loadPersistedRuntimeSettings = async (): Promise<void> => {
+  try {
+    const file = await fs.readFile(runtimeSettingsDataFile, 'utf8');
+    const encrypted = JSON.parse(file) as EncryptedPayload;
+    const decrypted = decryptText(encrypted);
+    const parsed = JSON.parse(decrypted) as Partial<RuntimeSettingsRecord>;
+    const defaults = buildDefaultRuntimeSettingsFromEnv();
+    const frameworks: Partial<RuntimeSettingsRecord['frameworks']> =
+      parsed.frameworks && typeof parsed.frameworks === 'object' && !Array.isArray(parsed.frameworks)
+        ? (parsed.frameworks as Partial<RuntimeSettingsRecord['frameworks']>)
+        : {};
+
+    runtimeSettings.frameworks.paddleocr = normalizeRuntimeFrameworkConfig(
+      frameworks.paddleocr,
+      defaults.frameworks.paddleocr
+    );
+    runtimeSettings.frameworks.doctr = normalizeRuntimeFrameworkConfig(
+      frameworks.doctr,
+      defaults.frameworks.doctr
+    );
+    runtimeSettings.frameworks.yolo = normalizeRuntimeFrameworkConfig(
+      frameworks.yolo,
+      defaults.frameworks.yolo
+    );
+    runtimeSettings.updated_at =
+      typeof parsed.updated_at === 'string' && parsed.updated_at.trim()
+        ? parsed.updated_at.trim()
+        : null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      return;
+    }
+
+    console.warn('[vistral-api] Failed to load encrypted runtime settings store:', (error as Error).message);
+  }
+};
+
 export const persistLlmConfigs = async (): Promise<void> => {
   const serialized = JSON.stringify(llmConfigsByUser);
   const encrypted = encryptText(serialized);
 
   await fs.mkdir(path.dirname(llmConfigDataFile), { recursive: true });
   await fs.writeFile(llmConfigDataFile, JSON.stringify(encrypted), 'utf8');
+};
+
+export const persistRuntimeSettings = async (): Promise<void> => {
+  const serialized = JSON.stringify(runtimeSettings);
+  const encrypted = encryptText(serialized);
+
+  await fs.mkdir(path.dirname(runtimeSettingsDataFile), { recursive: true });
+  await fs.writeFile(runtimeSettingsDataFile, JSON.stringify(encrypted), 'utf8');
 };

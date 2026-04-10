@@ -54,7 +54,7 @@ Actor: `user` / `admin`
 8. continue the current task without losing active route context or footer controls such as language/session status
 
 Note:
-- `/workspace/console` is now an immersive workspace route (same shell model as `/workspace/chat`) with fixed sidebar, independent content scroll, and floating bottom input bar.
+- `/workspace/console` now stays in the shared app shell and uses a professional workbench layout (`context toolbar + main work area + right inspector`) with partitioned scrolling.
 
 ## 2.2 Flow A2: Settings Surface (implemented)
 Actor: `user` / `admin`
@@ -104,11 +104,13 @@ Actor: `user`
 1. open `/datasets/:datasetId`
 2. switch item view mode (`grid` / `list`) based on current task
 3. apply fast filters (search, split, item status, queue status, class/tag/metadata hints)
-4. select multiple items from filtered results
-5. execute batch item operations (for example split/status/metadata updates) through one action bar
-6. verify resulting queue distribution (`needs_work` / `in_review` / `rejected` / `approved`)
-7. jump into annotation workspace with queue/item context preselected (and keep `version` context when launched from a dataset snapshot)
-8. open training jobs or inference validation from a dataset-version action with preserved query context (`/training/jobs?dataset=<id>&version=<id>`, `/inference/validate?dataset=<id>&version=<id>`)
+4. metadata filter supports both fuzzy keyword and `key=value` expression (for example `source=inference_feedback`, `feedback_reason=missing_detection`, `tag:low_confidence=true`)
+5. select multiple items from filtered results
+6. execute batch item operations (for example split/status/metadata updates) through one action bar
+7. optionally save current filters (including slice-derived filters) as reusable views and apply/delete those views in-place
+8. verify resulting queue distribution (`needs_work` / `in_review` / `rejected` / `approved`)
+9. jump into annotation workspace with queue/item context preselected (and keep `version` context when launched from a dataset snapshot)
+10. open training jobs or inference validation from a dataset-version action with preserved query context (`/training/jobs?dataset=<id>&version=<id>`, `/inference/validate?dataset=<id>&version=<id>`)
 
 ## 5. Flow D: Annotation Workflow (Phase 2 minimum, implementing now)
 Actor: `user` (annotator), `user/admin` (reviewer by capability)
@@ -131,12 +133,14 @@ Current phase target:
 2. review annotation summary and jump into a focused queue (`needs_work`, `in_review`, `rejected`, `approved`)
 3. open `/datasets/:datasetId/annotate` (optional `?version=<dataset_version_id>` keeps snapshot context during review)
 4. select dataset item directly or restore one from queue deep link
-5. edit OCR/detection payload
-6. save as `in_progress`/`annotated`
-7. submit `annotated -> in_review`
-8. review as `approved` or `rejected`
-9. once an item enters `in_review`, annotation payload becomes read-only in the upsert path; only the review endpoint may move it to `approved`/`rejected`
-10. when rejected, reviewer must provide `review_reason_code`; latest review reason/comment remain visible during rework until next review, and moving the item back to `in_progress` should keep the same item open inside the `needs_work` queue before any further edits
+5. queue filters (search/split/item-status/metadata/low-confidence) remain visible as active chips and can be cleared with one click
+6. metadata quick filters can prefill common triage patterns (`tag:low_confidence=true`, `inference_run_id`, top `feedback_reason`)
+7. edit OCR/detection payload
+8. save as `in_progress`/`annotated`
+9. submit `annotated -> in_review`
+10. review as `approved` or `rejected`
+11. once an item enters `in_review`, annotation payload becomes read-only in the upsert path; only the review endpoint may move it to `approved`/`rejected`
+12. when rejected, reviewer must provide `review_reason_code`; latest review reason/comment remain visible during rework until next review, and moving the item back to `in_progress` should keep the same item open inside the `needs_work` queue before any further edits
 
 ## 5.1 Flow D1: Single-Sample Review Workbench (evolution track)
 Actor: `user` (annotator/reviewer by capability)
@@ -173,7 +177,8 @@ Actor: `user`
 ## 7. Flow F: Model Version Registration
 Actor: `user`
 
-1. completed training job becomes registerable
+1. completed training job becomes registerable only when `execution_mode=local_command`
+1a. if artifact summary signals non-real local execution (`mode=template`, explicit `fallback_reason`, or `training_performed=false`), registration must be blocked unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
 2. register model version in `/models/versions`
 3. model version is linked to model + dataset + training job + metrics
 
@@ -186,10 +191,12 @@ Actor: `user`
 4. select model version
 5. run inference
 6. inspect visualized predictions + raw output + normalized output
+6a. when run source indicates fallback/template (`source` contains `mock` / `template` / `fallback` or raw fallback reason exists), UI must show explicit warning that this is not real OCR output
+6b. when OCR run returns empty lines in fallback mode, UI must show explicit empty-result guidance instead of business-like default text
 7. if failure sample, click feedback action to send sample to a dataset with matching task type
 8. system records `feedback_dataset_id`, ensures a dataset-scoped attachment exists in target dataset, and upserts a traceable dataset item for next-round annotation/training
 9. validation side actions can jump directly to scoped dataset detail, annotation queue, and training jobs while preserving dataset/version context
-10. annotation quick link additionally carries `meta=<run_id>` so annotation workspace can prefilter feedback samples for the selected inference run
+10. annotation quick link additionally carries `meta=inference_run_id=<run_id>` so annotation workspace can prefilter feedback samples for the selected inference run
 
 ## 9. Closed Business Loop 1: OCR Fine-tune
 1. create OCR dataset
@@ -219,7 +226,7 @@ Actor: `user`
 ## 11. Flow H: Deployment Verification Governance
 Actor: `admin`
 
-1. run `docker:verify:full` to generate report files
+1. run `docker:verify:full` to generate report files (includes OCR fallback safety guard verification)
 2. open `/admin/verification-reports`
 3. filter by status/base url/date range or search by filename/business user
 4. optionally apply quick range preset (last 7 days / last 30 days)
@@ -264,12 +271,14 @@ Actor: `admin` (control plane operator), `worker operator`
    - worker endpoint callback reachability
    - writable workspace
    - capability/runtime availability
+   - worker health payload compatibility metadata (`worker_version`, `contract_version`, `runtime_profile`, `capabilities`)
 9. operator confirms worker name, concurrency, capabilities, and optional advanced settings
 10. worker saves config locally and runs validation
 11. worker heartbeat is accepted by control plane and triggers callback validation from control plane to worker endpoint
-12. if callback validation passes, session and worker advance to `online`; otherwise session stays `validation_failed` and worker remains unschedulable until retry succeeds
+12. if callback validation and hard-compatibility checks pass, session and worker advance to `online`; otherwise session stays `validation_failed` and worker remains unschedulable until retry succeeds
 13. worker local `/setup` page can poll control-plane bootstrap status so the operator sees the latest onboarding state without switching back to admin runtime settings
 14. worker enters normal heartbeat and training-accept mode
+15. for an already-registered worker, admin can trigger `POST /admin/training-workers/{id}/reconfigure-session` to start a guided upgrade/reconfigure pass without deleting the existing worker record
 
 ## 13. Unified UX Constraints
 - multi-step flows must have top stepper

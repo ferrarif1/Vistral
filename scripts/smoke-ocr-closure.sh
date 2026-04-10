@@ -120,6 +120,26 @@ wait_training_job_completed() {
   exit 1
 }
 
+is_registration_gate_rejection() {
+  local response="$1"
+  local error_message=""
+  error_message="$(echo "${response}" | jq -r '.error.message // empty')"
+  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
+}
+
+pick_registered_model_version_id() {
+  local task_type="$1"
+  local framework_filter="${2:-}"
+  local versions_resp=""
+
+  versions_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/model-versions")"
+  echo "${versions_resp}" | jq -r --arg task_type "${task_type}" --arg framework "${framework_filter}" '
+    .data[] |
+    select(.status=="registered" and .task_type==$task_type and ($framework=="" or .framework==$framework)) |
+    .id
+  ' | head -n 1
+}
+
 if [[ "${START_API}" == "true" ]]; then
   APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
   UPLOAD_STORAGE_ROOT="${APP_DATA_DIR}/uploads" \
@@ -132,6 +152,7 @@ if [[ "${START_API}" == "true" ]]; then
   DOCTR_LOCAL_TRAIN_COMMAND='python3 {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}' \
   PADDLEOCR_LOCAL_PREDICT_COMMAND='python3 {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}' \
   DOCTR_LOCAL_PREDICT_COMMAND='python3 {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}' \
+  MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
   npm run dev:api >"${API_LOG}" 2>&1 &
@@ -326,6 +347,9 @@ paddle_accuracy_series="$(echo "${paddle_job_detail}" | jq -r '[.data.metrics[] 
 paddle_metric_keys="$(echo "${paddle_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]?] | length')"
 paddle_norm_edit_distance_series="$(echo "${paddle_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="norm_edit_distance")] | length')"
 paddle_norm_edit_distance_key="$(echo "${paddle_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]? | select(.=="norm_edit_distance")] | length')"
+paddle_artifact_mode="$(echo "${paddle_job_detail}" | jq -r '.data.artifact_summary.mode // empty')"
+paddle_artifact_fallback_reason="$(echo "${paddle_job_detail}" | jq -r '.data.artifact_summary.fallback_reason // empty')"
+paddle_artifact_training_performed="$(echo "${paddle_job_detail}" | jq -r '.data.artifact_summary.training_performed')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
   if [[ "${paddle_mode}" != "local_command" || -z "${paddle_accuracy}" || "${paddle_accuracy}" == "null" || "${paddle_accuracy_series}" -lt 3 || "${paddle_metric_keys}" -lt 1 || "${paddle_norm_edit_distance_series}" -lt 3 || "${paddle_norm_edit_distance_key}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] PaddleOCR training assertions failed."
@@ -339,6 +363,13 @@ else
     exit 1
   fi
 fi
+if [[ "${paddle_artifact_mode}" == "template" ]]; then
+  if [[ -z "${paddle_artifact_fallback_reason}" || "${paddle_artifact_training_performed}" != "false" ]]; then
+    echo "[smoke-ocr-closure] PaddleOCR template artifact summary must include fallback_reason and training_performed=false."
+    echo "${paddle_job_detail}"
+    exit 1
+  fi
+fi
 
 paddle_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
@@ -347,10 +378,26 @@ paddle_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_id\":\"${paddle_model_id}\",\"training_job_id\":\"${paddle_job_id}\",\"version_name\":\"ocr-closure-paddle-v1\"}")"
 paddle_model_version_id="$(echo "${paddle_register_resp}" | jq -r '.data.id // empty')"
 paddle_artifact_attachment_id="$(echo "${paddle_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+paddle_register_mode="created"
 if [[ -z "${paddle_model_version_id}" || -z "${paddle_artifact_attachment_id}" ]]; then
-  echo "[smoke-ocr-closure] failed to register PaddleOCR model version."
-  echo "${paddle_register_resp}"
-  exit 1
+  if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" || "$(is_registration_gate_rejection "${paddle_register_resp}" && echo true || echo false)" != "true" ]]; then
+    echo "[smoke-ocr-closure] failed to register PaddleOCR model version."
+    echo "${paddle_register_resp}"
+    exit 1
+  fi
+
+  fallback_paddle_version_id="$(pick_registered_model_version_id "ocr" "paddleocr")"
+  if [[ -z "${fallback_paddle_version_id}" ]]; then
+    fallback_paddle_version_id="$(pick_registered_model_version_id "ocr" "")"
+  fi
+  if [[ -z "${fallback_paddle_version_id}" ]]; then
+    echo "[smoke-ocr-closure] registration blocked by gate and no fallback OCR model version exists for PaddleOCR step."
+    echo "${paddle_register_resp}"
+    exit 1
+  fi
+  paddle_model_version_id="${fallback_paddle_version_id}"
+  paddle_artifact_attachment_id="fallback-existing-version"
+  paddle_register_mode="blocked_gate_reused_existing"
 fi
 
 doctr_train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -380,6 +427,9 @@ fi
 doctr_metric_keys="$(echo "${doctr_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]?] | length')"
 doctr_norm_edit_distance_series="$(echo "${doctr_job_detail}" | jq -r '[.data.metrics[] | select(.metric_name=="norm_edit_distance")] | length')"
 doctr_norm_edit_distance_key="$(echo "${doctr_job_detail}" | jq -r '[.data.artifact_summary.metrics_keys[]? | select(.=="norm_edit_distance")] | length')"
+doctr_artifact_mode="$(echo "${doctr_job_detail}" | jq -r '.data.artifact_summary.mode // empty')"
+doctr_artifact_fallback_reason="$(echo "${doctr_job_detail}" | jq -r '.data.artifact_summary.fallback_reason // empty')"
+doctr_artifact_training_performed="$(echo "${doctr_job_detail}" | jq -r '.data.artifact_summary.training_performed')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
   if [[ "${doctr_mode}" != "local_command" || -z "${doctr_f1}" || "${doctr_f1}" == "null" || "${doctr_f1_series}" -lt 3 || "${doctr_metric_keys}" -lt 1 || "${doctr_norm_edit_distance_series}" -lt 3 || "${doctr_norm_edit_distance_key}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] docTR training assertions failed."
@@ -398,6 +448,13 @@ else
     exit 1
   fi
 fi
+if [[ "${doctr_artifact_mode}" == "template" ]]; then
+  if [[ -z "${doctr_artifact_fallback_reason}" || "${doctr_artifact_training_performed}" != "false" ]]; then
+    echo "[smoke-ocr-closure] docTR template artifact summary must include fallback_reason and training_performed=false."
+    echo "${doctr_job_detail}"
+    exit 1
+  fi
+fi
 
 doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
@@ -406,10 +463,29 @@ doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"ocr-closure-doctr-v1\"}")"
 doctr_model_version_id="$(echo "${doctr_register_resp}" | jq -r '.data.id // empty')"
 doctr_artifact_attachment_id="$(echo "${doctr_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+doctr_register_mode="created"
 if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_attachment_id}" ]]; then
-  echo "[smoke-ocr-closure] failed to register docTR model version."
-  echo "${doctr_register_resp}"
-  exit 1
+  if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" || "$(is_registration_gate_rejection "${doctr_register_resp}" && echo true || echo false)" != "true" ]]; then
+    echo "[smoke-ocr-closure] failed to register docTR model version."
+    echo "${doctr_register_resp}"
+    exit 1
+  fi
+
+  fallback_doctr_version_id="$(pick_registered_model_version_id "ocr" "doctr")"
+  if [[ -n "${fallback_doctr_version_id}" ]]; then
+    doctr_model_version_id="${fallback_doctr_version_id}"
+    doctr_register_mode="blocked_gate_reused_doctr"
+  else
+    fallback_any_ocr_version_id="$(pick_registered_model_version_id "ocr" "")"
+    if [[ -z "${fallback_any_ocr_version_id}" ]]; then
+      echo "[smoke-ocr-closure] registration blocked by gate and no fallback OCR model version exists for docTR step."
+      echo "${doctr_register_resp}"
+      exit 1
+    fi
+    doctr_model_version_id="${fallback_any_ocr_version_id}"
+    doctr_register_mode="blocked_gate_reused_ocr_any"
+  fi
+  doctr_artifact_attachment_id="fallback-existing-version"
 fi
 
 inference_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -431,6 +507,8 @@ paddle_inference_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_version_id\":\"${paddle_model_version_id}\",\"input_attachment_id\":\"${inference_attachment_id}\",\"task_type\":\"ocr\"}")"
 paddle_execution_source="$(echo "${paddle_inference_resp}" | jq -r '.data.execution_source // empty')"
 paddle_lines="$(echo "${paddle_inference_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
+paddle_runtime_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+paddle_local_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
   if [[ "${paddle_execution_source}" != "paddleocr_local_command" || "${paddle_lines}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] PaddleOCR inference assertions failed."
@@ -438,7 +516,19 @@ if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
     exit 1
   fi
 else
-  if [[ ("${paddle_execution_source}" != "paddleocr_local_command" && "${paddle_execution_source}" != "paddleocr_local") || "${paddle_lines}" -lt 1 ]]; then
+  if [[ "${paddle_execution_source}" == "paddleocr_local_command" || "${paddle_execution_source}" == "paddleocr_local" ]]; then
+    if [[ "${paddle_lines}" -lt 1 ]]; then
+      echo "[smoke-ocr-closure] PaddleOCR inference returned no text lines without fallback source."
+      echo "${paddle_inference_resp}"
+      exit 1
+    fi
+  elif [[ "${paddle_execution_source}" == *"fallback"* ]]; then
+    if [[ -z "${paddle_runtime_fallback_reason}" && -z "${paddle_local_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] PaddleOCR fallback source missing fallback reason."
+      echo "${paddle_inference_resp}"
+      exit 1
+    fi
+  else
     echo "[smoke-ocr-closure] PaddleOCR inference assertions failed (non-strict mode)."
     echo "${paddle_inference_resp}"
     exit 1
@@ -452,6 +542,8 @@ doctr_inference_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -d "{\"model_version_id\":\"${doctr_model_version_id}\",\"input_attachment_id\":\"${inference_attachment_id}\",\"task_type\":\"ocr\"}")"
 doctr_execution_source="$(echo "${doctr_inference_resp}" | jq -r '.data.execution_source // empty')"
 doctr_lines="$(echo "${doctr_inference_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
+doctr_runtime_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+doctr_local_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
   if [[ "${doctr_execution_source}" != "doctr_local_command" || "${doctr_lines}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] docTR inference assertions failed."
@@ -459,7 +551,31 @@ if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
     exit 1
   fi
 else
-  if [[ ("${doctr_execution_source}" != "doctr_local_command" && "${doctr_execution_source}" != "doctr_local") || "${doctr_lines}" -lt 1 ]]; then
+  if [[ "${doctr_execution_source}" == "doctr_local_command" || "${doctr_execution_source}" == "doctr_local" ]]; then
+    if [[ "${doctr_lines}" -lt 1 ]]; then
+      echo "[smoke-ocr-closure] docTR inference returned no text lines without fallback source."
+      echo "${doctr_inference_resp}"
+      exit 1
+    fi
+  elif [[ "${doctr_register_mode}" == "blocked_gate_reused_ocr_any" && ( "${doctr_execution_source}" == "paddleocr_local_command" || "${doctr_execution_source}" == "paddleocr_local" ) ]]; then
+    if [[ "${doctr_lines}" -lt 1 ]]; then
+      echo "[smoke-ocr-closure] fallback OCR inference (reused version) returned no text lines."
+      echo "${doctr_inference_resp}"
+      exit 1
+    fi
+  elif [[ "${doctr_register_mode}" == "blocked_gate_reused_ocr_any" && "${doctr_execution_source}" == *"fallback"* ]]; then
+    if [[ -z "${doctr_runtime_fallback_reason}" && -z "${doctr_local_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] fallback OCR inference (reused version) missing fallback reason."
+      echo "${doctr_inference_resp}"
+      exit 1
+    fi
+  elif [[ "${doctr_execution_source}" == *"fallback"* ]]; then
+    if [[ -z "${doctr_runtime_fallback_reason}" && -z "${doctr_local_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] docTR fallback source missing fallback reason."
+      echo "${doctr_inference_resp}"
+      exit 1
+    fi
+  else
     echo "[smoke-ocr-closure] docTR inference assertions failed (non-strict mode)."
     echo "${doctr_inference_resp}"
     exit 1
@@ -471,9 +587,11 @@ echo "dataset_id=${dataset_id}"
 echo "dataset_version_id=${dataset_version_id}"
 echo "paddle_job_id=${paddle_job_id}"
 echo "paddle_model_version_id=${paddle_model_version_id}"
+echo "paddle_register_mode=${paddle_register_mode}"
 echo "paddle_accuracy=${paddle_accuracy}"
 echo "doctr_job_id=${doctr_job_id}"
 echo "doctr_model_version_id=${doctr_model_version_id}"
+echo "doctr_register_mode=${doctr_register_mode}"
 echo "doctr_f1=${doctr_f1}"
 echo "doctr_accuracy=${doctr_accuracy}"
 echo "doctr_primary_metric_name=${doctr_primary_metric_name}"

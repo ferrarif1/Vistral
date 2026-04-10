@@ -66,6 +66,21 @@ export type TrainingWorkerBootstrapStatus =
   | 'expired';
 export type TrainingWorkerDeploymentMode = 'docker' | 'script';
 export type TrainingWorkerProfile = 'yolo' | 'paddleocr' | 'doctr' | 'mixed';
+export type TrainingWorkerCompatibilityStatus =
+  | 'compatible'
+  | 'warning'
+  | 'incompatible'
+  | 'unknown';
+
+export interface TrainingWorkerCompatibilitySnapshot {
+  status: TrainingWorkerCompatibilityStatus;
+  message: string;
+  expected_runtime_profile: string | null;
+  reported_runtime_profile: string | null;
+  reported_worker_version: string | null;
+  reported_contract_version: string | null;
+  missing_capabilities: string[];
+}
 
 export interface TrainingSchedulerDecision {
   policy: 'load_aware_v1';
@@ -369,6 +384,7 @@ export interface TrainingWorkerBootstrapSessionRecord {
   last_seen_at: string | null;
   callback_checked_at: string | null;
   callback_validation_message: string | null;
+  compatibility: TrainingWorkerCompatibilitySnapshot | null;
   linked_worker_id: string | null;
   metadata: Record<string, string>;
   created_at: string;
@@ -631,6 +647,11 @@ export interface ClaimTrainingWorkerBootstrapSessionResult {
   config_defaults: Record<string, string>;
 }
 
+export interface ActivateTrainingWorkerResult {
+  worker: TrainingWorkerNodeView;
+  bootstrap_session: TrainingWorkerBootstrapSessionRecord | null;
+}
+
 export interface GetTrainingWorkerBootstrapSessionStatusInput {
   pairing_token: string;
 }
@@ -697,6 +718,31 @@ export interface LlmConfigView {
   temperature: number;
   has_api_key: boolean;
   api_key_masked: string;
+}
+
+export interface RuntimeFrameworkConfig {
+  endpoint: string;
+  api_key: string;
+  local_train_command: string;
+  local_predict_command: string;
+}
+
+export interface RuntimeFrameworkConfigView {
+  endpoint: string;
+  local_train_command: string;
+  local_predict_command: string;
+  has_api_key: boolean;
+  api_key_masked: string;
+}
+
+export interface RuntimeSettingsRecord {
+  updated_at: string | null;
+  frameworks: Record<ModelFramework, RuntimeFrameworkConfig>;
+}
+
+export interface RuntimeSettingsView {
+  updated_at: string | null;
+  frameworks: Record<ModelFramework, RuntimeFrameworkConfigView>;
 }
 
 export interface StartConversationInput {

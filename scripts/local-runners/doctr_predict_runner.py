@@ -36,7 +36,10 @@ def infer_image_shape(path: str) -> tuple:
 def build_template_payload(args, fallback_reason: str = '') -> dict:
     lines = read_text_lines(args.input_path)
     if not lines:
-        lines = ['DOC-TR-LINE-001', 'INSPECTION-READY']
+        lines = ['TEMPLATE_OCR_LINE_1', 'TEMPLATE_OCR_LINE_2']
+
+    template_reason = fallback_reason if fallback_reason else 'template_mode_default'
+    normalized_fallback_reason = fallback_reason if fallback_reason else 'template_mode_default'
 
     width, height = infer_image_shape(args.input_path)
     if width <= 0 or height <= 0:
@@ -65,12 +68,11 @@ def build_template_payload(args, fallback_reason: str = '') -> dict:
         'meta': {
             'runner': 'doctr_predict_runner',
             'mode': 'template',
+            'fallback_reason': normalized_fallback_reason,
+            'template_reason': template_reason,
             'generated_at': datetime.now(timezone.utc).isoformat(),
         },
     }
-
-    if fallback_reason:
-        payload['meta']['fallback_reason'] = fallback_reason
 
     return payload
 
