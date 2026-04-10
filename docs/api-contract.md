@@ -226,6 +226,7 @@ Notes:
   - `create_dataset`
   - `create_model_draft`
   - `create_training_job`
+  - `run_model_inference` (attachment + inference intent keywords => auto run inference using conversation model's latest registered version)
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
 - when backend execution succeeds, assistant returns `metadata.conversation_action.status=completed`
 - when execution fails or user cancels, assistant returns `failed` / `cancelled`
@@ -329,11 +330,44 @@ Notes:
 - admin scope only
 - API keys are masked in response (`has_api_key`, `api_key_masked`)
 - local train/predict command templates are returned as plain text fields for editing
+- response includes `active_profile_id` + `available_profiles` for one-click runtime profile activation
 
 Response:
 ```json
 {
   "updated_at": "2026-04-10T02:30:00.000Z",
+  "active_profile_id": "saved",
+  "available_profiles": [
+    {
+      "id": "saved",
+      "label": "Saved runtime settings",
+      "description": "Current persisted runtime configuration used by API runtime adapters.",
+      "source": "saved",
+      "frameworks": {
+        "paddleocr": {
+          "endpoint": "http://127.0.0.1:9393/predict",
+          "local_train_command": "python3 .../paddleocr_train_runner.py ...",
+          "local_predict_command": "python3 .../paddleocr_predict_runner.py ...",
+          "has_api_key": true,
+          "api_key_masked": "sk-a...9f2b"
+        },
+        "doctr": {
+          "endpoint": "",
+          "local_train_command": "",
+          "local_predict_command": "",
+          "has_api_key": false,
+          "api_key_masked": "Not set"
+        },
+        "yolo": {
+          "endpoint": "http://127.0.0.1:9394/predict",
+          "local_train_command": "python3 .../yolo_train_runner.py ...",
+          "local_predict_command": "python3 .../yolo_predict_runner.py ...",
+          "has_api_key": false,
+          "api_key_masked": "Not set"
+        }
+      }
+    }
+  ],
   "frameworks": {
     "paddleocr": {
       "endpoint": "http://127.0.0.1:9393/predict",
@@ -406,6 +440,23 @@ Notes:
 - `runtime_controls.python_bin` can override bundled runner python executable (`{{python_bin}}` placeholder)
 - `runtime_controls.disable_simulated_train_fallback=true` forces train to fail fast when local runner is unavailable
 - `runtime_controls.disable_inference_fallback=true` forces inference to fail fast instead of returning template/fallback outputs
+- response is the same masked settings view as `GET /settings/runtime`
+- save operation sets `active_profile_id` to `saved`
+
+### POST /settings/runtime/activate-profile
+Activate one runtime profile in one click.
+
+Request:
+```json
+{
+  "profile_id": "prod-realtime"
+}
+```
+
+Notes:
+- admin scope only
+- profile source can be `saved` or deployment env profiles from `VISTRAL_RUNTIME_PROFILES_JSON`
+- activating a profile copies its framework endpoint/api-key/local command templates into effective runtime settings
 - response is the same masked settings view as `GET /settings/runtime`
 
 ### DELETE /settings/runtime

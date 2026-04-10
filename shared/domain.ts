@@ -16,7 +16,11 @@ export type ModelStatus =
 
 export type ConversationStatus = 'active' | 'completed' | 'archived';
 export type MessageSender = 'user' | 'assistant' | 'system';
-export type ConversationActionType = 'create_dataset' | 'create_model_draft' | 'create_training_job';
+export type ConversationActionType =
+  | 'create_dataset'
+  | 'create_model_draft'
+  | 'create_training_job'
+  | 'run_model_inference';
 export type ConversationActionStatus = 'requires_input' | 'completed' | 'failed' | 'cancelled';
 
 export type FileAttachmentStatus = 'uploading' | 'processing' | 'ready' | 'error';
@@ -745,12 +749,23 @@ export interface RuntimeSettingsRecord {
   updated_at: string | null;
   frameworks: Record<ModelFramework, RuntimeFrameworkConfig>;
   controls: RuntimeControlSettings;
+  active_profile_id?: string | null;
 }
 
 export interface RuntimeSettingsView {
   updated_at: string | null;
   frameworks: Record<ModelFramework, RuntimeFrameworkConfigView>;
   controls: RuntimeControlSettings;
+  active_profile_id?: string | null;
+  available_profiles?: RuntimeProfileView[];
+}
+
+export interface RuntimeProfileView {
+  id: string;
+  label: string;
+  description: string;
+  source: 'env' | 'saved';
+  frameworks: Record<ModelFramework, RuntimeFrameworkConfigView>;
 }
 
 export interface StartConversationInput {
