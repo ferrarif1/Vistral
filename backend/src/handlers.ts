@@ -67,6 +67,7 @@ import type {
   LlmConfig,
   LlmConfigView,
   RuntimeFrameworkConfig,
+  RuntimeProfileView,
   RuntimeSettingsRecord,
   RuntimeSettingsView,
   LoginInput,
@@ -315,6 +316,15 @@ const normalizeLlmConfig = (input: Partial<LlmConfig>): LlmConfig => {
 };
 
 const runtimeFrameworks: ModelFramework[] = ['paddleocr', 'doctr', 'yolo'];
+type RuntimeProfileSource = 'env' | 'saved';
+
+interface RuntimeProfileRecord {
+  id: string;
+  label: string;
+  description: string;
+  source: RuntimeProfileSource;
+  frameworks: Record<ModelFramework, RuntimeFrameworkConfig>;
+}
 
 const emptyRuntimeFrameworkConfig: RuntimeFrameworkConfig = {
   endpoint: '',
@@ -419,12 +429,111 @@ const getStoredRuntimeControlConfig = (): RuntimeSettingsRecord['controls'] => {
 
 const getCurrentRuntimeSettingsRecord = (): RuntimeSettingsRecord => ({
   updated_at: runtimeSettings.updated_at,
+  active_profile_id:
+    typeof runtimeSettings.active_profile_id === 'string' && runtimeSettings.active_profile_id.trim()
+      ? runtimeSettings.active_profile_id.trim()
+      : null,
   frameworks: {
     paddleocr: getStoredRuntimeFrameworkConfig('paddleocr'),
     doctr: getStoredRuntimeFrameworkConfig('doctr'),
     yolo: getStoredRuntimeFrameworkConfig('yolo')
   },
   controls: getStoredRuntimeControlConfig()
+});
+
+const parseRuntimeProfilesFromEnv = (): RuntimeProfileRecord[] => {
+  const raw = (process.env.VISTRAL_RUNTIME_PROFILES_JSON ?? '').trim();
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const envProfiles: RuntimeProfileRecord[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const candidate = item as {
+        id?: unknown;
+        label?: unknown;
+        description?: unknown;
+        frameworks?: Partial<Record<ModelFramework, Partial<RuntimeFrameworkConfig>>>;
+      };
+      const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+      const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
+      if (!id || !label) {
+        continue;
+      }
+      const frameworks = candidate.frameworks ?? {};
+      envProfiles.push({
+        id,
+        label,
+        description:
+          typeof candidate.description === 'string' && candidate.description.trim()
+            ? candidate.description.trim()
+            : 'Runtime profile loaded from deployment environment.',
+        source: 'env',
+        frameworks: {
+          paddleocr: normalizeRuntimeFrameworkConfig(frameworks.paddleocr, emptyRuntimeFrameworkConfig),
+          doctr: normalizeRuntimeFrameworkConfig(frameworks.doctr, emptyRuntimeFrameworkConfig),
+          yolo: normalizeRuntimeFrameworkConfig(frameworks.yolo, emptyRuntimeFrameworkConfig)
+        }
+      });
+    }
+    return envProfiles;
+  } catch {
+    return [];
+  }
+};
+
+const buildRuntimeProfiles = (record: RuntimeSettingsRecord): RuntimeProfileRecord[] => {
+  const envProfiles = parseRuntimeProfilesFromEnv();
+  const savedProfile: RuntimeProfileRecord = {
+    id: 'saved',
+    label: 'Saved runtime settings',
+    description: 'Current persisted runtime configuration used by API runtime adapters.',
+    source: 'saved',
+    frameworks: {
+      paddleocr: normalizeRuntimeFrameworkConfig(record.frameworks.paddleocr, emptyRuntimeFrameworkConfig),
+      doctr: normalizeRuntimeFrameworkConfig(record.frameworks.doctr, emptyRuntimeFrameworkConfig),
+      yolo: normalizeRuntimeFrameworkConfig(record.frameworks.yolo, emptyRuntimeFrameworkConfig)
+    }
+  };
+  return [savedProfile, ...envProfiles];
+};
+
+const toRuntimeProfileView = (profile: RuntimeProfileRecord): RuntimeProfileView => ({
+  id: profile.id,
+  label: profile.label,
+  description: profile.description,
+  source: profile.source,
+  frameworks: {
+    paddleocr: {
+      endpoint: profile.frameworks.paddleocr.endpoint,
+      local_train_command: profile.frameworks.paddleocr.local_train_command,
+      local_predict_command: profile.frameworks.paddleocr.local_predict_command,
+      has_api_key: profile.frameworks.paddleocr.api_key.length > 0,
+      api_key_masked: maskApiKey(profile.frameworks.paddleocr.api_key)
+    },
+    doctr: {
+      endpoint: profile.frameworks.doctr.endpoint,
+      local_train_command: profile.frameworks.doctr.local_train_command,
+      local_predict_command: profile.frameworks.doctr.local_predict_command,
+      has_api_key: profile.frameworks.doctr.api_key.length > 0,
+      api_key_masked: maskApiKey(profile.frameworks.doctr.api_key)
+    },
+    yolo: {
+      endpoint: profile.frameworks.yolo.endpoint,
+      local_train_command: profile.frameworks.yolo.local_train_command,
+      local_predict_command: profile.frameworks.yolo.local_predict_command,
+      has_api_key: profile.frameworks.yolo.api_key.length > 0,
+      api_key_masked: maskApiKey(profile.frameworks.yolo.api_key)
+    }
+  }
 });
 
 const getStoredLlmConfigByUser = (userId: string): LlmConfig => {
@@ -1068,8 +1177,11 @@ const getCurrentUserLlmConfigView = (): LlmConfigView => {
 
 const getCurrentRuntimeSettingsView = (): RuntimeSettingsView => {
   const record = getCurrentRuntimeSettingsRecord();
+  const profiles = buildRuntimeProfiles(record);
   return {
     updated_at: record.updated_at,
+    active_profile_id: record.active_profile_id,
+    available_profiles: profiles.map((item) => toRuntimeProfileView(item)),
     frameworks: {
       paddleocr: {
         endpoint: record.frameworks.paddleocr.endpoint,
@@ -1921,13 +2033,142 @@ const resolveCreateModelDraftAction = async (
   }
 };
 
-const resolveConversationAction = async (
-  conversationId: string,
+const detectConversationInferenceIntent = (content: string, attachmentIds: string[]): boolean => {
+  if (attachmentIds.length === 0) {
+    return false;
+  }
+  if (detectConversationActionType(content)) {
+    return false;
+  }
+  return /(识别|推理|检测|ocr|read|predict|inference|analy[sz]e|请分析|帮我识别)/i.test(content);
+};
+
+const formatInferenceSummary = (run: InferenceRunRecord, inputText: string, attachmentLabel: string): string => {
+  const chinese = hasChineseText(inputText);
+  const output = run.normalized_output;
+  const source = run.execution_source;
+  if (run.task_type === 'ocr') {
+    const lines = output.ocr.lines.map((item) => item.text).filter(Boolean).slice(0, 5);
+    const detail = lines.length > 0 ? lines.join(' | ') : chinese ? '未返回可读文本。' : 'No OCR lines returned.';
+    return chinese
+      ? `已完成 OCR 推理（${source}）。文件：${attachmentLabel}。识别结果：${detail}`
+      : `OCR inference completed (${source}). File: ${attachmentLabel}. Result: ${detail}`;
+  }
+  if (run.task_type === 'detection' || run.task_type === 'obb') {
+    const count = output.boxes.length + output.rotated_boxes.length;
+    return chinese
+      ? `已完成目标检测推理（${source}）。文件：${attachmentLabel}。检测到 ${count} 个目标。`
+      : `Detection inference completed (${source}). File: ${attachmentLabel}. Detected ${count} objects.`;
+  }
+  if (run.task_type === 'segmentation') {
+    const count = output.polygons.length + output.masks.length;
+    return chinese
+      ? `已完成分割推理（${source}）。文件：${attachmentLabel}。分割结果 ${count} 项。`
+      : `Segmentation inference completed (${source}). File: ${attachmentLabel}. Segmentation outputs: ${count}.`;
+  }
+  const top = output.labels[0];
+  return chinese
+    ? `已完成分类推理（${source}）。文件：${attachmentLabel}。Top-1：${top?.label ?? 'unknown'} (${top?.score ?? 0}).`
+    : `Classification inference completed (${source}). File: ${attachmentLabel}. Top-1: ${top?.label ?? 'unknown'} (${top?.score ?? 0}).`;
+};
+
+const resolveConversationInferenceAction = async (
+  conversation: ConversationRecord,
   content: string,
+  attachmentIds: string[],
   currentUser: User
 ): Promise<ConversationActionResolution | null> => {
+  if (!detectConversationInferenceIntent(content, attachmentIds)) {
+    return null;
+  }
+  const model = assertModelAccess(conversation.model_id, currentUser);
+  const taskType = model.model_type;
+  const version = [...modelVersions]
+    .filter((item) => item.model_id === model.id && item.status === 'registered' && item.task_type === taskType)
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+  if (!version) {
+    const chinese = hasChineseText(content);
+    const summary = chinese
+      ? '当前会话模型还没有可用的已注册版本，无法执行真实推理。请先完成训练并注册模型版本。'
+      : 'No registered model version is available for this conversation model yet. Train/register a version first.';
+    return {
+      content: summary,
+      metadata: toActionMetadata('run_model_inference', 'failed', summary, {
+        model_id: model.id,
+        task_type: taskType
+      })
+    };
+  }
+  const readyAttachment = attachments.find(
+    (item) =>
+      attachmentIds.includes(item.id) &&
+      item.owner_user_id === currentUser.id &&
+      item.status === 'ready'
+  );
+  if (!readyAttachment) {
+    const chinese = hasChineseText(content);
+    const summary = chinese
+      ? '附件尚未 ready，暂时无法执行推理。请稍后重试。'
+      : 'Attachment is not ready yet, inference cannot run right now. Please retry shortly.';
+    return {
+      content: summary,
+      metadata: toActionMetadata('run_model_inference', 'failed', summary, {
+        model_version_id: version.id
+      })
+    };
+  }
+  try {
+    const run = await runInference({
+      model_version_id: version.id,
+      input_attachment_id: readyAttachment.id,
+      task_type: taskType
+    });
+    const summary = formatInferenceSummary(run, content, readyAttachment.filename);
+    return {
+      content: summary,
+      metadata: toActionMetadata('run_model_inference', 'completed', summary, {
+        model_id: model.id,
+        model_version_id: version.id,
+        inference_run_id: run.id,
+        task_type: taskType,
+        execution_source: run.execution_source
+      }, {
+        createdEntityType: null,
+        createdEntityId: run.id,
+        createdEntityLabel: readyAttachment.filename
+      })
+    };
+  } catch (error) {
+    const chinese = hasChineseText(content);
+    const summary = chinese ? `推理执行失败：${(error as Error).message}` : `Inference failed: ${(error as Error).message}`;
+    return {
+      content: summary,
+      metadata: toActionMetadata('run_model_inference', 'failed', summary, {
+        model_id: model.id,
+        model_version_id: version.id,
+        task_type: taskType
+      })
+    };
+  }
+};
+
+const resolveConversationAction = async (
+  conversation: ConversationRecord,
+  content: string,
+  attachmentIds: string[],
+  currentUser: User
+): Promise<ConversationActionResolution | null> => {
+  const inferenceResolution = await resolveConversationInferenceAction(
+    conversation,
+    content,
+    attachmentIds,
+    currentUser
+  );
+  if (inferenceResolution) {
+    return inferenceResolution;
+  }
   const explicitAction = detectConversationActionType(content);
-  const pendingAction = getPendingConversationAction(conversationId);
+  const pendingAction = getPendingConversationAction(conversation.id);
   const action = explicitAction ?? pendingAction?.action ?? null;
 
   if (!action) {
@@ -7230,8 +7471,9 @@ export async function startConversation(
 
   const effectiveLlmConfig = getEffectiveConversationLlmConfig(input.llm_config);
   const actionResolution = await resolveConversationAction(
-    createdConversation.id,
+    createdConversation,
     input.initial_message,
+    input.attachment_ids,
     currentUser
   );
   const assistantContent =
@@ -7294,8 +7536,9 @@ export async function sendConversationMessage(
 
   const effectiveLlmConfig = getEffectiveConversationLlmConfig(input.llm_config);
   const actionResolution = await resolveConversationAction(
-    conversation.id,
+    conversation,
     input.content,
+    input.attachment_ids,
     currentUser
   );
   const assistantContent =
@@ -10046,6 +10289,7 @@ export async function saveRuntimeSettings(input: {
     };
   });
   runtimeSettings.controls = normalizeRuntimeControlConfig(input.runtime_controls, existing.controls);
+  runtimeSettings.active_profile_id = 'saved';
   runtimeSettings.updated_at = now();
   await persistRuntimeSettings();
 
@@ -10065,10 +10309,38 @@ export async function clearRuntimeSettings(): Promise<RuntimeSettingsView> {
     runtimeSettings.frameworks[framework] = getEnvRuntimeFrameworkConfig(framework);
   });
   runtimeSettings.controls = getEnvRuntimeControlConfig();
+  runtimeSettings.active_profile_id = null;
   runtimeSettings.updated_at = null;
   await persistRuntimeSettings();
 
   logAudit('runtime_settings_cleared', 'System', 'runtime-settings', {
+    updated_by: currentUser.id
+  });
+  return getCurrentRuntimeSettingsView();
+}
+
+export async function activateRuntimeProfile(profileId: string): Promise<RuntimeSettingsView> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can switch runtime profile.');
+
+  const record = getCurrentRuntimeSettingsRecord();
+  const target = buildRuntimeProfiles(record).find((item) => item.id === profileId.trim());
+  if (!target) {
+    throw new Error('Runtime profile not found.');
+  }
+
+  runtimeFrameworks.forEach((framework) => {
+    runtimeSettings.frameworks[framework] = {
+      ...target.frameworks[framework]
+    };
+  });
+  runtimeSettings.active_profile_id = target.id;
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  logAudit('runtime_profile_activated', 'System', 'runtime-settings', {
+    profile_id: target.id,
     updated_by: currentUser.id
   });
   return getCurrentRuntimeSettingsView();

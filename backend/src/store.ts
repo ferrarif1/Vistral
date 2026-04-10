@@ -104,6 +104,7 @@ const buildDefaultRuntimeControlSettingsFromEnv = (): RuntimeSettingsRecord['con
 
 const buildDefaultRuntimeSettingsFromEnv = (): RuntimeSettingsRecord => ({
   updated_at: null,
+  active_profile_id: null,
   frameworks: {
     paddleocr: {
       endpoint: normalizeRuntimeSettingField(process.env.PADDLEOCR_RUNTIME_ENDPOINT),
@@ -1572,6 +1573,10 @@ export const loadPersistedRuntimeSettings = async (): Promise<void> => {
       defaults.frameworks.yolo
     );
     runtimeSettings.controls = normalizeRuntimeControlSettings(parsed.controls, defaults.controls);
+    runtimeSettings.active_profile_id =
+      typeof parsed.active_profile_id === 'string' && parsed.active_profile_id.trim()
+        ? parsed.active_profile_id.trim()
+        : null;
     runtimeSettings.updated_at =
       typeof parsed.updated_at === 'string' && parsed.updated_at.trim()
         ? parsed.updated_at.trim()
