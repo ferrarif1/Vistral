@@ -448,6 +448,10 @@ Attributes:
   - `paddleocr.local_predict_command`
   - `doctr.*` (same fields)
   - `yolo.*` (same fields)
+- `controls` (global runtime safety/exec controls)
+  - `python_bin` (optional default Python executable for bundled local runners)
+  - `disable_simulated_train_fallback` (boolean; when true, train must fail instead of simulated fallback)
+  - `disable_inference_fallback` (boolean; when true, inference must fail instead of template/fallback output)
 
 Rules:
 - runtime adapters should read effective config dynamically at execution time (not only on process boot).

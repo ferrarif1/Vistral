@@ -108,6 +108,11 @@ export default function InferenceValidationPage() {
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [runtimeError, setRuntimeError] = useState('');
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeConnectivityRecord[]>([]);
+  const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
+  const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
+  const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
+  const [runtimeDisableInferenceFallback, setRuntimeDisableInferenceFallback] = useState(false);
+  const [runtimePythonBin, setRuntimePythonBin] = useState('');
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
@@ -474,6 +479,37 @@ export default function InferenceValidationPage() {
   }, [loadRuntimeConnectivity]);
 
   useEffect(() => {
+    let active = true;
+    setRuntimeSettingsLoading(true);
+    setRuntimeSettingsError('');
+    api
+      .getRuntimeSettings()
+      .then((view) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeDisableSimulatedTrainFallback(view.controls.disable_simulated_train_fallback);
+        setRuntimeDisableInferenceFallback(view.controls.disable_inference_fallback);
+        setRuntimePythonBin(view.controls.python_bin.trim());
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeSettingsError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setRuntimeSettingsLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (feedbackDatasets.length === 0) {
       if (selectedDatasetId) {
         setSelectedDatasetId('');
@@ -665,6 +701,47 @@ export default function InferenceValidationPage() {
           title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
+      ) : null}
+      {!runtimeSettingsLoading ? (
+        runtimeSettingsError ? (
+          <StateBlock
+            variant="empty"
+            title={t('Runtime strict mode status unavailable')}
+            description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
+            extra={
+              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                {t('Open Runtime Settings')}
+              </ButtonLink>
+            }
+          />
+        ) : runtimeDisableInferenceFallback ? (
+          <StateBlock
+            variant="success"
+            title={t('Inference strict fallback guard is active')}
+            description={t(
+              'Inference fallback/template outputs are blocked. Bundled runner python: {pythonBin}.',
+              { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
+            )}
+          />
+        ) : (
+          <StateBlock
+            variant="error"
+            title={t('Inference strict fallback guard is off')}
+            description={t(
+              'Inference may still return fallback/template outputs when runtime or local command fails. Enable strict guard in Runtime settings before production validation.'
+            )}
+            extra={
+              <div className="row gap wrap">
+                <Badge tone={runtimeDisableSimulatedTrainFallback ? 'success' : 'warning'}>
+                  {t('Train strict')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
+                </Badge>
+                <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                  {t('Open Runtime Settings')}
+                </ButtonLink>
+              </div>
+            }
+          />
+        )
       ) : null}
       {selectedRunFallbackWarning ? (
         <StateBlock

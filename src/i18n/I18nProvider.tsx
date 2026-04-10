@@ -937,6 +937,32 @@ const zhCN: Record<string, string> = {
   'Review whether each framework is reachable and whether setup is complete.':
     '查看每个框架是否可达，以及接入是否完整。',
   'Runtime controls': 'Runtime 控制区',
+  'Runtime strict controls': 'Runtime 严格控制',
+  'Control whether runtime can fallback to simulated/template outputs, and choose default Python executable for bundled runners.':
+    '控制 Runtime 是否允许 simulated/template 降级输出，并指定内置 Runner 默认 Python 可执行文件。',
+  'Bundled runner Python executable': '内置 Runner Python 可执行文件',
+  'platform default': '平台默认',
+  'Leave blank to use platform default (python3 / python)':
+    '留空则使用平台默认值（python3 / python）',
+  'Disable simulated training fallback (fail fast when local runner command is missing or unavailable)':
+    '禁用 simulated 训练回退（本地 Runner 命令缺失/不可用时直接失败）',
+  'Disable inference fallback (reject template/fallback runtime outputs and return explicit error)':
+    '禁用推理回退（拒绝 template/fallback 输出并返回显式错误）',
+  'Runtime strict mode status unavailable': 'Runtime 严格模式状态不可用',
+  'Open Runtime Settings': '打开 Runtime 设置',
+  'Inference strict fallback guard is active': '推理严格回退保护已开启',
+  'Inference strict fallback guard is off': '推理严格回退保护未开启',
+  'Inference fallback/template outputs are blocked. Bundled runner python: {pythonBin}.':
+    '推理回退/模板输出已被阻止。内置 Runner Python：{pythonBin}。',
+  'Inference may still return fallback/template outputs when runtime or local command fails. Enable strict guard in Runtime settings before production validation.':
+    '当 Runtime 或本地命令失败时，推理仍可能返回回退/模板输出。请在 Runtime 设置中开启严格保护后再用于生产验证。',
+  'Train strict': '训练严格',
+  'Training strict fallback guard is active': '训练严格回退保护已开启',
+  'Training strict fallback guard is off': '训练严格回退保护未开启',
+  'Simulated/template training fallback is blocked. Bundled runner python: {pythonBin}.':
+    '模拟/模板训练回退已被阻止。内置 Runner Python：{pythonBin}。',
+  'Training may fallback to simulated/template outputs when local runner command is unavailable. Enable strict guard in Runtime settings before production runs.':
+    '当本地 Runner 命令不可用时，训练仍可能回退到模拟/模板输出。请在 Runtime 设置中开启严格保护后再进行生产训练。',
   'Filter the diagnostics surface and rerun selected checks without leaving the page.':
     '无需离开当前页面，就能筛选诊断视图并重新执行选定检查。',
   'Execution watch': '执行观察',

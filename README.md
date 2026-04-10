@@ -150,6 +150,8 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - runs the core closure suite (`no-seed-hardcoding` + `foundation-reset` + `adapter-no-placeholder` + `training-template-guard` + `model-version-register-gate` + `account-governance` + `phase2` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
 - `npm run smoke:llm-settings`
   - verifies LLM settings save/edit/clear flow, including keeping the saved key while editing and loading encrypted config after API restart
+- `npm run smoke:runtime-settings-persistence`
+  - verifies runtime settings save/reload/clear flow (including encrypted persistence across API restart and adapter fallback to env defaults after clear)
 - `npm run smoke:runtime-success`
   - verifies YOLO/PaddleOCR/docTR runtime success path with a local runtime mock server
 - `npm run smoke:ocr-fallback-guard`
@@ -165,8 +167,16 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - `npm run smoke:ocr-closure`
   - validates a dedicated OCR closure on real uploaded data: OCR import -> PaddleOCR/docTR local-command training -> metrics/artifact summary -> model-version register -> inference upload/run
   - default is strict local-command assertions; use `OCR_CLOSURE_STRICT_LOCAL_COMMAND=false npm run smoke:ocr-closure` for fallback-tolerant checks
+  - to enforce non-template/non-fallback OCR evidence, run `OCR_CLOSURE_REQUIRE_REAL_MODE=true npm run smoke:ocr-closure` (auto-enables `VISTRAL_RUNNER_ENABLE_REAL=1`)
+  - by default this smoke prefers `.data/runtime-python/.venv/bin/python` when present; override with `PYTHON_BIN=/path/to/python`
+  - closure now generates a synthetic OCR text image by default for stable real-mode metric checks (`OCR_CLOSURE_GENERATE_TEXT_SAMPLE=false` to disable)
+  - for slow first-time model warmup, tune wait with `OCR_CLOSURE_WAIT_POLLS` and `OCR_CLOSURE_WAIT_SLEEP_SEC`
 - `npm run smoke:real-closure`
   - validates a more complete real closure: requirement draft -> dataset upload/import/export -> YOLO training -> model version register -> YOLO/PaddleOCR/docTR inference -> detection/OCR feedback loops with dataset traceability
+  - by default this smoke prefers `.data/runtime-python/.venv/bin/python` when present; override with `PYTHON_BIN=/path/to/python`
+  - closure now generates a synthetic OCR text image by default for stable OCR train/inference checks (`REAL_CLOSURE_GENERATE_TEXT_SAMPLE=false` to disable)
+  - to enforce non-template/non-fallback OCR evidence, run `REAL_CLOSURE_REQUIRE_REAL_MODE=true npm run smoke:real-closure` (auto-enables `VISTRAL_RUNNER_ENABLE_REAL=1`)
+  - for slow first-time model warmup, tune wait with `REAL_CLOSURE_YOLO_WAIT_POLLS`/`REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC` and `REAL_CLOSURE_DOCTR_WAIT_POLLS`/`REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC`
 - `npm run smoke:restart-resume`
   - verifies app-state persistence and automatic training-job resume after API restart
 - `npm run smoke:local-command`
@@ -225,14 +235,17 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - Optional local command adapters:
   - `YOLO_LOCAL_TRAIN_COMMAND`, `PADDLEOCR_LOCAL_TRAIN_COMMAND`, `DOCTR_LOCAL_TRAIN_COMMAND`
   - `YOLO_LOCAL_PREDICT_COMMAND`, `PADDLEOCR_LOCAL_PREDICT_COMMAND`, `DOCTR_LOCAL_PREDICT_COMMAND`
+  - optional bundled-runner python override: `VISTRAL_PYTHON_BIN` (fallbacks: `PYTHON_BIN`, then platform default `python3`/`python`)
   - command timeout: `LOCAL_RUNNER_TIMEOUT_MS`
+  - strict non-simulated train fallback switch: `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK=1` (fail fast when local runner command is missing/unavailable)
+  - strict non-fallback inference switch: `VISTRAL_DISABLE_INFERENCE_FALLBACK=1` (runtime/local predict must return real output; template/fallback outputs are rejected)
   - optional real-runner switch: `VISTRAL_RUNNER_ENABLE_REAL=1`
   - optional real-runner hints:
     - `VISTRAL_YOLO_MODEL_PATH`
     - `VISTRAL_PADDLEOCR_LANG`, `VISTRAL_PADDLEOCR_USE_GPU`
     - `VISTRAL_DOCTR_DET_ARCH`, `VISTRAL_DOCTR_RECO_ARCH`
   - reusable runner templates: `scripts/local-runners/`
-  - template placeholders include `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
+  - template placeholders include `{{python_bin}}`, `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 - Worker dispatch controls:
   - `TRAINING_WORKER_SHARED_TOKEN`
   - `TRAINING_WORKER_HEARTBEAT_TTL_MS`

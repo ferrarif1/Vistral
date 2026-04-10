@@ -3,13 +3,42 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_HOST="${API_HOST:-127.0.0.1}"
-if [[ "${START_API:-true}" == "true" && -z "${API_PORT:-}" ]]; then
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "[smoke-real-closure] python3 is required when auto-selecting API_PORT."
-    exit 1
-  fi
+START_API="${START_API:-true}"
+AUTH_USERNAME="${AUTH_USERNAME:-}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-}"
+REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION:-true}"
+REAL_CLOSURE_REQUIRE_REAL_MODE="${REAL_CLOSURE_REQUIRE_REAL_MODE:-false}"
+REAL_CLOSURE_GENERATE_TEXT_SAMPLE="${REAL_CLOSURE_GENERATE_TEXT_SAMPLE:-true}"
+REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-6}"
+DEMO_DIR="${DEMO_DIR:-${ROOT_DIR}/demo_data}"
+DEFAULT_VENV_PYTHON="${ROOT_DIR}/.data/runtime-python/.venv/bin/python"
+if [[ -x "${DEFAULT_VENV_PYTHON}" ]]; then
+  PYTHON_BIN="${PYTHON_BIN:-${DEFAULT_VENV_PYTHON}}"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
+RUNNER_ENABLE_REAL_VALUE="${VISTRAL_RUNNER_ENABLE_REAL:-0}"
+if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  RUNNER_ENABLE_REAL_VALUE="1"
+fi
+if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  REAL_CLOSURE_YOLO_WAIT_POLLS="${REAL_CLOSURE_YOLO_WAIT_POLLS:-360}"
+  REAL_CLOSURE_DOCTR_WAIT_POLLS="${REAL_CLOSURE_DOCTR_WAIT_POLLS:-720}"
+else
+  REAL_CLOSURE_YOLO_WAIT_POLLS="${REAL_CLOSURE_YOLO_WAIT_POLLS:-120}"
+  REAL_CLOSURE_DOCTR_WAIT_POLLS="${REAL_CLOSURE_DOCTR_WAIT_POLLS:-180}"
+fi
+REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC="${REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC:-0.3}"
+REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC="${REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC:-0.3}"
+
+if ! "${PYTHON_BIN}" -V >/dev/null 2>&1; then
+  echo "[smoke-real-closure] python runtime is required. missing PYTHON_BIN=${PYTHON_BIN}"
+  exit 1
+fi
+
+if [[ "${START_API}" == "true" && -z "${API_PORT:-}" ]]; then
   API_PORT="$(
-    python3 - <<'PY'
+    "${PYTHON_BIN}" - <<'PY'
 import socket
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     sock.bind(("127.0.0.1", 0))
@@ -19,15 +48,6 @@ PY
 fi
 API_PORT="${API_PORT:-8787}"
 BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
-START_API="${START_API:-true}"
-AUTH_USERNAME="${AUTH_USERNAME:-}"
-AUTH_PASSWORD="${AUTH_PASSWORD:-}"
-REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION:-true}"
-REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-6}"
-REAL_CLOSURE_YOLO_WAIT_POLLS="${REAL_CLOSURE_YOLO_WAIT_POLLS:-100}"
-REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC="${REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC:-0.3}"
-REAL_CLOSURE_DOCTR_WAIT_POLLS="${REAL_CLOSURE_DOCTR_WAIT_POLLS:-80}"
-REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC="${REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC:-0.3}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-real-closure] jq is required."
@@ -37,11 +57,11 @@ fi
 COOKIE_FILE="$(mktemp)"
 API_LOG="$(mktemp)"
 TMP_YOLO="$(mktemp)"
-TMP_OCR="$(mktemp)"
 TMP_COCO="$(mktemp)"
 TMP_LABELME="$(mktemp)"
 TMP_EXPORT="$(mktemp)"
 TMP_FALLBACK_IMAGE="$(mktemp)"
+TMP_SYNTH_IMAGE=""
 API_PID=""
 
 cleanup() {
@@ -49,7 +69,7 @@ cleanup() {
     kill "${API_PID}" >/dev/null 2>&1 || true
     wait "${API_PID}" >/dev/null 2>&1 || true
   fi
-  rm -f "${COOKIE_FILE}" "${API_LOG}" "${TMP_YOLO}" "${TMP_OCR}" "${TMP_COCO}" "${TMP_LABELME}" "${TMP_EXPORT}" "${TMP_FALLBACK_IMAGE}"
+  rm -f "${COOKIE_FILE}" "${API_LOG}" "${TMP_YOLO}" "${TMP_COCO}" "${TMP_LABELME}" "${TMP_EXPORT}" "${TMP_FALLBACK_IMAGE}" "${TMP_SYNTH_IMAGE:-}"
 }
 trap cleanup EXIT
 
@@ -102,6 +122,15 @@ pick_registered_model_version_id() {
 }
 
 if [[ "${START_API}" == "true" ]]; then
+  YOLO_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
+  PADDLEOCR_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
+  DOCTR_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
+  YOLO_LOCAL_PREDICT_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}" \
+  PADDLEOCR_LOCAL_PREDICT_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}" \
+  DOCTR_LOCAL_PREDICT_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}" \
+  VISTRAL_PADDLEOCR_LANG="${VISTRAL_PADDLEOCR_LANG:-en}" \
+  PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}" \
+  VISTRAL_RUNNER_ENABLE_REAL="${RUNNER_ENABLE_REAL_VALUE}" \
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
   PADDLEOCR_RUNTIME_ENDPOINT="" \
@@ -183,10 +212,52 @@ if [[ -z "${task_type}" || -z "${recommended_annotation_type}" || "${metric_sugg
   exit 1
 fi
 
-image_file="$(find "${ROOT_DIR}/demo_data" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit)"
+image_file="$(find "${DEMO_DIR}" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true)"
+ocr_image_file="${image_file}"
+ocr_line_1="VISTRAL OCR 1022"
+ocr_line_2="TRAINING SAMPLE 08"
+if [[ "${REAL_CLOSURE_GENERATE_TEXT_SAMPLE}" == "true" ]]; then
+  synth_base="$(mktemp -t real-closure-ocr-image)"
+  TMP_SYNTH_IMAGE="${synth_base}.png"
+  mv "${synth_base}" "${TMP_SYNTH_IMAGE}"
+  set +e
+  "${PYTHON_BIN}" - "${TMP_SYNTH_IMAGE}" "${ocr_line_1}" "${ocr_line_2}" <<'PY'
+import sys
+from PIL import Image, ImageDraw, ImageFont
+
+target = sys.argv[1]
+line1 = sys.argv[2]
+line2 = sys.argv[3]
+
+image = Image.new('RGB', (1280, 720), color='white')
+draw = ImageDraw.Draw(image)
+try:
+    font = ImageFont.truetype("DejaVuSans.ttf", 64)
+except Exception:
+    font = ImageFont.load_default()
+
+draw.text((90, 180), line1, fill='black', font=font)
+draw.text((90, 320), line2, fill='black', font=font)
+image.save(target, format='PNG')
+PY
+  synth_code=$?
+  set -e
+  if [[ "${synth_code}" -eq 0 ]]; then
+    ocr_image_file="${TMP_SYNTH_IMAGE}"
+  fi
+fi
+
 if [[ -z "${image_file}" ]]; then
-  printf 'real closure synthetic image payload\n' >"${TMP_FALLBACK_IMAGE}"
-  image_file="${TMP_FALLBACK_IMAGE}"
+  if [[ -n "${ocr_image_file}" ]]; then
+    image_file="${ocr_image_file}"
+  else
+    printf 'real closure synthetic image payload\n' >"${TMP_FALLBACK_IMAGE}"
+    image_file="${TMP_FALLBACK_IMAGE}"
+    ocr_image_file="${TMP_FALLBACK_IMAGE}"
+  fi
+fi
+if [[ -z "${ocr_image_file}" ]]; then
+  ocr_image_file="${image_file}"
 fi
 
 dataset_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -615,11 +686,10 @@ fi
 
 assert_feedback_trace "${dataset_id}" "${yolo_run_id}" "detection"
 
-echo "Train No: CRH380A-1234" >"${TMP_OCR}"
 ocr_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/files/inference/upload" \
-  -F "file=@${TMP_OCR};filename=ocr-sample.txt;type=text/plain")"
+  -F "file=@${ocr_image_file}")"
 ocr_attachment_id="$(echo "${ocr_upload_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${ocr_attachment_id}" ]]; then
   echo "[smoke-real-closure] ocr input upload failed."
@@ -675,100 +745,105 @@ if [[ "${ocr_lines}" -lt 1 ]]; then
     exit 1
   fi
 fi
-
-ocr_dataset_id="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets" | jq -r '.data[] | select(.task_type == "ocr") | .id' | head -n 1)"
-if [[ -z "${ocr_dataset_id}" ]]; then
-  ocr_dataset_create_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-    -H "Content-Type: application/json" \
-    -H "X-CSRF-Token: ${csrf_token}" \
-    -X POST "${BASE_URL}/api/datasets" \
-    -d "{\"name\":\"real-closure-ocr-target-$(date +%s)\",\"description\":\"real closure doctr ocr target\",\"task_type\":\"ocr\",\"label_schema\":{\"classes\":[\"text_line\"]}}")"
-  ocr_dataset_id="$(echo "${ocr_dataset_create_resp}" | jq -r '.data.id // empty')"
-  if [[ -z "${ocr_dataset_id}" ]]; then
-    echo "[smoke-real-closure] failed to create OCR dataset for doctr training."
-    echo "${ocr_dataset_create_resp}"
+if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  if [[ "${ocr_lines}" -lt 1 || "${ocr_source}" == *"fallback"* || "${ocr_source}" == *"template"* || "${ocr_source}" == *"mock"* || "${ocr_template_mode}" == "template" || "${ocr_template_marker}" == "true" ]]; then
+    echo "[smoke-real-closure] paddleocr require-real assertions failed."
+    echo "${ocr_infer_resp}"
     exit 1
   fi
-
-  ocr_dataset_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-    -H "Content-Type: application/json" \
-    -H "X-CSRF-Token: ${csrf_token}" \
-    -X POST "${BASE_URL}/api/files/dataset/${ocr_dataset_id}/upload" \
-    -d "{\"filename\":\"real-closure-ocr-target-$(date +%s).jpg\"}")"
-  ocr_dataset_attachment_id="$(echo "${ocr_dataset_upload_resp}" | jq -r '.data.id // empty')"
-  if [[ -z "${ocr_dataset_attachment_id}" ]]; then
-    echo "[smoke-real-closure] failed to upload OCR dataset sample for doctr training."
-    echo "${ocr_dataset_upload_resp}"
-    exit 1
-  fi
-
-  ocr_dataset_attachment_status=""
-  for _ in {1..120}; do
-    ocr_dataset_files_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/dataset/${ocr_dataset_id}")"
-    ocr_dataset_attachment_status="$(echo "${ocr_dataset_files_resp}" | jq -r --arg id "${ocr_dataset_attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
-    if [[ "${ocr_dataset_attachment_status}" == "ready" ]]; then
-      break
-    fi
-    if [[ "${ocr_dataset_attachment_status}" == "error" ]]; then
-      echo "[smoke-real-closure] OCR dataset sample attachment entered error state."
-      echo "${ocr_dataset_files_resp}"
-      exit 1
-    fi
-    sleep 0.2
-  done
-
-  if [[ "${ocr_dataset_attachment_status}" != "ready" ]]; then
-    echo "[smoke-real-closure] OCR dataset sample attachment not ready in time."
-    echo "${ocr_dataset_files_resp}"
-    exit 1
-  fi
-
-  ocr_dataset_detail_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${ocr_dataset_id}")"
-  ocr_dataset_item_id="$(echo "${ocr_dataset_detail_resp}" | jq -r '.data.items[0].id // empty')"
-  if [[ -z "${ocr_dataset_item_id}" ]]; then
-    echo "[smoke-real-closure] OCR dataset item was not generated."
-    echo "${ocr_dataset_detail_resp}"
-    exit 1
-  fi
-
-  ocr_annotation_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-    -H "Content-Type: application/json" \
-    -H "X-CSRF-Token: ${csrf_token}" \
-    -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/annotations" \
-    -d "{\"dataset_item_id\":\"${ocr_dataset_item_id}\",\"task_type\":\"ocr\",\"source\":\"manual\",\"status\":\"annotated\",\"payload\":{\"lines\":[{\"text\":\"real closure doctr sample\",\"confidence\":0.99}]}}")"
-  ocr_annotation_status="$(echo "${ocr_annotation_resp}" | jq -r '.data.status // empty')"
-  if [[ "${ocr_annotation_status}" != "annotated" ]]; then
-    echo "[smoke-real-closure] failed to annotate OCR dataset sample for doctr training."
-    echo "${ocr_annotation_resp}"
+  if [[ -n "${ocr_runtime_fallback_reason}" || -n "${ocr_local_fallback_reason}" || -n "${ocr_meta_fallback_reason}" ]]; then
+    echo "[smoke-real-closure] paddleocr require-real assertions failed: fallback reason exists."
+    echo "${ocr_infer_resp}"
     exit 1
   fi
 fi
 
-ocr_dataset_version_id="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${ocr_dataset_id}/versions" | jq -r '.data[0].id // empty')"
-if [[ -z "${ocr_dataset_version_id}" ]]; then
-  ocr_split_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-    -H "Content-Type: application/json" \
-    -H "X-CSRF-Token: ${csrf_token}" \
-    -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/split" \
-    -d '{"train_ratio":0.8,"val_ratio":0.1,"test_ratio":0.1,"seed":42}')"
-  ocr_split_train_count="$(echo "${ocr_split_resp}" | jq -r '.data.split_summary.train // 0')"
-  if [[ "${ocr_split_train_count}" -lt 1 ]]; then
-    echo "[smoke-real-closure] ocr dataset split did not produce train items."
-    echo "${ocr_split_resp}"
-    exit 1
-  fi
+ocr_dataset_create_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets" \
+  -d "{\"name\":\"real-closure-ocr-target-$(date +%s)\",\"description\":\"real closure doctr ocr target\",\"task_type\":\"ocr\",\"label_schema\":{\"classes\":[\"text_line\"]}}")"
+ocr_dataset_id="$(echo "${ocr_dataset_create_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${ocr_dataset_id}" ]]; then
+  echo "[smoke-real-closure] failed to create OCR dataset for doctr training."
+  echo "${ocr_dataset_create_resp}"
+  exit 1
+fi
 
-  ocr_version_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-    -H "Content-Type: application/json" \
-    -H "X-CSRF-Token: ${csrf_token}" \
-    -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/versions" \
-    -d '{"version_name":"real-closure-ocr-v1"}')"
-  ocr_dataset_version_id="$(echo "${ocr_version_resp}" | jq -r '.data.id // empty')"
-  if [[ -z "${ocr_dataset_version_id}" ]]; then
-    echo "[smoke-real-closure] ocr dataset version creation failed."
-    echo "${ocr_version_resp}"
+ocr_dataset_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/files/dataset/${ocr_dataset_id}/upload" \
+  -F "file=@${ocr_image_file}")"
+ocr_dataset_attachment_id="$(echo "${ocr_dataset_upload_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${ocr_dataset_attachment_id}" ]]; then
+  echo "[smoke-real-closure] failed to upload OCR dataset sample for doctr training."
+  echo "${ocr_dataset_upload_resp}"
+  exit 1
+fi
+
+ocr_dataset_attachment_status=""
+for _ in {1..120}; do
+  ocr_dataset_files_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/files/dataset/${ocr_dataset_id}")"
+  ocr_dataset_attachment_status="$(echo "${ocr_dataset_files_resp}" | jq -r --arg id "${ocr_dataset_attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
+  if [[ "${ocr_dataset_attachment_status}" == "ready" ]]; then
+    break
+  fi
+  if [[ "${ocr_dataset_attachment_status}" == "error" ]]; then
+    echo "[smoke-real-closure] OCR dataset sample attachment entered error state."
+    echo "${ocr_dataset_files_resp}"
     exit 1
   fi
+  sleep 0.2
+done
+
+if [[ "${ocr_dataset_attachment_status}" != "ready" ]]; then
+  echo "[smoke-real-closure] OCR dataset sample attachment not ready in time."
+  echo "${ocr_dataset_files_resp}"
+  exit 1
+fi
+
+ocr_dataset_detail_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/datasets/${ocr_dataset_id}")"
+ocr_dataset_item_id="$(echo "${ocr_dataset_detail_resp}" | jq -r --arg attachment_id "${ocr_dataset_attachment_id}" '.data.items[] | select(.attachment_id==$attachment_id) | .id // empty' | head -n 1)"
+if [[ -z "${ocr_dataset_item_id}" ]]; then
+  echo "[smoke-real-closure] OCR dataset item was not generated."
+  echo "${ocr_dataset_detail_resp}"
+  exit 1
+fi
+
+ocr_annotation_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/annotations" \
+  -d "{\"dataset_item_id\":\"${ocr_dataset_item_id}\",\"task_type\":\"ocr\",\"source\":\"manual\",\"status\":\"annotated\",\"payload\":{\"lines\":[{\"text\":\"${ocr_line_1}\",\"confidence\":0.99},{\"text\":\"${ocr_line_2}\",\"confidence\":0.98}]}}")"
+ocr_annotation_status="$(echo "${ocr_annotation_resp}" | jq -r '.data.status // empty')"
+if [[ "${ocr_annotation_status}" != "annotated" ]]; then
+  echo "[smoke-real-closure] failed to annotate OCR dataset sample for doctr training."
+  echo "${ocr_annotation_resp}"
+  exit 1
+fi
+
+ocr_split_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/split" \
+  -d '{"train_ratio":0.8,"val_ratio":0.1,"test_ratio":0.1,"seed":42}')"
+ocr_split_train_count="$(echo "${ocr_split_resp}" | jq -r '.data.split_summary.train // 0')"
+if [[ "${ocr_split_train_count}" -lt 1 ]]; then
+  echo "[smoke-real-closure] ocr dataset split did not produce train items."
+  echo "${ocr_split_resp}"
+  exit 1
+fi
+
+ocr_version_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${csrf_token}" \
+  -X POST "${BASE_URL}/api/datasets/${ocr_dataset_id}/versions" \
+  -d '{"version_name":"real-closure-ocr-v1"}')"
+ocr_dataset_version_id="$(echo "${ocr_version_resp}" | jq -r '.data.id // empty')"
+if [[ -z "${ocr_dataset_version_id}" ]]; then
+  echo "[smoke-real-closure] ocr dataset version creation failed."
+  echo "${ocr_version_resp}"
+  exit 1
 fi
 
 ocr_mismatch_feedback_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -837,6 +912,26 @@ doctr_artifact_training_performed="$(echo "${doctr_job_detail}" | jq -r '.data.a
 if [[ "${doctr_artifact_mode}" == "template" ]]; then
   if [[ -z "${doctr_artifact_fallback_reason}" || "${doctr_artifact_training_performed}" != "false" ]]; then
     echo "[smoke-real-closure] doctr template artifact summary must include fallback_reason and training_performed=false."
+    echo "${doctr_job_detail}"
+    exit 1
+  fi
+fi
+if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  doctr_primary_metric_value="$(echo "${doctr_job_detail}" | jq -r '
+    (
+      [.data.metrics[] | select(.metric_name=="f1") | .metric_value] +
+      [.data.metrics[] | select(.metric_name=="accuracy") | .metric_value]
+    ) | map(select(. != null)) | .[0] // empty
+  ')"
+  doctr_primary_nonzero="$("${PYTHON_BIN}" -c 'import sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.0
+print(1 if value > 0 else 0)
+' "${doctr_primary_metric_value}")"
+  if [[ "${doctr_artifact_mode}" == "template" || -n "${doctr_artifact_fallback_reason}" || "${doctr_primary_nonzero}" != "1" ]]; then
+    echo "[smoke-real-closure] doctr require-real assertions failed."
     echo "${doctr_job_detail}"
     exit 1
   fi
@@ -912,6 +1007,18 @@ if [[ "${doctr_lines}" -lt 1 ]]; then
   fi
   if [[ -z "${doctr_runtime_fallback_reason}" && -z "${doctr_local_fallback_reason}" && -z "${doctr_meta_fallback_reason}" ]]; then
     echo "[smoke-real-closure] doctr inference produced no text lines without explicit fallback markers."
+    echo "${doctr_infer_resp}"
+    exit 1
+  fi
+fi
+if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  if [[ "${doctr_lines}" -lt 1 || "${doctr_source}" == *"fallback"* || "${doctr_source}" == *"template"* || "${doctr_source}" == *"mock"* || "${doctr_template_mode}" == "template" || "${doctr_template_marker}" == "true" ]]; then
+    echo "[smoke-real-closure] doctr require-real assertions failed."
+    echo "${doctr_infer_resp}"
+    exit 1
+  fi
+  if [[ -n "${doctr_runtime_fallback_reason}" || -n "${doctr_local_fallback_reason}" || -n "${doctr_meta_fallback_reason}" ]]; then
+    echo "[smoke-real-closure] doctr require-real assertions failed: fallback reason exists."
     echo "${doctr_infer_resp}"
     exit 1
   fi

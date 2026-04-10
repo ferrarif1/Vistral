@@ -82,6 +82,9 @@ start_api() {
   PADDLEOCR_RUNTIME_ENDPOINT="${ENV_PADDLE_ENDPOINT}" \
   DOCTR_RUNTIME_ENDPOINT="${ENV_DOCTR_ENDPOINT}" \
   YOLO_RUNTIME_ENDPOINT="${ENV_YOLO_ENDPOINT}" \
+  VISTRAL_PYTHON_BIN="${ENV_RUNTIME_PYTHON_BIN}" \
+  VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK="${ENV_DISABLE_SIMULATED_TRAIN_FALLBACK}" \
+  VISTRAL_DISABLE_INFERENCE_FALLBACK="${ENV_DISABLE_INFERENCE_FALLBACK}" \
   PADDLEOCR_RUNTIME_API_KEY="" \
   DOCTR_RUNTIME_API_KEY="" \
   YOLO_RUNTIME_API_KEY="" \
@@ -147,6 +150,9 @@ login_admin() {
 ENV_PADDLE_ENDPOINT="http://env-paddle.local/predict"
 ENV_DOCTR_ENDPOINT="http://env-doctr.local/predict"
 ENV_YOLO_ENDPOINT="http://env-yolo.local/predict"
+ENV_RUNTIME_PYTHON_BIN="/env/runtime/python"
+ENV_DISABLE_SIMULATED_TRAIN_FALLBACK="0"
+ENV_DISABLE_INFERENCE_FALLBACK="0"
 
 if [[ "${START_API}" == "true" ]]; then
   start_api
@@ -157,6 +163,9 @@ csrf_token="$(login_admin)"
 initial_settings="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/settings/runtime")"
 initial_updated_at="$(echo "${initial_settings}" | jq -r '.data.updated_at // empty')"
 initial_yolo_endpoint="$(echo "${initial_settings}" | jq -r '.data.frameworks.yolo.endpoint // empty')"
+initial_python_bin="$(echo "${initial_settings}" | jq -r '.data.controls.python_bin // empty')"
+initial_disable_simulated_train_fallback="$(echo "${initial_settings}" | jq -r '.data.controls.disable_simulated_train_fallback // false')"
+initial_disable_inference_fallback="$(echo "${initial_settings}" | jq -r '.data.controls.disable_inference_fallback // false')"
 if [[ -n "${initial_updated_at}" ]]; then
   echo "[smoke-runtime-settings-persistence] expected initial updated_at to be null."
   echo "${initial_settings}"
@@ -164,6 +173,11 @@ if [[ -n "${initial_updated_at}" ]]; then
 fi
 if [[ "${initial_yolo_endpoint}" != "${ENV_YOLO_ENDPOINT}" ]]; then
   echo "[smoke-runtime-settings-persistence] initial yolo endpoint mismatch."
+  echo "${initial_settings}"
+  exit 1
+fi
+if [[ "${initial_python_bin}" != "${ENV_RUNTIME_PYTHON_BIN}" || "${initial_disable_simulated_train_fallback}" != "false" || "${initial_disable_inference_fallback}" != "false" ]]; then
+  echo "[smoke-runtime-settings-persistence] initial runtime control defaults mismatch."
   echo "${initial_settings}"
   exit 1
 fi
@@ -189,6 +203,11 @@ save_payload="$(jq -nc '{
       local_predict_command: "python3 /opt/runner/yolo_predict.py"
     }
   },
+  runtime_controls: {
+    python_bin: "/saved/runtime/python",
+    disable_simulated_train_fallback: true,
+    disable_inference_fallback: true
+  },
   keep_existing_api_keys: true
 }')"
 
@@ -202,7 +221,10 @@ saved_updated_at="$(echo "${saved_settings}" | jq -r '.data.updated_at // empty'
 saved_yolo_endpoint="$(echo "${saved_settings}" | jq -r '.data.frameworks.yolo.endpoint // empty')"
 saved_yolo_has_key="$(echo "${saved_settings}" | jq -r '.data.frameworks.yolo.has_api_key // false')"
 saved_yolo_masked="$(echo "${saved_settings}" | jq -r '.data.frameworks.yolo.api_key_masked // empty')"
-if [[ -z "${saved_updated_at}" || "${saved_yolo_endpoint}" != "http://saved-yolo.local/predict" || "${saved_yolo_has_key}" != "true" || -z "${saved_yolo_masked}" ]]; then
+saved_python_bin="$(echo "${saved_settings}" | jq -r '.data.controls.python_bin // empty')"
+saved_disable_simulated_train_fallback="$(echo "${saved_settings}" | jq -r '.data.controls.disable_simulated_train_fallback // false')"
+saved_disable_inference_fallback="$(echo "${saved_settings}" | jq -r '.data.controls.disable_inference_fallback // false')"
+if [[ -z "${saved_updated_at}" || "${saved_yolo_endpoint}" != "http://saved-yolo.local/predict" || "${saved_yolo_has_key}" != "true" || -z "${saved_yolo_masked}" || "${saved_python_bin}" != "/saved/runtime/python" || "${saved_disable_simulated_train_fallback}" != "true" || "${saved_disable_inference_fallback}" != "true" ]]; then
   echo "[smoke-runtime-settings-persistence] save runtime settings assertions failed."
   echo "${saved_settings}"
   exit 1
@@ -226,7 +248,10 @@ csrf_token="$(login_admin)"
 reloaded_settings="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/settings/runtime")"
 reloaded_yolo_endpoint="$(echo "${reloaded_settings}" | jq -r '.data.frameworks.yolo.endpoint // empty')"
 reloaded_updated_at="$(echo "${reloaded_settings}" | jq -r '.data.updated_at // empty')"
-if [[ "${reloaded_yolo_endpoint}" != "http://saved-yolo.local/predict" || -z "${reloaded_updated_at}" ]]; then
+reloaded_python_bin="$(echo "${reloaded_settings}" | jq -r '.data.controls.python_bin // empty')"
+reloaded_disable_simulated_train_fallback="$(echo "${reloaded_settings}" | jq -r '.data.controls.disable_simulated_train_fallback // false')"
+reloaded_disable_inference_fallback="$(echo "${reloaded_settings}" | jq -r '.data.controls.disable_inference_fallback // false')"
+if [[ "${reloaded_yolo_endpoint}" != "http://saved-yolo.local/predict" || -z "${reloaded_updated_at}" || "${reloaded_python_bin}" != "/saved/runtime/python" || "${reloaded_disable_simulated_train_fallback}" != "true" || "${reloaded_disable_inference_fallback}" != "true" ]]; then
   echo "[smoke-runtime-settings-persistence] saved runtime settings were not persisted across restart."
   echo "${reloaded_settings}"
   exit 1
@@ -237,7 +262,10 @@ clear_settings_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -X DELETE "${BASE_URL}/api/settings/runtime")"
 clear_updated_at="$(echo "${clear_settings_resp}" | jq -r '.data.updated_at // empty')"
 clear_yolo_endpoint="$(echo "${clear_settings_resp}" | jq -r '.data.frameworks.yolo.endpoint // empty')"
-if [[ -n "${clear_updated_at}" || "${clear_yolo_endpoint}" != "${ENV_YOLO_ENDPOINT}" ]]; then
+clear_python_bin="$(echo "${clear_settings_resp}" | jq -r '.data.controls.python_bin // empty')"
+clear_disable_simulated_train_fallback="$(echo "${clear_settings_resp}" | jq -r '.data.controls.disable_simulated_train_fallback // false')"
+clear_disable_inference_fallback="$(echo "${clear_settings_resp}" | jq -r '.data.controls.disable_inference_fallback // false')"
+if [[ -n "${clear_updated_at}" || "${clear_yolo_endpoint}" != "${ENV_YOLO_ENDPOINT}" || "${clear_python_bin}" != "${ENV_RUNTIME_PYTHON_BIN}" || "${clear_disable_simulated_train_fallback}" != "false" || "${clear_disable_inference_fallback}" != "false" ]]; then
   echo "[smoke-runtime-settings-persistence] clear runtime settings did not fall back to env defaults."
   echo "${clear_settings_resp}"
   exit 1

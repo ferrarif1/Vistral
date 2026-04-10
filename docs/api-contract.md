@@ -356,6 +356,11 @@ Response:
       "has_api_key": false,
       "api_key_masked": "Not set"
     }
+  },
+  "controls": {
+    "python_bin": "/opt/vistral/.venv/bin/python",
+    "disable_simulated_train_fallback": false,
+    "disable_inference_fallback": false
   }
 }
 ```
@@ -386,6 +391,11 @@ Request:
       "local_predict_command": "python3 .../yolo_predict_runner.py ..."
     }
   },
+  "runtime_controls": {
+    "python_bin": "/opt/vistral/.venv/bin/python",
+    "disable_simulated_train_fallback": false,
+    "disable_inference_fallback": false
+  },
   "keep_existing_api_keys": true
 }
 ```
@@ -393,6 +403,9 @@ Request:
 Notes:
 - admin scope only
 - when `keep_existing_api_keys=true`, blank `api_key` fields keep previously saved secret values
+- `runtime_controls.python_bin` can override bundled runner python executable (`{{python_bin}}` placeholder)
+- `runtime_controls.disable_simulated_train_fallback=true` forces train to fail fast when local runner is unavailable
+- `runtime_controls.disable_inference_fallback=true` forces inference to fail fast instead of returning template/fallback outputs
 - response is the same masked settings view as `GET /settings/runtime`
 
 ### DELETE /settings/runtime

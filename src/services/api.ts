@@ -831,12 +831,14 @@ export const api = {
 
   saveRuntimeSettings: (
     runtimeConfig: RuntimeSettingsRecord['frameworks'],
+    runtimeControls: RuntimeSettingsRecord['controls'],
     keepExistingApiKeys = true
   ) =>
     request<RuntimeSettingsView>('/api/settings/runtime', {
       method: 'POST',
       body: JSON.stringify({
         runtime_config: runtimeConfig,
+        runtime_controls: runtimeControls,
         keep_existing_api_keys: keepExistingApiKeys
       })
     }),

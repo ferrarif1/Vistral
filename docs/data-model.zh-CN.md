@@ -111,6 +111,9 @@
   - `frameworks.paddleocr.local_predict_command`
   - `frameworks.doctr.*`（同上）
   - `frameworks.yolo.*`（同上）
+  - `controls.python_bin`（可选：内置本地 runner 默认 Python 可执行文件）
+  - `controls.disable_simulated_train_fallback`（布尔：为 true 时训练不允许 simulated 回退）
+  - `controls.disable_inference_fallback`（布尔：为 true 时推理不允许 template/fallback 输出）
 - 规则：
   - runtime 适配器应在执行时动态读取配置，而不是只在进程启动时读取一次
   - 当不存在 UI 保存配置时，允许按环境变量做兜底

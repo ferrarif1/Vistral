@@ -7,21 +7,41 @@ START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND:-true}"
+OCR_CLOSURE_REQUIRE_REAL_MODE="${OCR_CLOSURE_REQUIRE_REAL_MODE:-false}"
+OCR_CLOSURE_GENERATE_TEXT_SAMPLE="${OCR_CLOSURE_GENERATE_TEXT_SAMPLE:-true}"
 DEMO_DIR="${DEMO_DIR:-${ROOT_DIR}/demo_data}"
+DEFAULT_VENV_PYTHON="${ROOT_DIR}/.data/runtime-python/.venv/bin/python"
+if [[ -x "${DEFAULT_VENV_PYTHON}" ]]; then
+  PYTHON_BIN="${PYTHON_BIN:-${DEFAULT_VENV_PYTHON}}"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-ocr-closure] jq is required."
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "[smoke-ocr-closure] python3 is required."
+RUNNER_ENABLE_REAL_VALUE="${VISTRAL_RUNNER_ENABLE_REAL:-0}"
+if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  RUNNER_ENABLE_REAL_VALUE="1"
+fi
+
+if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS:-720}"
+else
+  OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS:-140}"
+fi
+OCR_CLOSURE_WAIT_SLEEP_SEC="${OCR_CLOSURE_WAIT_SLEEP_SEC:-0.25}"
+
+if ! "${PYTHON_BIN}" -V >/dev/null 2>&1; then
+  echo "[smoke-ocr-closure] python runtime is required. missing PYTHON_BIN=${PYTHON_BIN}"
   exit 1
 fi
 
 if [[ "${START_API}" == "true" && -z "${API_PORT:-}" ]]; then
   API_PORT="$(
-    python3 - <<'PY'
+    "${PYTHON_BIN}" - <<'PY'
 import socket
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     sock.bind(("127.0.0.1", 0))
@@ -37,6 +57,7 @@ API_LOG="$(mktemp)"
 APP_DATA_DIR="$(mktemp -d)"
 TMP_OCR_IMPORT="$(mktemp)"
 TMP_INFERENCE_FILE="$(mktemp)"
+TMP_SYNTH_IMAGE=""
 API_PID=""
 
 cleanup() {
@@ -44,7 +65,7 @@ cleanup() {
     kill "${API_PID}" >/dev/null 2>&1 || true
     wait "${API_PID}" >/dev/null 2>&1 || true
   fi
-  rm -f "${COOKIE_FILE}" "${API_LOG}" "${TMP_OCR_IMPORT}" "${TMP_INFERENCE_FILE}"
+  rm -f "${COOKIE_FILE}" "${API_LOG}" "${TMP_OCR_IMPORT}" "${TMP_INFERENCE_FILE}" "${TMP_SYNTH_IMAGE:-}"
   rm -rf "${APP_DATA_DIR}"
 }
 trap cleanup EXIT
@@ -97,7 +118,7 @@ wait_training_job_completed() {
   local job_detail=""
   local job_status=""
 
-  for _ in {1..140}; do
+  for (( attempt=0; attempt<OCR_CLOSURE_WAIT_POLLS; attempt+=1 )); do
     job_detail="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" "${BASE_URL}/api/training/jobs/${job_id}")"
     job_status="$(echo "${job_detail}" | jq -r '.data.job.status // empty')"
 
@@ -112,7 +133,7 @@ wait_training_job_completed() {
       exit 1
     fi
 
-    sleep 0.25
+    sleep "${OCR_CLOSURE_WAIT_SLEEP_SEC}"
   done
 
   echo "[smoke-ocr-closure] ${label} training job timeout."
@@ -147,11 +168,14 @@ if [[ "${START_API}" == "true" ]]; then
   PADDLEOCR_RUNTIME_ENDPOINT="" \
   DOCTR_RUNTIME_ENDPOINT="" \
   YOLO_RUNTIME_ENDPOINT="" \
-  YOLO_LOCAL_TRAIN_COMMAND='python3 {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}' \
-  PADDLEOCR_LOCAL_TRAIN_COMMAND='python3 {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}' \
-  DOCTR_LOCAL_TRAIN_COMMAND='python3 {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}' \
-  PADDLEOCR_LOCAL_PREDICT_COMMAND='python3 {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}' \
-  DOCTR_LOCAL_PREDICT_COMMAND='python3 {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}' \
+  YOLO_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
+  PADDLEOCR_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
+  DOCTR_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
+  PADDLEOCR_LOCAL_PREDICT_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}" \
+  DOCTR_LOCAL_PREDICT_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}" \
+  VISTRAL_PADDLEOCR_LANG="${VISTRAL_PADDLEOCR_LANG:-en}" \
+  PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}" \
+  VISTRAL_RUNNER_ENABLE_REAL="${RUNNER_ENABLE_REAL_VALUE}" \
   MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
@@ -214,6 +238,39 @@ if [[ -z "${image_file}" ]]; then
   image_file="${TMP_INFERENCE_FILE}"
 fi
 
+ocr_line_1="VISTRAL OCR 1022"
+ocr_line_2="TRAINING SAMPLE 08"
+if [[ "${OCR_CLOSURE_GENERATE_TEXT_SAMPLE}" == "true" ]]; then
+  synth_base="$(mktemp -t ocr-closure-image)"
+  TMP_SYNTH_IMAGE="${synth_base}.png"
+  mv "${synth_base}" "${TMP_SYNTH_IMAGE}"
+  set +e
+  "${PYTHON_BIN}" - "${TMP_SYNTH_IMAGE}" "${ocr_line_1}" "${ocr_line_2}" <<'PY'
+import sys
+from PIL import Image, ImageDraw, ImageFont
+
+target = sys.argv[1]
+line1 = sys.argv[2]
+line2 = sys.argv[3]
+
+image = Image.new('RGB', (1280, 720), color='white')
+draw = ImageDraw.Draw(image)
+try:
+    font = ImageFont.truetype("DejaVuSans.ttf", 64)
+except Exception:
+    font = ImageFont.load_default()
+
+draw.text((90, 180), line1, fill='black', font=font)
+draw.text((90, 320), line2, fill='black', font=font)
+image.save(target, format='PNG')
+PY
+  synth_code=$?
+  set -e
+  if [[ "${synth_code}" -eq 0 ]]; then
+    image_file="${TMP_SYNTH_IMAGE}"
+  fi
+fi
+
 dataset_payload="$(jq -nc \
   --arg name "ocr-closure-$(date +%s)" \
   --arg description "OCR closure smoke dataset" \
@@ -244,9 +301,11 @@ if [[ -z "${dataset_image_attachment_id}" || -z "${dataset_image_filename}" ]]; 
 fi
 wait_attachment_ready "${BASE_URL}/api/files/dataset/${dataset_id}" "${dataset_image_attachment_id}" "dataset image"
 
-printf "%s\tTrain No CRH380A-1022\t0.95\n%s\tCarriage 08\t0.91\n" \
+printf "%s\t%s\t0.95\n%s\t%s\t0.91\n" \
   "${dataset_image_filename}" \
-  "${dataset_image_filename}" >"${TMP_OCR_IMPORT}"
+  "${ocr_line_1}" \
+  "${dataset_image_filename}" \
+  "${ocr_line_2}" >"${TMP_OCR_IMPORT}"
 
 ocr_import_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "X-CSRF-Token: ${csrf_token}" \
@@ -356,6 +415,13 @@ if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
     echo "${paddle_job_detail}"
     exit 1
   fi
+  if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+    if [[ "${paddle_artifact_mode}" == "template" || -n "${paddle_artifact_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] PaddleOCR require-real assertions failed: template/fallback evidence detected."
+      echo "${paddle_job_detail}"
+      exit 1
+    fi
+  fi
 else
   if [[ ("${paddle_mode}" != "local_command" && "${paddle_mode}" != "simulated") || -z "${paddle_accuracy}" || "${paddle_accuracy}" == "null" || "${paddle_accuracy_series}" -lt 3 || "${paddle_metric_keys}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] PaddleOCR training assertions failed (non-strict mode)."
@@ -436,6 +502,30 @@ if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
     echo "${doctr_job_detail}"
     exit 1
   fi
+  if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+    if [[ "${doctr_artifact_mode}" == "template" || -n "${doctr_artifact_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] docTR require-real assertions failed: template/fallback evidence detected."
+      echo "${doctr_job_detail}"
+      exit 1
+    fi
+    if [[ -z "${doctr_primary_metric_value}" || "${doctr_primary_metric_value}" == "null" ]]; then
+      echo "[smoke-ocr-closure] docTR require-real assertions failed: primary metric is empty."
+      echo "${doctr_job_detail}"
+      exit 1
+    fi
+    doctr_primary_nonzero="$("${PYTHON_BIN}" -c 'import sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.0
+print(1 if value > 0 else 0)
+' "${doctr_primary_metric_value}")"
+    if [[ "${doctr_primary_nonzero}" != "1" ]]; then
+      echo "[smoke-ocr-closure] docTR require-real assertions failed: primary metric should be > 0."
+      echo "${doctr_job_detail}"
+      exit 1
+    fi
+  fi
 else
   if [[ ("${doctr_mode}" != "local_command" && "${doctr_mode}" != "simulated") || "${doctr_metric_keys}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] docTR training assertions failed (non-strict mode)."
@@ -509,11 +599,19 @@ paddle_execution_source="$(echo "${paddle_inference_resp}" | jq -r '.data.execut
 paddle_lines="$(echo "${paddle_inference_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
 paddle_runtime_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
 paddle_local_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+paddle_inference_meta_mode="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
   if [[ "${paddle_execution_source}" != "paddleocr_local_command" || "${paddle_lines}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] PaddleOCR inference assertions failed."
     echo "${paddle_inference_resp}"
     exit 1
+  fi
+  if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+    if [[ "${paddle_inference_meta_mode}" == "template" || -n "${paddle_runtime_fallback_reason}" || -n "${paddle_local_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] PaddleOCR inference require-real assertions failed."
+      echo "${paddle_inference_resp}"
+      exit 1
+    fi
   fi
 else
   if [[ "${paddle_execution_source}" == "paddleocr_local_command" || "${paddle_execution_source}" == "paddleocr_local" ]]; then
@@ -544,11 +642,19 @@ doctr_execution_source="$(echo "${doctr_inference_resp}" | jq -r '.data.executio
 doctr_lines="$(echo "${doctr_inference_resp}" | jq -r '.data.normalized_output.ocr.lines | length // 0')"
 doctr_runtime_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
 doctr_local_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
+doctr_inference_meta_mode="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
   if [[ "${doctr_execution_source}" != "doctr_local_command" || "${doctr_lines}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] docTR inference assertions failed."
     echo "${doctr_inference_resp}"
     exit 1
+  fi
+  if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+    if [[ "${doctr_inference_meta_mode}" == "template" || -n "${doctr_runtime_fallback_reason}" || -n "${doctr_local_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] docTR inference require-real assertions failed."
+      echo "${doctr_inference_resp}"
+      exit 1
+    fi
   fi
 else
   if [[ "${doctr_execution_source}" == "doctr_local_command" || "${doctr_execution_source}" == "doctr_local" ]]; then
@@ -599,3 +705,4 @@ echo "doctr_primary_metric_value=${doctr_primary_metric_value}"
 echo "inference_attachment_id=${inference_attachment_id}"
 echo "paddle_execution_source=${paddle_execution_source}"
 echo "doctr_execution_source=${doctr_execution_source}"
+echo "ocr_closure_require_real_mode=${OCR_CLOSURE_REQUIRE_REAL_MODE}"

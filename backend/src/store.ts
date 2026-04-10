@@ -82,6 +82,26 @@ interface AppStatePayload {
 const normalizeRuntimeSettingField = (value: string | undefined): string =>
   (value ?? '').trim();
 
+const parseRuntimeBoolean = (value: string | undefined, fallback = false): boolean => {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+};
+
+const buildDefaultRuntimeControlSettingsFromEnv = (): RuntimeSettingsRecord['controls'] => ({
+  python_bin: normalizeRuntimeSettingField(process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN),
+  disable_simulated_train_fallback: parseRuntimeBoolean(
+    process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
+    false
+  ),
+  disable_inference_fallback: parseRuntimeBoolean(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, false)
+});
+
 const buildDefaultRuntimeSettingsFromEnv = (): RuntimeSettingsRecord => ({
   updated_at: null,
   frameworks: {
@@ -103,7 +123,8 @@ const buildDefaultRuntimeSettingsFromEnv = (): RuntimeSettingsRecord => ({
       local_train_command: normalizeRuntimeSettingField(process.env.YOLO_LOCAL_TRAIN_COMMAND),
       local_predict_command: normalizeRuntimeSettingField(process.env.YOLO_LOCAL_PREDICT_COMMAND)
     }
-  }
+  },
+  controls: buildDefaultRuntimeControlSettingsFromEnv()
 });
 
 const deriveKey = (): Buffer => {
@@ -1503,6 +1524,29 @@ const normalizeRuntimeFrameworkConfig = (
   };
 };
 
+const normalizeRuntimeControlSettings = (
+  raw: unknown,
+  fallback: RuntimeSettingsRecord['controls']
+): RuntimeSettingsRecord['controls'] => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ...fallback };
+  }
+
+  const entry = raw as Partial<RuntimeSettingsRecord['controls']>;
+  return {
+    python_bin:
+      typeof entry.python_bin === 'string' ? entry.python_bin.trim() : fallback.python_bin,
+    disable_simulated_train_fallback:
+      typeof entry.disable_simulated_train_fallback === 'boolean'
+        ? entry.disable_simulated_train_fallback
+        : fallback.disable_simulated_train_fallback,
+    disable_inference_fallback:
+      typeof entry.disable_inference_fallback === 'boolean'
+        ? entry.disable_inference_fallback
+        : fallback.disable_inference_fallback
+  };
+};
+
 export const loadPersistedRuntimeSettings = async (): Promise<void> => {
   try {
     const file = await fs.readFile(runtimeSettingsDataFile, 'utf8');
@@ -1527,6 +1571,7 @@ export const loadPersistedRuntimeSettings = async (): Promise<void> => {
       frameworks.yolo,
       defaults.frameworks.yolo
     );
+    runtimeSettings.controls = normalizeRuntimeControlSettings(parsed.controls, defaults.controls);
     runtimeSettings.updated_at =
       typeof parsed.updated_at === 'string' && parsed.updated_at.trim()
         ? parsed.updated_at.trim()

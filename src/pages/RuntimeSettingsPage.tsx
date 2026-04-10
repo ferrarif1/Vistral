@@ -76,6 +76,12 @@ type RuntimeFrameworkDraft = {
 
 type RuntimeFrameworkDraftMap = Record<ModelFramework, RuntimeFrameworkDraft>;
 
+type RuntimeControlDraft = {
+  python_bin: string;
+  disable_simulated_train_fallback: boolean;
+  disable_inference_fallback: boolean;
+};
+
 const endpointEnvByFramework: Record<ModelFramework, { endpoint: string; apiKey: string }> = {
   paddleocr: {
     endpoint: 'PADDLEOCR_RUNTIME_ENDPOINT',
@@ -104,6 +110,12 @@ const buildDefaultRuntimeFrameworkDraftMap = (): RuntimeFrameworkDraftMap => ({
   paddleocr: buildDefaultRuntimeFrameworkDraft(),
   doctr: buildDefaultRuntimeFrameworkDraft(),
   yolo: buildDefaultRuntimeFrameworkDraft()
+});
+
+const buildDefaultRuntimeControlDraft = (): RuntimeControlDraft => ({
+  python_bin: '',
+  disable_simulated_train_fallback: false,
+  disable_inference_fallback: false
 });
 
 const mergeRuntimeFrameworkDraft = (
@@ -396,6 +408,9 @@ export default function RuntimeSettingsPage() {
   const [runtimeDrafts, setRuntimeDrafts] = useState<RuntimeFrameworkDraftMap>(() =>
     buildDefaultRuntimeFrameworkDraftMap()
   );
+  const [runtimeControlDraft, setRuntimeControlDraft] = useState<RuntimeControlDraft>(() =>
+    buildDefaultRuntimeControlDraft()
+  );
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [workersLoading, setWorkersLoading] = useState(true);
   const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
@@ -478,6 +493,11 @@ export default function RuntimeSettingsPage() {
       doctr: mergeRuntimeFrameworkDraft(view.frameworks.doctr),
       yolo: mergeRuntimeFrameworkDraft(view.frameworks.yolo)
     });
+    setRuntimeControlDraft({
+      python_bin: view.controls.python_bin,
+      disable_simulated_train_fallback: view.controls.disable_simulated_train_fallback,
+      disable_inference_fallback: view.controls.disable_inference_fallback
+    });
   };
 
   const refreshRuntimeSettings = async () => {
@@ -506,6 +526,16 @@ export default function RuntimeSettingsPage() {
     }));
   };
 
+  const updateRuntimeControlDraft = (
+    field: keyof RuntimeControlDraft,
+    value: string | boolean
+  ) => {
+    setRuntimeControlDraft((prev) => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
   const saveRuntimeSettingsConfig = async () => {
     setRuntimeSettingsSaving(true);
     setRuntimeSettingsError('');
@@ -531,7 +561,15 @@ export default function RuntimeSettingsPage() {
           local_predict_command: runtimeDrafts.yolo.local_predict_command.trim()
         }
       };
-      const saved = await api.saveRuntimeSettings(nextConfig, keepExistingApiKeys);
+      const saved = await api.saveRuntimeSettings(
+        nextConfig,
+        {
+          python_bin: runtimeControlDraft.python_bin.trim(),
+          disable_simulated_train_fallback: runtimeControlDraft.disable_simulated_train_fallback,
+          disable_inference_fallback: runtimeControlDraft.disable_inference_fallback
+        },
+        keepExistingApiKeys
+      );
       applyRuntimeSettingsView(saved);
       setRuntimeSettingsMessage(t('Runtime settings saved.'));
       void refresh();
@@ -933,6 +971,12 @@ export default function RuntimeSettingsPage() {
   const pendingBootstrapCount = bootstrapSessions.filter(
     (session) => session.status !== 'online' && session.status !== 'expired'
   ).length;
+  const defaultPythonBinByPlatform =
+    typeof navigator !== 'undefined' && /win/i.test(navigator.platform) ? 'python' : 'python3';
+  const resolvedPythonBin =
+    runtimeControlDraft.python_bin.trim() || `${defaultPythonBinByPlatform} (${t('platform default')})`;
+  const runtimeStrictModeEnabled =
+    runtimeControlDraft.disable_simulated_train_fallback && runtimeControlDraft.disable_inference_fallback;
   const activeBootstrapSession =
     bootstrapSessions.find((session) => session.id === activeBootstrapSessionId) ?? null;
   const editingWorker =
@@ -1211,6 +1255,61 @@ export default function RuntimeSettingsPage() {
               <span>{t('Keep existing API keys when key field is left blank')}</span>
             </label>
 
+            <Panel as="section" className="workspace-record-item" tone="soft">
+              <div className="stack tight">
+                <strong>{t('Runtime strict controls')}</strong>
+                <small className="muted">
+                  {t('Control whether runtime can fallback to simulated/template outputs, and choose default Python executable for bundled runners.')}
+                </small>
+              </div>
+              <label className="stack tight">
+                <small className="muted">{t('Bundled runner Python executable')}</small>
+                <Input
+                  value={runtimeControlDraft.python_bin}
+                  onChange={(event) =>
+                    updateRuntimeControlDraft('python_bin', event.target.value)
+                  }
+                  placeholder={t('Leave blank to use platform default (python3 / python)')}
+                />
+              </label>
+              <label className="row gap wrap align-center">
+                <input
+                  type="checkbox"
+                  className="ui-checkbox"
+                  checked={runtimeControlDraft.disable_simulated_train_fallback}
+                  onChange={(event) =>
+                    updateRuntimeControlDraft(
+                      'disable_simulated_train_fallback',
+                      event.target.checked
+                    )
+                  }
+                />
+                <span>
+                  {t(
+                    'Disable simulated training fallback (fail fast when local runner command is missing or unavailable)'
+                  )}
+                </span>
+              </label>
+              <label className="row gap wrap align-center">
+                <input
+                  type="checkbox"
+                  className="ui-checkbox"
+                  checked={runtimeControlDraft.disable_inference_fallback}
+                  onChange={(event) =>
+                    updateRuntimeControlDraft(
+                      'disable_inference_fallback',
+                      event.target.checked
+                    )
+                  }
+                />
+                <span>
+                  {t(
+                    'Disable inference fallback (reject template/fallback runtime outputs and return explicit error)'
+                  )}
+                </span>
+              </label>
+            </Panel>
+
             {runtimeSettingsLoading ? (
               <StateBlock
                 variant="loading"
@@ -1465,6 +1564,31 @@ export default function RuntimeSettingsPage() {
               {t('Framework filter')}: {frameworkFilter === 'all' ? t('all') : t(frameworkFilter)} · {t('Configured')}:{' '}
               {configuredCount} / {FRAMEWORKS.length}
             </small>
+            <Panel as="section" className="workspace-record-item compact" tone="soft">
+              <div className="stack tight">
+                <strong>{t('Runtime strict controls')}</strong>
+                <div className="row gap wrap">
+                  <Badge tone={runtimeStrictModeEnabled ? 'success' : 'warning'}>
+                    {runtimeStrictModeEnabled ? t('yes') : t('no')}
+                  </Badge>
+                </div>
+                <small className="muted">
+                  {t('Bundled runner Python executable')}: {resolvedPythonBin}
+                </small>
+                <small className="muted">
+                  {t(
+                    'Disable simulated training fallback (fail fast when local runner command is missing or unavailable)'
+                  )}
+                  : {runtimeControlDraft.disable_simulated_train_fallback ? t('yes') : t('no')}
+                </small>
+                <small className="muted">
+                  {t(
+                    'Disable inference fallback (reject template/fallback runtime outputs and return explicit error)'
+                  )}
+                  : {runtimeControlDraft.disable_inference_fallback ? t('yes') : t('no')}
+                </small>
+              </div>
+            </Panel>
           </Card>
 
           <Card as="article" className="workspace-inspector-card">

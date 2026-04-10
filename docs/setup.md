@@ -137,7 +137,10 @@ Persistence-related env vars (prototype):
 - `TRAINING_METRICS_MAX_TOTAL_ROWS` (default `20000`)
 - `YOLO_LOCAL_TRAIN_COMMAND` / `PADDLEOCR_LOCAL_TRAIN_COMMAND` / `DOCTR_LOCAL_TRAIN_COMMAND`
 - `YOLO_LOCAL_PREDICT_COMMAND` / `PADDLEOCR_LOCAL_PREDICT_COMMAND` / `DOCTR_LOCAL_PREDICT_COMMAND`
+- `VISTRAL_PYTHON_BIN` (optional python executable override for bundled local runners; fallback: `PYTHON_BIN`, then platform default `python3`/`python`)
 - `LOCAL_RUNNER_TIMEOUT_MS` (default `1800000`)
+- `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK` (`1` means fail fast when local train runner command is missing/unavailable; no simulated fallback)
+- `VISTRAL_DISABLE_INFERENCE_FALLBACK` (`1` means fail fast when runtime/local predict would return template/fallback output)
 - bundled runner templates under `scripts/local-runners/` are used by default when explicit local command env vars are not set
 - `VISTRAL_RUNNER_ENABLE_REAL` (set `1` to attempt dependency-backed real framework branch in local runners; default keeps template mode)
 - `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND` (default `0`; when `0`, model-version registration rejects local-command jobs with template/fallback/non-real artifact evidence)
@@ -151,7 +154,7 @@ Persistence-related env vars (prototype):
 - `TRAINING_WORKER_INLINE_PACKAGE_MAX_FILES` (default `800`, max file count for inline dataset package sent to worker)
 - `TRAINING_WORKER_INLINE_PACKAGE_MAX_BYTES` (default `41943040`, max total bytes for inline dataset package sent to worker)
 - local command templates are available under `scripts/local-runners/`
-- placeholder examples: `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
+- placeholder examples: `{{python_bin}}`, `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
 
 `docker:verify:full` writes audit-style reports to `.data/verify-reports/`.
 It now also validates account governance, conversation operational actions, phase2 annotation/review + launch-readiness gates (including dataset-version ownership under the selected dataset), dataset export/import roundtrip (detection/ocr/segmentation), dedicated training-worker auth dispatch/cancel flow, OCR fallback safety guard (no misleading default OCR business text on fallback), and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.
@@ -207,3 +210,8 @@ This check now includes:
 
 Optional controls:
 - `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass npm run smoke:real-closure`
+- `PYTHON_BIN=/path/to/python npm run smoke:real-closure` (override Python runtime; default prefers `.data/runtime-python/.venv/bin/python` when present)
+- `REAL_CLOSURE_GENERATE_TEXT_SAMPLE=false npm run smoke:real-closure` (disable synthetic OCR text image generation)
+- `REAL_CLOSURE_REQUIRE_REAL_MODE=true npm run smoke:real-closure` (require non-template/non-fallback OCR evidence; auto-enables `VISTRAL_RUNNER_ENABLE_REAL=1`)
+- `REAL_CLOSURE_YOLO_WAIT_POLLS=360 REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC=0.3 npm run smoke:real-closure` (tune YOLO training wait window)
+- `REAL_CLOSURE_DOCTR_WAIT_POLLS=720 REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC=0.3 npm run smoke:real-closure` (tune docTR training wait window)

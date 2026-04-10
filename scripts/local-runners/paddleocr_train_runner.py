@@ -168,6 +168,14 @@ def extract_paddle_pred_text(result_raw: object) -> Tuple[str, int]:
         return '', 0
 
     for block in result_raw:
+        if isinstance(block, dict):
+            rec_texts = block.get('rec_texts')
+            if isinstance(rec_texts, list):
+                for value in rec_texts:
+                    text = str(value).strip()
+                    if text:
+                        lines.append(text)
+            continue
         if not isinstance(block, list):
             continue
         for item in block:
@@ -181,6 +189,17 @@ def extract_paddle_pred_text(result_raw: object) -> Tuple[str, int]:
                 lines.append(text)
 
     return ' '.join(lines).strip(), len(lines)
+
+
+def run_paddle_predict(predictor, image_path: str):
+    try:
+        return predictor.ocr(image_path, cls=True)
+    except TypeError as exc:
+        if 'unexpected keyword argument' not in str(exc):
+            raise
+        if not hasattr(predictor, 'predict'):
+            raise
+        return predictor.predict(image_path)
 
 
 def build_real_probe_series(metrics: Dict[str, float], epochs: int) -> List[Dict]:
@@ -208,6 +227,37 @@ def build_real_probe_series(metrics: Dict[str, float], epochs: int) -> List[Dict
             }
         )
     return series
+
+
+def build_paddleocr_predictor(language: str, use_gpu: bool):
+    from paddleocr import PaddleOCR  # type: ignore
+
+    device = 'gpu' if use_gpu else 'cpu'
+    attempts = [
+        {'use_textline_orientation': True, 'lang': language, 'device': device, 'show_log': False},
+        {'use_angle_cls': True, 'lang': language, 'device': device, 'show_log': False},
+        {'lang': language, 'device': device, 'show_log': False},
+        {'use_textline_orientation': True, 'lang': language, 'use_gpu': use_gpu, 'show_log': False},
+        {'use_angle_cls': True, 'lang': language, 'use_gpu': use_gpu, 'show_log': False},
+        {'use_angle_cls': True, 'lang': language, 'use_gpu': use_gpu},
+        {'use_angle_cls': True, 'lang': language, 'show_log': False},
+        {'lang': language, 'show_log': False},
+        {'use_angle_cls': True, 'lang': language},
+        {'lang': language, 'use_gpu': use_gpu},
+        {'lang': language},
+    ]
+
+    last_error: Optional[Exception] = None
+    for kwargs in attempts:
+        try:
+            return PaddleOCR(**kwargs)
+        except Exception as exc:  # pragma: no cover - fallback compatibility path
+            last_error = exc
+            continue
+
+    if last_error is None:
+        raise RuntimeError('failed_to_build_paddleocr_predictor')
+    raise last_error
 
 
 def try_real_train(args, config: dict):
@@ -241,7 +291,7 @@ def try_real_train(args, config: dict):
     max_items = max(1, min(max_items, len(samples)))
 
     try:
-        predictor = PaddleOCR(use_angle_cls=True, lang=language, show_log=False, use_gpu=use_gpu)
+        predictor = build_paddleocr_predictor(language, use_gpu)
     except Exception as exc:
         return None, f'real_probe_failed:build_predictor_failed:{exc}'
 
@@ -252,7 +302,7 @@ def try_real_train(args, config: dict):
 
     for image_path, gt_text, gt_line_count in samples[:max_items]:
         try:
-            result = predictor.ocr(image_path, cls=True)
+            result = run_paddle_predict(predictor, image_path)
             pred_text, pred_line_count = extract_paddle_pred_text(result)
         except Exception:
             continue

@@ -735,14 +735,22 @@ export interface RuntimeFrameworkConfigView {
   api_key_masked: string;
 }
 
+export interface RuntimeControlSettings {
+  python_bin: string;
+  disable_simulated_train_fallback: boolean;
+  disable_inference_fallback: boolean;
+}
+
 export interface RuntimeSettingsRecord {
   updated_at: string | null;
   frameworks: Record<ModelFramework, RuntimeFrameworkConfig>;
+  controls: RuntimeControlSettings;
 }
 
 export interface RuntimeSettingsView {
   updated_at: string | null;
   frameworks: Record<ModelFramework, RuntimeFrameworkConfigView>;
+  controls: RuntimeControlSettings;
 }
 
 export interface StartConversationInput {

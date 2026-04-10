@@ -304,6 +304,10 @@
   - 仅管理员可访问
   - API key 只返回掩码信息（`has_api_key`、`api_key_masked`）
   - 返回各 framework 的 `endpoint`、`local_train_command`、`local_predict_command`
+  - 额外返回 `controls`：
+    - `python_bin`
+    - `disable_simulated_train_fallback`
+    - `disable_inference_fallback`
 
 - `POST /settings/runtime`：保存或更新 runtime 配置
   - 请求体包含：
@@ -311,10 +315,16 @@
     - `runtime_config.paddleocr|doctr|yolo.api_key`
     - `runtime_config.paddleocr|doctr|yolo.local_train_command`
     - `runtime_config.paddleocr|doctr|yolo.local_predict_command`
+    - `runtime_controls.python_bin`
+    - `runtime_controls.disable_simulated_train_fallback`
+    - `runtime_controls.disable_inference_fallback`
     - `keep_existing_api_keys`
   - 规则：
     - 仅管理员可访问
     - 当 `keep_existing_api_keys=true` 且某 framework 的 `api_key` 为空时，保留该 framework 已保存 key
+    - `runtime_controls.python_bin` 可覆盖内置 runner 的 Python 执行命令（`{{python_bin}}` 占位）
+    - `runtime_controls.disable_simulated_train_fallback=true` 时，训练命令不可用将直接失败（不再 simulated 回退）
+    - `runtime_controls.disable_inference_fallback=true` 时，推理命令/端点失败将直接报错（不再返回 template/fallback 结果）
     - 响应返回 masked 视图（不含明文 key）
 
 - `DELETE /settings/runtime`：清空 UI 保存的 runtime 配置

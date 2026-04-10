@@ -69,6 +69,14 @@ const resolveFrameworkRuntimeConfigFromEnv = (
   };
 };
 
+const resolveLocalPythonBin = (): string => {
+  const configured = resolveRuntimeControlSettings().pythonBin;
+  if (configured) {
+    return configured;
+  }
+  return process.platform === 'win32' ? 'python' : 'python3';
+};
+
 const resolveEffectiveRuntimeConfig = (
   framework: ModelFramework
 ): FrameworkRuntimeConfig => {
@@ -101,21 +109,21 @@ const bundledLocalRunnerCommands: Record<
 > = {
   paddleocr: {
     train:
-      'python3 {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
+      '{{python_bin}} {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
     predict:
-      'python3 {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
+      '{{python_bin}} {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
   },
   doctr: {
     train:
-      'python3 {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
+      '{{python_bin}} {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
     predict:
-      'python3 {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
+      '{{python_bin}} {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
   },
   yolo: {
     train:
-      'python3 {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
+      '{{python_bin}} {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
     predict:
-      'python3 {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
+      '{{python_bin}} {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
   }
 };
 
@@ -126,6 +134,53 @@ const localRunnerTimeoutMs = (() => {
   }
   return parsed;
 })();
+
+const parseBooleanFlag = (value: string | undefined, fallback = false): boolean => {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+};
+
+const resolveRuntimeControlSettings = (): {
+  pythonBin: string;
+  disableSimulatedTrainFallback: boolean;
+  disableInferenceFallback: boolean;
+} => {
+  const fallback = runtimeSettings.updated_at
+    ? {
+        python_bin: '',
+        disable_simulated_train_fallback: false,
+        disable_inference_fallback: false
+      }
+    : {
+        python_bin: (process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN ?? '').trim(),
+        disable_simulated_train_fallback: parseBooleanFlag(
+          process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
+          false
+        ),
+        disable_inference_fallback: parseBooleanFlag(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, false)
+      };
+  const controls = runtimeSettings.controls ?? fallback;
+  return {
+    pythonBin:
+      typeof controls.python_bin === 'string' && controls.python_bin.trim()
+        ? controls.python_bin.trim()
+        : '',
+    disableSimulatedTrainFallback:
+      typeof controls.disable_simulated_train_fallback === 'boolean'
+        ? controls.disable_simulated_train_fallback
+        : fallback.disable_simulated_train_fallback,
+    disableInferenceFallback:
+      typeof controls.disable_inference_fallback === 'boolean'
+        ? controls.disable_inference_fallback
+        : fallback.disable_inference_fallback
+  };
+};
 
 const trainingWorkspaceRoot = path.resolve(
   process.cwd(),
@@ -1010,6 +1065,7 @@ const callLocalPredictCommand = async (
   const workingDir = path.resolve(process.cwd(), '.data', 'runtime-local-predict');
   const values = {
     repo_root: process.cwd(),
+    python_bin: resolveLocalPythonBin(),
     framework,
     model_id: input.modelId,
     model_version_id: input.modelVersionId,
@@ -1073,6 +1129,19 @@ const callLocalPredictCommand = async (
       ? parsed.raw_output.local_command_fallback_reason.trim()
       : '';
   const resolvedLocalFallbackReason = existingLocalFallbackReason || templateFallbackReason;
+  const strictInferenceFallbackDisabled =
+    resolveRuntimeControlSettings().disableInferenceFallback;
+  if (
+    strictInferenceFallbackDisabled &&
+    (rawMeta?.mode === 'template' || Boolean(resolvedLocalFallbackReason))
+  ) {
+    throw attachLocalCommandContext(
+      new Error(
+        `${framework} local predict produced non-real template/fallback evidence while VISTRAL_DISABLE_INFERENCE_FALLBACK=1. fallback_reason=${resolvedLocalFallbackReason || 'none'}`
+      ),
+      execution.context
+    );
+  }
   parsed.normalized_output = {
     ...parsed.normalized_output,
     source: `${framework}_local_command`
@@ -1130,18 +1199,26 @@ const classifyConnectivityError = (error: unknown): RuntimeConnectivityErrorKind
 const createPredictWithRuntimeBridge =
   (framework: ModelFramework) =>
   async (input: PredictInput): Promise<UnifiedInferenceOutput> => {
+    const strictInferenceFallbackDisabled =
+      resolveRuntimeControlSettings().disableInferenceFallback;
     const runtime = resolveEffectiveRuntimeConfig(framework);
     if (!runtime.endpoint) {
       await delay(80);
       try {
         return await callLocalPredictCommand(framework, runtime, input);
       } catch (error) {
+        if (strictInferenceFallbackDisabled) {
+          throw new Error(
+            `${framework} inference failed and fallback output is disabled (VISTRAL_DISABLE_INFERENCE_FALLBACK=1): ${(error as Error).message}`
+          );
+        }
         const commandTemplate =
           runtime.localPredictCommand || bundledLocalRunnerCommands[framework].predict;
         const fallbackContext = readLocalCommandContext(error, {
           attemptedCommand: commandTemplate
             ? interpolateTemplate(commandTemplate, {
                 repo_root: process.cwd(),
+                python_bin: resolveLocalPythonBin(),
                 framework,
                 model_id: input.modelId,
                 model_version_id: input.modelVersionId,
@@ -1171,6 +1248,11 @@ const createPredictWithRuntimeBridge =
     try {
       return await callRuntimePredict(framework, runtime, input);
     } catch (error) {
+      if (strictInferenceFallbackDisabled) {
+        throw new Error(
+          `${framework} runtime predict failed and fallback output is disabled (VISTRAL_DISABLE_INFERENCE_FALLBACK=1): ${(error as Error).message}`
+        );
+      }
       const fallback = buildOutput(framework, input);
       fallback.raw_output = {
         ...fallback.raw_output,
@@ -1260,12 +1342,19 @@ const createTrainer = (
   },
 
   async train(input: TrainInput): Promise<TrainResult> {
+    const strictSimulatedTrainFallbackDisabled =
+      resolveRuntimeControlSettings().disableSimulatedTrainFallback;
     const runtime = resolveEffectiveRuntimeConfig(framework);
     const usingBundledTemplate = !runtime.localTrainCommand;
     const commandTemplate =
       runtime.localTrainCommand || bundledLocalRunnerCommands[framework].train;
 
     if (!commandTemplate) {
+      if (strictSimulatedTrainFallbackDisabled) {
+        throw new Error(
+          `${framework} local train command is not configured and simulated fallback is disabled (VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK=1).`
+        );
+      }
       await delay(150);
       input.onExecutionMode?.('simulated');
       return {
@@ -1283,6 +1372,7 @@ const createTrainer = (
     );
     const values: Record<string, string> = {
       repo_root: process.cwd(),
+      python_bin: resolveLocalPythonBin(),
       framework,
       job_id: input.trainingJobId,
       dataset_id: input.datasetId,
@@ -1306,6 +1396,11 @@ const createTrainer = (
       });
     } catch (error) {
       if (usingBundledTemplate) {
+        if (strictSimulatedTrainFallbackDisabled) {
+          throw new Error(
+            `${framework} bundled local runner unavailable and simulated fallback is disabled (VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK=1): ${(error as Error).message}`
+          );
+        }
         input.onExecutionMode?.('simulated');
         return {
           accepted: true,

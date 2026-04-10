@@ -64,6 +64,11 @@ export default function CreateTrainingJobPage() {
   const [requirementDescription, setRequirementDescription] = useState('');
   const [drafting, setDrafting] = useState(false);
   const [taskDraft, setTaskDraft] = useState<RequirementTaskDraft | null>(null);
+  const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
+  const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
+  const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
+  const [runtimeDisableInferenceFallback, setRuntimeDisableInferenceFallback] = useState(false);
+  const [runtimePythonBin, setRuntimePythonBin] = useState('');
   const [loading, setLoading] = useState(true);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -166,6 +171,37 @@ export default function CreateTrainingJobPage() {
       setFramework('yolo');
     }
   }, [framework, taskType]);
+
+  useEffect(() => {
+    let active = true;
+    setRuntimeSettingsLoading(true);
+    setRuntimeSettingsError('');
+    api
+      .getRuntimeSettings()
+      .then((view) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeDisableSimulatedTrainFallback(view.controls.disable_simulated_train_fallback);
+        setRuntimeDisableInferenceFallback(view.controls.disable_inference_fallback);
+        setRuntimePythonBin(view.controls.python_bin.trim());
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeSettingsError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setRuntimeSettingsLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const baseModelOptions = useMemo<string[]>(
     () => [...curatedBaseModelCatalog[framework]],
@@ -691,6 +727,48 @@ export default function CreateTrainingJobPage() {
             ? t('Dataset and version snapshot were prefilled. You can launch directly after readiness review.')
             : t('Dataset was prefilled. Choose a version snapshot, then continue launch review.')}
         />
+      ) : null}
+
+      {!runtimeSettingsLoading ? (
+        runtimeSettingsError ? (
+          <StateBlock
+            variant="empty"
+            title={t('Runtime strict mode status unavailable')}
+            description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
+            extra={
+              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                {t('Open Runtime Settings')}
+              </ButtonLink>
+            }
+          />
+        ) : runtimeDisableSimulatedTrainFallback ? (
+          <StateBlock
+            variant="success"
+            title={t('Training strict fallback guard is active')}
+            description={t(
+              'Simulated/template training fallback is blocked. Bundled runner python: {pythonBin}.',
+              { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
+            )}
+            extra={
+              <Badge tone={runtimeDisableInferenceFallback ? 'success' : 'warning'}>
+                {t('Inference strict')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
+              </Badge>
+            }
+          />
+        ) : (
+          <StateBlock
+            variant="error"
+            title={t('Training strict fallback guard is off')}
+            description={t(
+              'Training may fallback to simulated/template outputs when local runner command is unavailable. Enable strict guard in Runtime settings before production runs.'
+            )}
+            extra={
+              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                {t('Open Runtime Settings')}
+              </ButtonLink>
+            }
+          />
+        )
       ) : null}
 
       {feedback ? (

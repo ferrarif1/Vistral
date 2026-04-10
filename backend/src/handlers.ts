@@ -323,6 +323,32 @@ const emptyRuntimeFrameworkConfig: RuntimeFrameworkConfig = {
   local_predict_command: ''
 };
 
+const parseRuntimeBoolean = (value: string | undefined, fallback = false): boolean => {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+};
+
+const emptyRuntimeControlConfig: RuntimeSettingsRecord['controls'] = {
+  python_bin: '',
+  disable_simulated_train_fallback: false,
+  disable_inference_fallback: false
+};
+
+const getEnvRuntimeControlConfig = (): RuntimeSettingsRecord['controls'] => ({
+  python_bin: (process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN ?? '').trim(),
+  disable_simulated_train_fallback: parseRuntimeBoolean(
+    process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
+    false
+  ),
+  disable_inference_fallback: parseRuntimeBoolean(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, false)
+});
+
 const getEnvRuntimeFrameworkConfig = (framework: ModelFramework): RuntimeFrameworkConfig => {
   if (framework === 'paddleocr') {
     return {
@@ -366,9 +392,29 @@ const normalizeRuntimeFrameworkConfig = (
       : fallback.local_predict_command
 });
 
+const normalizeRuntimeControlConfig = (
+  input: Partial<RuntimeSettingsRecord['controls']> | null | undefined,
+  fallback: RuntimeSettingsRecord['controls']
+): RuntimeSettingsRecord['controls'] => ({
+  python_bin: typeof input?.python_bin === 'string' ? input.python_bin.trim() : fallback.python_bin,
+  disable_simulated_train_fallback:
+    typeof input?.disable_simulated_train_fallback === 'boolean'
+      ? input.disable_simulated_train_fallback
+      : fallback.disable_simulated_train_fallback,
+  disable_inference_fallback:
+    typeof input?.disable_inference_fallback === 'boolean'
+      ? input.disable_inference_fallback
+      : fallback.disable_inference_fallback
+});
+
 const getStoredRuntimeFrameworkConfig = (framework: ModelFramework): RuntimeFrameworkConfig => {
   const fallback = runtimeSettings.updated_at ? emptyRuntimeFrameworkConfig : getEnvRuntimeFrameworkConfig(framework);
   return normalizeRuntimeFrameworkConfig(runtimeSettings.frameworks[framework], fallback);
+};
+
+const getStoredRuntimeControlConfig = (): RuntimeSettingsRecord['controls'] => {
+  const fallback = runtimeSettings.updated_at ? emptyRuntimeControlConfig : getEnvRuntimeControlConfig();
+  return normalizeRuntimeControlConfig(runtimeSettings.controls, fallback);
 };
 
 const getCurrentRuntimeSettingsRecord = (): RuntimeSettingsRecord => ({
@@ -377,7 +423,8 @@ const getCurrentRuntimeSettingsRecord = (): RuntimeSettingsRecord => ({
     paddleocr: getStoredRuntimeFrameworkConfig('paddleocr'),
     doctr: getStoredRuntimeFrameworkConfig('doctr'),
     yolo: getStoredRuntimeFrameworkConfig('yolo')
-  }
+  },
+  controls: getStoredRuntimeControlConfig()
 });
 
 const getStoredLlmConfigByUser = (userId: string): LlmConfig => {
@@ -1045,6 +1092,11 @@ const getCurrentRuntimeSettingsView = (): RuntimeSettingsView => {
         has_api_key: Boolean(record.frameworks.yolo.api_key),
         api_key_masked: maskApiKey(record.frameworks.yolo.api_key)
       }
+    },
+    controls: {
+      python_bin: record.controls.python_bin,
+      disable_simulated_train_fallback: record.controls.disable_simulated_train_fallback,
+      disable_inference_fallback: record.controls.disable_inference_fallback
     }
   };
 };
@@ -9969,6 +10021,7 @@ export async function getRuntimeSettings(): Promise<RuntimeSettingsView> {
 
 export async function saveRuntimeSettings(input: {
   runtime_config: RuntimeSettingsRecord['frameworks'];
+  runtime_controls?: Partial<RuntimeSettingsRecord['controls']>;
   keep_existing_api_keys?: boolean;
 }): Promise<RuntimeSettingsView> {
   await delay(80);
@@ -9992,6 +10045,7 @@ export async function saveRuntimeSettings(input: {
         keepExistingApiKeys && !submitted.api_key.trim() ? previous.api_key : submitted.api_key
     };
   });
+  runtimeSettings.controls = normalizeRuntimeControlConfig(input.runtime_controls, existing.controls);
   runtimeSettings.updated_at = now();
   await persistRuntimeSettings();
 
@@ -10010,6 +10064,7 @@ export async function clearRuntimeSettings(): Promise<RuntimeSettingsView> {
   runtimeFrameworks.forEach((framework) => {
     runtimeSettings.frameworks[framework] = getEnvRuntimeFrameworkConfig(framework);
   });
+  runtimeSettings.controls = getEnvRuntimeControlConfig();
   runtimeSettings.updated_at = null;
   await persistRuntimeSettings();
 

@@ -1450,6 +1450,11 @@ const server = createServer(async (req, res) => {
             local_predict_command: string;
           };
         };
+        runtime_controls?: {
+          python_bin?: string;
+          disable_simulated_train_fallback?: boolean;
+          disable_inference_fallback?: boolean;
+        };
         keep_existing_api_keys?: boolean;
       };
 

@@ -4,7 +4,8 @@ import type {
   DatasetRecord,
   TrainingArtifactSummary,
   TrainingJobRecord,
-  TrainingMetricRecord
+  TrainingMetricRecord,
+  RuntimeSettingsView
 } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
@@ -92,6 +93,11 @@ export default function TrainingJobDetailPage() {
   const [artifactAttachmentId, setArtifactAttachmentId] = useState<string | null>(null);
   const [artifactSummary, setArtifactSummary] = useState<TrainingArtifactSummary | null>(null);
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
+  const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
+  const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
+  const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
+  const [runtimeDisableInferenceFallback, setRuntimeDisableInferenceFallback] = useState(false);
+  const [runtimePythonBin, setRuntimePythonBin] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -165,6 +171,37 @@ export default function TrainingJobDetailPage() {
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
       .finally(() => setLoading(false));
   }, [jobId, load]);
+
+  useEffect(() => {
+    let active = true;
+    setRuntimeSettingsLoading(true);
+    setRuntimeSettingsError('');
+    api
+      .getRuntimeSettings()
+      .then((view: RuntimeSettingsView) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeDisableSimulatedTrainFallback(view.controls.disable_simulated_train_fallback);
+        setRuntimeDisableInferenceFallback(view.controls.disable_inference_fallback);
+        setRuntimePythonBin(view.controls.python_bin.trim());
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeSettingsError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setRuntimeSettingsLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useBackgroundPolling(
     () => {
@@ -561,6 +598,50 @@ export default function TrainingJobDetailPage() {
                   )
           }
         />
+      ) : null}
+      {!runtimeSettingsLoading ? (
+        runtimeSettingsError ? (
+          <StateBlock
+            variant="empty"
+            title={t('Runtime strict mode status unavailable')}
+            description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
+          />
+        ) : runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback ? (
+          <StateBlock
+            variant="success"
+            title={t('Runtime strict mode is active')}
+            description={t(
+              'Training and inference fallback guards are reflected in this workspace. Bundled runner python: {pythonBin}.',
+              { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
+            )}
+            extra={
+              <div className="row gap wrap">
+                <Badge tone={runtimeDisableSimulatedTrainFallback ? 'success' : 'warning'}>
+                  {t('Train strict')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
+                </Badge>
+                <Badge tone={runtimeDisableInferenceFallback ? 'success' : 'warning'}>
+                  {t('Inference strict')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
+                </Badge>
+                <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                  {t('Open Runtime Settings')}
+                </ButtonLink>
+              </div>
+            }
+          />
+        ) : (
+          <StateBlock
+            variant="error"
+            title={t('Runtime strict mode is off')}
+            description={t(
+              'This training detail may still include fallback-generated evidence. Enable strict guards in Runtime settings before production approval.'
+            )}
+            extra={
+              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                {t('Open Runtime Settings')}
+              </ButtonLink>
+            }
+          />
+        )
       ) : null}
 
       <WorkspaceMetricGrid

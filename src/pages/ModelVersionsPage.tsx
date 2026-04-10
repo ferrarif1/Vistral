@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ModelRecord, ModelVersionRecord, TrainingJobRecord } from '../../shared/domain';
+import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, RuntimeSettingsView } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
@@ -132,6 +132,11 @@ export default function ModelVersionsPage() {
   const [compareError, setCompareError] = useState('');
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>({});
   const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
+  const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
+  const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
+  const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
+  const [runtimeDisableInferenceFallback, setRuntimeDisableInferenceFallback] = useState(false);
+  const [runtimePythonBin, setRuntimePythonBin] = useState('');
   const versionsSignatureRef = useRef('');
   const modelsSignatureRef = useRef('');
   const jobsSignatureRef = useRef('');
@@ -197,6 +202,37 @@ export default function ModelVersionsPage() {
       // no-op
     });
   }, [load]);
+
+  useEffect(() => {
+    let active = true;
+    setRuntimeSettingsLoading(true);
+    setRuntimeSettingsError('');
+    api
+      .getRuntimeSettings()
+      .then((view: RuntimeSettingsView) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeDisableSimulatedTrainFallback(view.controls.disable_simulated_train_fallback);
+        setRuntimeDisableInferenceFallback(view.controls.disable_inference_fallback);
+        setRuntimePythonBin(view.controls.python_bin.trim());
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRuntimeSettingsError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setRuntimeSettingsLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const hasTransientJobState = useMemo(
     () => jobs.some((job) => ['queued', 'preparing', 'running', 'evaluating'].includes(job.status)),
@@ -823,6 +859,50 @@ export default function ModelVersionsPage() {
                 />
               ) : (
                 <>
+                  {!runtimeSettingsLoading ? (
+                    runtimeSettingsError ? (
+                      <StateBlock
+                        variant="empty"
+                        title={t('Runtime strict mode status unavailable')}
+                        description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
+                      />
+                    ) : runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback ? (
+                      <StateBlock
+                        variant="success"
+                        title={t('Runtime strict mode is active')}
+                        description={t(
+                          'Version authenticity checks are aligned with strict runtime controls. Bundled runner python: {pythonBin}.',
+                          { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
+                        )}
+                        extra={
+                          <div className="row gap wrap">
+                            <Badge tone={runtimeDisableSimulatedTrainFallback ? 'success' : 'warning'}>
+                              {t('Train strict')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
+                            </Badge>
+                            <Badge tone={runtimeDisableInferenceFallback ? 'success' : 'warning'}>
+                              {t('Inference strict')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
+                            </Badge>
+                            <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                              {t('Open Runtime Settings')}
+                            </ButtonLink>
+                          </div>
+                        }
+                      />
+                    ) : (
+                      <StateBlock
+                        variant="error"
+                        title={t('Runtime strict mode is off')}
+                        description={t(
+                          'This version page may still surface fallback-linked jobs. Enable strict guards in Runtime settings before registration.'
+                        )}
+                        extra={
+                          <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                            {t('Open Runtime Settings')}
+                          </ButtonLink>
+                        }
+                      />
+                    )
+                  ) : null}
                   <Panel as="section" className="stack tight" tone="soft">
                     <div className="row between gap wrap align-center">
                       <strong>{selectedVersion.version_name}</strong>
