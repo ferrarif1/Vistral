@@ -86,6 +86,13 @@ const detectInferenceFallback = (run: InferenceRunRecord): { fallback: boolean; 
   };
 };
 
+const formatCoveragePercent = (covered: number, total: number): string => {
+  if (total <= 0) {
+    return 'n/a';
+  }
+  return `${Math.round((covered / total) * 100)}%`;
+};
+
 const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
   JSON.stringify({
     user: {
@@ -382,6 +389,14 @@ export default function ProfessionalConsolePage() {
   const nonRealTrainingCount = nonRealTrainingJobs.length;
   const fallbackInferenceCount = inferenceFallbackRuns.length;
   const hasRealityWarning = nonRealTrainingCount > 0 || fallbackInferenceCount > 0;
+  const terminalTrainingCount = snapshot
+    ? snapshot.trainingJobs.filter((job) => terminalTrainingStatuses.has(job.status)).length
+    : 0;
+  const realTrainingCount = Math.max(terminalTrainingCount - nonRealTrainingCount, 0);
+  const realTrainingCoverage = formatCoveragePercent(realTrainingCount, terminalTrainingCount);
+  const totalInferenceCount = snapshot?.inferenceRuns.length ?? 0;
+  const realInferenceCount = Math.max(totalInferenceCount - fallbackInferenceCount, 0);
+  const realInferenceCoverage = formatCoveragePercent(realInferenceCount, totalInferenceCount);
 
   const priorityMode =
     pendingApprovals.length > 0
@@ -541,6 +556,24 @@ export default function ProfessionalConsolePage() {
                     description: t('Inference runs marked as fallback/template/mock output.'),
                     value: fallbackInferenceCount,
                     tone: fallbackInferenceCount > 0 ? 'attention' : 'default'
+                  },
+                  {
+                    title: t('Training real-run coverage'),
+                    description: t('Share of terminal training jobs that carry real execution evidence.'),
+                    value: `${realTrainingCoverage} (${realTrainingCount}/${terminalTrainingCount})`,
+                    tone:
+                      terminalTrainingCount > 0 && realTrainingCount !== terminalTrainingCount
+                        ? 'attention'
+                        : 'default'
+                  },
+                  {
+                    title: t('Inference real-run coverage'),
+                    description: t('Share of inference runs without fallback/template/mock markers.'),
+                    value: `${realInferenceCoverage} (${realInferenceCount}/${totalInferenceCount})`,
+                    tone:
+                      totalInferenceCount > 0 && realInferenceCount !== totalInferenceCount
+                        ? 'attention'
+                        : 'default'
                   }
                 ]}
               />
@@ -858,6 +891,22 @@ export default function ProfessionalConsolePage() {
                           <div className="row between gap wrap align-center">
                             <strong>{t('Fallback inference')}</strong>
                             <Badge tone={fallbackInferenceCount > 0 ? 'warning' : 'neutral'}>{fallbackInferenceCount}</Badge>
+                          </div>
+                        </Panel>
+                        <Panel as="li" className="workspace-record-item compact" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <strong>{t('Training real-run')}</strong>
+                            <Badge tone={realTrainingCoverage === 'n/a' ? 'neutral' : 'info'}>
+                              {realTrainingCoverage}
+                            </Badge>
+                          </div>
+                        </Panel>
+                        <Panel as="li" className="workspace-record-item compact" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <strong>{t('Inference real-run')}</strong>
+                            <Badge tone={realInferenceCoverage === 'n/a' ? 'neutral' : 'info'}>
+                              {realInferenceCoverage}
+                            </Badge>
                           </div>
                         </Panel>
                       </ul>
