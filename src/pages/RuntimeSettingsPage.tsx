@@ -5,6 +5,7 @@ import type {
   RuntimeConnectivityRecord,
   RuntimeFrameworkConfigView,
   RuntimeMetricsRetentionSummary,
+  RuntimeProfileView,
   RuntimeSettingsView,
   TrainingArtifactSummary,
   TrainingJobRecord,
@@ -404,6 +405,10 @@ export default function RuntimeSettingsPage() {
   const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
   const [runtimeSettingsMessage, setRuntimeSettingsMessage] = useState('');
   const [runtimeSettingsUpdatedAt, setRuntimeSettingsUpdatedAt] = useState<string | null>(null);
+  const [runtimeSettingsActiveProfileId, setRuntimeSettingsActiveProfileId] = useState<string | null>(null);
+  const [runtimeProfiles, setRuntimeProfiles] = useState<RuntimeProfileView[]>([]);
+  const [selectedRuntimeProfileId, setSelectedRuntimeProfileId] = useState('');
+  const [runtimeProfileActivating, setRuntimeProfileActivating] = useState(false);
   const [keepExistingApiKeys, setKeepExistingApiKeys] = useState(true);
   const [runtimeDrafts, setRuntimeDrafts] = useState<RuntimeFrameworkDraftMap>(() =>
     buildDefaultRuntimeFrameworkDraftMap()
@@ -488,6 +493,16 @@ export default function RuntimeSettingsPage() {
 
   const applyRuntimeSettingsView = (view: RuntimeSettingsView) => {
     setRuntimeSettingsUpdatedAt(view.updated_at);
+    const availableProfiles = Array.isArray(view.available_profiles) ? view.available_profiles : [];
+    setRuntimeProfiles(availableProfiles);
+    const activeProfileId =
+      typeof view.active_profile_id === 'string' && view.active_profile_id.trim()
+        ? view.active_profile_id.trim()
+        : null;
+    setRuntimeSettingsActiveProfileId(activeProfileId);
+    setSelectedRuntimeProfileId(
+      activeProfileId ?? (availableProfiles[0]?.id ? availableProfiles[0].id : '')
+    );
     setRuntimeDrafts({
       paddleocr: mergeRuntimeFrameworkDraft(view.frameworks.paddleocr),
       doctr: mergeRuntimeFrameworkDraft(view.frameworks.doctr),
@@ -498,6 +513,27 @@ export default function RuntimeSettingsPage() {
       disable_simulated_train_fallback: view.controls.disable_simulated_train_fallback,
       disable_inference_fallback: view.controls.disable_inference_fallback
     });
+  };
+
+  const activateRuntimeProfile = async () => {
+    const profileId = selectedRuntimeProfileId.trim();
+    if (!profileId) {
+      return;
+    }
+
+    setRuntimeProfileActivating(true);
+    setRuntimeSettingsError('');
+    setRuntimeSettingsMessage('');
+    try {
+      const updated = await api.activateRuntimeProfile(profileId);
+      applyRuntimeSettingsView(updated);
+      setRuntimeSettingsMessage(t('Runtime profile activated.'));
+      void refresh();
+    } catch (runtimeProfileError) {
+      setRuntimeSettingsError((runtimeProfileError as Error).message);
+    } finally {
+      setRuntimeProfileActivating(false);
+    }
   };
 
   const refreshRuntimeSettings = async () => {
@@ -1208,6 +1244,9 @@ export default function RuntimeSettingsPage() {
                 <Badge tone="neutral">
                   {t('Last updated')}: {formatTimestamp(runtimeSettingsUpdatedAt)}
                 </Badge>
+                <Badge tone="info">
+                  {t('Active profile')}: {runtimeSettingsActiveProfileId ?? t('saved')}
+                </Badge>
                 <Button
                   type="button"
                   variant="secondary"
@@ -1236,6 +1275,39 @@ export default function RuntimeSettingsPage() {
                   {runtimeSettingsClearing ? t('Clearing...') : t('Clear UI settings')}
                 </Button>
               </div>
+            </div>
+
+            <div className="row gap wrap align-center">
+              <label className="stack tight" style={{ minWidth: 280 }}>
+                <small className="muted">{t('Deployment runtime profile')}</small>
+                <Select
+                  value={selectedRuntimeProfileId}
+                  onChange={(event) => setSelectedRuntimeProfileId(event.target.value)}
+                  disabled={runtimeSettingsLoading || runtimeSettingsSaving || runtimeSettingsClearing}
+                >
+                  {runtimeProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.label} ({profile.source})
+                    </option>
+                  ))}
+                  {runtimeProfiles.length === 0 ? <option value="">{t('No profiles')}</option> : null}
+                </Select>
+              </label>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void activateRuntimeProfile()}
+                disabled={
+                  runtimeSettingsLoading ||
+                  runtimeSettingsSaving ||
+                  runtimeSettingsClearing ||
+                  runtimeProfileActivating ||
+                  !selectedRuntimeProfileId.trim()
+                }
+              >
+                {runtimeProfileActivating ? t('Switching...') : t('Activate profile')}
+              </Button>
             </div>
 
             {runtimeSettingsError ? (

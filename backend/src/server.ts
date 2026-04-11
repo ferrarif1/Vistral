@@ -1461,6 +1461,11 @@ const server = createServer(async (req, res) => {
       return withUserMutation(req, res, () => handlers.saveRuntimeSettings(body));
     }
 
+    if (path === '/api/settings/runtime/activate-profile' && req.method === 'POST') {
+      const body = (await readBody(req)) as { profile_id: string };
+      return withUserMutation(req, res, () => handlers.activateRuntimeProfile(body.profile_id));
+    }
+
     if (path === '/api/settings/runtime' && req.method === 'DELETE') {
       return withUserMutation(req, res, () => handlers.clearRuntimeSettings());
     }
