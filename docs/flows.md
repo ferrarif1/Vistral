@@ -165,6 +165,8 @@ Actor: `user`
    - Step 4 review + submit
 3. select a dataset version snapshot, confirm launch readiness (dataset status / split summary / annotation coverage), then create training job
    - launch is blocked when `split_summary.train <= 0` or `annotation_coverage <= 0`
+   - when runtime strict training guard (`disable_simulated_train_fallback`) is off, launch also requires explicit risk confirmation from the operator before submit
+   - when runtime strict mode status cannot be loaded, launch remains blocked until runtime settings become available again
 4. job transitions through:
    - `draft`
    - `queued`

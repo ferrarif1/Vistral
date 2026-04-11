@@ -169,6 +169,8 @@ Define executable route and page structure for the AI-native conversation worksp
 - dataset selection must be paired with an explicit dataset-version snapshot before submit
 - page keeps a visible launch-readiness summary for the selected dataset version (dataset status, split summary, annotation coverage, train-split availability)
 - launch action must stay disabled when selected dataset version has `annotation_coverage <= 0` or no train split items
+- when runtime strict training fallback guard is off, launch action also requires explicit operator confirmation in the review step before submit
+- when runtime strict mode status is unavailable (runtime settings load failure), launch action remains disabled until status is recoverable
 - advanced hyperparameters remain collapsed initially
 
 ### 5.4 Inference Validation
