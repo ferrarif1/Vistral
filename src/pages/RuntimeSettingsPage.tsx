@@ -567,6 +567,10 @@ export default function RuntimeSettingsPage() {
     [runtimeDrafts, runtimeControlDraft]
   );
   const runtimeHasUnsavedChanges = Boolean(runtimeBaselineSnapshotKey) && runtimeDraftSnapshotKey !== runtimeBaselineSnapshotKey;
+  const selectedRuntimeProfile = useMemo(
+    () => runtimeProfiles.find((profile) => profile.id === selectedRuntimeProfileId) ?? null,
+    [runtimeProfiles, selectedRuntimeProfileId]
+  );
 
   const activateRuntimeProfile = async () => {
     const profileId = selectedRuntimeProfileId.trim();
@@ -1374,6 +1378,30 @@ export default function RuntimeSettingsPage() {
                 <Badge tone="warning">{t('Unsaved edits will be overwritten')}</Badge>
               ) : null}
             </div>
+            {selectedRuntimeProfile ? (
+              <Panel as="section" className="workspace-record-item stack tight" tone="soft">
+                <div className="row between gap wrap align-center">
+                  <strong>{t('Selected profile snapshot')}</strong>
+                  <Badge tone="neutral">
+                    {t('Source')}: {selectedRuntimeProfile.source}
+                  </Badge>
+                </div>
+                <small className="muted">
+                  {t('python_bin')}: {selectedRuntimeProfile.controls.python_bin || t('platform default')}
+                </small>
+                <small className="muted">
+                  {t('disable_simulated_train_fallback')}:{' '}
+                  {selectedRuntimeProfile.controls.disable_simulated_train_fallback ? t('yes') : t('no')} ·{' '}
+                  {t('disable_inference_fallback')}:{' '}
+                  {selectedRuntimeProfile.controls.disable_inference_fallback ? t('yes') : t('no')}
+                </small>
+                <small className="muted">
+                  {t('Endpoints')}: OCR={selectedRuntimeProfile.frameworks.paddleocr.endpoint || '-'} · docTR=
+                  {selectedRuntimeProfile.frameworks.doctr.endpoint || '-'} · YOLO=
+                  {selectedRuntimeProfile.frameworks.yolo.endpoint || '-'}
+                </small>
+              </Panel>
+            ) : null}
 
             {runtimeSettingsError ? (
               <StateBlock variant="error" title={t('Runtime settings unavailable')} description={runtimeSettingsError} />
