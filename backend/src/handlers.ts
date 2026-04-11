@@ -324,6 +324,7 @@ interface RuntimeProfileRecord {
   description: string;
   source: RuntimeProfileSource;
   frameworks: Record<ModelFramework, RuntimeFrameworkConfig>;
+  controls: RuntimeSettingsRecord['controls'];
 }
 
 const emptyRuntimeFrameworkConfig: RuntimeFrameworkConfig = {
@@ -462,6 +463,7 @@ const parseRuntimeProfilesFromEnv = (): RuntimeProfileRecord[] => {
         label?: unknown;
         description?: unknown;
         frameworks?: Partial<Record<ModelFramework, Partial<RuntimeFrameworkConfig>>>;
+        controls?: Partial<RuntimeSettingsRecord['controls']>;
       };
       const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
       const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
@@ -481,7 +483,8 @@ const parseRuntimeProfilesFromEnv = (): RuntimeProfileRecord[] => {
           paddleocr: normalizeRuntimeFrameworkConfig(frameworks.paddleocr, emptyRuntimeFrameworkConfig),
           doctr: normalizeRuntimeFrameworkConfig(frameworks.doctr, emptyRuntimeFrameworkConfig),
           yolo: normalizeRuntimeFrameworkConfig(frameworks.yolo, emptyRuntimeFrameworkConfig)
-        }
+        },
+        controls: normalizeRuntimeControlConfig(candidate.controls, emptyRuntimeControlConfig)
       });
     }
     return envProfiles;
@@ -501,7 +504,8 @@ const buildRuntimeProfiles = (record: RuntimeSettingsRecord): RuntimeProfileReco
       paddleocr: normalizeRuntimeFrameworkConfig(record.frameworks.paddleocr, emptyRuntimeFrameworkConfig),
       doctr: normalizeRuntimeFrameworkConfig(record.frameworks.doctr, emptyRuntimeFrameworkConfig),
       yolo: normalizeRuntimeFrameworkConfig(record.frameworks.yolo, emptyRuntimeFrameworkConfig)
-    }
+    },
+    controls: normalizeRuntimeControlConfig(record.controls, emptyRuntimeControlConfig)
   };
   return [savedProfile, ...envProfiles];
 };
@@ -533,6 +537,11 @@ const toRuntimeProfileView = (profile: RuntimeProfileRecord): RuntimeProfileView
       has_api_key: profile.frameworks.yolo.api_key.length > 0,
       api_key_masked: maskApiKey(profile.frameworks.yolo.api_key)
     }
+  },
+  controls: {
+    python_bin: profile.controls.python_bin,
+    disable_simulated_train_fallback: profile.controls.disable_simulated_train_fallback,
+    disable_inference_fallback: profile.controls.disable_inference_fallback
   }
 });
 
@@ -11725,6 +11734,7 @@ export async function activateRuntimeProfile(profileId: string): Promise<Runtime
       ...target.frameworks[framework]
     };
   });
+  runtimeSettings.controls = normalizeRuntimeControlConfig(target.controls, emptyRuntimeControlConfig);
   runtimeSettings.active_profile_id = target.id;
   runtimeSettings.updated_at = now();
   await persistRuntimeSettings();

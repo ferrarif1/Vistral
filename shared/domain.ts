@@ -770,6 +770,7 @@ export interface RuntimeProfileView {
   description: string;
   source: 'env' | 'saved';
   frameworks: Record<ModelFramework, RuntimeFrameworkConfigView>;
+  controls: RuntimeControlSettings;
 }
 
 export interface StartConversationInput {

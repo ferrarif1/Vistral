@@ -382,6 +382,11 @@ Response:
           "has_api_key": false,
           "api_key_masked": "Not set"
         }
+      },
+      "controls": {
+        "python_bin": "/opt/vistral/.venv/bin/python",
+        "disable_simulated_train_fallback": false,
+        "disable_inference_fallback": false
       }
     }
   ],
@@ -473,7 +478,7 @@ Request:
 Notes:
 - admin scope only
 - profile source can be `saved` or deployment env profiles from `VISTRAL_RUNTIME_PROFILES_JSON`
-- activating a profile copies its framework endpoint/api-key/local command templates into effective runtime settings
+- activating a profile copies both framework settings and runtime controls (`python_bin`, fallback guards) into effective runtime settings
 - response is the same masked settings view as `GET /settings/runtime`
 
 ### DELETE /settings/runtime
