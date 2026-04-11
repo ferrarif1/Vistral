@@ -1301,10 +1301,35 @@ const detectCancelIntent = (text: string): boolean =>
 const confirmationPhraseZh = '确认执行';
 const confirmationPhraseEn = 'confirm execute';
 
+const normalizeConfirmationToken = (text: string): string =>
+  compactWhitespace(text)
+    .toLowerCase()
+    .replace(/[“”"'`]/g, '')
+    .replace(/[。.!！?？]+$/g, '');
+
+const matchRequiredConfirmationPhrase = (text: string, confirmationPhrase: string): boolean => {
+  const normalizedText = normalizeConfirmationToken(text);
+  const normalizedPhrase = normalizeConfirmationToken(confirmationPhrase);
+  if (!normalizedText || !normalizedPhrase) {
+    return false;
+  }
+  return normalizedText === normalizedPhrase;
+};
+
 const detectExecutionConfirmation = (text: string): boolean =>
   /(确认执行|确认开始|确认创建|同意执行|确认提交|confirm execute|confirm run|yes, execute|approved, run)/i.test(
     text
   );
+
+const resolveConversationConfirmation = (
+  text: string,
+  pendingAction: ConversationActionMetadata | null
+): boolean => {
+  if (pendingAction?.requires_confirmation && pendingAction.confirmation_phrase) {
+    return matchRequiredConfirmationPhrase(text, pendingAction.confirmation_phrase);
+  }
+  return detectExecutionConfirmation(text);
+};
 
 const inferTaskTypeFromText = (text: string): TaskType | null => {
   if (/(obb|rotated box|rotated bbox|旋转框|旋转目标)/i.test(text)) {
@@ -1708,7 +1733,7 @@ const resolveCreateTrainingJobAction = async (
 ): Promise<ConversationActionResolution> => {
   const inferredDatasetVersionId = inferDatasetVersionIdFromText(content);
   const inferredDatasetReference = inferDatasetReferenceFromText(content);
-  const confirmed = detectExecutionConfirmation(content);
+  const confirmed = resolveConversationConfirmation(content, pendingAction);
   const numericFields = {
     ...(pendingAction?.collected_fields ?? {}),
     ...inferNumericConfigFromText(content)
@@ -1990,7 +2015,7 @@ const resolveCreateDatasetAction = async (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution> => {
-  const confirmed = detectExecutionConfirmation(content);
+  const confirmed = resolveConversationConfirmation(content, pendingAction);
   const collectedFields = normalizeCollectedFields({
     ...(pendingAction?.collected_fields ?? {}),
     name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
@@ -2091,7 +2116,7 @@ const resolveCreateModelDraftAction = async (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution> => {
-  const confirmed = detectExecutionConfirmation(content);
+  const confirmed = resolveConversationConfirmation(content, pendingAction);
   const collectedFields = normalizeCollectedFields({
     ...(pendingAction?.collected_fields ?? {}),
     name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
@@ -2434,7 +2459,7 @@ const buildNaturalConsoleOpsPayload = (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): ConsoleOpsPayload | null => {
-  if (pendingAction?.action === 'console_api_call' && detectExecutionConfirmation(content)) {
+  if (pendingAction?.action === 'console_api_call' && resolveConversationConfirmation(content, pendingAction)) {
     const raw = pendingAction.collected_fields.payload_json ?? '';
     if (!raw) {
       return null;
@@ -2994,7 +3019,12 @@ const resolveConsoleApiAction = async (
           payload_json: pendingPayloadJsonAfterFill || pendingAction.collected_fields.payload_json || ''
         }, {
           missingFields,
-          suggestions: missingFields.flatMap((field) => suggestionsForMissingConsoleField(field)).slice(0, 8)
+          suggestions: missingFields.flatMap((field) => suggestionsForMissingConsoleField(field)).slice(0, 8),
+          requiresConfirmation: missingFields.includes('confirmation') && pendingAction.requires_confirmation,
+          confirmationPhrase:
+            missingFields.includes('confirmation') && pendingAction.requires_confirmation
+              ? pendingAction.confirmation_phrase ?? null
+              : null
         })
       };
     }
@@ -3022,7 +3052,7 @@ const resolveConsoleApiAction = async (
 
   const normalizedApi = payload.api.trim().toLowerCase();
   const params = payload.params ?? {};
-  const confirmed = Boolean(payload.confirm) || detectExecutionConfirmation(content);
+  const confirmed = Boolean(payload.confirm) || resolveConversationConfirmation(content, pendingAction);
   if (highRiskConsoleApis.has(normalizedApi) && !confirmed) {
     const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
     const summary = hasChineseText(content)

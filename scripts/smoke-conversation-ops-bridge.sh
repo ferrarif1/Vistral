@@ -99,13 +99,28 @@ msg_fill="$(send_message "tj-det-1")"
 fill_status="$(echo "$msg_fill" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
 fill_requires_confirm="$(echo "$msg_fill" | jq -r '.data.messages[-1].metadata.conversation_action.requires_confirmation // false')"
 fill_missing="$(echo "$msg_fill" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+fill_confirmation_phrase="$(echo "$msg_fill" | jq -r '.data.messages[-1].metadata.conversation_action.confirmation_phrase // empty')"
 if [[ "$fill_status" != "requires_input" || "$fill_requires_confirm" != "true" || "$fill_missing" != *"confirmation"* ]]; then
   echo "[smoke-conversation-ops-bridge] expected confirmation requirement after filling job_id"
   echo "$msg_fill"
   exit 1
 fi
+if [[ -z "$fill_confirmation_phrase" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected confirmation phrase for high-risk API"
+  echo "$msg_fill"
+  exit 1
+fi
 
-msg_confirm="$(send_message "确认执行")"
+msg_wrong_confirm="$(send_message "yes, execute")"
+wrong_confirm_status="$(echo "$msg_wrong_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+wrong_confirm_missing="$(echo "$msg_wrong_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+if [[ "$wrong_confirm_status" != "requires_input" || "$wrong_confirm_missing" != *"confirmation"* ]]; then
+  echo "[smoke-conversation-ops-bridge] expected strict confirmation phrase guard before execution"
+  echo "$msg_wrong_confirm"
+  exit 1
+fi
+
+msg_confirm="$(send_message "$fill_confirmation_phrase")"
 confirm_action="$(echo "$msg_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.action // empty')"
 confirm_status="$(echo "$msg_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
 if [[ "$confirm_action" != "console_api_call" ]]; then
@@ -153,13 +168,19 @@ msg_review_fill="$(send_message "ann-1")"
 review_fill_status="$(echo "$msg_review_fill" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
 review_fill_requires_confirm="$(echo "$msg_review_fill" | jq -r '.data.messages[-1].metadata.conversation_action.requires_confirmation // false')"
 review_fill_missing="$(echo "$msg_review_fill" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+review_confirmation_phrase="$(echo "$msg_review_fill" | jq -r '.data.messages[-1].metadata.conversation_action.confirmation_phrase // empty')"
 if [[ "$review_fill_status" != "requires_input" || "$review_fill_requires_confirm" != "true" || "$review_fill_missing" != *"confirmation"* ]]; then
   echo "[smoke-conversation-ops-bridge] expected confirmation requirement after filling annotation_id"
   echo "$msg_review_fill"
   exit 1
 fi
+if [[ -z "$review_confirmation_phrase" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected confirmation phrase for review high-risk API"
+  echo "$msg_review_fill"
+  exit 1
+fi
 
-msg_review_confirm="$(send_message "确认执行")"
+msg_review_confirm="$(send_message "$review_confirmation_phrase")"
 review_confirm_action="$(echo "$msg_review_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.action // empty')"
 review_confirm_status="$(echo "$msg_review_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
 if [[ "$review_confirm_action" != "console_api_call" ]]; then
