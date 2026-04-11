@@ -2224,6 +2224,83 @@ type ConsoleOpsPayload = {
   confirm?: boolean;
 };
 
+const suggestDatasetRefs = (): string[] =>
+  datasets.slice(0, 8).map((item) => `${item.name} (${item.id})`);
+
+const suggestModelRefs = (): string[] =>
+  models.slice(0, 8).map((item) => `${item.name} (${item.id})`);
+
+const suggestTrainingJobRefs = (): string[] =>
+  trainingJobs.slice(0, 8).map((item) => `${item.name} (${item.id})`);
+
+const suggestInferenceRunRefs = (): string[] =>
+  inferenceRuns.slice(0, 8).map((item) => `${item.id}`);
+
+const suggestAttachmentRefs = (): string[] =>
+  attachments
+    .filter((item) => item.status === 'ready')
+    .slice(0, 8)
+    .map((item) => `${item.filename} (${item.id})`);
+
+const suggestModelVersionRefs = (): string[] =>
+  modelVersions.slice(0, 8).map((item) => `${item.version_name} (${item.id})`);
+
+const resolveDatasetReference = (content: string): string => {
+  const byId = extractPatternValue(content, [/\b(d-\d+)\b/i]);
+  if (byId) {
+    return byId;
+  }
+  const quoted = extractQuotedValue(content);
+  const normalized = normalizeSearchToken(quoted);
+  if (!normalized) {
+    return '';
+  }
+  const matched = datasets.find((item) => normalizeSearchToken(item.name) === normalized);
+  return matched?.id ?? '';
+};
+
+const resolveModelReference = (content: string): string => {
+  const byId = extractPatternValue(content, [/\b(m-\d+)\b/i]);
+  if (byId) {
+    return byId;
+  }
+  const quoted = extractQuotedValue(content);
+  const normalized = normalizeSearchToken(quoted);
+  if (!normalized) {
+    return '';
+  }
+  const matched = models.find((item) => normalizeSearchToken(item.name) === normalized);
+  return matched?.id ?? '';
+};
+
+const resolveTrainingJobReference = (content: string): string => {
+  const byId = extractPatternValue(content, [/\b(tj-[a-z0-9-]+)\b/i]);
+  if (byId) {
+    return byId;
+  }
+  const quoted = extractQuotedValue(content);
+  const normalized = normalizeSearchToken(quoted);
+  if (!normalized) {
+    return '';
+  }
+  const matched = trainingJobs.find((item) => normalizeSearchToken(item.name) === normalized);
+  return matched?.id ?? '';
+};
+
+const resolveModelVersionReference = (content: string): string => {
+  const byId = extractPatternValue(content, [/\b(mv-\d+)\b/i]);
+  if (byId) {
+    return byId;
+  }
+  const quoted = extractQuotedValue(content);
+  const normalized = normalizeSearchToken(quoted);
+  if (!normalized) {
+    return '';
+  }
+  const matched = modelVersions.find((item) => normalizeSearchToken(item.version_name) === normalized);
+  return matched?.id ?? '';
+};
+
 const parseConsoleOpsPayload = (content: string): ConsoleOpsPayload | null => {
   const match = content.trim().match(/^\/ops\s+(\{[\s\S]+\})$/i);
   if (!match?.[1]) {
@@ -2551,6 +2628,121 @@ const detectNaturalConsoleIntentMissingFields = (
   return null;
 };
 
+const suggestionsForMissingConsoleField = (field: string): string[] => {
+  if (field === 'dataset_id') {
+    return suggestDatasetRefs();
+  }
+  if (field === 'model_id' || field === 'source_model_id') {
+    return suggestModelRefs();
+  }
+  if (field === 'training_job_id' || field === 'job_id') {
+    return suggestTrainingJobRefs();
+  }
+  if (field === 'run_id') {
+    return suggestInferenceRunRefs();
+  }
+  if (field === 'attachment_id' || field === 'input_attachment_id') {
+    return suggestAttachmentRefs();
+  }
+  if (field === 'model_version_id' || field === 'source_model_version_id') {
+    return suggestModelVersionRefs();
+  }
+  if (field === 'task_type') {
+    return ['ocr', 'detection', 'classification', 'segmentation', 'obb'];
+  }
+  if (field === 'status') {
+    return ['approved', 'rejected'];
+  }
+  if (field === 'profile_id') {
+    const record = getCurrentRuntimeSettingsRecord();
+    return buildRuntimeProfiles(record).map((item) => item.id);
+  }
+  return [];
+};
+
+const fillConsoleMissingField = (
+  field: string,
+  content: string,
+  params: Record<string, unknown>
+): boolean => {
+  if (field === 'dataset_id') {
+    const resolved = resolveDatasetReference(content);
+    if (resolved) {
+      params.dataset_id = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'model_id' || field === 'source_model_id') {
+    const resolved = resolveModelReference(content);
+    if (resolved) {
+      params[field] = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'training_job_id' || field === 'job_id') {
+    const resolved = resolveTrainingJobReference(content);
+    if (resolved) {
+      params[field] = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'run_id') {
+    const resolved = extractPatternValue(content, [/\b(ir-\d+)\b/i]);
+    if (resolved) {
+      params.run_id = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'attachment_id' || field === 'input_attachment_id') {
+    const resolved = extractPatternValue(content, [/\b(f-\d+)\b/i]);
+    if (resolved) {
+      params[field] = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'model_version_id' || field === 'source_model_version_id') {
+    const resolved = resolveModelVersionReference(content);
+    if (resolved) {
+      params[field] = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'task_type') {
+    const inferred = inferTaskTypeFromText(content);
+    if (inferred) {
+      params.task_type = inferred;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'status') {
+    if (/(通过|approved?|approve)/i.test(content)) {
+      params.status = 'approved';
+      return true;
+    }
+    if (/(拒绝|驳回|rejected?|reject)/i.test(content)) {
+      params.status = 'rejected';
+      return true;
+    }
+    return false;
+  }
+  if (field === 'profile_id') {
+    const candidate = inferActionNameFromText(content) || extractQuotedValue(content);
+    if (candidate) {
+      params.profile_id = candidate;
+      return true;
+    }
+    return false;
+  }
+  return false;
+};
+
 const highRiskConsoleApis = new Set([
   'create_dataset',
   'create_model_draft',
@@ -2582,6 +2774,8 @@ const resolveConsoleApiAction = async (
       metadata: toActionMetadata('console_api_call', 'failed', summary, {})
     };
   }
+  let pendingMissingAfterFill: string[] = [];
+  let pendingPayloadJsonAfterFill = '';
   const recoveredFromPending =
     !parsed && pendingAction?.action === 'console_api_call'
       ? (() => {
@@ -2590,7 +2784,27 @@ const resolveConsoleApiAction = async (
             if (!raw) {
               return null;
             }
-            return JSON.parse(raw) as ConsoleOpsPayload;
+            const recovered = JSON.parse(raw) as ConsoleOpsPayload;
+            const params =
+              recovered.params && typeof recovered.params === 'object'
+                ? { ...(recovered.params as Record<string, unknown>) }
+                : {};
+            const missingFields = Array.isArray(pendingAction.missing_fields)
+              ? pendingAction.missing_fields
+              : [];
+            const remainingMissing = missingFields.filter((field) => !fillConsoleMissingField(field, content, params));
+            pendingMissingAfterFill = remainingMissing;
+            pendingPayloadJsonAfterFill = JSON.stringify({
+              api: recovered.api,
+              params
+            });
+            if (remainingMissing.length > 0) {
+              return null;
+            }
+            return {
+              ...recovered,
+              params
+            } as ConsoleOpsPayload;
           } catch {
             return null;
           }
@@ -2601,6 +2815,27 @@ const resolveConsoleApiAction = async (
     : null;
   const payload = parsed ?? recoveredFromPending ?? naturalPayload;
   if (!payload) {
+    if (
+      !parsed &&
+      pendingAction?.action === 'console_api_call' &&
+      (pendingAction.missing_fields.length > 0 || pendingMissingAfterFill.length > 0)
+    ) {
+      const missingFields =
+        pendingMissingAfterFill.length > 0 ? pendingMissingAfterFill : pendingAction.missing_fields;
+      const summary = hasChineseText(content)
+        ? `请补充这些字段后我再执行：${missingFields.join(', ')}`
+        : `Please provide these fields so I can continue: ${missingFields.join(', ')}`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'requires_input', summary, {
+          api: pendingAction.collected_fields.api ?? '',
+          payload_json: pendingPayloadJsonAfterFill || pendingAction.collected_fields.payload_json || ''
+        }, {
+          missingFields,
+          suggestions: missingFields.flatMap((field) => suggestionsForMissingConsoleField(field)).slice(0, 8)
+        })
+      };
+    }
     const missing = detectNaturalConsoleIntentMissingFields(content);
     if (missing) {
       const summary = hasChineseText(content)
@@ -2609,9 +2844,14 @@ const resolveConsoleApiAction = async (
       return {
         content: summary,
         metadata: toActionMetadata('console_api_call', 'requires_input', summary, {
-          api: missing.api
+          api: missing.api,
+          payload_json: JSON.stringify({
+            api: missing.api,
+            params: {}
+          })
         }, {
-          missingFields: missing.missingFields
+          missingFields: missing.missingFields,
+          suggestions: missing.missingFields.flatMap((field) => suggestionsForMissingConsoleField(field)).slice(0, 8)
         })
       };
     }

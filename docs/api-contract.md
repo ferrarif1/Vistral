@@ -235,6 +235,7 @@ Notes:
 - advanced console bridge (LLM/tool-like call): message can use `/ops {json}` to invoke selected console APIs directly in conversation
   - natural-language route is also supported for common intents (for example: “查看训练任务”, “导出 d-12 的 OCR 标注”, “取消训练任务 tj-101”); server maps intent to bridge API automatically
   - when natural-language intent is recognized but required IDs/params are missing, assistant returns structured `requires_input` with explicit `missing_fields`
+  - user can reply with only the missing value(s) in follow-up turn; server merges them into pending bridge payload and continues execution flow (including high-risk confirmation gate)
   - supported `api`:
     - read: `list_datasets`, `list_models`, `list_model_versions`, `list_training_jobs`, `list_inference_runs`, `list_dataset_annotations`
     - execute: `run_inference`, `create_dataset_version`, `export_dataset_annotations`
