@@ -232,6 +232,7 @@ Notes:
 - `metadata.conversation_action` may include optional `action_links` (`[{label, href}]`) so clients can render direct navigation cards for complex follow-up input collection (for example annotation/training/inference workspaces)
 - high-risk mutating operations (`create_*`) require explicit confirmation before backend execution; assistant returns `missing_fields=["confirmation"]` plus `requires_confirmation=true`
 - when `confirmation_phrase` is present in pending action metadata, execution confirmation must match that phrase after trim/case/punctuation normalization (free-form "yes" is not enough)
+- when a pending action already has confirmation context, follow-up turns should keep the same `confirmation_phrase` (avoid switching zh/en phrase because user only replied with ids)
 - when backend execution succeeds, assistant returns `metadata.conversation_action.status=completed`
 - when execution fails or user cancels, assistant returns `failed` / `cancelled`
 - advanced console bridge (LLM/tool-like call): message can use `/ops {json}` to invoke selected console APIs directly in conversation

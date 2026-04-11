@@ -110,6 +110,11 @@ if [[ -z "$fill_confirmation_phrase" ]]; then
   echo "$msg_fill"
   exit 1
 fi
+if [[ "$fill_confirmation_phrase" != "确认执行" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected zh confirmation phrase continuity for zh intent flow"
+  echo "$msg_fill"
+  exit 1
+fi
 
 msg_wrong_confirm="$(send_message "yes, execute")"
 wrong_confirm_status="$(echo "$msg_wrong_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
@@ -176,6 +181,11 @@ if [[ "$review_fill_status" != "requires_input" || "$review_fill_requires_confir
 fi
 if [[ -z "$review_confirmation_phrase" ]]; then
   echo "[smoke-conversation-ops-bridge] expected confirmation phrase for review high-risk API"
+  echo "$msg_review_fill"
+  exit 1
+fi
+if [[ "$review_confirmation_phrase" != "确认执行" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected zh confirmation phrase continuity for zh review flow"
   echo "$msg_review_fill"
   exit 1
 fi

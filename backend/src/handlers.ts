@@ -1331,6 +1331,21 @@ const resolveConversationConfirmation = (
   return detectExecutionConfirmation(text);
 };
 
+const resolveConfirmationPhrase = (
+  text: string,
+  pendingAction: ConversationActionMetadata | null
+): string => {
+  const pendingPhrase = pendingAction?.confirmation_phrase ?? '';
+  if (pendingPhrase) {
+    return pendingPhrase;
+  }
+  const preferChinese =
+    hasChineseText(text) ||
+    hasChineseText(pendingAction?.summary ?? '') ||
+    hasChineseText(pendingAction?.collected_fields?.intent_language_hint ?? '');
+  return preferChinese ? confirmationPhraseZh : confirmationPhraseEn;
+};
+
 const inferTaskTypeFromText = (text: string): TaskType | null => {
   if (/(obb|rotated box|rotated bbox|旋转框|旋转目标)/i.test(text)) {
     return 'obb';
@@ -1942,7 +1957,7 @@ const resolveCreateTrainingJobAction = async (
   };
 
   if (collectedFields.confirmed !== 'true') {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `训练任务参数已就绪。若要真正创建任务，请回复“${confirmationPhrase}”。`
       : `Training job parameters are ready. Reply "${confirmationPhrase}" to execute.`;
@@ -2057,7 +2072,7 @@ const resolveCreateDatasetAction = async (
     : [];
 
   if (collectedFields.confirmed !== 'true') {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `数据集参数已就绪。若要真正创建数据集，请回复“${confirmationPhrase}”。`
       : `Dataset parameters are ready. Reply "${confirmationPhrase}" to execute.`;
@@ -2161,7 +2176,7 @@ const resolveCreateModelDraftAction = async (
       : 'private';
 
   if (collectedFields.confirmed !== 'true') {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `模型草稿参数已就绪。若要真正创建模型草稿，请回复“${confirmationPhrase}”。`
       : `Model draft parameters are ready. Reply "${confirmationPhrase}" to execute.`;
@@ -3054,7 +3069,7 @@ const resolveConsoleApiAction = async (
   const params = payload.params ?? {};
   const confirmed = Boolean(payload.confirm) || resolveConversationConfirmation(content, pendingAction);
   if (highRiskConsoleApis.has(normalizedApi) && !confirmed) {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `准备调用高危控制台 API（${normalizedApi}）。请回复“${confirmationPhrase}”确认执行。`
       : `High-risk console API call queued (${normalizedApi}). Reply "${confirmationPhrase}" to execute.`;
