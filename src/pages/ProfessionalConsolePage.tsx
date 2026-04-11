@@ -86,6 +86,13 @@ const detectInferenceFallback = (run: InferenceRunRecord): { fallback: boolean; 
   };
 };
 
+const formatCoveragePercent = (covered: number, total: number): string => {
+  if (total <= 0) {
+    return 'n/a';
+  }
+  return `${Math.round((covered / total) * 100)}%`;
+};
+
 const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
   JSON.stringify({
     user: {
@@ -147,6 +154,7 @@ export default function ProfessionalConsolePage() {
   const [error, setError] = useState('');
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>({});
   const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
+  const [kpiCopyMessage, setKpiCopyMessage] = useState('');
   const snapshotSignatureRef = useRef('');
 
   const load = useCallback(async (mode: LoadMode = 'initial') => {
@@ -382,6 +390,73 @@ export default function ProfessionalConsolePage() {
   const nonRealTrainingCount = nonRealTrainingJobs.length;
   const fallbackInferenceCount = inferenceFallbackRuns.length;
   const hasRealityWarning = nonRealTrainingCount > 0 || fallbackInferenceCount > 0;
+  const terminalTrainingCount = snapshot
+    ? snapshot.trainingJobs.filter((job) => terminalTrainingStatuses.has(job.status)).length
+    : 0;
+  const realTrainingCount = Math.max(terminalTrainingCount - nonRealTrainingCount, 0);
+  const realTrainingCoverage = formatCoveragePercent(realTrainingCount, terminalTrainingCount);
+  const totalInferenceCount = snapshot?.inferenceRuns.length ?? 0;
+  const realInferenceCount = Math.max(totalInferenceCount - fallbackInferenceCount, 0);
+  const realInferenceCoverage = formatCoveragePercent(realInferenceCount, totalInferenceCount);
+  const nowMs = Date.now();
+  const dayAgoMs = nowMs - 24 * 60 * 60 * 1000;
+  const recentNonRealTrainingCount = nonRealTrainingJobs.filter(
+    (entry) => Date.parse(entry.job.updated_at) >= dayAgoMs
+  ).length;
+  const recentFallbackInferenceCount = inferenceFallbackRuns.filter(
+    (entry) => Date.parse(entry.run.updated_at) >= dayAgoMs
+  ).length;
+  const topTrainingFallbackReasons = useMemo(
+    () =>
+      Array.from(
+        nonRealTrainingJobs.reduce((counter, entry) => {
+          const reason = entry.insight.fallbackReason?.trim() || 'unspecified_non_real_evidence';
+          counter.set(reason, (counter.get(reason) ?? 0) + 1);
+          return counter;
+        }, new Map<string, number>())
+      )
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 3),
+    [nonRealTrainingJobs]
+  );
+  const topInferenceFallbackReasons = useMemo(
+    () =>
+      Array.from(
+        inferenceFallbackRuns.reduce((counter, entry) => {
+          const reason = entry.reality.reason?.trim() || 'unspecified_runtime_fallback';
+          counter.set(reason, (counter.get(reason) ?? 0) + 1);
+          return counter;
+        }, new Map<string, number>())
+      )
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 3),
+    [inferenceFallbackRuns]
+  );
+  const copyRealitySnapshot = async () => {
+    const payload = {
+      generated_at: new Date().toISOString(),
+      training: {
+        terminal_count: terminalTrainingCount,
+        non_real_count: nonRealTrainingCount,
+        real_count: realTrainingCount,
+        real_coverage: realTrainingCoverage,
+        top_reasons: topTrainingFallbackReasons.map(([reason, count]) => ({ reason, count }))
+      },
+      inference: {
+        total_count: totalInferenceCount,
+        fallback_count: fallbackInferenceCount,
+        real_count: realInferenceCount,
+        real_coverage: realInferenceCoverage,
+        top_reasons: topInferenceFallbackReasons.map(([reason, count]) => ({ reason, count }))
+      }
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setKpiCopyMessage(t('Reality KPI snapshot copied.'));
+    } catch (error) {
+      setKpiCopyMessage(t('Copy failed: {message}', { message: (error as Error).message }));
+    }
+  };
 
   const priorityMode =
     pendingApprovals.length > 0
@@ -541,6 +616,36 @@ export default function ProfessionalConsolePage() {
                     description: t('Inference runs marked as fallback/template/mock output.'),
                     value: fallbackInferenceCount,
                     tone: fallbackInferenceCount > 0 ? 'attention' : 'default'
+                  },
+                  {
+                    title: t('Training real-run coverage'),
+                    description: t('Share of terminal training jobs that carry real execution evidence.'),
+                    value: `${realTrainingCoverage} (${realTrainingCount}/${terminalTrainingCount})`,
+                    tone:
+                      terminalTrainingCount > 0 && realTrainingCount !== terminalTrainingCount
+                        ? 'attention'
+                        : 'default'
+                  },
+                  {
+                    title: t('Inference real-run coverage'),
+                    description: t('Share of inference runs without fallback/template/mock markers.'),
+                    value: `${realInferenceCoverage} (${realInferenceCount}/${totalInferenceCount})`,
+                    tone:
+                      totalInferenceCount > 0 && realInferenceCount !== totalInferenceCount
+                        ? 'attention'
+                        : 'default'
+                  },
+                  {
+                    title: t('Non-real training (24h)'),
+                    description: t('Terminal training jobs with non-real evidence in the last 24 hours.'),
+                    value: recentNonRealTrainingCount,
+                    tone: recentNonRealTrainingCount > 0 ? 'attention' : 'default'
+                  },
+                  {
+                    title: t('Fallback inference (24h)'),
+                    description: t('Inference fallback/template/mock runs in the last 24 hours.'),
+                    value: recentFallbackInferenceCount,
+                    tone: recentFallbackInferenceCount > 0 ? 'attention' : 'default'
                   }
                 ]}
               />
@@ -614,10 +719,16 @@ export default function ProfessionalConsolePage() {
                       <WorkspaceSectionHeader
                         title={t('Reality Guardrail')}
                         description={t('Surface template/fallback outputs early so production decisions stay safe.')}
+                        actions={
+                          <Button type="button" variant="ghost" size="sm" onClick={() => void copyRealitySnapshot()}>
+                            {t('Copy KPI snapshot')}
+                          </Button>
+                        }
                       />
                       {jobInsightsLoading ? (
                         <small className="muted">{t('Refreshing training authenticity checks...')}</small>
                       ) : null}
+                      {kpiCopyMessage ? <small className="muted">{kpiCopyMessage}</small> : null}
                       {!hasRealityWarning ? (
                         <StateBlock
                           variant="success"
@@ -626,6 +737,40 @@ export default function ProfessionalConsolePage() {
                         />
                       ) : (
                         <div className="stack">
+                          <Panel as="section" className="stack tight" tone="soft">
+                            <div className="row between gap wrap align-center">
+                              <strong>{t('Top fallback reasons')}</strong>
+                              <Badge tone="info">{nonRealTrainingCount + fallbackInferenceCount}</Badge>
+                            </div>
+                            <div className="stack tight">
+                              <small className="muted">{t('Training non-real reasons')}</small>
+                              <div className="row gap wrap">
+                                {topTrainingFallbackReasons.length > 0 ? (
+                                  topTrainingFallbackReasons.map(([reason, count]) => (
+                                    <Badge key={`training-${reason}`} tone="warning">
+                                      {reason} · {count}
+                                    </Badge>
+                                  ))
+                                ) : (
+                                  <Badge tone="neutral">{t('none')}</Badge>
+                                )}
+                              </div>
+                            </div>
+                            <div className="stack tight">
+                              <small className="muted">{t('Inference fallback reasons')}</small>
+                              <div className="row gap wrap">
+                                {topInferenceFallbackReasons.length > 0 ? (
+                                  topInferenceFallbackReasons.map(([reason, count]) => (
+                                    <Badge key={`inference-${reason}`} tone="warning">
+                                      {reason} · {count}
+                                    </Badge>
+                                  ))
+                                ) : (
+                                  <Badge tone="neutral">{t('none')}</Badge>
+                                )}
+                              </div>
+                            </div>
+                          </Panel>
                           {nonRealTrainingCount > 0 ? (
                             <Panel as="section" className="stack tight" tone="soft">
                               <div className="row between gap wrap align-center">
@@ -858,6 +1003,22 @@ export default function ProfessionalConsolePage() {
                           <div className="row between gap wrap align-center">
                             <strong>{t('Fallback inference')}</strong>
                             <Badge tone={fallbackInferenceCount > 0 ? 'warning' : 'neutral'}>{fallbackInferenceCount}</Badge>
+                          </div>
+                        </Panel>
+                        <Panel as="li" className="workspace-record-item compact" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <strong>{t('Training real-run')}</strong>
+                            <Badge tone={realTrainingCoverage === 'n/a' ? 'neutral' : 'info'}>
+                              {realTrainingCoverage}
+                            </Badge>
+                          </div>
+                        </Panel>
+                        <Panel as="li" className="workspace-record-item compact" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <strong>{t('Inference real-run')}</strong>
+                            <Badge tone={realInferenceCoverage === 'n/a' ? 'neutral' : 'info'}>
+                              {realInferenceCoverage}
+                            </Badge>
                           </div>
                         </Panel>
                       </ul>

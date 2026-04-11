@@ -324,6 +324,7 @@ interface RuntimeProfileRecord {
   description: string;
   source: RuntimeProfileSource;
   frameworks: Record<ModelFramework, RuntimeFrameworkConfig>;
+  controls: RuntimeSettingsRecord['controls'];
 }
 
 const emptyRuntimeFrameworkConfig: RuntimeFrameworkConfig = {
@@ -462,6 +463,7 @@ const parseRuntimeProfilesFromEnv = (): RuntimeProfileRecord[] => {
         label?: unknown;
         description?: unknown;
         frameworks?: Partial<Record<ModelFramework, Partial<RuntimeFrameworkConfig>>>;
+        controls?: Partial<RuntimeSettingsRecord['controls']>;
       };
       const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
       const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
@@ -481,7 +483,8 @@ const parseRuntimeProfilesFromEnv = (): RuntimeProfileRecord[] => {
           paddleocr: normalizeRuntimeFrameworkConfig(frameworks.paddleocr, emptyRuntimeFrameworkConfig),
           doctr: normalizeRuntimeFrameworkConfig(frameworks.doctr, emptyRuntimeFrameworkConfig),
           yolo: normalizeRuntimeFrameworkConfig(frameworks.yolo, emptyRuntimeFrameworkConfig)
-        }
+        },
+        controls: normalizeRuntimeControlConfig(candidate.controls, emptyRuntimeControlConfig)
       });
     }
     return envProfiles;
@@ -501,7 +504,8 @@ const buildRuntimeProfiles = (record: RuntimeSettingsRecord): RuntimeProfileReco
       paddleocr: normalizeRuntimeFrameworkConfig(record.frameworks.paddleocr, emptyRuntimeFrameworkConfig),
       doctr: normalizeRuntimeFrameworkConfig(record.frameworks.doctr, emptyRuntimeFrameworkConfig),
       yolo: normalizeRuntimeFrameworkConfig(record.frameworks.yolo, emptyRuntimeFrameworkConfig)
-    }
+    },
+    controls: normalizeRuntimeControlConfig(record.controls, emptyRuntimeControlConfig)
   };
   return [savedProfile, ...envProfiles];
 };
@@ -533,6 +537,11 @@ const toRuntimeProfileView = (profile: RuntimeProfileRecord): RuntimeProfileView
       has_api_key: profile.frameworks.yolo.api_key.length > 0,
       api_key_masked: maskApiKey(profile.frameworks.yolo.api_key)
     }
+  },
+  controls: {
+    python_bin: profile.controls.python_bin,
+    disable_simulated_train_fallback: profile.controls.disable_simulated_train_fallback,
+    disable_inference_fallback: profile.controls.disable_inference_fallback
   }
 });
 
@@ -1292,10 +1301,50 @@ const detectCancelIntent = (text: string): boolean =>
 const confirmationPhraseZh = '确认执行';
 const confirmationPhraseEn = 'confirm execute';
 
+const normalizeConfirmationToken = (text: string): string =>
+  compactWhitespace(text)
+    .toLowerCase()
+    .replace(/[“”"'`]/g, '')
+    .replace(/[。.!！?？]+$/g, '');
+
+const matchRequiredConfirmationPhrase = (text: string, confirmationPhrase: string): boolean => {
+  const normalizedText = normalizeConfirmationToken(text);
+  const normalizedPhrase = normalizeConfirmationToken(confirmationPhrase);
+  if (!normalizedText || !normalizedPhrase) {
+    return false;
+  }
+  return normalizedText === normalizedPhrase;
+};
+
 const detectExecutionConfirmation = (text: string): boolean =>
   /(确认执行|确认开始|确认创建|同意执行|确认提交|confirm execute|confirm run|yes, execute|approved, run)/i.test(
     text
   );
+
+const resolveConversationConfirmation = (
+  text: string,
+  pendingAction: ConversationActionMetadata | null
+): boolean => {
+  if (pendingAction?.requires_confirmation && pendingAction.confirmation_phrase) {
+    return matchRequiredConfirmationPhrase(text, pendingAction.confirmation_phrase);
+  }
+  return detectExecutionConfirmation(text);
+};
+
+const resolveConfirmationPhrase = (
+  text: string,
+  pendingAction: ConversationActionMetadata | null
+): string => {
+  const pendingPhrase = pendingAction?.confirmation_phrase ?? '';
+  if (pendingPhrase) {
+    return pendingPhrase;
+  }
+  const preferChinese =
+    hasChineseText(text) ||
+    hasChineseText(pendingAction?.summary ?? '') ||
+    hasChineseText(pendingAction?.collected_fields?.intent_language_hint ?? '');
+  return preferChinese ? confirmationPhraseZh : confirmationPhraseEn;
+};
 
 const inferTaskTypeFromText = (text: string): TaskType | null => {
   if (/(obb|rotated box|rotated bbox|旋转框|旋转目标)/i.test(text)) {
@@ -1699,7 +1748,7 @@ const resolveCreateTrainingJobAction = async (
 ): Promise<ConversationActionResolution> => {
   const inferredDatasetVersionId = inferDatasetVersionIdFromText(content);
   const inferredDatasetReference = inferDatasetReferenceFromText(content);
-  const confirmed = detectExecutionConfirmation(content);
+  const confirmed = resolveConversationConfirmation(content, pendingAction);
   const numericFields = {
     ...(pendingAction?.collected_fields ?? {}),
     ...inferNumericConfigFromText(content)
@@ -1908,7 +1957,7 @@ const resolveCreateTrainingJobAction = async (
   };
 
   if (collectedFields.confirmed !== 'true') {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `训练任务参数已就绪。若要真正创建任务，请回复“${confirmationPhrase}”。`
       : `Training job parameters are ready. Reply "${confirmationPhrase}" to execute.`;
@@ -1981,7 +2030,7 @@ const resolveCreateDatasetAction = async (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution> => {
-  const confirmed = detectExecutionConfirmation(content);
+  const confirmed = resolveConversationConfirmation(content, pendingAction);
   const collectedFields = normalizeCollectedFields({
     ...(pendingAction?.collected_fields ?? {}),
     name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
@@ -2023,7 +2072,7 @@ const resolveCreateDatasetAction = async (
     : [];
 
   if (collectedFields.confirmed !== 'true') {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `数据集参数已就绪。若要真正创建数据集，请回复“${confirmationPhrase}”。`
       : `Dataset parameters are ready. Reply "${confirmationPhrase}" to execute.`;
@@ -2082,7 +2131,7 @@ const resolveCreateModelDraftAction = async (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution> => {
-  const confirmed = detectExecutionConfirmation(content);
+  const confirmed = resolveConversationConfirmation(content, pendingAction);
   const collectedFields = normalizeCollectedFields({
     ...(pendingAction?.collected_fields ?? {}),
     name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
@@ -2127,7 +2176,7 @@ const resolveCreateModelDraftAction = async (
       : 'private';
 
   if (collectedFields.confirmed !== 'true') {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `模型草稿参数已就绪。若要真正创建模型草稿，请回复“${confirmationPhrase}”。`
       : `Model draft parameters are ready. Reply "${confirmationPhrase}" to execute.`;
@@ -2425,7 +2474,7 @@ const buildNaturalConsoleOpsPayload = (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): ConsoleOpsPayload | null => {
-  if (pendingAction?.action === 'console_api_call' && detectExecutionConfirmation(content)) {
+  if (pendingAction?.action === 'console_api_call' && resolveConversationConfirmation(content, pendingAction)) {
     const raw = pendingAction.collected_fields.payload_json ?? '';
     if (!raw) {
       return null;
@@ -2884,7 +2933,6 @@ const highRiskConsoleApis = new Set([
 
 const resolveConsoleApiAction = async (
   content: string,
-  currentUser: User,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution | null> => {
   const parsed = parseConsoleOpsPayload(content);
@@ -2986,7 +3034,12 @@ const resolveConsoleApiAction = async (
           payload_json: pendingPayloadJsonAfterFill || pendingAction.collected_fields.payload_json || ''
         }, {
           missingFields,
-          suggestions: missingFields.flatMap((field) => suggestionsForMissingConsoleField(field)).slice(0, 8)
+          suggestions: missingFields.flatMap((field) => suggestionsForMissingConsoleField(field)).slice(0, 8),
+          requiresConfirmation: missingFields.includes('confirmation') && pendingAction.requires_confirmation,
+          confirmationPhrase:
+            missingFields.includes('confirmation') && pendingAction.requires_confirmation
+              ? pendingAction.confirmation_phrase ?? null
+              : null
         })
       };
     }
@@ -3014,9 +3067,9 @@ const resolveConsoleApiAction = async (
 
   const normalizedApi = payload.api.trim().toLowerCase();
   const params = payload.params ?? {};
-  const confirmed = Boolean(payload.confirm) || detectExecutionConfirmation(content);
+  const confirmed = Boolean(payload.confirm) || resolveConversationConfirmation(content, pendingAction);
   if (highRiskConsoleApis.has(normalizedApi) && !confirmed) {
-    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
     const summary = hasChineseText(content)
       ? `准备调用高危控制台 API（${normalizedApi}）。请回复“${confirmationPhrase}”确认执行。`
       : `High-risk console API call queued (${normalizedApi}). Reply "${confirmationPhrase}" to execute.`;
@@ -3180,8 +3233,7 @@ const resolveConsoleApiAction = async (
     }
 
     if (normalizedApi === 'import_dataset_annotations') {
-      const result = await importDatasetAnnotations({
-        dataset_id: String(params.dataset_id ?? ''),
+      const result = await importDatasetAnnotations(String(params.dataset_id ?? ''), {
         format: String(params.format ?? '') as 'yolo' | 'coco' | 'labelme' | 'ocr',
         attachment_id: String(params.attachment_id ?? '')
       });
@@ -3199,8 +3251,7 @@ const resolveConsoleApiAction = async (
     }
 
     if (normalizedApi === 'export_dataset_annotations') {
-      const result = await exportDatasetAnnotations({
-        dataset_id: String(params.dataset_id ?? ''),
+      const result = await exportDatasetAnnotations(String(params.dataset_id ?? ''), {
         format: String(params.format ?? '') as 'yolo' | 'coco' | 'labelme' | 'ocr'
       });
       const summary = hasChineseText(content)
@@ -3235,7 +3286,7 @@ const resolveConsoleApiAction = async (
     }
 
     if (normalizedApi === 'upsert_dataset_annotation') {
-      const updated = await upsertDatasetAnnotation({
+      const updated = await upsertDatasetAnnotation(String(params.dataset_id ?? ''), {
         dataset_item_id: String(params.dataset_item_id ?? ''),
         task_type: String(params.task_type ?? '') as TaskType,
         source: String(params.source ?? '') as 'manual' | 'import' | 'pre_annotation',
@@ -3264,8 +3315,10 @@ const resolveConsoleApiAction = async (
     }
 
     if (normalizedApi === 'review_dataset_annotation') {
-      const updated = await reviewDatasetAnnotation({
-        annotation_id: String(params.annotation_id ?? ''),
+      const updated = await reviewDatasetAnnotation(
+        String(params.dataset_id ?? ''),
+        String(params.annotation_id ?? ''),
+        {
         status: String(params.status ?? '') as 'approved' | 'rejected',
         review_reason_code:
           params.review_reason_code === null || typeof params.review_reason_code === 'undefined'
@@ -3277,7 +3330,8 @@ const resolveConsoleApiAction = async (
           params.review_comment === null || typeof params.review_comment === 'undefined'
             ? null
             : String(params.review_comment)
-      });
+        }
+      );
       const summary = hasChineseText(content)
         ? `控制台 API review_dataset_annotation 已执行：${updated.id} (${updated.status})。`
         : `Console API review_dataset_annotation executed: ${updated.id} (${updated.status}).`;
@@ -3292,13 +3346,13 @@ const resolveConsoleApiAction = async (
     }
 
     if (normalizedApi === 'run_dataset_pre_annotations') {
-      const result = await runDatasetPreAnnotations({
-        dataset_id: String(params.dataset_id ?? ''),
-        task_type: String(params.task_type ?? '') as TaskType,
-        source_model_id: String(params.source_model_id ?? ''),
-        source_model_version_id:
-          typeof params.source_model_version_id === 'string' ? params.source_model_version_id : undefined
-      });
+      const result = await runDatasetPreAnnotations(
+        String(params.dataset_id ?? ''),
+        {
+          model_version_id:
+            typeof params.source_model_version_id === 'string' ? params.source_model_version_id : undefined
+        }
+      );
       const summary = hasChineseText(content)
         ? `控制台 API run_dataset_pre_annotations 已执行：创建 ${result.created} 条，更新 ${result.updated} 条。`
         : `Console API run_dataset_pre_annotations executed: created=${result.created}, updated=${result.updated}.`;
@@ -3540,7 +3594,7 @@ const resolveConversationAction = async (
   currentUser: User
 ): Promise<ConversationActionResolution | null> => {
   const pendingAction = getPendingConversationAction(conversation.id);
-  const consoleApiResolution = await resolveConsoleApiAction(content, currentUser, pendingAction);
+  const consoleApiResolution = await resolveConsoleApiAction(content, pendingAction);
   if (consoleApiResolution) {
     return consoleApiResolution;
   }
@@ -11725,6 +11779,7 @@ export async function activateRuntimeProfile(profileId: string): Promise<Runtime
       ...target.frameworks[framework]
     };
   });
+  runtimeSettings.controls = normalizeRuntimeControlConfig(target.controls, emptyRuntimeControlConfig);
   runtimeSettings.active_profile_id = target.id;
   runtimeSettings.updated_at = now();
   await persistRuntimeSettings();

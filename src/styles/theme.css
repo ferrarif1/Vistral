@@ -80,7 +80,7 @@ body.workspace-immersive-lock {
 
 #root {
   min-height: 100vh;
-  overflow-x: clip;
+  overflow-x: hidden;
 }
 
 a {
@@ -1128,7 +1128,7 @@ small {
   padding: 24px 28px 40px;
   background: var(--bg);
   overflow-y: auto;
-  overflow-x: clip;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
@@ -3446,9 +3446,16 @@ small {
 
 .annotation-queue-advanced-filters {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) repeat(3, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
   gap: var(--space-2);
   margin-top: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.annotation-queue-advanced-filters > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annotation-queue-filter-summary {
@@ -3482,10 +3489,14 @@ small {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annotation-queue-shortcuts {
   margin-right: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .annotation-review-metadata-list {
@@ -3559,6 +3570,7 @@ small {
 
 .review-action-row {
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .review-optional-metadata {
@@ -3584,6 +3596,8 @@ small {
 
 .review-followup-shortcuts {
   flex-basis: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .workspace-record-item.selected {
@@ -3594,8 +3608,10 @@ small {
 
 .annotation-ocr-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annotation-ocr-grid .span-2 {

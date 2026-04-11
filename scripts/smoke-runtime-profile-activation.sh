@@ -29,6 +29,11 @@ RUNTIME_PROFILES_JSON='[
       "yolo": {
         "endpoint": "http://127.0.0.1:9903/predict"
       }
+    },
+    "controls": {
+      "python_bin": "/opt/edge-lab/python",
+      "disable_simulated_train_fallback": true,
+      "disable_inference_fallback": true
     }
   }
 ]'
@@ -108,6 +113,9 @@ activate_payload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
 active_profile="$(echo "$activate_payload" | jq -r '.data.active_profile_id // empty')"
 active_endpoint="$(echo "$activate_payload" | jq -r '.data.frameworks.paddleocr.endpoint // empty')"
 active_has_key="$(echo "$activate_payload" | jq -r '.data.frameworks.paddleocr.has_api_key // false')"
+active_python_bin="$(echo "$activate_payload" | jq -r '.data.controls.python_bin // empty')"
+active_disable_simulated_fallback="$(echo "$activate_payload" | jq -r '.data.controls.disable_simulated_train_fallback // false')"
+active_disable_inference_fallback="$(echo "$activate_payload" | jq -r '.data.controls.disable_inference_fallback // false')"
 if [[ "$active_profile" != "edge-lab" ]]; then
   echo "[smoke-runtime-profile-activation] expected active profile edge-lab"
   echo "$activate_payload"
@@ -115,6 +123,11 @@ if [[ "$active_profile" != "edge-lab" ]]; then
 fi
 if [[ "$active_endpoint" != "http://127.0.0.1:9901/predict" || "$active_has_key" != "true" ]]; then
   echo "[smoke-runtime-profile-activation] expected activated profile configs reflected in runtime view"
+  echo "$activate_payload"
+  exit 1
+fi
+if [[ "$active_python_bin" != "/opt/edge-lab/python" || "$active_disable_simulated_fallback" != "true" || "$active_disable_inference_fallback" != "true" ]]; then
+  echo "[smoke-runtime-profile-activation] expected activated profile controls reflected in runtime view"
   echo "$activate_payload"
   exit 1
 fi

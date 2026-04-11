@@ -240,7 +240,7 @@ export default function PolygonCanvas({
 
   return (
     <Card as="section">
-      <div className="row between gap align-center">
+      <div className="row between gap wrap align-center">
         <h3>{t(title)}</h3>
         <span className="muted">{t('Click to add points, then complete polygon. Drag vertices to adjust.')}</span>
       </div>

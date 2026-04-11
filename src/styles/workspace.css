@@ -1,11 +1,24 @@
 .workspace-overview-page {
   gap: var(--space-5);
   min-width: 0;
+  max-width: 100%;
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 .workspace-overview-page > * {
   min-width: 0;
+  max-width: 100%;
+}
+
+.workspace-overview-page .row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workspace-overview-page .row > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workspace-overview-hero {
@@ -107,9 +120,11 @@
 
 .workspace-overview-panel-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 340px);
   gap: var(--space-4);
   align-items: start;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workspace-overview-main,
@@ -165,10 +180,12 @@
 
 .dataset-workbench-filter-row {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) repeat(2, minmax(150px, 180px));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: var(--space-2);
   align-items: end;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .dataset-workbench-filter-row > label {
@@ -206,20 +223,29 @@
 
 .annotation-studio-layout {
   display: grid;
-  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: var(--space-4);
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .annotation-studio-queue {
   min-height: clamp(620px, 76vh, 980px);
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding-right: 2px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annotation-studio-workbench {
   min-height: clamp(620px, 76vh, 980px);
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .workspace-workbench {
@@ -227,6 +253,9 @@
   grid-template-rows: auto minmax(0, 1fr);
   gap: var(--space-3);
   min-height: clamp(520px, 72vh, 880px);
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .workspace-workbench-toolbar {
@@ -273,17 +302,21 @@
 
 .workspace-toolbar-actions {
   justify-content: flex-end;
+  max-width: 100%;
 }
 
 .workspace-toolbar-meta {
   justify-content: space-between;
+  max-width: 100%;
 }
 
 .workspace-filter-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 1.5fr) repeat(3, minmax(140px, 0.85fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: var(--space-2);
   align-items: end;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workspace-filter-grid > * {
@@ -292,9 +325,17 @@
 
 .workspace-workbench-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
   gap: var(--space-4);
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.workspace-workbench-grid > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workspace-workbench-main,
@@ -304,8 +345,11 @@
   align-content: start;
   gap: var(--space-4);
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding-right: 2px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workspace-section-header {
@@ -339,7 +383,7 @@
 }
 
 .workspace-keyline-list {
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .workspace-keyline-item {
@@ -372,16 +416,17 @@
 
 .settings-surface-tabs {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: var(--space-2);
   max-width: 100%;
-  overflow-x: auto;
-  scrollbar-gutter: stable;
-  padding-bottom: 2px;
+  overflow: visible;
+  row-gap: var(--space-1);
 }
 
 .settings-surface-tabs > * {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .settings-surface-tab {
@@ -396,6 +441,8 @@
   color: var(--color-text-muted);
   font-size: 14px;
   font-weight: 600;
+  white-space: normal;
+  text-align: center;
   transition:
     background 0.18s ease,
     border-color 0.18s ease,
@@ -442,7 +489,7 @@
 }
 
 .workspace-record-list.compact {
-  gap: 6px;
+  gap: var(--space-1);
 }
 
 .workspace-record-item {
@@ -461,8 +508,8 @@
 }
 
 .workspace-record-item.compact {
-  padding: 10px;
-  gap: 6px;
+  padding: var(--space-2);
+  gap: var(--space-1);
 }
 
 .workspace-record-row {
@@ -564,10 +611,12 @@
   min-height: 22px;
   padding: 0 8px;
   font-size: 12px;
-  max-width: min(100%, 220px);
+  max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .workspace-record-list.compact .ui-status-tag,
@@ -575,7 +624,7 @@
   min-height: 20px;
   padding: 0 7px;
   font-size: 11px;
-  max-width: min(100%, 190px);
+  max-width: 100%;
 }
 
 .workspace-form-grid {
@@ -719,7 +768,7 @@
   }
 
   .workspace-filter-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   }
 
   .annotation-studio-layout {
@@ -733,6 +782,12 @@
 
   .workspace-overview-signal-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1728px) {
+  .annotation-studio-workbench .workspace-workbench-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -757,6 +812,13 @@
   }
 }
 
+@media (max-width: 1440px) {
+  .workspace-overview-page .row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+}
+
 @media (max-width: 960px) {
   .workspace-overview-hero-grid,
   .workspace-overview-panel-grid {
@@ -773,7 +835,8 @@
 
   .workspace-workbench-main,
   .workspace-workbench-side {
-    overflow: visible;
+    overflow-y: visible;
+    overflow-x: hidden;
     padding-right: 0;
   }
 

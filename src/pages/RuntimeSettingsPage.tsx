@@ -83,6 +83,11 @@ type RuntimeControlDraft = {
   disable_inference_fallback: boolean;
 };
 
+type RuntimeSettingsDraftSnapshot = {
+  frameworks: RuntimeFrameworkDraftMap;
+  controls: RuntimeControlDraft;
+};
+
 const endpointEnvByFramework: Record<ModelFramework, { endpoint: string; apiKey: string }> = {
   paddleocr: {
     endpoint: 'PADDLEOCR_RUNTIME_ENDPOINT',
@@ -118,6 +123,35 @@ const buildDefaultRuntimeControlDraft = (): RuntimeControlDraft => ({
   disable_simulated_train_fallback: false,
   disable_inference_fallback: false
 });
+
+const normalizeRuntimeSnapshot = (snapshot: RuntimeSettingsDraftSnapshot): string =>
+  JSON.stringify({
+    frameworks: {
+      paddleocr: {
+        endpoint: snapshot.frameworks.paddleocr.endpoint.trim(),
+        api_key: snapshot.frameworks.paddleocr.api_key.trim(),
+        local_train_command: snapshot.frameworks.paddleocr.local_train_command.trim(),
+        local_predict_command: snapshot.frameworks.paddleocr.local_predict_command.trim()
+      },
+      doctr: {
+        endpoint: snapshot.frameworks.doctr.endpoint.trim(),
+        api_key: snapshot.frameworks.doctr.api_key.trim(),
+        local_train_command: snapshot.frameworks.doctr.local_train_command.trim(),
+        local_predict_command: snapshot.frameworks.doctr.local_predict_command.trim()
+      },
+      yolo: {
+        endpoint: snapshot.frameworks.yolo.endpoint.trim(),
+        api_key: snapshot.frameworks.yolo.api_key.trim(),
+        local_train_command: snapshot.frameworks.yolo.local_train_command.trim(),
+        local_predict_command: snapshot.frameworks.yolo.local_predict_command.trim()
+      }
+    },
+    controls: {
+      python_bin: snapshot.controls.python_bin.trim(),
+      disable_simulated_train_fallback: snapshot.controls.disable_simulated_train_fallback,
+      disable_inference_fallback: snapshot.controls.disable_inference_fallback
+    }
+  });
 
 const mergeRuntimeFrameworkDraft = (
   view: RuntimeFrameworkConfigView
@@ -409,6 +443,7 @@ export default function RuntimeSettingsPage() {
   const [runtimeProfiles, setRuntimeProfiles] = useState<RuntimeProfileView[]>([]);
   const [selectedRuntimeProfileId, setSelectedRuntimeProfileId] = useState('');
   const [runtimeProfileActivating, setRuntimeProfileActivating] = useState(false);
+  const [runtimeBaselineSnapshotKey, setRuntimeBaselineSnapshotKey] = useState('');
   const [keepExistingApiKeys, setKeepExistingApiKeys] = useState(true);
   const [runtimeDrafts, setRuntimeDrafts] = useState<RuntimeFrameworkDraftMap>(() =>
     buildDefaultRuntimeFrameworkDraftMap()
@@ -503,22 +538,53 @@ export default function RuntimeSettingsPage() {
     setSelectedRuntimeProfileId(
       activeProfileId ?? (availableProfiles[0]?.id ? availableProfiles[0].id : '')
     );
-    setRuntimeDrafts({
+    const nextDrafts = {
       paddleocr: mergeRuntimeFrameworkDraft(view.frameworks.paddleocr),
       doctr: mergeRuntimeFrameworkDraft(view.frameworks.doctr),
       yolo: mergeRuntimeFrameworkDraft(view.frameworks.yolo)
-    });
-    setRuntimeControlDraft({
+    };
+    const nextControls = {
       python_bin: view.controls.python_bin,
       disable_simulated_train_fallback: view.controls.disable_simulated_train_fallback,
       disable_inference_fallback: view.controls.disable_inference_fallback
-    });
+    };
+    setRuntimeDrafts(nextDrafts);
+    setRuntimeControlDraft(nextControls);
+    setRuntimeBaselineSnapshotKey(
+      normalizeRuntimeSnapshot({
+        frameworks: nextDrafts,
+        controls: nextControls
+      })
+    );
   };
+
+  const runtimeDraftSnapshotKey = useMemo(
+    () =>
+      normalizeRuntimeSnapshot({
+        frameworks: runtimeDrafts,
+        controls: runtimeControlDraft
+      }),
+    [runtimeDrafts, runtimeControlDraft]
+  );
+  const runtimeHasUnsavedChanges = Boolean(runtimeBaselineSnapshotKey) && runtimeDraftSnapshotKey !== runtimeBaselineSnapshotKey;
+  const selectedRuntimeProfile = useMemo(
+    () => runtimeProfiles.find((profile) => profile.id === selectedRuntimeProfileId) ?? null,
+    [runtimeProfiles, selectedRuntimeProfileId]
+  );
 
   const activateRuntimeProfile = async () => {
     const profileId = selectedRuntimeProfileId.trim();
     if (!profileId) {
       return;
+    }
+
+    if (runtimeHasUnsavedChanges) {
+      const proceed = window.confirm(
+        t('You have unsaved runtime edits. Activating a profile will overwrite current draft values. Continue?')
+      );
+      if (!proceed) {
+        return;
+      }
     }
 
     setRuntimeProfileActivating(true);
@@ -1308,7 +1374,34 @@ export default function RuntimeSettingsPage() {
               >
                 {runtimeProfileActivating ? t('Switching...') : t('Activate profile')}
               </Button>
+              {runtimeHasUnsavedChanges ? (
+                <Badge tone="warning">{t('Unsaved edits will be overwritten')}</Badge>
+              ) : null}
             </div>
+            {selectedRuntimeProfile ? (
+              <Panel as="section" className="workspace-record-item stack tight" tone="soft">
+                <div className="row between gap wrap align-center">
+                  <strong>{t('Selected profile snapshot')}</strong>
+                  <Badge tone="neutral">
+                    {t('Source')}: {selectedRuntimeProfile.source}
+                  </Badge>
+                </div>
+                <small className="muted">
+                  {t('python_bin')}: {selectedRuntimeProfile.controls.python_bin || t('platform default')}
+                </small>
+                <small className="muted">
+                  {t('disable_simulated_train_fallback')}:{' '}
+                  {selectedRuntimeProfile.controls.disable_simulated_train_fallback ? t('yes') : t('no')} ·{' '}
+                  {t('disable_inference_fallback')}:{' '}
+                  {selectedRuntimeProfile.controls.disable_inference_fallback ? t('yes') : t('no')}
+                </small>
+                <small className="muted">
+                  {t('Endpoints')}: OCR={selectedRuntimeProfile.frameworks.paddleocr.endpoint || '-'} · docTR=
+                  {selectedRuntimeProfile.frameworks.doctr.endpoint || '-'} · YOLO=
+                  {selectedRuntimeProfile.frameworks.yolo.endpoint || '-'}
+                </small>
+              </Panel>
+            ) : null}
 
             {runtimeSettingsError ? (
               <StateBlock variant="error" title={t('Runtime settings unavailable')} description={runtimeSettingsError} />

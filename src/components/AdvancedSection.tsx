@@ -25,7 +25,7 @@ export default function AdvancedSection({
 
   return (
     <Panel className="stack advanced-panel">
-      <div className="row between">
+      <div className="row between gap wrap align-center">
         <strong>{finalTitle}</strong>
         {collapsible ? (
           <Button

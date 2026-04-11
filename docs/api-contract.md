@@ -231,6 +231,8 @@ Notes:
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
 - `metadata.conversation_action` may include optional `action_links` (`[{label, href}]`) so clients can render direct navigation cards for complex follow-up input collection (for example annotation/training/inference workspaces)
 - high-risk mutating operations (`create_*`) require explicit confirmation before backend execution; assistant returns `missing_fields=["confirmation"]` plus `requires_confirmation=true`
+- when `confirmation_phrase` is present in pending action metadata, execution confirmation must match that phrase after trim/case/punctuation normalization (free-form "yes" is not enough)
+- when a pending action already has confirmation context, follow-up turns should keep the same `confirmation_phrase` (avoid switching zh/en phrase because user only replied with ids)
 - when backend execution succeeds, assistant returns `metadata.conversation_action.status=completed`
 - when execution fails or user cancels, assistant returns `failed` / `cancelled`
 - advanced console bridge (LLM/tool-like call): message can use `/ops {json}` to invoke selected console APIs directly in conversation
@@ -382,6 +384,11 @@ Response:
           "has_api_key": false,
           "api_key_masked": "Not set"
         }
+      },
+      "controls": {
+        "python_bin": "/opt/vistral/.venv/bin/python",
+        "disable_simulated_train_fallback": false,
+        "disable_inference_fallback": false
       }
     }
   ],
@@ -473,7 +480,7 @@ Request:
 Notes:
 - admin scope only
 - profile source can be `saved` or deployment env profiles from `VISTRAL_RUNTIME_PROFILES_JSON`
-- activating a profile copies its framework endpoint/api-key/local command templates into effective runtime settings
+- activating a profile copies both framework settings and runtime controls (`python_bin`, fallback guards) into effective runtime settings
 - response is the same masked settings view as `GET /settings/runtime`
 
 ### DELETE /settings/runtime
