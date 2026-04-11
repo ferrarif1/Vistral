@@ -31,9 +31,11 @@ Operational branch inside the same flow:
 1. user asks the assistant to perform a real setup action (for example create dataset / create model draft / create training job / run model inference on attached files)
 2. system parses intent and available fields from current turn plus pending conversation action context
 3. if critical fields are missing, assistant responds with a compact `requires_input` card that lists missing fields and optional suggestions
-4. user provides only the missing details in follow-up turn
-5. system calls the corresponding backend API once required inputs are complete
-6. assistant returns a `completed` or `failed` action card with created entity summary and next-step guidance
+4. once required fields are complete for high-risk mutations (create dataset/model/training job), assistant asks for explicit confirmation (`确认执行` / `confirm execute`)
+5. user confirms execution in follow-up turn
+6. system calls the corresponding backend API only after confirmation is received
+7. assistant returns a `completed` or `failed` action card with created entity summary and next-step guidance
+8. for power users / agentic bridge, user can use `/ops {json}`; for normal users, natural-language intents can also be mapped to the same bridge APIs automatically; high-risk calls still require confirmation before mutation
 
 Attachment states:
 - `uploading`

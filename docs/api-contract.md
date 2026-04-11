@@ -227,9 +227,19 @@ Notes:
   - `create_model_draft`
   - `create_training_job`
   - `run_model_inference` (attachment + inference intent keywords => auto run inference using conversation model's latest registered version)
+- assistant can post-process latest OCR inference for extraction intents (plate/serial/number keywords) and return extracted candidate content
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
+- high-risk mutating operations (`create_*`) require explicit confirmation before backend execution; assistant returns `missing_fields=["confirmation"]` plus `requires_confirmation=true`
 - when backend execution succeeds, assistant returns `metadata.conversation_action.status=completed`
 - when execution fails or user cancels, assistant returns `failed` / `cancelled`
+- advanced console bridge (LLM/tool-like call): message can use `/ops {json}` to invoke selected console APIs directly in conversation
+  - natural-language route is also supported for common intents (for example: “查看训练任务”, “导出 d-12 的 OCR 标注”, “取消训练任务 tj-101”); server maps intent to bridge API automatically
+  - when natural-language intent is recognized but required IDs/params are missing, assistant returns structured `requires_input` with explicit `missing_fields`
+  - supported `api`:
+    - read: `list_datasets`, `list_models`, `list_model_versions`, `list_training_jobs`, `list_inference_runs`, `list_dataset_annotations`
+    - execute: `run_inference`, `create_dataset_version`, `export_dataset_annotations`
+    - mutating/high-risk: `create_dataset`, `create_model_draft`, `create_training_job`, `register_model_version`, `submit_approval_request`, `send_inference_feedback`, `cancel_training_job`, `retry_training_job`, `upsert_dataset_annotation`, `review_dataset_annotation`, `import_dataset_annotations`, `run_dataset_pre_annotations`, `activate_runtime_profile`
+  - high-risk bridge APIs (all mutating actions above) require explicit confirmation before execution
 
 ### GET /conversations/{id}
 Get conversation with messages.
@@ -243,6 +253,8 @@ Message shape notes:
   "status": "requires_input",
   "summary": "Need dataset selection before creating the training job.",
   "missing_fields": ["dataset_id"],
+  "requires_confirmation": false,
+  "confirmation_phrase": null,
   "collected_fields": {
     "task_type": "ocr",
     "framework": "paddleocr",

@@ -20,7 +20,8 @@ export type ConversationActionType =
   | 'create_dataset'
   | 'create_model_draft'
   | 'create_training_job'
-  | 'run_model_inference';
+  | 'run_model_inference'
+  | 'console_api_call';
 export type ConversationActionStatus = 'requires_input' | 'completed' | 'failed' | 'cancelled';
 
 export type FileAttachmentStatus = 'uploading' | 'processing' | 'ready' | 'error';
@@ -157,6 +158,8 @@ export interface ConversationActionMetadata {
   missing_fields: string[];
   collected_fields: Record<string, string>;
   suggestions?: string[];
+  requires_confirmation?: boolean;
+  confirmation_phrase?: string | null;
   created_entity_type?: 'Dataset' | 'TrainingJob' | 'Model' | null;
   created_entity_id?: string | null;
   created_entity_label?: string | null;

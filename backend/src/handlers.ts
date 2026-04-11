@@ -1289,6 +1289,14 @@ const detectConversationActionType = (text: string): ConversationActionMetadata[
 const detectCancelIntent = (text: string): boolean =>
   /(取消|算了|不用了|先不用|停止|cancel|never mind|forget it)/i.test(text);
 
+const confirmationPhraseZh = '确认执行';
+const confirmationPhraseEn = 'confirm execute';
+
+const detectExecutionConfirmation = (text: string): boolean =>
+  /(确认执行|确认开始|确认创建|同意执行|确认提交|confirm execute|confirm run|yes, execute|approved, run)/i.test(
+    text
+  );
+
 const inferTaskTypeFromText = (text: string): TaskType | null => {
   if (/(obb|rotated box|rotated bbox|旋转框|旋转目标)/i.test(text)) {
     return 'obb';
@@ -1577,6 +1585,8 @@ const toActionMetadata = (
   options?: {
     missingFields?: string[];
     suggestions?: string[];
+    requiresConfirmation?: boolean;
+    confirmationPhrase?: string | null;
     createdEntityType?: ConversationActionMetadata['created_entity_type'];
     createdEntityId?: string | null;
     createdEntityLabel?: string | null;
@@ -1589,6 +1599,8 @@ const toActionMetadata = (
     missing_fields: options?.missingFields ?? [],
     collected_fields: normalizeCollectedFields(collectedFields),
     suggestions: options?.suggestions ?? [],
+    requires_confirmation: options?.requiresConfirmation ?? false,
+    confirmation_phrase: options?.confirmationPhrase ?? null,
     created_entity_type: options?.createdEntityType ?? null,
     created_entity_id: options?.createdEntityId ?? null,
     created_entity_label: options?.createdEntityLabel ?? null
@@ -1602,6 +1614,7 @@ const resolveCreateTrainingJobAction = async (
 ): Promise<ConversationActionResolution> => {
   const inferredDatasetVersionId = inferDatasetVersionIdFromText(content);
   const inferredDatasetReference = inferDatasetReferenceFromText(content);
+  const confirmed = detectExecutionConfirmation(content);
   const numericFields = {
     ...(pendingAction?.collected_fields ?? {}),
     ...inferNumericConfigFromText(content)
@@ -1622,7 +1635,8 @@ const resolveCreateTrainingJobAction = async (
     batch_size: numericFields.batch_size ?? '',
     learning_rate: numericFields.learning_rate ?? '',
     warmup_ratio: numericFields.warmup_ratio ?? '',
-    weight_decay: numericFields.weight_decay ?? ''
+    weight_decay: numericFields.weight_decay ?? '',
+    confirmed: confirmed ? 'true' : pendingAction?.collected_fields.confirmed ?? ''
   });
 
   const datasetLookup = findDatasetByReference(collectedFields.dataset_reference ?? '', currentUser);
@@ -1808,6 +1822,21 @@ const resolveCreateTrainingJobAction = async (
     weight_decay: collectedFields.weight_decay || '0.0001'
   };
 
+  if (collectedFields.confirmed !== 'true') {
+    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const summary = hasChineseText(content)
+      ? `训练任务参数已就绪。若要真正创建任务，请回复“${confirmationPhrase}”。`
+      : `Training job parameters are ready. Reply "${confirmationPhrase}" to execute.`;
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_training_job', 'requires_input', summary, collectedFields, {
+        missingFields: ['confirmation'],
+        requiresConfirmation: true,
+        confirmationPhrase
+      })
+    };
+  }
+
   try {
     const created = await createTrainingJob({
       name: finalName,
@@ -1867,6 +1896,7 @@ const resolveCreateDatasetAction = async (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution> => {
+  const confirmed = detectExecutionConfirmation(content);
   const collectedFields = normalizeCollectedFields({
     ...(pendingAction?.collected_fields ?? {}),
     name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
@@ -1875,7 +1905,8 @@ const resolveCreateDatasetAction = async (
     description:
       inferDescriptionFromText(content) || pendingAction?.collected_fields.description || '',
     label_classes:
-      inferLabelClassesFromText(content).join(', ') || pendingAction?.collected_fields.label_classes || ''
+      inferLabelClassesFromText(content).join(', ') || pendingAction?.collected_fields.label_classes || '',
+    confirmed: confirmed ? 'true' : pendingAction?.collected_fields.confirmed ?? ''
   });
 
   const missingFields: string[] = [];
@@ -1905,6 +1936,21 @@ const resolveCreateDatasetAction = async (
   const labelClasses = collectedFields.label_classes
     ? collectedFields.label_classes.split(/[，,、;；|]/).map((item) => sanitizeCapturedValue(item)).filter(Boolean)
     : [];
+
+  if (collectedFields.confirmed !== 'true') {
+    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const summary = hasChineseText(content)
+      ? `数据集参数已就绪。若要真正创建数据集，请回复“${confirmationPhrase}”。`
+      : `Dataset parameters are ready. Reply "${confirmationPhrase}" to execute.`;
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_dataset', 'requires_input', summary, collectedFields, {
+        missingFields: ['confirmation'],
+        requiresConfirmation: true,
+        confirmationPhrase
+      })
+    };
+  }
 
   try {
     const created = await createDataset({
@@ -1951,6 +1997,7 @@ const resolveCreateModelDraftAction = async (
   content: string,
   pendingAction: ConversationActionMetadata | null
 ): Promise<ConversationActionResolution> => {
+  const confirmed = detectExecutionConfirmation(content);
   const collectedFields = normalizeCollectedFields({
     ...(pendingAction?.collected_fields ?? {}),
     name: inferActionNameFromText(content) || pendingAction?.collected_fields.name || '',
@@ -1959,7 +2006,8 @@ const resolveCreateModelDraftAction = async (
     description:
       inferDescriptionFromText(content) || pendingAction?.collected_fields.description || '',
     visibility:
-      inferVisibilityFromText(content) ?? pendingAction?.collected_fields.visibility ?? ''
+      inferVisibilityFromText(content) ?? pendingAction?.collected_fields.visibility ?? '',
+    confirmed: confirmed ? 'true' : pendingAction?.collected_fields.confirmed ?? ''
   });
 
   const missingFields: string[] = [];
@@ -1992,6 +2040,21 @@ const resolveCreateModelDraftAction = async (
     collectedFields.visibility === 'private'
       ? collectedFields.visibility
       : 'private';
+
+  if (collectedFields.confirmed !== 'true') {
+    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const summary = hasChineseText(content)
+      ? `模型草稿参数已就绪。若要真正创建模型草稿，请回复“${confirmationPhrase}”。`
+      : `Model draft parameters are ready. Reply "${confirmationPhrase}" to execute.`;
+    return {
+      content: summary,
+      metadata: toActionMetadata('create_model_draft', 'requires_input', summary, collectedFields, {
+        missingFields: ['confirmation'],
+        requiresConfirmation: true,
+        confirmationPhrase
+      })
+    };
+  }
 
   try {
     const created = await createModelDraft({
@@ -2152,12 +2215,946 @@ const resolveConversationInferenceAction = async (
   }
 };
 
+const detectOcrExtractionIntent = (content: string): boolean =>
+  /(提取|抽取|抓取|车号|车牌|数字|编号|serial|plate|number|extract)/i.test(content);
+
+type ConsoleOpsPayload = {
+  api: string;
+  params?: Record<string, unknown>;
+  confirm?: boolean;
+};
+
+const parseConsoleOpsPayload = (content: string): ConsoleOpsPayload | null => {
+  const match = content.trim().match(/^\/ops\s+(\{[\s\S]+\})$/i);
+  if (!match?.[1]) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(match[1]) as ConsoleOpsPayload;
+    if (!parsed || typeof parsed.api !== 'string') {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const extractEntityId = (text: string, pattern: RegExp): string =>
+  extractPatternValue(text, [pattern]);
+
+const buildNaturalConsoleOpsPayload = (
+  content: string,
+  pendingAction: ConversationActionMetadata | null
+): ConsoleOpsPayload | null => {
+  if (pendingAction?.action === 'console_api_call' && detectExecutionConfirmation(content)) {
+    const raw = pendingAction.collected_fields.payload_json ?? '';
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as ConsoleOpsPayload;
+      return {
+        ...parsed,
+        confirm: true
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const lower = content.toLowerCase();
+  const datasetId = extractEntityId(content, /\b(d-\d+)\b/i);
+  const attachmentId = extractEntityId(content, /\b(f-\d+)\b/i);
+  const runId = extractEntityId(content, /\b(ir-\d+)\b/i);
+  const jobId = extractEntityId(content, /\b(tj-[a-z0-9-]+)\b/i);
+  const modelId = extractEntityId(content, /\b(m-\d+)\b/i);
+  const modelVersionId = extractEntityId(content, /\b(mv-\d+)\b/i);
+  const taskType = inferTaskTypeFromText(content);
+  const reviewStatus =
+    /(通过|approved?|approve)/i.test(content) ? 'approved' : /(拒绝|驳回|rejected?|reject)/i.test(content) ? 'rejected' : '';
+
+  if (/(查看|列出|list).*(训练任务|training job)/i.test(content)) {
+    return { api: 'list_training_jobs' };
+  }
+  if (/(查看|列出|list).*(推理记录|inference run)/i.test(content)) {
+    return { api: 'list_inference_runs' };
+  }
+  if (/(查看|列出|list).*(模型版本|model version)/i.test(content)) {
+    return { api: 'list_model_versions' };
+  }
+  if (/(查看|列出|list).*(模型|models?)/i.test(content)) {
+    return { api: 'list_models' };
+  }
+  if (/(查看|列出|list).*(数据集|dataset)/i.test(content)) {
+    return { api: 'list_datasets' };
+  }
+  if (/(查看|列出|list).*(标注|annotation)/i.test(content) && datasetId) {
+    return {
+      api: 'list_dataset_annotations',
+      params: {
+        dataset_id: datasetId
+      }
+    };
+  }
+  if (/(导出|export).*(标注|annotation)/i.test(content) && datasetId) {
+    return {
+      api: 'export_dataset_annotations',
+      params: {
+        dataset_id: datasetId,
+        format: /(ocr)/i.test(lower) ? 'ocr' : /(coco)/i.test(lower) ? 'coco' : /(labelme)/i.test(lower) ? 'labelme' : 'yolo'
+      }
+    };
+  }
+  if (/(导入|import).*(标注|annotation)/i.test(content) && datasetId && attachmentId) {
+    return {
+      api: 'import_dataset_annotations',
+      params: {
+        dataset_id: datasetId,
+        attachment_id: attachmentId,
+        format: /(ocr)/i.test(lower) ? 'ocr' : /(coco)/i.test(lower) ? 'coco' : /(labelme)/i.test(lower) ? 'labelme' : 'yolo'
+      }
+    };
+  }
+  if (/(预标注|pre-?annotat)/i.test(content) && datasetId && modelId) {
+    return {
+      api: 'run_dataset_pre_annotations',
+      params: {
+        dataset_id: datasetId,
+        source_model_id: modelId,
+        source_model_version_id: modelVersionId || undefined,
+        task_type: taskType ?? 'detection'
+      }
+    };
+  }
+  if (/(运行推理|执行推理|run inference|inference)/i.test(content) && modelVersionId && attachmentId && taskType) {
+    return {
+      api: 'run_inference',
+      params: {
+        model_version_id: modelVersionId,
+        input_attachment_id: attachmentId,
+        task_type: taskType
+      }
+    };
+  }
+  if (/(反馈回流|inference feedback|反馈到数据集)/i.test(content) && runId && datasetId) {
+    return {
+      api: 'send_inference_feedback',
+      params: {
+        run_id: runId,
+        dataset_id: datasetId,
+        reason: inferDescriptionFromText(content) || 'feedback'
+      }
+    };
+  }
+  if (/(取消训练|cancel training)/i.test(content) && jobId) {
+    return {
+      api: 'cancel_training_job',
+      params: { job_id: jobId }
+    };
+  }
+  if (/(重试训练|retry training)/i.test(content) && jobId) {
+    return {
+      api: 'retry_training_job',
+      params: { job_id: jobId }
+    };
+  }
+  if (/(创建数据集版本|create dataset version)/i.test(content) && datasetId) {
+    return {
+      api: 'create_dataset_version',
+      params: {
+        dataset_id: datasetId,
+        version_name: inferActionNameFromText(content) || undefined
+      }
+    };
+  }
+  if (/(注册模型版本|register model version)/i.test(content) && modelId && jobId) {
+    return {
+      api: 'register_model_version',
+      params: {
+        model_id: modelId,
+        training_job_id: jobId,
+        version_name: inferActionNameFromText(content) || `v-${Date.now().toString().slice(-6)}`
+      }
+    };
+  }
+  if (/(提交审批|submit approval)/i.test(content) && modelId) {
+    return {
+      api: 'submit_approval_request',
+      params: {
+        model_id: modelId,
+        review_notes: inferDescriptionFromText(content) || '',
+        parameter_snapshot: {}
+      }
+    };
+  }
+  if (/(激活.*runtime profile|activate runtime profile|切换 runtime profile)/i.test(content)) {
+    const profileId = inferActionNameFromText(content) || extractQuotedValue(content);
+    if (profileId) {
+      return {
+        api: 'activate_runtime_profile',
+        params: {
+          profile_id: profileId
+        }
+      };
+    }
+  }
+  if (/(更新标注|写入标注|upsert annotation)/i.test(content)) {
+    const datasetItemId = extractEntityId(content, /\b(di-[a-z0-9-]+)\b/i);
+    if (datasetItemId && taskType) {
+      return {
+        api: 'upsert_dataset_annotation',
+        params: {
+          dataset_item_id: datasetItemId,
+          task_type: taskType,
+          source: 'manual',
+          status: 'annotated',
+          payload: {}
+        }
+      };
+    }
+  }
+  if (/(审核标注|review annotation)/i.test(content)) {
+    const annotationId = extractEntityId(content, /\b(ann-[a-z0-9-]+)\b/i);
+    if (annotationId && reviewStatus) {
+      return {
+        api: 'review_dataset_annotation',
+        params: {
+          annotation_id: annotationId,
+          status: reviewStatus
+        }
+      };
+    }
+  }
+  return null;
+};
+
+const detectNaturalConsoleIntentMissingFields = (
+  content: string
+): { api: string; missingFields: string[] } | null => {
+  const lower = content.toLowerCase();
+  const hasDatasetId = /\b(d-\d+)\b/i.test(content);
+  const hasAttachmentId = /\b(f-\d+)\b/i.test(content);
+  const hasRunId = /\b(ir-\d+)\b/i.test(content);
+  const hasJobId = /\b(tj-[a-z0-9-]+)\b/i.test(content);
+  const hasModelId = /\b(m-\d+)\b/i.test(content);
+  const hasModelVersionId = /\b(mv-\d+)\b/i.test(content);
+  const taskType = inferTaskTypeFromText(content);
+  const hasReviewStatus = /(通过|approved?|approve|拒绝|驳回|rejected?|reject)/i.test(content);
+
+  if (/(取消训练|cancel training)/i.test(content) && !hasJobId) {
+    return { api: 'cancel_training_job', missingFields: ['job_id'] };
+  }
+  if (/(重试训练|retry training)/i.test(content) && !hasJobId) {
+    return { api: 'retry_training_job', missingFields: ['job_id'] };
+  }
+  if (/(查看|列出|list).*(标注|annotation)/i.test(content) && !hasDatasetId) {
+    return { api: 'list_dataset_annotations', missingFields: ['dataset_id'] };
+  }
+  if (/(导出|export).*(标注|annotation)/i.test(content) && !hasDatasetId) {
+    return { api: 'export_dataset_annotations', missingFields: ['dataset_id'] };
+  }
+  if (/(导入|import).*(标注|annotation)/i.test(content) && (!hasDatasetId || !hasAttachmentId)) {
+    const missing = [];
+    if (!hasDatasetId) {
+      missing.push('dataset_id');
+    }
+    if (!hasAttachmentId) {
+      missing.push('attachment_id');
+    }
+    return { api: 'import_dataset_annotations', missingFields: missing };
+  }
+  if (/(预标注|pre-?annotat)/i.test(content) && (!hasDatasetId || !hasModelId || !taskType)) {
+    const missing = [];
+    if (!hasDatasetId) {
+      missing.push('dataset_id');
+    }
+    if (!hasModelId) {
+      missing.push('source_model_id');
+    }
+    if (!taskType) {
+      missing.push('task_type');
+    }
+    return { api: 'run_dataset_pre_annotations', missingFields: missing };
+  }
+  if (/(运行推理|执行推理|run inference|inference)/i.test(content) && (!hasModelVersionId || !hasAttachmentId || !taskType)) {
+    const missing = [];
+    if (!hasModelVersionId) {
+      missing.push('model_version_id');
+    }
+    if (!hasAttachmentId) {
+      missing.push('input_attachment_id');
+    }
+    if (!taskType) {
+      missing.push('task_type');
+    }
+    return { api: 'run_inference', missingFields: missing };
+  }
+  if (/(反馈回流|inference feedback|反馈到数据集)/i.test(content) && (!hasRunId || !hasDatasetId)) {
+    const missing = [];
+    if (!hasRunId) {
+      missing.push('run_id');
+    }
+    if (!hasDatasetId) {
+      missing.push('dataset_id');
+    }
+    return { api: 'send_inference_feedback', missingFields: missing };
+  }
+  if (/(创建数据集版本|create dataset version)/i.test(content) && !hasDatasetId) {
+    return { api: 'create_dataset_version', missingFields: ['dataset_id'] };
+  }
+  if (/(注册模型版本|register model version)/i.test(content) && (!hasModelId || !hasJobId)) {
+    const missing = [];
+    if (!hasModelId) {
+      missing.push('model_id');
+    }
+    if (!hasJobId) {
+      missing.push('training_job_id');
+    }
+    return { api: 'register_model_version', missingFields: missing };
+  }
+  if (/(提交审批|submit approval)/i.test(content) && !hasModelId) {
+    return { api: 'submit_approval_request', missingFields: ['model_id'] };
+  }
+  if (/(激活.*runtime profile|activate runtime profile|切换 runtime profile)/i.test(content) && !extractQuotedValue(content)) {
+    return { api: 'activate_runtime_profile', missingFields: ['profile_id'] };
+  }
+  if (/(更新标注|写入标注|upsert annotation)/i.test(content)) {
+    const hasDatasetItemId = /\b(di-[a-z0-9-]+)\b/i.test(content);
+    if (!hasDatasetItemId || !taskType) {
+      const missing = [];
+      if (!hasDatasetItemId) {
+        missing.push('dataset_item_id');
+      }
+      if (!taskType) {
+        missing.push('task_type');
+      }
+      return { api: 'upsert_dataset_annotation', missingFields: missing };
+    }
+  }
+  if (/(审核标注|review annotation)/i.test(content)) {
+    const hasAnnotationId = /\b(ann-[a-z0-9-]+)\b/i.test(content);
+    if (!hasAnnotationId || !hasReviewStatus) {
+      const missing = [];
+      if (!hasAnnotationId) {
+        missing.push('annotation_id');
+      }
+      if (!hasReviewStatus) {
+        missing.push('status');
+      }
+      return { api: 'review_dataset_annotation', missingFields: missing };
+    }
+  }
+  if (lower.includes('runtime profile') && !/(activate|切换)/i.test(content)) {
+    return null;
+  }
+  return null;
+};
+
+const highRiskConsoleApis = new Set([
+  'create_dataset',
+  'create_model_draft',
+  'create_training_job',
+  'activate_runtime_profile',
+  'register_model_version',
+  'submit_approval_request',
+  'send_inference_feedback',
+  'cancel_training_job',
+  'retry_training_job',
+  'upsert_dataset_annotation',
+  'review_dataset_annotation',
+  'import_dataset_annotations',
+  'run_dataset_pre_annotations'
+]);
+
+const resolveConsoleApiAction = async (
+  content: string,
+  currentUser: User,
+  pendingAction: ConversationActionMetadata | null
+): Promise<ConversationActionResolution | null> => {
+  const parsed = parseConsoleOpsPayload(content);
+  if (!parsed && /^\/ops\b/i.test(content.trim())) {
+    const summary = hasChineseText(content)
+      ? '控制台调用格式错误。请使用：/ops {"api":"run_inference","params":{...}}'
+      : 'Invalid console call format. Use: /ops {"api":"run_inference","params":{...}}';
+    return {
+      content: summary,
+      metadata: toActionMetadata('console_api_call', 'failed', summary, {})
+    };
+  }
+  const recoveredFromPending =
+    !parsed && pendingAction?.action === 'console_api_call'
+      ? (() => {
+          try {
+            const raw = pendingAction.collected_fields.payload_json ?? '';
+            if (!raw) {
+              return null;
+            }
+            return JSON.parse(raw) as ConsoleOpsPayload;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  const naturalPayload = !parsed && !recoveredFromPending
+    ? buildNaturalConsoleOpsPayload(content, pendingAction)
+    : null;
+  const payload = parsed ?? recoveredFromPending ?? naturalPayload;
+  if (!payload) {
+    const missing = detectNaturalConsoleIntentMissingFields(content);
+    if (missing) {
+      const summary = hasChineseText(content)
+        ? `已识别到控制台意图 ${missing.api}，但缺少参数：${missing.missingFields.join(', ')}`
+        : `Detected console intent ${missing.api}, but missing parameters: ${missing.missingFields.join(', ')}`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'requires_input', summary, {
+          api: missing.api
+        }, {
+          missingFields: missing.missingFields
+        })
+      };
+    }
+    return null;
+  }
+
+  const normalizedApi = payload.api.trim().toLowerCase();
+  const params = payload.params ?? {};
+  const confirmed = Boolean(payload.confirm) || detectExecutionConfirmation(content);
+  if (highRiskConsoleApis.has(normalizedApi) && !confirmed) {
+    const confirmationPhrase = hasChineseText(content) ? confirmationPhraseZh : confirmationPhraseEn;
+    const summary = hasChineseText(content)
+      ? `准备调用高危控制台 API（${normalizedApi}）。请回复“${confirmationPhrase}”确认执行。`
+      : `High-risk console API call queued (${normalizedApi}). Reply "${confirmationPhrase}" to execute.`;
+    return {
+      content: summary,
+      metadata: toActionMetadata('console_api_call', 'requires_input', summary, {
+        api: normalizedApi,
+        payload_json: JSON.stringify({
+          api: normalizedApi,
+          params
+        })
+      }, {
+        missingFields: ['confirmation'],
+        requiresConfirmation: true,
+        confirmationPhrase
+      })
+    };
+  }
+
+  try {
+    if (normalizedApi === 'list_datasets') {
+      const list = await listDatasets();
+      const summary = hasChineseText(content)
+        ? `控制台 API list_datasets 已执行，返回 ${list.length} 条数据集记录。`
+        : `Console API list_datasets executed, returned ${list.length} datasets.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          count: String(list.length)
+        })
+      };
+    }
+
+    if (normalizedApi === 'list_model_versions') {
+      const list = await listModelVersions();
+      const summary = hasChineseText(content)
+        ? `控制台 API list_model_versions 已执行，返回 ${list.length} 条模型版本记录。`
+        : `Console API list_model_versions executed, returned ${list.length} model versions.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          count: String(list.length)
+        })
+      };
+    }
+
+    if (normalizedApi === 'list_models') {
+      const list = await listModels();
+      const summary = hasChineseText(content)
+        ? `控制台 API list_models 已执行，返回 ${list.length} 条模型记录。`
+        : `Console API list_models executed, returned ${list.length} models.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          count: String(list.length)
+        })
+      };
+    }
+
+    if (normalizedApi === 'list_training_jobs') {
+      const list = await listTrainingJobs();
+      const summary = hasChineseText(content)
+        ? `控制台 API list_training_jobs 已执行，返回 ${list.length} 条训练任务记录。`
+        : `Console API list_training_jobs executed, returned ${list.length} jobs.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          count: String(list.length)
+        })
+      };
+    }
+
+    if (normalizedApi === 'list_inference_runs') {
+      const list = await listInferenceRuns();
+      const summary = hasChineseText(content)
+        ? `控制台 API list_inference_runs 已执行，返回 ${list.length} 条推理记录。`
+        : `Console API list_inference_runs executed, returned ${list.length} runs.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          count: String(list.length)
+        })
+      };
+    }
+
+    if (normalizedApi === 'list_dataset_annotations') {
+      const list = await listDatasetAnnotations(String(params.dataset_id ?? ''));
+      const summary = hasChineseText(content)
+        ? `控制台 API list_dataset_annotations 已执行，返回 ${list.length} 条标注记录。`
+        : `Console API list_dataset_annotations executed, returned ${list.length} annotations.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          count: String(list.length)
+        })
+      };
+    }
+
+    if (normalizedApi === 'run_inference') {
+      const created = await runInference({
+        model_version_id: String(params.model_version_id ?? ''),
+        input_attachment_id: String(params.input_attachment_id ?? ''),
+        task_type: String(params.task_type ?? '') as TaskType
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API run_inference 已执行，任务 ${created.id}，来源 ${created.execution_source}。`
+        : `Console API run_inference executed, run=${created.id}, source=${created.execution_source}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          inference_run_id: created.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'create_dataset') {
+      const created = await createDataset({
+        name: String(params.name ?? ''),
+        description: String(params.description ?? ''),
+        task_type: String(params.task_type ?? '') as TaskType,
+        label_schema: {
+          classes: Array.isArray(params.classes)
+            ? params.classes.map((item) => String(item)).filter(Boolean)
+            : []
+        }
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API create_dataset 已执行：${created.name} (${created.id})。`
+        : `Console API create_dataset executed: ${created.name} (${created.id}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          dataset_id: created.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'create_dataset_version') {
+      const created = await createDatasetVersion({
+        dataset_id: String(params.dataset_id ?? ''),
+        version_name: String(params.version_name ?? '')
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API create_dataset_version 已执行：${created.version_name} (${created.id})。`
+        : `Console API create_dataset_version executed: ${created.version_name} (${created.id}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          dataset_version_id: created.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'import_dataset_annotations') {
+      const result = await importDatasetAnnotations({
+        dataset_id: String(params.dataset_id ?? ''),
+        format: String(params.format ?? '') as 'yolo' | 'coco' | 'labelme' | 'ocr',
+        attachment_id: String(params.attachment_id ?? '')
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API import_dataset_annotations 已执行：导入 ${result.imported}，更新 ${result.updated}。`
+        : `Console API import_dataset_annotations executed: imported=${result.imported}, updated=${result.updated}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          imported: String(result.imported),
+          updated: String(result.updated)
+        })
+      };
+    }
+
+    if (normalizedApi === 'export_dataset_annotations') {
+      const result = await exportDatasetAnnotations({
+        dataset_id: String(params.dataset_id ?? ''),
+        format: String(params.format ?? '') as 'yolo' | 'coco' | 'labelme' | 'ocr'
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API export_dataset_annotations 已执行：${result.filename} (${result.attachment_id})。`
+        : `Console API export_dataset_annotations executed: ${result.filename} (${result.attachment_id}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          attachment_id: result.attachment_id
+        })
+      };
+    }
+
+    if (normalizedApi === 'create_model_draft') {
+      const created = await createModelDraft({
+        name: String(params.name ?? ''),
+        description: String(params.description ?? ''),
+        model_type: String(params.model_type ?? '') as TaskType,
+        visibility: String(params.visibility ?? 'private') as ModelRecord['visibility']
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API create_model_draft 已执行：${created.name} (${created.id})。`
+        : `Console API create_model_draft executed: ${created.name} (${created.id}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          model_id: created.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'upsert_dataset_annotation') {
+      const updated = await upsertDatasetAnnotation({
+        dataset_item_id: String(params.dataset_item_id ?? ''),
+        task_type: String(params.task_type ?? '') as TaskType,
+        source: String(params.source ?? '') as 'manual' | 'import' | 'pre_annotation',
+        status: String(params.status ?? '') as
+          | 'unannotated'
+          | 'in_progress'
+          | 'annotated'
+          | 'in_review'
+          | 'approved'
+          | 'rejected',
+        payload:
+          params.payload && typeof params.payload === 'object'
+            ? (params.payload as Record<string, unknown>)
+            : {}
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API upsert_dataset_annotation 已执行：${updated.id}。`
+        : `Console API upsert_dataset_annotation executed: ${updated.id}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          annotation_id: updated.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'review_dataset_annotation') {
+      const updated = await reviewDatasetAnnotation({
+        annotation_id: String(params.annotation_id ?? ''),
+        status: String(params.status ?? '') as 'approved' | 'rejected',
+        review_reason_code:
+          params.review_reason_code === null || typeof params.review_reason_code === 'undefined'
+            ? null
+            : (String(params.review_reason_code) as AnnotationReviewReasonCode),
+        quality_score:
+          typeof params.quality_score === 'number' ? params.quality_score : null,
+        review_comment:
+          params.review_comment === null || typeof params.review_comment === 'undefined'
+            ? null
+            : String(params.review_comment)
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API review_dataset_annotation 已执行：${updated.id} (${updated.status})。`
+        : `Console API review_dataset_annotation executed: ${updated.id} (${updated.status}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          annotation_id: updated.id,
+          status: updated.status
+        })
+      };
+    }
+
+    if (normalizedApi === 'run_dataset_pre_annotations') {
+      const result = await runDatasetPreAnnotations({
+        dataset_id: String(params.dataset_id ?? ''),
+        task_type: String(params.task_type ?? '') as TaskType,
+        source_model_id: String(params.source_model_id ?? ''),
+        source_model_version_id:
+          typeof params.source_model_version_id === 'string' ? params.source_model_version_id : undefined
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API run_dataset_pre_annotations 已执行：创建 ${result.created} 条，更新 ${result.updated} 条。`
+        : `Console API run_dataset_pre_annotations executed: created=${result.created}, updated=${result.updated}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          created: String(result.created),
+          updated: String(result.updated)
+        })
+      };
+    }
+
+    if (normalizedApi === 'create_training_job') {
+      const created = await createTrainingJob({
+        name: String(params.name ?? ''),
+        task_type: String(params.task_type ?? '') as TaskType,
+        framework: String(params.framework ?? '') as ModelFramework,
+        dataset_id: String(params.dataset_id ?? ''),
+        dataset_version_id: String(params.dataset_version_id ?? ''),
+        base_model: String(params.base_model ?? ''),
+        config:
+          params.config && typeof params.config === 'object'
+            ? Object.fromEntries(
+                Object.entries(params.config as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')])
+              )
+            : {}
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API create_training_job 已执行：${created.name} (${created.id})。`
+        : `Console API create_training_job executed: ${created.name} (${created.id}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          training_job_id: created.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'register_model_version') {
+      const created = await registerModelVersion({
+        model_id: String(params.model_id ?? ''),
+        training_job_id: String(params.training_job_id ?? ''),
+        version_name: String(params.version_name ?? '')
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API register_model_version 已执行：${created.version_name} (${created.id})。`
+        : `Console API register_model_version executed: ${created.version_name} (${created.id}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          model_version_id: created.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'submit_approval_request') {
+      const created = await submitApprovalRequest({
+        model_id: String(params.model_id ?? ''),
+        review_notes: typeof params.review_notes === 'string' ? params.review_notes : undefined,
+        parameter_snapshot:
+          params.parameter_snapshot && typeof params.parameter_snapshot === 'object'
+            ? Object.fromEntries(
+                Object.entries(params.parameter_snapshot as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')])
+              )
+            : {}
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API submit_approval_request 已执行：${created.id}。`
+        : `Console API submit_approval_request executed: ${created.id}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          approval_id: created.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'send_inference_feedback') {
+      const updated = await sendInferenceFeedback({
+        run_id: String(params.run_id ?? ''),
+        dataset_id: String(params.dataset_id ?? ''),
+        reason: String(params.reason ?? 'feedback')
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API send_inference_feedback 已执行：run=${updated.id}。`
+        : `Console API send_inference_feedback executed: run=${updated.id}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          inference_run_id: updated.id
+        })
+      };
+    }
+
+    if (normalizedApi === 'cancel_training_job') {
+      const updated = await cancelTrainingJob(String(params.job_id ?? ''));
+      const summary = hasChineseText(content)
+        ? `控制台 API cancel_training_job 已执行：${updated.name} (${updated.status})。`
+        : `Console API cancel_training_job executed: ${updated.name} (${updated.status}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          training_job_id: updated.id,
+          status: updated.status
+        })
+      };
+    }
+
+    if (normalizedApi === 'retry_training_job') {
+      const updated = await retryTrainingJob(String(params.job_id ?? ''));
+      const summary = hasChineseText(content)
+        ? `控制台 API retry_training_job 已执行：${updated.name} (${updated.status})。`
+        : `Console API retry_training_job executed: ${updated.name} (${updated.status}).`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          training_job_id: updated.id,
+          status: updated.status
+        })
+      };
+    }
+
+    if (normalizedApi === 'activate_runtime_profile') {
+      const profileId = String(params.profile_id ?? '').trim();
+      const view = await activateRuntimeProfile(profileId);
+      const summary = hasChineseText(content)
+        ? `控制台 API activate_runtime_profile 已执行，当前 profile=${view.active_profile_id ?? 'saved'}。`
+        : `Console API activate_runtime_profile executed, active_profile=${view.active_profile_id ?? 'saved'}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          active_profile_id: view.active_profile_id ?? 'saved'
+        })
+      };
+    }
+
+    const unsupportedSummary = hasChineseText(content)
+      ? `暂不支持的控制台 API：${normalizedApi}`
+      : `Unsupported console API: ${normalizedApi}`;
+    return {
+      content: unsupportedSummary,
+      metadata: toActionMetadata('console_api_call', 'failed', unsupportedSummary, {
+        api: normalizedApi
+      })
+    };
+  } catch (error) {
+    const summary = hasChineseText(content)
+      ? `控制台 API ${normalizedApi} 执行失败：${(error as Error).message}`
+      : `Console API ${normalizedApi} failed: ${(error as Error).message}`;
+    return {
+      content: summary,
+      metadata: toActionMetadata('console_api_call', 'failed', summary, {
+        api: normalizedApi
+      })
+    };
+  }
+};
+
+const resolveConversationExtractionAction = (
+  conversationId: string,
+  content: string
+): ConversationActionResolution | null => {
+  if (!detectOcrExtractionIntent(content)) {
+    return null;
+  }
+
+  let latestInferenceRunId = '';
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+    if (!item || item.conversation_id !== conversationId || item.sender !== 'assistant') {
+      continue;
+    }
+    const action = item.metadata?.conversation_action;
+    if (action?.action === 'run_model_inference' && action.status === 'completed') {
+      latestInferenceRunId = action.collected_fields.inference_run_id ?? '';
+      if (latestInferenceRunId) {
+        break;
+      }
+    }
+  }
+
+  if (!latestInferenceRunId) {
+    const summary = hasChineseText(content)
+      ? '未找到可提取的最近一次推理结果，请先上传图片并发起识别。'
+      : 'No recent inference result found. Upload an image and run inference first.';
+    return {
+      content: summary,
+      metadata: toActionMetadata('run_model_inference', 'failed', summary, {})
+    };
+  }
+
+  const run = inferenceRuns.find((entry) => entry.id === latestInferenceRunId);
+  if (!run) {
+    const summary = hasChineseText(content)
+      ? '最近推理记录不存在，请重新执行识别。'
+      : 'Latest inference record no longer exists. Please run inference again.';
+    return {
+      content: summary,
+      metadata: toActionMetadata('run_model_inference', 'failed', summary, {
+        inference_run_id: latestInferenceRunId
+      })
+    };
+  }
+
+  const ocrLines = run.normalized_output.ocr.lines.map((item) => item.text).filter(Boolean);
+  const joined = ocrLines.join(' ');
+  const plateCandidate =
+    joined.match(/[A-Z]{1,2}[A-Z0-9]{4,7}/i)?.[0] ??
+    joined.match(/[0-9]{5,12}/)?.[0] ??
+    '';
+  const summary = hasChineseText(content)
+    ? plateCandidate
+      ? `已从最近推理中提取候选编号：${plateCandidate}`
+      : '未提取到明确编号，你可以继续指定提取规则（例如“只要连续 6 位数字”）。'
+    : plateCandidate
+      ? `Extracted candidate identifier from latest inference: ${plateCandidate}`
+      : 'No clear identifier extracted. Provide a stricter rule (e.g. "exactly 6 consecutive digits").';
+  return {
+    content: summary,
+    metadata: toActionMetadata('run_model_inference', 'completed', summary, {
+      inference_run_id: latestInferenceRunId,
+      extracted_identifier: plateCandidate
+    })
+  };
+};
+
 const resolveConversationAction = async (
   conversation: ConversationRecord,
   content: string,
   attachmentIds: string[],
   currentUser: User
 ): Promise<ConversationActionResolution | null> => {
+  const pendingAction = getPendingConversationAction(conversation.id);
+  const consoleApiResolution = await resolveConsoleApiAction(content, currentUser, pendingAction);
+  if (consoleApiResolution) {
+    return consoleApiResolution;
+  }
+
+  const extractionResolution = resolveConversationExtractionAction(conversation.id, content);
+  if (extractionResolution) {
+    return extractionResolution;
+  }
   const inferenceResolution = await resolveConversationInferenceAction(
     conversation,
     content,
@@ -2168,7 +3165,6 @@ const resolveConversationAction = async (
     return inferenceResolution;
   }
   const explicitAction = detectConversationActionType(content);
-  const pendingAction = getPendingConversationAction(conversation.id);
   const action = explicitAction ?? pendingAction?.action ?? null;
 
   if (!action) {
