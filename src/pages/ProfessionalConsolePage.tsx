@@ -154,6 +154,7 @@ export default function ProfessionalConsolePage() {
   const [error, setError] = useState('');
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>({});
   const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
+  const [kpiCopyMessage, setKpiCopyMessage] = useState('');
   const snapshotSignatureRef = useRef('');
 
   const load = useCallback(async (mode: LoadMode = 'initial') => {
@@ -423,6 +424,31 @@ export default function ProfessionalConsolePage() {
         .slice(0, 3),
     [inferenceFallbackRuns]
   );
+  const copyRealitySnapshot = async () => {
+    const payload = {
+      generated_at: new Date().toISOString(),
+      training: {
+        terminal_count: terminalTrainingCount,
+        non_real_count: nonRealTrainingCount,
+        real_count: realTrainingCount,
+        real_coverage: realTrainingCoverage,
+        top_reasons: topTrainingFallbackReasons.map(([reason, count]) => ({ reason, count }))
+      },
+      inference: {
+        total_count: totalInferenceCount,
+        fallback_count: fallbackInferenceCount,
+        real_count: realInferenceCount,
+        real_coverage: realInferenceCoverage,
+        top_reasons: topInferenceFallbackReasons.map(([reason, count]) => ({ reason, count }))
+      }
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setKpiCopyMessage(t('Reality KPI snapshot copied.'));
+    } catch (error) {
+      setKpiCopyMessage(t('Copy failed: {message}', { message: (error as Error).message }));
+    }
+  };
 
   const priorityMode =
     pendingApprovals.length > 0
@@ -673,10 +699,16 @@ export default function ProfessionalConsolePage() {
                       <WorkspaceSectionHeader
                         title={t('Reality Guardrail')}
                         description={t('Surface template/fallback outputs early so production decisions stay safe.')}
+                        actions={
+                          <Button type="button" variant="ghost" size="sm" onClick={() => void copyRealitySnapshot()}>
+                            {t('Copy KPI snapshot')}
+                          </Button>
+                        }
                       />
                       {jobInsightsLoading ? (
                         <small className="muted">{t('Refreshing training authenticity checks...')}</small>
                       ) : null}
+                      {kpiCopyMessage ? <small className="muted">{kpiCopyMessage}</small> : null}
                       {!hasRealityWarning ? (
                         <StateBlock
                           variant="success"
