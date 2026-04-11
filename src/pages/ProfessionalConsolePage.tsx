@@ -397,6 +397,32 @@ export default function ProfessionalConsolePage() {
   const totalInferenceCount = snapshot?.inferenceRuns.length ?? 0;
   const realInferenceCount = Math.max(totalInferenceCount - fallbackInferenceCount, 0);
   const realInferenceCoverage = formatCoveragePercent(realInferenceCount, totalInferenceCount);
+  const topTrainingFallbackReasons = useMemo(
+    () =>
+      Array.from(
+        nonRealTrainingJobs.reduce((counter, entry) => {
+          const reason = entry.insight.fallbackReason?.trim() || 'unspecified_non_real_evidence';
+          counter.set(reason, (counter.get(reason) ?? 0) + 1);
+          return counter;
+        }, new Map<string, number>())
+      )
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 3),
+    [nonRealTrainingJobs]
+  );
+  const topInferenceFallbackReasons = useMemo(
+    () =>
+      Array.from(
+        inferenceFallbackRuns.reduce((counter, entry) => {
+          const reason = entry.reality.reason?.trim() || 'unspecified_runtime_fallback';
+          counter.set(reason, (counter.get(reason) ?? 0) + 1);
+          return counter;
+        }, new Map<string, number>())
+      )
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 3),
+    [inferenceFallbackRuns]
+  );
 
   const priorityMode =
     pendingApprovals.length > 0
@@ -659,6 +685,40 @@ export default function ProfessionalConsolePage() {
                         />
                       ) : (
                         <div className="stack">
+                          <Panel as="section" className="stack tight" tone="soft">
+                            <div className="row between gap wrap align-center">
+                              <strong>{t('Top fallback reasons')}</strong>
+                              <Badge tone="info">{nonRealTrainingCount + fallbackInferenceCount}</Badge>
+                            </div>
+                            <div className="stack tight">
+                              <small className="muted">{t('Training non-real reasons')}</small>
+                              <div className="row gap wrap">
+                                {topTrainingFallbackReasons.length > 0 ? (
+                                  topTrainingFallbackReasons.map(([reason, count]) => (
+                                    <Badge key={`training-${reason}`} tone="warning">
+                                      {reason} · {count}
+                                    </Badge>
+                                  ))
+                                ) : (
+                                  <Badge tone="neutral">{t('none')}</Badge>
+                                )}
+                              </div>
+                            </div>
+                            <div className="stack tight">
+                              <small className="muted">{t('Inference fallback reasons')}</small>
+                              <div className="row gap wrap">
+                                {topInferenceFallbackReasons.length > 0 ? (
+                                  topInferenceFallbackReasons.map(([reason, count]) => (
+                                    <Badge key={`inference-${reason}`} tone="warning">
+                                      {reason} · {count}
+                                    </Badge>
+                                  ))
+                                ) : (
+                                  <Badge tone="neutral">{t('none')}</Badge>
+                                )}
+                              </div>
+                            </div>
+                          </Panel>
                           {nonRealTrainingCount > 0 ? (
                             <Panel as="section" className="stack tight" tone="soft">
                               <div className="row between gap wrap align-center">
