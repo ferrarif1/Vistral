@@ -1055,6 +1055,7 @@ interface ConversationMessageViewportProps {
   formatConversationActionStatusLabel: (status: ConversationActionMetadata['status']) => string;
   formatConversationActionFieldLabel: (field: string) => string;
   resolveConversationActionHref: (action: ConversationActionMetadata) => string | null;
+  resolveConversationActionLinks: (action: ConversationActionMetadata) => Array<{ label: string; href: string }>;
   resolveMessageAttachmentNames: (message: MessageRecord) => string[];
 }
 
@@ -1075,8 +1076,37 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
   formatConversationActionStatusLabel,
   formatConversationActionFieldLabel,
   resolveConversationActionHref,
+  resolveConversationActionLinks,
   resolveMessageAttachmentNames
 }: ConversationMessageViewportProps) {
+  const normalizeActionLinks = useCallback(
+    (links: Array<{ label: string; href: string }> | undefined | null): Array<{ label: string; href: string }> => {
+      if (!Array.isArray(links) || links.length === 0) {
+        return [];
+      }
+      const seen = new Set<string>();
+      const normalized: Array<{ label: string; href: string }> = [];
+      for (const item of links) {
+        if (!item || typeof item.label !== 'string' || typeof item.href !== 'string') {
+          continue;
+        }
+        const href = item.href.trim();
+        const label = item.label.trim();
+        if (!href.startsWith('/') || href.startsWith('//') || label.length === 0) {
+          continue;
+        }
+        const dedupeKey = `${label}::${href}`;
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
+        normalized.push({ label, href });
+      }
+      return normalized;
+    },
+    []
+  );
+
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const prependAnchorRef = useRef<{
     scrollHeight: number;
@@ -1195,6 +1225,11 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                 {visibleMessages.map((message) => {
                 const actionMetadata = message.metadata?.conversation_action ?? null;
                 const actionHref = actionMetadata ? resolveConversationActionHref(actionMetadata) : null;
+                const actionLinks = normalizeActionLinks(actionMetadata
+                  ? actionMetadata.action_links && actionMetadata.action_links.length > 0
+                    ? actionMetadata.action_links
+                    : resolveConversationActionLinks(actionMetadata)
+                  : []);
                 const attachmentNames = resolveMessageAttachmentNames(message);
                 const contentParagraphs = formatMessageParagraphs(message.content);
 
@@ -1279,6 +1314,21 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                               <ButtonLink className="chat-action-btn" variant="secondary" size="sm" to={actionHref}>
                                 {t('Open Result')}
                               </ButtonLink>
+                            </div>
+                          ) : null}
+                          {actionLinks.length > 0 ? (
+                            <div className="row gap wrap">
+                              {actionLinks.map((link) => (
+                                <ButtonLink
+                                  key={`${message.id}-action-link-${link.href}-${link.label}`}
+                                  className="chat-action-btn"
+                                  variant="secondary"
+                                  size="sm"
+                                  to={link.href}
+                                >
+                                  {link.label}
+                                </ButtonLink>
+                              ))}
                             </div>
                           ) : null}
                         </div>
@@ -2071,6 +2121,12 @@ export default function ConversationPage() {
       if (field === 'weight_decay') {
         return t('Weight Decay');
       }
+      if (field === 'annotation_id') {
+        return t('Annotation');
+      }
+      if (field === 'dataset_item_id') {
+        return t('Dataset Item');
+      }
       return field;
     },
     [t]
@@ -2097,6 +2153,56 @@ export default function ConversationPage() {
 
     return actionRouteByEntityType.Model;
   }, []);
+
+  const resolveConversationActionLinks = useCallback(
+    (action: ConversationActionMetadata): Array<{ label: string; href: string }> => {
+      if (action.action !== 'console_api_call') {
+        return [];
+      }
+      const api = action.collected_fields.api ?? '';
+      let payloadParams: Record<string, unknown> = {};
+      const rawPayload = action.collected_fields.payload_json ?? '';
+      if (rawPayload) {
+        try {
+          const parsed = JSON.parse(rawPayload) as { params?: Record<string, unknown> };
+          if (parsed.params && typeof parsed.params === 'object') {
+            payloadParams = parsed.params;
+          }
+        } catch {
+          payloadParams = {};
+        }
+      }
+
+      const datasetId = typeof payloadParams.dataset_id === 'string' ? payloadParams.dataset_id : '';
+      const modelVersionId = typeof payloadParams.model_version_id === 'string' ? payloadParams.model_version_id : '';
+      const linkMap: Record<string, Array<{ label: string; href: string }>> = {
+        list_datasets: [{ label: t('Open Datasets'), href: '/datasets' }],
+        create_dataset: [{ label: t('Open Datasets'), href: '/datasets' }],
+        create_dataset_version: [{ label: t('Open Dataset Detail'), href: datasetId ? `/datasets/${datasetId}` : '/datasets' }],
+        list_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
+        export_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
+        import_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
+        upsert_dataset_annotation: [{ label: t('Open Annotation Workspace'), href: '/datasets' }],
+        review_dataset_annotation: [{ label: t('Open Annotation Workspace'), href: '/datasets' }],
+        run_dataset_pre_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
+        list_training_jobs: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
+        create_training_job: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
+        cancel_training_job: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
+        retry_training_job: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
+        list_model_versions: [{ label: t('Open Model Versions'), href: '/models/versions' }],
+        register_model_version: [{ label: t('Open Model Versions'), href: '/models/versions' }],
+        run_inference: [
+          {
+            label: t('Open Inference Validation'),
+            href: modelVersionId ? `/inference/validate?modelVersion=${encodeURIComponent(modelVersionId)}` : '/inference/validate'
+          }
+        ],
+        send_inference_feedback: [{ label: t('Open Inference Validation'), href: '/inference/validate' }]
+      };
+      return linkMap[api] ?? [];
+    },
+    [t]
+  );
 
   const upsertHistoryItem = useCallback((id: string, seedText: string) => {
     setHistory((previous) => {
@@ -3254,6 +3360,7 @@ export default function ConversationPage() {
           formatConversationActionStatusLabel={formatConversationActionStatusLabel}
           formatConversationActionFieldLabel={formatConversationActionFieldLabel}
           resolveConversationActionHref={resolveConversationActionHref}
+          resolveConversationActionLinks={resolveConversationActionLinks}
           resolveMessageAttachmentNames={resolveMessageAttachmentNames}
         />
 
