@@ -1577,6 +1577,77 @@ const buildActionSummary = (
   return chinese ? `模型草稿创建失败：${detail}` : `Model draft creation failed: ${detail}`;
 };
 
+const parseConsolePayloadParams = (payloadJson: string): Record<string, unknown> => {
+  if (!payloadJson.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(payloadJson) as { params?: Record<string, unknown> };
+    return parsed.params && typeof parsed.params === 'object' ? parsed.params : {};
+  } catch {
+    return {};
+  }
+};
+
+const buildConsoleActionLinks = (
+  api: string,
+  params: Record<string, unknown>,
+  chinese: boolean
+): Array<{ label: string; href: string }> => {
+  const datasetId = typeof params.dataset_id === 'string' ? params.dataset_id : '';
+  const modelVersionId = typeof params.model_version_id === 'string' ? params.model_version_id : '';
+  const links: Record<string, Array<{ label: string; href: string }>> = {
+    list_datasets: [{ label: chinese ? '打开数据集' : 'Open Datasets', href: '/datasets' }],
+    create_dataset: [{ label: chinese ? '打开数据集' : 'Open Datasets', href: '/datasets' }],
+    create_dataset_version: [
+      {
+        label: chinese ? '打开数据集详情' : 'Open Dataset Detail',
+        href: datasetId ? `/datasets/${datasetId}` : '/datasets'
+      }
+    ],
+    list_dataset_annotations: [
+      {
+        label: chinese ? '打开标注工作台' : 'Open Annotation Workspace',
+        href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets'
+      }
+    ],
+    export_dataset_annotations: [
+      {
+        label: chinese ? '打开标注工作台' : 'Open Annotation Workspace',
+        href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets'
+      }
+    ],
+    import_dataset_annotations: [
+      {
+        label: chinese ? '打开标注工作台' : 'Open Annotation Workspace',
+        href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets'
+      }
+    ],
+    upsert_dataset_annotation: [{ label: chinese ? '打开标注工作台' : 'Open Annotation Workspace', href: '/datasets' }],
+    review_dataset_annotation: [{ label: chinese ? '打开标注工作台' : 'Open Annotation Workspace', href: '/datasets' }],
+    run_dataset_pre_annotations: [
+      {
+        label: chinese ? '打开标注工作台' : 'Open Annotation Workspace',
+        href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets'
+      }
+    ],
+    list_training_jobs: [{ label: chinese ? '打开训练任务' : 'Open Training Jobs', href: '/training/jobs' }],
+    create_training_job: [{ label: chinese ? '打开训练任务' : 'Open Training Jobs', href: '/training/jobs' }],
+    cancel_training_job: [{ label: chinese ? '打开训练任务' : 'Open Training Jobs', href: '/training/jobs' }],
+    retry_training_job: [{ label: chinese ? '打开训练任务' : 'Open Training Jobs', href: '/training/jobs' }],
+    list_model_versions: [{ label: chinese ? '打开模型版本' : 'Open Model Versions', href: '/models/versions' }],
+    register_model_version: [{ label: chinese ? '打开模型版本' : 'Open Model Versions', href: '/models/versions' }],
+    run_inference: [
+      {
+        label: chinese ? '打开推理验证' : 'Open Inference Validation',
+        href: modelVersionId ? `/inference/validate?modelVersion=${encodeURIComponent(modelVersionId)}` : '/inference/validate'
+      }
+    ],
+    send_inference_feedback: [{ label: chinese ? '打开推理验证' : 'Open Inference Validation', href: '/inference/validate' }]
+  };
+  return links[api] ?? [];
+};
+
 const toActionMetadata = (
   action: ConversationActionMetadata['action'],
   status: ConversationActionMetadata['status'],
@@ -1590,22 +1661,36 @@ const toActionMetadata = (
     createdEntityType?: ConversationActionMetadata['created_entity_type'];
     createdEntityId?: string | null;
     createdEntityLabel?: string | null;
+    actionLinks?: Array<{ label: string; href: string }>;
   }
-): MessageMetadata => ({
-  conversation_action: {
-    action,
-    status,
-    summary,
-    missing_fields: options?.missingFields ?? [],
-    collected_fields: normalizeCollectedFields(collectedFields),
-    suggestions: options?.suggestions ?? [],
-    requires_confirmation: options?.requiresConfirmation ?? false,
-    confirmation_phrase: options?.confirmationPhrase ?? null,
-    created_entity_type: options?.createdEntityType ?? null,
-    created_entity_id: options?.createdEntityId ?? null,
-    created_entity_label: options?.createdEntityLabel ?? null
-  }
-});
+): MessageMetadata => {
+  const normalizedCollectedFields = normalizeCollectedFields(collectedFields);
+  const api = action === 'console_api_call' ? normalizedCollectedFields.api ?? '' : '';
+  const payloadParams =
+    action === 'console_api_call'
+      ? parseConsolePayloadParams(normalizedCollectedFields.payload_json ?? '')
+      : {};
+  const autoActionLinks =
+    action === 'console_api_call'
+      ? buildConsoleActionLinks(api, payloadParams, hasChineseText(summary))
+      : [];
+  return {
+    conversation_action: {
+      action,
+      status,
+      summary,
+      missing_fields: options?.missingFields ?? [],
+      collected_fields: normalizedCollectedFields,
+      action_links: options?.actionLinks ?? autoActionLinks,
+      suggestions: options?.suggestions ?? [],
+      requires_confirmation: options?.requiresConfirmation ?? false,
+      confirmation_phrase: options?.confirmationPhrase ?? null,
+      created_entity_type: options?.createdEntityType ?? null,
+      created_entity_id: options?.createdEntityId ?? null,
+      created_entity_label: options?.createdEntityLabel ?? null
+    }
+  };
+};
 
 const resolveCreateTrainingJobAction = async (
   content: string,
@@ -2301,6 +2386,22 @@ const resolveModelVersionReference = (content: string): string => {
   return matched?.id ?? '';
 };
 
+const resolveDatasetItemReference = (content: string): string => {
+  const byId = extractPatternValue(content, [/\b(di-[a-z0-9-]+)\b/i]);
+  if (byId) {
+    return byId;
+  }
+  return '';
+};
+
+const resolveAnnotationReference = (content: string): string => {
+  const byId = extractPatternValue(content, [/\b(ann-[a-z0-9-]+)\b/i]);
+  if (byId) {
+    return byId;
+  }
+  return '';
+};
+
 const parseConsoleOpsPayload = (content: string): ConsoleOpsPayload | null => {
   const match = content.trim().match(/^\/ops\s+(\{[\s\S]+\})$/i);
   if (!match?.[1]) {
@@ -2650,6 +2751,12 @@ const suggestionsForMissingConsoleField = (field: string): string[] => {
   if (field === 'task_type') {
     return ['ocr', 'detection', 'classification', 'segmentation', 'obb'];
   }
+  if (field === 'dataset_item_id') {
+    return datasetItems.slice(0, 8).map((item) => item.id);
+  }
+  if (field === 'annotation_id') {
+    return annotations.slice(0, 8).map((item) => item.id);
+  }
   if (field === 'status') {
     return ['approved', 'rejected'];
   }
@@ -2728,6 +2835,22 @@ const fillConsoleMissingField = (
     }
     if (/(拒绝|驳回|rejected?|reject)/i.test(content)) {
       params.status = 'rejected';
+      return true;
+    }
+    return false;
+  }
+  if (field === 'dataset_item_id') {
+    const resolved = resolveDatasetItemReference(content);
+    if (resolved) {
+      params.dataset_item_id = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'annotation_id') {
+    const resolved = resolveAnnotationReference(content);
+    if (resolved) {
+      params.annotation_id = resolved;
       return true;
     }
     return false;
@@ -2815,6 +2938,37 @@ const resolveConsoleApiAction = async (
     : null;
   const payload = parsed ?? recoveredFromPending ?? naturalPayload;
   if (!payload) {
+    const naturalMissing = detectNaturalConsoleIntentMissingFields(content);
+    const pendingApi =
+      pendingAction?.action === 'console_api_call' && typeof pendingAction.collected_fields.api === 'string'
+        ? pendingAction.collected_fields.api
+        : '';
+    if (naturalMissing && naturalMissing.api && naturalMissing.api !== pendingApi) {
+      const summary = hasChineseText(content)
+        ? `已识别到控制台意图 ${naturalMissing.api}，但缺少参数：${naturalMissing.missingFields.join(', ')}`
+        : `Detected console intent ${naturalMissing.api}, but missing parameters: ${naturalMissing.missingFields.join(', ')}`;
+      return {
+        content: summary,
+        metadata: toActionMetadata(
+          'console_api_call',
+          'requires_input',
+          summary,
+          {
+            api: naturalMissing.api,
+            payload_json: JSON.stringify({
+              api: naturalMissing.api,
+              params: {}
+            })
+          },
+          {
+            missingFields: naturalMissing.missingFields,
+            suggestions: naturalMissing.missingFields
+              .flatMap((field) => suggestionsForMissingConsoleField(field))
+              .slice(0, 8)
+          }
+        )
+      };
+    }
     if (
       !parsed &&
       pendingAction?.action === 'console_api_call' &&
@@ -2836,7 +2990,7 @@ const resolveConsoleApiAction = async (
         })
       };
     }
-    const missing = detectNaturalConsoleIntentMissingFields(content);
+    const missing = naturalMissing;
     if (missing) {
       const summary = hasChineseText(content)
         ? `已识别到控制台意图 ${missing.api}，但缺少参数：${missing.missingFields.join(', ')}`

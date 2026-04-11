@@ -229,6 +229,7 @@ Notes:
   - `run_model_inference` (attachment + inference intent keywords => auto run inference using conversation model's latest registered version)
 - assistant can post-process latest OCR inference for extraction intents (plate/serial/number keywords) and return extracted candidate content
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
+- `metadata.conversation_action` may include optional `action_links` (`[{label, href}]`) so clients can render direct navigation cards for complex follow-up input collection (for example annotation/training/inference workspaces)
 - high-risk mutating operations (`create_*`) require explicit confirmation before backend execution; assistant returns `missing_fields=["confirmation"]` plus `requires_confirmation=true`
 - when backend execution succeeds, assistant returns `metadata.conversation_action.status=completed`
 - when execution fails or user cancels, assistant returns `failed` / `cancelled`
@@ -256,6 +257,9 @@ Message shape notes:
   "missing_fields": ["dataset_id"],
   "requires_confirmation": false,
   "confirmation_phrase": null,
+  "action_links": [
+    { "label": "Open Datasets", "href": "/datasets" }
+  ],
   "collected_fields": {
     "task_type": "ocr",
     "framework": "paddleocr",

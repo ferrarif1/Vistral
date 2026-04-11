@@ -31,6 +31,7 @@ Operational branch inside the same flow:
 1. user asks the assistant to perform a real setup action (for example create dataset / create model draft / create training job / run model inference on attached files)
 2. system parses intent and available fields from current turn plus pending conversation action context
 3. if critical fields are missing, assistant responds with a compact `requires_input` card that lists missing fields and optional suggestions
+3a. for complex operational intents (for example annotation/review/training/inference scopes), the same `requires_input` card can include direct navigation links so users can jump to the relevant workspace and fetch required ids/inputs
 4. once required fields are complete for high-risk mutations (create dataset/model/training job), assistant asks for explicit confirmation (`确认执行` / `confirm execute`)
 5. user confirms execution in follow-up turn
 6. system calls the corresponding backend API only after confirmation is received

@@ -157,6 +157,7 @@ export interface ConversationActionMetadata {
   summary: string;
   missing_fields: string[];
   collected_fields: Record<string, string>;
+  action_links?: Array<{ label: string; href: string }>;
   suggestions?: string[];
   requires_confirmation?: boolean;
   confirmation_phrase?: string | null;

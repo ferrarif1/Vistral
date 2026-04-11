@@ -74,8 +74,14 @@ send_message() {
 msg_read="$(send_message "帮我查看训练任务")"
 read_action="$(echo "$msg_read" | jq -r '.data.messages[-1].metadata.conversation_action.action // empty')"
 read_status="$(echo "$msg_read" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+read_first_link="$(echo "$msg_read" | jq -r '.data.messages[-1].metadata.conversation_action.action_links[0].href // empty')"
 if [[ "$read_action" != "console_api_call" || "$read_status" != "completed" ]]; then
   echo "[smoke-conversation-ops-bridge] expected list-training-jobs action completed"
+  echo "$msg_read"
+  exit 1
+fi
+if [[ "$read_first_link" != "/training/jobs" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected training-jobs action link on list_training_jobs"
   echo "$msg_read"
   exit 1
 fi
@@ -116,9 +122,54 @@ fi
 msg_export_missing="$(send_message "导出标注")"
 export_status="$(echo "$msg_export_missing" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
 export_missing="$(echo "$msg_export_missing" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+export_first_link="$(echo "$msg_export_missing" | jq -r '.data.messages[-1].metadata.conversation_action.action_links[0].href // empty')"
 if [[ "$export_status" != "requires_input" || "$export_missing" != *"dataset_id"* ]]; then
   echo "[smoke-conversation-ops-bridge] expected missing dataset_id on export"
   echo "$msg_export_missing"
+  exit 1
+fi
+if [[ "$export_first_link" != "/datasets" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected dataset action link on export missing-card"
+  echo "$msg_export_missing"
+  exit 1
+fi
+
+msg_review_missing="$(send_message "审核标注通过")"
+review_missing_status="$(echo "$msg_review_missing" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+review_missing_fields="$(echo "$msg_review_missing" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+review_first_link="$(echo "$msg_review_missing" | jq -r '.data.messages[-1].metadata.conversation_action.action_links[0].href // empty')"
+if [[ "$review_missing_status" != "requires_input" || "$review_missing_fields" != *"annotation_id"* ]]; then
+  echo "[smoke-conversation-ops-bridge] expected intent switch and missing annotation_id for review"
+  echo "$msg_review_missing"
+  exit 1
+fi
+if [[ "$review_first_link" != "/datasets" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected dataset action link on review missing-card"
+  echo "$msg_review_missing"
+  exit 1
+fi
+
+msg_review_fill="$(send_message "ann-1")"
+review_fill_status="$(echo "$msg_review_fill" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+review_fill_requires_confirm="$(echo "$msg_review_fill" | jq -r '.data.messages[-1].metadata.conversation_action.requires_confirmation // false')"
+review_fill_missing="$(echo "$msg_review_fill" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+if [[ "$review_fill_status" != "requires_input" || "$review_fill_requires_confirm" != "true" || "$review_fill_missing" != *"confirmation"* ]]; then
+  echo "[smoke-conversation-ops-bridge] expected confirmation requirement after filling annotation_id"
+  echo "$msg_review_fill"
+  exit 1
+fi
+
+msg_review_confirm="$(send_message "确认执行")"
+review_confirm_action="$(echo "$msg_review_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.action // empty')"
+review_confirm_status="$(echo "$msg_review_confirm" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+if [[ "$review_confirm_action" != "console_api_call" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected console_api_call after review confirmation"
+  echo "$msg_review_confirm"
+  exit 1
+fi
+if [[ "$review_confirm_status" != "completed" && "$review_confirm_status" != "failed" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected terminal review status after confirmation"
+  echo "$msg_review_confirm"
   exit 1
 fi
 

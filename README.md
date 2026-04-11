@@ -140,6 +140,8 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - when `EXPECTED_TRAINING_DATASET_ID` / `EXPECTED_TRAINING_DATASET_VERSION_ID` are not provided, it auto-prepares a trainable detection dataset/version target by default (`AUTO_PREPARE_TRAINING_TARGET=true`)
 - `npm run smoke:conversation-ops-bridge`
   - validates natural-language ops bridge end-to-end: intent routing, missing-field prompts, follow-up parameter completion, and high-risk confirmation gate
+- `npm run smoke:runtime-profile-activation`
+  - validates runtime profile activation from env-provided profiles: profile list visibility, `active_profile_id` switch, and activated framework config projection in response view
 - `npm run smoke:inference-feedback-guard`
   - verifies `POST /api/inference/runs/{id}/feedback` for both detection and OCR loops: rejects cross-task datasets, accepts matching-task datasets, and keeps dataset item/attachment traceability
   - validates idempotency for repeated feedback on the same run+dataset (no duplicate dataset items; metadata reason is updated)
