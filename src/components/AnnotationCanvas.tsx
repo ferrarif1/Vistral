@@ -354,7 +354,7 @@ export default function AnnotationCanvas({
 
   return (
     <Card as="section">
-      <div className="row between gap align-center">
+      <div className="row between gap wrap align-center">
         <h3>{t(title)}</h3>
         <span className="muted">{t('Drag to create box. Click box to edit.')}</span>
       </div>

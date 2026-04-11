@@ -128,6 +128,33 @@ Loop B (Detection): dataset -> annotation/import -> train -> evaluate -> registe
 
 When work is interrupted by a new conversation task, append handoff details in `docs/work-handoff.md` first, then continue from this queue.
 
+## 6.1 One-Engineer Elite Execution Plan (2026-04)
+
+Execution principle: one world-class engineer + strict scope control + measurable closure.
+
+### Stage A (P0, now): Real-Execution Credibility
+1. Build and expose platform-level “reality KPIs”:
+   - training real-run coverage
+   - inference real-run coverage
+   - fallback/simulated trend
+2. Keep non-real evidence blocked from model-version registration by default.
+3. Tighten runtime profile safety UX (preview + overwrite guard + explicit activation context).
+
+### Stage B (P1): Data Loop Throughput
+1. Close annotation reviewer/rework continuity from dataset detail -> annotate queue.
+2. Make dataset-version context first-class in all training/inference jumps.
+3. Improve bulk metadata/tag workflows for sample triage efficiency.
+
+### Stage C (P2): Worker Control Plane Reliability
+1. Complete guided worker GUI onboarding and compatibility gates.
+2. Strengthen dispatch failover observability and bounded retry diagnostics.
+3. Add operator-first remediation playbooks for worker-side failures.
+
+### Immediate Sprint (this round)
+1. Land reality KPI visibility directly in Professional Console overview (main metric cards + inspector context).
+2. Keep all checks green (`typecheck`, `lint`, `build`, targeted smoke).
+3. Continue incremental release with contract-aligned docs and no route sprawl.
+
 Current priority queue:
 
 1. Refactor the full frontend against `DESIGN.md` / `notion/DESIGN.md` so all pages share one AI-native design system and layout language.

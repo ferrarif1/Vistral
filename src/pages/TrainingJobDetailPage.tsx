@@ -1048,7 +1048,7 @@ export default function TrainingJobDetailPage() {
                 <div className="metric-chart-grid">
                   {metricCurves.map((curve) => (
                     <article key={curve.metricName} className="metric-chart-card stack tight">
-                      <div className="row between align-center">
+                      <div className="row between gap wrap align-center">
                         <strong>{curve.metricName}</strong>
                         <Badge tone="info">{curve.latestValue.toFixed(4)}</Badge>
                       </div>

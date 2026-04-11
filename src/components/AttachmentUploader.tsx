@@ -198,7 +198,7 @@ export default function AttachmentUploader({
         <ul className="workspace-record-list">
           {items.map((item) => (
             <Panel key={item.id} as="li" className="workspace-record-item stack attachment-uploader-item" tone="soft">
-              <div className="row between gap">
+              <div className="row between gap wrap align-center">
                 <div className="stack tight">
                   <strong>{item.filename}</strong>
                   {item.upload_error ? <small className="error-text">{item.upload_error}</small> : null}

@@ -69,6 +69,7 @@ export default function CreateTrainingJobPage() {
   const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
   const [runtimeDisableInferenceFallback, setRuntimeDisableInferenceFallback] = useState(false);
   const [runtimePythonBin, setRuntimePythonBin] = useState('');
+  const [nonStrictLaunchConfirmed, setNonStrictLaunchConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -203,6 +204,12 @@ export default function CreateTrainingJobPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (runtimeDisableSimulatedTrainFallback || runtimeSettingsError) {
+      setNonStrictLaunchConfirmed(false);
+    }
+  }, [runtimeDisableSimulatedTrainFallback, runtimeSettingsError]);
+
   const baseModelOptions = useMemo<string[]>(
     () => [...curatedBaseModelCatalog[framework]],
     [framework]
@@ -266,6 +273,8 @@ export default function CreateTrainingJobPage() {
     Boolean(selectedDatasetVersion) &&
     datasetVersionHasTrainSplit &&
     datasetVersionHasAnnotationCoverage;
+  const strictLaunchGateReady = runtimeDisableSimulatedTrainFallback || nonStrictLaunchConfirmed;
+  const submitReady = launchReady && !runtimeSettingsLoading && !runtimeSettingsError && strictLaunchGateReady;
 
   const taskFrameworkOptions = useMemo(() => {
     if (taskType === 'ocr') {
@@ -321,6 +330,22 @@ export default function CreateTrainingJobPage() {
 
     if (!datasetVersionHasAnnotationCoverage) {
       setFeedback({ variant: 'error', text: t('Selected dataset version must include annotation coverage before launch.') });
+      return;
+    }
+
+    if (runtimeSettingsError) {
+      setFeedback({
+        variant: 'error',
+        text: t('Runtime strict mode status is unavailable. Resolve runtime settings before creating this training job.')
+      });
+      return;
+    }
+
+    if (!runtimeSettingsLoading && !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed) {
+      setFeedback({
+        variant: 'error',
+        text: t('Runtime strict fallback guard is off. Confirm risk acknowledgment before creating this training job.')
+      });
       return;
     }
 
@@ -418,6 +443,19 @@ export default function CreateTrainingJobPage() {
         : t('Launch readiness becomes available after a dataset version is selected.')
     },
     {
+      label: t('Runtime strict guard'),
+      done: strictLaunchGateReady && !runtimeSettingsLoading && !runtimeSettingsError,
+      hint: runtimeSettingsLoading
+        ? t('Loading runtime strict mode status...')
+        : runtimeSettingsError
+          ? t('Runtime settings unavailable. Resolve Runtime settings before launch.')
+          : runtimeDisableSimulatedTrainFallback
+            ? t('Strict guard is active: simulated/template fallback is blocked.')
+            : nonStrictLaunchConfirmed
+              ? t('Risk confirmed: this launch may fallback to simulated/template outputs.')
+              : t('Strict guard is off. Confirm risk acknowledgment before launch.')
+    },
+    {
       label: t('Params'),
       done: Boolean(epochs && batchSize && learningRate),
       hint:
@@ -427,7 +465,7 @@ export default function CreateTrainingJobPage() {
     },
     {
       label: t('Review'),
-      done: step === steps.length - 1 && Boolean(name.trim()) && launchReady,
+      done: step === steps.length - 1 && Boolean(name.trim()) && submitReady,
       hint:
         step === steps.length - 1
           ? t('This run is ready for final review.')
@@ -685,6 +723,43 @@ export default function CreateTrainingJobPage() {
             </small>
           </li>
         </ul>
+        {runtimeSettingsError ? (
+          <Panel as="section" className="workspace-record-item compact" tone="soft">
+            <div className="stack tight">
+              <strong>{t('Runtime strict mode status unavailable')}</strong>
+              <small className="muted">
+                {t('Resolve runtime settings first. Training launch stays blocked until strict status can be verified.')}
+              </small>
+            </div>
+            <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+              {t('Open Runtime Settings')}
+            </ButtonLink>
+          </Panel>
+        ) : null}
+        {!runtimeSettingsLoading && !runtimeSettingsError && !runtimeDisableSimulatedTrainFallback ? (
+          <Panel as="section" className="workspace-record-item compact" tone="soft">
+            <div className="stack tight">
+              <strong>{t('Runtime strict fallback guard is off')}</strong>
+              <small className="muted">
+                {t(
+                  'This launch may fallback to simulated/template outputs when local runner command is unavailable. Enable strict guard for production runs.'
+                )}
+              </small>
+            </div>
+            <label className="row gap wrap align-center">
+              <input
+                type="checkbox"
+                className="ui-checkbox"
+                checked={nonStrictLaunchConfirmed}
+                onChange={(event) => setNonStrictLaunchConfirmed(event.target.checked)}
+              />
+              <span>{t('I understand the risk and still want to launch this training job')}</span>
+            </label>
+            <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+              {t('Open Runtime Settings')}
+            </ButtonLink>
+          </Panel>
+        ) : null}
       </Card>
     );
   };
@@ -829,7 +904,7 @@ export default function CreateTrainingJobPage() {
                 <Button
                   type="button"
                   onClick={submit}
-                  disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !launchReady}
+                  disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !submitReady}
                   size="sm"
                 >
                   {submitting ? t('Submitting...') : t('Create Training Job')}

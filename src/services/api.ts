@@ -846,5 +846,13 @@ export const api = {
   clearRuntimeSettings: () =>
     request<RuntimeSettingsView>('/api/settings/runtime', {
       method: 'DELETE'
+    }),
+
+  activateRuntimeProfile: (profileId: string) =>
+    request<RuntimeSettingsView>('/api/settings/runtime/activate-profile', {
+      method: 'POST',
+      body: JSON.stringify({
+        profile_id: profileId
+      })
     })
 };
