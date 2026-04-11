@@ -398,6 +398,14 @@ export default function ProfessionalConsolePage() {
   const totalInferenceCount = snapshot?.inferenceRuns.length ?? 0;
   const realInferenceCount = Math.max(totalInferenceCount - fallbackInferenceCount, 0);
   const realInferenceCoverage = formatCoveragePercent(realInferenceCount, totalInferenceCount);
+  const nowMs = Date.now();
+  const dayAgoMs = nowMs - 24 * 60 * 60 * 1000;
+  const recentNonRealTrainingCount = nonRealTrainingJobs.filter(
+    (entry) => Date.parse(entry.job.updated_at) >= dayAgoMs
+  ).length;
+  const recentFallbackInferenceCount = inferenceFallbackRuns.filter(
+    (entry) => Date.parse(entry.run.updated_at) >= dayAgoMs
+  ).length;
   const topTrainingFallbackReasons = useMemo(
     () =>
       Array.from(
@@ -626,6 +634,18 @@ export default function ProfessionalConsolePage() {
                       totalInferenceCount > 0 && realInferenceCount !== totalInferenceCount
                         ? 'attention'
                         : 'default'
+                  },
+                  {
+                    title: t('Non-real training (24h)'),
+                    description: t('Terminal training jobs with non-real evidence in the last 24 hours.'),
+                    value: recentNonRealTrainingCount,
+                    tone: recentNonRealTrainingCount > 0 ? 'attention' : 'default'
+                  },
+                  {
+                    title: t('Fallback inference (24h)'),
+                    description: t('Inference fallback/template/mock runs in the last 24 hours.'),
+                    value: recentFallbackInferenceCount,
+                    tone: recentFallbackInferenceCount > 0 ? 'attention' : 'default'
                   }
                 ]}
               />
