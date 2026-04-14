@@ -118,7 +118,9 @@ Worker scheduler/dispatch/cancel/failover/package/dedicated-auth smoke knobs:
 - segmentation: labelme polygon export->import roundtrip
 
 Optional positive real-runner validation:
-- `REAL_YOLO_MODEL_PATH=/abs/path/to/yolo.pt npm run smoke:runner-real-positive`
+- `YOLO_LOCAL_MODEL_PATH=/abs/path/to/yolo.pt npm run smoke:runner-real-positive`
+- for stable PaddleOCR local runtime, prefer dependency combo:
+  - `python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cpu "numpy==1.26.4" "paddlepaddle==3.2.0" "paddleocr==3.4.0" "torch==2.5.1+cpu" "torchvision==0.20.1+cpu" "ultralytics==8.4.37" "python-doctr==1.0.1"`
 - Script auto-skips when model file or `ultralytics` dependency is missing.
 
 Persistence-related env vars (prototype):
@@ -137,14 +139,38 @@ Persistence-related env vars (prototype):
 - `TRAINING_METRICS_MAX_TOTAL_ROWS` (default `20000`)
 - `YOLO_LOCAL_TRAIN_COMMAND` / `PADDLEOCR_LOCAL_TRAIN_COMMAND` / `DOCTR_LOCAL_TRAIN_COMMAND`
 - `YOLO_LOCAL_PREDICT_COMMAND` / `PADDLEOCR_LOCAL_PREDICT_COMMAND` / `DOCTR_LOCAL_PREDICT_COMMAND`
-- `VISTRAL_PYTHON_BIN` (optional python executable override for bundled local runners; fallback: `PYTHON_BIN`, then platform default `python3`/`python`)
+- `VISTRAL_PYTHON_BIN` (optional python executable override for bundled local runners; Docker default is `/opt/vistral-venv/bin/python`)
+- `API_NODE_BASE_IMAGE` (API image base; default `docker.m.daocloud.io/library/node:20-bookworm-slim`)
+- `API_DEBIAN_APT_MIRROR` (API image apt mirror; default `http://mirrors.tuna.tsinghua.edu.cn/debian`)
+- `API_DEBIAN_APT_SECURITY_MIRROR` (API image apt security mirror; default `http://mirrors.tuna.tsinghua.edu.cn/debian-security`)
+- `API_PIP_INDEX_URL` (API image python package mirror; default `https://pypi.tuna.tsinghua.edu.cn/simple`)
+- `API_PIP_EXTRA_INDEX_URL` (default `https://download.pytorch.org/whl/cpu`; used as default torch wheel index in Docker build)
+- `API_PIP_TORCH_INDEX_URL` (optional explicit override for torch/torchvision wheel index; when empty, Docker build reuses `API_PIP_EXTRA_INDEX_URL`)
+- `API_PIP_TRUSTED_HOST` (trusted host used with `API_PIP_INDEX_URL`; default `pypi.tuna.tsinghua.edu.cn`)
 - `LOCAL_RUNNER_TIMEOUT_MS` (default `1800000`)
+- `VISTRAL_AUTO_BOOTSTRAP_YOLO_MODEL` (default `1`; API startup auto-fetches `yolo11n.pt` from ModelScope when local YOLO model is missing)
+- `VISTRAL_AUTO_BOOTSTRAP_PADDLEOCR_MODELS` (default `1`; API startup warms PaddleOCR models and writes bootstrap marker)
+- `VISTRAL_AUTO_BOOTSTRAP_DOCTR_MODELS` (default `1`; API startup warms docTR models and writes bootstrap marker)
+- `VISTRAL_RUNTIME_BOOTSTRAP_BLOCKING` (default `0`; `1` means API waits for bootstrap completion before listen)
+- `VISTRAL_RUNTIME_BOOTSTRAP_TIMEOUT_MS` (default `180000`; timeout for startup runtime bootstrap tasks)
+- `VISTRAL_RUNTIME_MODELS_ROOT` (default `.data/runtime-models`; runtime models/caches/markers root)
+- `PADDLE_HOME` (default `.data/runtime-models/paddle-home`; persisted Paddle cache root)
+- `HF_HOME` (default `.data/runtime-models/hf-home`; persisted HuggingFace cache root)
+- `DOCTR_CACHE_DIR` (default `.data/runtime-models/doctr-cache`; persisted docTR cache root)
+- `VISTRAL_DOCTR_PRESEEDED_MODELS_DIR` (default `.data/runtime-models/doctr-preseed`; optional local directory for preseeded docTR model files copied into `DOCTR_CACHE_DIR/models` before warmup)
+- `VISTRAL_DOCTR_PRESEEDED_MODELS_URLS` (optional comma-separated model file URLs for pre-seeding docTR cache in restricted networks)
+- `ULTRALYTICS_CONFIG_DIR` (default `.data/runtime-models/ultralytics`; persisted Ultralytics cache/config root)
 - `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK` (`1` means fail fast when local train runner command is missing/unavailable; no simulated fallback)
 - `VISTRAL_DISABLE_INFERENCE_FALLBACK` (`1` means fail fast when runtime/local predict would return template/fallback output)
 - bundled runner templates under `scripts/local-runners/` are used by default when explicit local command env vars are not set
-- `VISTRAL_RUNNER_ENABLE_REAL` (set `1` to attempt dependency-backed real framework branch in local runners; default keeps template mode)
+- `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS` (default `1`; auto-fills blank runtime local command fields with bundled templates in Runtime Settings/readiness)
+- `VISTRAL_RUNTIME_AUTO_ENDPOINT_CANDIDATES_JSON` (optional JSON object to override/append endpoint probe candidates used by runtime auto-config, for example `{"yolo":["http://10.0.0.5:9394/predict"]}`)
+- `VISTRAL_RUNNER_ENABLE_REAL` (default `auto`; bundled local runners attempt real execution unless explicitly disabled with `0/false/no/off/disabled`)
+- `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` (default `True`; disable Paddle model-source connectivity pre-check to reduce runtime jitter)
 - `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND` (default `0`; when `0`, model-version registration rejects local-command jobs with template/fallback/non-real artifact evidence)
-- `VISTRAL_YOLO_MODEL_PATH`
+- `PADDLEOCR_LOCAL_MODEL_PATH`
+- `DOCTR_LOCAL_MODEL_PATH`
+- `YOLO_LOCAL_MODEL_PATH` (preferred; YOLO also accepts legacy `VISTRAL_YOLO_MODEL_PATH` / `REAL_YOLO_MODEL_PATH`)
 - `VISTRAL_PADDLEOCR_LANG` / `VISTRAL_PADDLEOCR_USE_GPU`
 - `VISTRAL_DOCTR_DET_ARCH` / `VISTRAL_DOCTR_RECO_ARCH`
 - `TRAINING_WORKER_AUTH_TOKEN` (preferred for `/api/runtime/training-workers/heartbeat`; shared fallback remains optional)
@@ -155,6 +181,15 @@ Persistence-related env vars (prototype):
 - `TRAINING_WORKER_INLINE_PACKAGE_MAX_BYTES` (default `41943040`, max total bytes for inline dataset package sent to worker)
 - local command templates are available under `scripts/local-runners/`
 - placeholder examples: `{{python_bin}}`, `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
+
+For restricted-network environments where `doctr-static.mindee.com` is unreachable:
+- place predownloaded docTR model files (for default arches: `db_resnet50-79bd7d70.pt`, `vgg16_bn_r-d108c19c.pt`) under `VISTRAL_DOCTR_PRESEEDED_MODELS_DIR`, or
+- set `VISTRAL_DOCTR_PRESEEDED_MODELS_URLS` to mirrored file URLs.
+Startup bootstrap copies these files into `DOCTR_CACHE_DIR/models` before docTR warmup.
+
+Docker compose shortcut:
+- host folder `./runtime-assets/doctr-preseed` is mounted to `/app/runtime-preseed/doctr` (read-only).
+- run `npm run setup:doctr-preseed` to check/download preseed files into that host folder.
 
 `docker:verify:full` writes audit-style reports to `.data/verify-reports/`.
 It now also validates account governance, conversation operational actions, phase2 annotation/review + launch-readiness gates (including dataset-version ownership under the selected dataset), dataset export/import roundtrip (detection/ocr/segmentation), dedicated training-worker auth dispatch/cancel flow, OCR fallback safety guard (no misleading default OCR business text on fallback), and runs real closure smoke with YOLO/PaddleOCR/docTR against the target deployment.

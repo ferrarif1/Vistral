@@ -1,15 +1,20 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ApprovalRequest,
+  DatasetRecord,
   FileAttachment,
   InferenceRunRecord,
   ModelRecord,
+  ModelVersionRecord,
   TrainingJobRecord,
   User
 } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
+import WorkspaceStarterPanel from '../components/onboarding/WorkspaceStarterPanel';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import WorkspaceActionStack from '../components/ui/WorkspaceActionStack';
 import { Card, Panel } from '../components/ui/Surface';
 import {
   WorkspaceHero,
@@ -23,11 +28,19 @@ import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
+import { detectInferenceRunReality } from '../utils/inferenceSource';
+import {
+  bucketRuntimeFallbackReason,
+  runtimeFallbackReasonLabelKey,
+  type RuntimeFallbackReasonBucket
+} from '../utils/runtimeFallbackReason';
 
 interface ConsoleSnapshot {
   user: User;
+  datasets: DatasetRecord[];
   visibleModels: ModelRecord[];
   myModels: ModelRecord[];
+  modelVersions: ModelVersionRecord[];
   conversationAttachments: FileAttachment[];
   approvals: ApprovalRequest[];
   trainingJobs: TrainingJobRecord[];
@@ -42,49 +55,12 @@ interface ConsoleActionGroup {
 
 const backgroundRefreshIntervalMs = 6000;
 type LoadMode = 'initial' | 'manual' | 'background';
+const consoleOnboardingDismissedStorageKey = 'vistral-console-onboarding-dismissed';
 
 const formatTimestamp = (iso: string): string => formatCompactTimestamp(iso);
 const isAuthenticationRequiredMessage = (message: string): boolean => message === 'Authentication required.';
 const terminalTrainingStatuses = new Set<TrainingJobRecord['status']>(['completed', 'failed', 'cancelled']);
 const activeTrainingStatuses = new Set<TrainingJobRecord['status']>(['queued', 'preparing', 'running', 'evaluating']);
-
-const detectInferenceFallback = (run: InferenceRunRecord): { fallback: boolean; reason: string | null } => {
-  const normalizedMeta =
-    run.normalized_output.normalized_output &&
-    typeof run.normalized_output.normalized_output === 'object' &&
-    !Array.isArray(run.normalized_output.normalized_output)
-      ? (run.normalized_output.normalized_output as Record<string, unknown>)
-      : {};
-  const rawMeta =
-    run.raw_output.meta && typeof run.raw_output.meta === 'object' && !Array.isArray(run.raw_output.meta)
-      ? (run.raw_output.meta as Record<string, unknown>)
-      : null;
-  const normalizedSource =
-    typeof normalizedMeta.source === 'string' && normalizedMeta.source.trim()
-      ? normalizedMeta.source.toLowerCase()
-      : '';
-  const executionSource = run.execution_source.trim().toLowerCase();
-  const source = normalizedSource || executionSource;
-  const sourceIndicatesFallback = source.includes('mock') || source.includes('template') || source.includes('fallback');
-  const templateMode = rawMeta && typeof rawMeta.mode === 'string' ? rawMeta.mode.toLowerCase() === 'template' : false;
-  const localFallbackReason =
-    typeof run.raw_output.local_command_fallback_reason === 'string' && run.raw_output.local_command_fallback_reason.trim()
-      ? run.raw_output.local_command_fallback_reason.trim()
-      : '';
-  const runtimeFallbackReason =
-    typeof run.raw_output.runtime_fallback_reason === 'string' && run.raw_output.runtime_fallback_reason.trim()
-      ? run.raw_output.runtime_fallback_reason.trim()
-      : '';
-  const templateFallbackReason =
-    rawMeta && typeof rawMeta.fallback_reason === 'string' && rawMeta.fallback_reason.trim()
-      ? rawMeta.fallback_reason.trim()
-      : '';
-  const reason = localFallbackReason || runtimeFallbackReason || templateFallbackReason || null;
-  return {
-    fallback: sourceIndicatesFallback || templateMode || Boolean(reason),
-    reason
-  };
-};
 
 const formatCoveragePercent = (covered: number, total: number): string => {
   if (total <= 0) {
@@ -100,6 +76,13 @@ const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
       role: snapshot.user.role,
       updated_at: snapshot.user.updated_at
     },
+    datasets: snapshot.datasets
+      .map((dataset) => ({
+        id: dataset.id,
+        status: dataset.status,
+        updated_at: dataset.updated_at
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
     visibleModels: snapshot.visibleModels
       .map((model) => ({
         id: model.id,
@@ -112,6 +95,13 @@ const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
         id: model.id,
         status: model.status,
         updated_at: model.updated_at
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    modelVersions: snapshot.modelVersions
+      .map((version) => ({
+        id: version.id,
+        status: version.status,
+        updated_at: version.created_at
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     conversationAttachments: snapshot.conversationAttachments
@@ -156,6 +146,10 @@ export default function ProfessionalConsolePage() {
   const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
   const [kpiCopyMessage, setKpiCopyMessage] = useState('');
   const snapshotSignatureRef = useRef('');
+  const formatFallbackReasonBucketLabel = useCallback(
+    (bucket: RuntimeFallbackReasonBucket): string => t(runtimeFallbackReasonLabelKey(bucket)),
+    [t]
+  );
 
   const load = useCallback(async (mode: LoadMode = 'initial') => {
     if (mode === 'initial') {
@@ -170,9 +164,20 @@ export default function ProfessionalConsolePage() {
 
     try {
       const user = await api.me();
-      const [visibleModels, myModels, conversationAttachments, approvals, trainingJobs, inferenceRuns] = await Promise.all([
+      const [
+        datasets,
+        visibleModels,
+        myModels,
+        modelVersions,
+        conversationAttachments,
+        approvals,
+        trainingJobs,
+        inferenceRuns
+      ] = await Promise.all([
+        api.listDatasets(),
         api.listModels(),
         api.listMyModels(),
+        api.listModelVersions(),
         api.listConversationAttachments(),
         user.role === 'admin' ? api.listApprovalRequests() : Promise.resolve([]),
         api.listTrainingJobs(),
@@ -181,8 +186,10 @@ export default function ProfessionalConsolePage() {
 
       const nextSnapshot = {
         user,
+        datasets,
         visibleModels,
         myModels,
+        modelVersions,
         conversationAttachments,
         approvals,
         trainingJobs,
@@ -381,7 +388,7 @@ export default function ProfessionalConsolePage() {
     () =>
       snapshot
         ? snapshot.inferenceRuns
-            .map((run) => ({ run, reality: detectInferenceFallback(run) }))
+            .map((run) => ({ run, reality: detectInferenceRunReality(run) }))
             .filter((entry) => entry.reality.fallback)
             .sort((left, right) => Date.parse(right.run.updated_at) - Date.parse(left.run.updated_at))
         : [],
@@ -410,10 +417,10 @@ export default function ProfessionalConsolePage() {
     () =>
       Array.from(
         nonRealTrainingJobs.reduce((counter, entry) => {
-          const reason = entry.insight.fallbackReason?.trim() || 'unspecified_non_real_evidence';
+          const reason = bucketRuntimeFallbackReason(entry.insight.fallbackReason);
           counter.set(reason, (counter.get(reason) ?? 0) + 1);
           return counter;
-        }, new Map<string, number>())
+        }, new Map<RuntimeFallbackReasonBucket, number>())
       )
         .sort((left, right) => right[1] - left[1])
         .slice(0, 3),
@@ -423,10 +430,10 @@ export default function ProfessionalConsolePage() {
     () =>
       Array.from(
         inferenceFallbackRuns.reduce((counter, entry) => {
-          const reason = entry.reality.reason?.trim() || 'unspecified_runtime_fallback';
+          const reason = bucketRuntimeFallbackReason(entry.reality.reason);
           counter.set(reason, (counter.get(reason) ?? 0) + 1);
           return counter;
-        }, new Map<string, number>())
+        }, new Map<RuntimeFallbackReasonBucket, number>())
       )
         .sort((left, right) => right[1] - left[1])
         .slice(0, 3),
@@ -440,14 +447,22 @@ export default function ProfessionalConsolePage() {
         non_real_count: nonRealTrainingCount,
         real_count: realTrainingCount,
         real_coverage: realTrainingCoverage,
-        top_reasons: topTrainingFallbackReasons.map(([reason, count]) => ({ reason, count }))
+        top_reasons: topTrainingFallbackReasons.map(([reason, count]) => ({
+          reason_code: reason,
+          reason_label: formatFallbackReasonBucketLabel(reason),
+          count
+        }))
       },
       inference: {
         total_count: totalInferenceCount,
         fallback_count: fallbackInferenceCount,
         real_count: realInferenceCount,
         real_coverage: realInferenceCoverage,
-        top_reasons: topInferenceFallbackReasons.map(([reason, count]) => ({ reason, count }))
+        top_reasons: topInferenceFallbackReasons.map(([reason, count]) => ({
+          reason_code: reason,
+          reason_label: formatFallbackReasonBucketLabel(reason),
+          count
+        }))
       }
     };
     try {
@@ -457,29 +472,6 @@ export default function ProfessionalConsolePage() {
       setKpiCopyMessage(t('Copy failed: {message}', { message: (error as Error).message }));
     }
   };
-
-  const priorityMode =
-    pendingApprovals.length > 0
-      ? 'approval'
-      : recentMyModels.length > 0
-        ? 'model'
-        : recentProcessingAttachments.length > 0
-          ? 'attachment'
-          : 'empty';
-  const priorityDescription =
-    priorityMode === 'approval'
-      ? t('Items needing attention now.')
-      : priorityMode === 'model'
-        ? t('Continue the latest model work without scanning the full navigation tree.')
-        : priorityMode === 'attachment'
-          ? t('Recent files still processing in conversation context can be resumed from chat.')
-          : t('No console data available.');
-  const priorityCta =
-    priorityMode === 'approval'
-      ? { to: '/admin/models/pending', label: t('Open Queue') }
-      : priorityMode === 'model'
-        ? { to: '/models/my-models', label: t('Inspect my models') }
-        : { to: '/workspace/chat', label: t('Continue in Chat') };
 
   const actionGroups: ConsoleActionGroup[] = useMemo(() => {
     const groups: ConsoleActionGroup[] = [
@@ -518,6 +510,91 @@ export default function ProfessionalConsolePage() {
     return groups;
   }, [snapshot?.user.role, t]);
 
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'dataset',
+        label: t('Create your first dataset'),
+        detail: t('Prepare OCR/detection assets and define a clear data scope before training.'),
+        done: (snapshot?.datasets.length ?? 0) > 0,
+        to: '/datasets',
+        cta: t('Manage Datasets')
+      },
+      {
+        key: 'annotate',
+        label: t('Annotate and review samples'),
+        detail: t('Open dataset detail and move samples through annotation/review before versioning.'),
+        done: (snapshot?.trainingJobs.length ?? 0) > 0,
+        to: '/datasets',
+        cta: t('Open Annotation Workspace')
+      },
+      {
+        key: 'train',
+        label: t('Launch training job'),
+        detail: t('Bind a dataset version snapshot and run training with readiness checks visible.'),
+        done: (snapshot?.trainingJobs.length ?? 0) > 0,
+        to: '/training/jobs/new',
+        cta: t('Create Training Job')
+      },
+      {
+        key: 'version',
+        label: t('Register model version'),
+        detail: t('Promote completed training output into a traceable model version for runtime usage.'),
+        done: (snapshot?.modelVersions.length ?? 0) > 0,
+        to: '/models/versions',
+        cta: t('Open Model Versions')
+      },
+      {
+        key: 'validate',
+        label: t('Validate inference and close feedback loop'),
+        detail: t('Run inference, inspect execution quality markers, and send bad cases back to datasets.'),
+        done:
+          (snapshot?.inferenceRuns.length ?? 0) > 0 &&
+          Boolean(snapshot?.inferenceRuns.some((run) => Boolean(run.feedback_dataset_id))),
+        to: '/inference/validate',
+        cta: t('Open Inference Validation')
+      }
+    ],
+    [snapshot, t]
+  );
+  const nextOnboardingStep = useMemo(
+    () => onboardingSteps.find((step) => !step.done) ?? null,
+    [onboardingSteps]
+  );
+  const nextOnboardingStepIndex = useMemo(
+    () => (nextOnboardingStep ? onboardingSteps.findIndex((step) => step.key === nextOnboardingStep.key) + 1 : 0),
+    [nextOnboardingStep, onboardingSteps]
+  );
+  const priorityMode =
+    pendingApprovals.length > 0
+      ? 'approval'
+      : recentMyModels.length > 0
+        ? 'model'
+        : recentProcessingAttachments.length > 0
+          ? 'attachment'
+          : nextOnboardingStep
+            ? 'starter'
+            : 'empty';
+  const priorityDescription =
+    priorityMode === 'approval'
+      ? t('Items needing attention now.')
+      : priorityMode === 'model'
+        ? t('Continue the latest model work without scanning the full navigation tree.')
+        : priorityMode === 'attachment'
+          ? t('Recent files still processing in conversation context can be resumed from chat.')
+          : priorityMode === 'starter'
+            ? t('Use this starter task to begin the first complete visual-model loop without scanning the whole console.')
+            : t('No console data available.');
+  const priorityCta =
+    priorityMode === 'approval'
+      ? { to: '/admin/models/pending', label: t('Open Queue') }
+      : priorityMode === 'model'
+        ? { to: '/models/my-models', label: t('Inspect my models') }
+        : priorityMode === 'attachment'
+          ? { to: '/workspace/chat', label: t('Continue in Chat') }
+          : priorityMode === 'starter' && nextOnboardingStep
+            ? { to: nextOnboardingStep.to, label: nextOnboardingStep.cta }
+            : { to: '/workspace/chat', label: t('Continue in Chat') };
   const renderPageShell = (content: ReactNode) => (
     <WorkspacePage>
       <WorkspaceHero
@@ -577,7 +654,21 @@ export default function ProfessionalConsolePage() {
         )
       : !snapshot
         ? renderPageShell(
-            <StateBlock variant="empty" title={t('No Snapshot')} description={t('No console data available.')} />
+            <StateBlock
+              variant="empty"
+              title={t('No Snapshot')}
+              description={t('This overview fills itself after you create data, run training, or save runtime settings.')}
+              extra={
+                <div className="row gap wrap">
+                  <ButtonLink to="/datasets" variant="secondary" size="sm">
+                    {t('Open Datasets')}
+                  </ButtonLink>
+                  <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
+                    {t('Open Runtime Settings')}
+                  </ButtonLink>
+                </div>
+              }
+            />
           )
         : renderPageShell(
             <>
@@ -607,13 +698,13 @@ export default function ProfessionalConsolePage() {
                   },
                   {
                     title: t('Non-real training outputs'),
-                    description: t('Terminal jobs with template/simulated/unknown execution evidence.'),
+                    description: t('Terminal jobs with degraded or incomplete execution evidence.'),
                     value: nonRealTrainingCount,
                     tone: nonRealTrainingCount > 0 ? 'attention' : 'default'
                   },
                   {
-                    title: t('Fallback inference runs'),
-                    description: t('Inference runs marked as fallback/template/mock output.'),
+                    title: t('Degraded inference runs'),
+                    description: t('Inference runs marked as degraded output.'),
                     value: fallbackInferenceCount,
                     tone: fallbackInferenceCount > 0 ? 'attention' : 'default'
                   },
@@ -628,7 +719,7 @@ export default function ProfessionalConsolePage() {
                   },
                   {
                     title: t('Inference real-run coverage'),
-                    description: t('Share of inference runs without fallback/template/mock markers.'),
+                    description: t('Share of inference runs without degraded-output markers.'),
                     value: `${realInferenceCoverage} (${realInferenceCount}/${totalInferenceCount})`,
                     tone:
                       totalInferenceCount > 0 && realInferenceCount !== totalInferenceCount
@@ -636,14 +727,14 @@ export default function ProfessionalConsolePage() {
                         : 'default'
                   },
                   {
-                    title: t('Non-real training (24h)'),
-                    description: t('Terminal training jobs with non-real evidence in the last 24 hours.'),
+                    title: t('Degraded training (24h)'),
+                    description: t('Terminal training jobs with degraded output in the last 24 hours.'),
                     value: recentNonRealTrainingCount,
                     tone: recentNonRealTrainingCount > 0 ? 'attention' : 'default'
                   },
                   {
-                    title: t('Fallback inference (24h)'),
-                    description: t('Inference fallback/template/mock runs in the last 24 hours.'),
+                    title: t('Degraded inference (24h)'),
+                    description: t('Inference runs with degraded output in the last 24 hours.'),
                     value: recentFallbackInferenceCount,
                     tone: recentFallbackInferenceCount > 0 ? 'attention' : 'default'
                   }
@@ -694,10 +785,10 @@ export default function ProfessionalConsolePage() {
                           {t('Processing files')}: {processingFiles}
                         </Badge>
                         <Badge tone={nonRealTrainingCount > 0 ? 'warning' : 'neutral'}>
-                          {t('Non-real training')}: {nonRealTrainingCount}
+                          {t('Degraded training')}: {nonRealTrainingCount}
                         </Badge>
                         <Badge tone={fallbackInferenceCount > 0 ? 'warning' : 'neutral'}>
-                          {t('Fallback inference')}: {fallbackInferenceCount}
+                          {t('Degraded inference')}: {fallbackInferenceCount}
                         </Badge>
                         <Badge tone="info">
                           {t('Priority lane')}:{' '}
@@ -707,6 +798,8 @@ export default function ProfessionalConsolePage() {
                               ? t('Models')
                               : priorityMode === 'attachment'
                                 ? t('Attachments')
+                                : priorityMode === 'starter'
+                                  ? t('Getting started')
                                 : t('Idle')}
                         </Badge>
                       </div>
@@ -715,10 +808,27 @@ export default function ProfessionalConsolePage() {
                 }
                 main={
                   <div className="workspace-main-stack">
+                    <WorkspaceOnboardingCard
+                      title={t('New to Vistral? Start here')}
+                      description={t('Follow this guided path to understand the full visual-model loop without guessing where to click.')}
+                      summary={t('Each step links to the exact workspace page and updates from real records.')}
+                      storageKey={consoleOnboardingDismissedStorageKey}
+                      steps={onboardingSteps.map((step) => ({
+                        key: step.key,
+                        label: step.label,
+                        detail: step.detail,
+                        done: step.done,
+                        primaryAction: {
+                          to: step.to,
+                          label: step.cta
+                        }
+                      }))}
+                    />
+
                     <Card as="article">
                       <WorkspaceSectionHeader
                         title={t('Reality Guardrail')}
-                        description={t('Surface template/fallback outputs early so production decisions stay safe.')}
+                        description={t('Surface degraded outputs early so production decisions stay safe.')}
                         actions={
                           <Button type="button" variant="ghost" size="sm" onClick={() => void copyRealitySnapshot()}>
                             {t('Copy KPI snapshot')}
@@ -739,16 +849,16 @@ export default function ProfessionalConsolePage() {
                         <div className="stack">
                           <Panel as="section" className="stack tight" tone="soft">
                             <div className="row between gap wrap align-center">
-                              <strong>{t('Top fallback reasons')}</strong>
+                              <strong>{t('Top degradation reasons')}</strong>
                               <Badge tone="info">{nonRealTrainingCount + fallbackInferenceCount}</Badge>
                             </div>
                             <div className="stack tight">
-                              <small className="muted">{t('Training non-real reasons')}</small>
+                              <small className="muted">{t('Training degradation reasons')}</small>
                               <div className="row gap wrap">
                                 {topTrainingFallbackReasons.length > 0 ? (
                                   topTrainingFallbackReasons.map(([reason, count]) => (
                                     <Badge key={`training-${reason}`} tone="warning">
-                                      {reason} · {count}
+                                      {formatFallbackReasonBucketLabel(reason)} · {count}
                                     </Badge>
                                   ))
                                 ) : (
@@ -757,12 +867,12 @@ export default function ProfessionalConsolePage() {
                               </div>
                             </div>
                             <div className="stack tight">
-                              <small className="muted">{t('Inference fallback reasons')}</small>
+                              <small className="muted">{t('Inference degradation reasons')}</small>
                               <div className="row gap wrap">
                                 {topInferenceFallbackReasons.length > 0 ? (
                                   topInferenceFallbackReasons.map(([reason, count]) => (
                                     <Badge key={`inference-${reason}`} tone="warning">
-                                      {reason} · {count}
+                                      {formatFallbackReasonBucketLabel(reason)} · {count}
                                     </Badge>
                                   ))
                                 ) : (
@@ -777,9 +887,6 @@ export default function ProfessionalConsolePage() {
                                 <strong>{t('Training authenticity alerts')}</strong>
                                 <Badge tone="warning">{nonRealTrainingCount}</Badge>
                               </div>
-                              <small className="muted">
-                                {t('These terminal jobs include template/simulated/unknown evidence and need review.')}
-                              </small>
                               <ul className="workspace-record-list compact">
                                 {nonRealTrainingJobs.slice(0, 4).map(({ job, insight }) => (
                                   <Panel key={job.id} as="li" className="workspace-record-item compact" tone="soft">
@@ -787,15 +894,15 @@ export default function ProfessionalConsolePage() {
                                       <div className="workspace-record-summary stack tight">
                                         <strong>{job.name}</strong>
                                         <small className="muted">
-                                          {t(job.framework)} · {t(job.execution_mode)} · {formatTimestamp(job.updated_at)}
+                                          {t(job.framework)} · {t('Local execution path')} · {formatTimestamp(job.updated_at)}
                                         </small>
                                       </div>
                                       <Badge tone="warning">
                                         {insight.reality === 'template'
-                                          ? t('Template/Fallback')
+                                          ? t('Degraded output')
                                           : insight.reality === 'simulated'
-                                            ? t('Simulated')
-                                            : t('Unknown')}
+                                            ? t('Degraded output')
+                                            : t('Needs verification')}
                                       </Badge>
                                     </div>
                                     <ButtonLink to={`/training/jobs/${job.id}`} variant="ghost" size="sm">
@@ -812,12 +919,9 @@ export default function ProfessionalConsolePage() {
                           {fallbackInferenceCount > 0 ? (
                             <Panel as="section" className="stack tight" tone="soft">
                               <div className="row between gap wrap align-center">
-                                <strong>{t('Inference fallback alerts')}</strong>
+                                <strong>{t('Inference degradation alerts')}</strong>
                                 <Badge tone="warning">{fallbackInferenceCount}</Badge>
                               </div>
-                              <small className="muted">
-                                {t('These inference runs carry fallback/template markers and should not be treated as fully real output.')}
-                              </small>
                               <ul className="workspace-record-list compact">
                                 {inferenceFallbackRuns.slice(0, 4).map(({ run, reality }) => (
                                   <Panel key={run.id} as="li" className="workspace-record-item compact" tone="soft">
@@ -825,12 +929,14 @@ export default function ProfessionalConsolePage() {
                                       <div className="workspace-record-summary stack tight">
                                         <strong>{run.id}</strong>
                                         <small className="muted">
-                                          {t(run.framework)} · {run.execution_source} · {formatTimestamp(run.updated_at)}
+                                          {t(run.framework)} · {t('Degraded mode')} · {formatTimestamp(run.updated_at)}
                                         </small>
                                       </div>
-                                      <Badge tone="warning">{t('Fallback')}</Badge>
+                                      <Badge tone="warning">{t('Degraded')}</Badge>
                                     </div>
-                                    {reality.reason ? <small className="muted">{reality.reason}</small> : null}
+                                    <small className="muted">
+                                      {formatFallbackReasonBucketLabel(bucketRuntimeFallbackReason(reality.reason))}
+                                    </small>
                                     <ButtonLink to="/inference/validate" variant="ghost" size="sm">
                                       {t('Open Validation')}
                                     </ButtonLink>
@@ -848,7 +954,7 @@ export default function ProfessionalConsolePage() {
 
                     <Card as="article">
                       <WorkspaceSectionHeader
-                        title={t('Main Work Queue')}
+                        title={priorityMode === 'starter' ? t('Start your first loop') : t('Main Work Queue')}
                         description={priorityDescription}
                         actions={
                           priorityMode !== 'empty' ? (
@@ -864,6 +970,16 @@ export default function ProfessionalConsolePage() {
                           variant="empty"
                           title={t('No follow-up items right now.')}
                           description={t('All queued approvals are already resolved.')}
+                          extra={
+                            <div className="row gap wrap">
+                              <ButtonLink to="/datasets" variant="secondary" size="sm">
+                                {t('Open Datasets')}
+                              </ButtonLink>
+                              <ButtonLink to="/training/jobs" variant="ghost" size="sm">
+                                {t('Open Training Jobs')}
+                              </ButtonLink>
+                            </div>
+                          }
                         />
                       ) : (
                         <ul className="workspace-record-list compact">
@@ -933,6 +1049,31 @@ export default function ProfessionalConsolePage() {
                                 </Panel>
                               ))
                             : null}
+                          {priorityMode === 'starter' && nextOnboardingStep
+                            ? [
+                                <WorkspaceStarterPanel
+                                  key={nextOnboardingStep.key}
+                                  as="li"
+                                  className="workspace-record-item compact"
+                                  title={nextOnboardingStep.label}
+                                  progressLabel={t('Step {current} of {total}', {
+                                    current: nextOnboardingStepIndex,
+                                    total: onboardingSteps.length
+                                  })}
+                                  detail={nextOnboardingStep.detail}
+                                  actions={
+                                    <>
+                                      <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
+                                        {nextOnboardingStep.cta}
+                                      </ButtonLink>
+                                      <ButtonLink to="/datasets" variant="ghost" size="sm">
+                                        {t('Open Datasets')}
+                                      </ButtonLink>
+                                    </>
+                                  }
+                                />
+                              ]
+                            : null}
                         </ul>
                       )}
                     </Card>
@@ -949,13 +1090,13 @@ export default function ProfessionalConsolePage() {
                               <strong>{group.title}</strong>
                               <small className="muted">{group.description}</small>
                             </div>
-                            <div className="workspace-button-stack">
+                            <WorkspaceActionStack>
                               {group.links.map((link) => (
                                 <ButtonLink key={link.to} to={link.to} variant="secondary" size="sm" block>
                                   {link.label}
                                 </ButtonLink>
                               ))}
-                            </div>
+                            </WorkspaceActionStack>
                           </Panel>
                         ))}
                       </div>
@@ -995,13 +1136,13 @@ export default function ProfessionalConsolePage() {
                         </Panel>
                         <Panel as="li" className="workspace-record-item compact" tone="soft">
                           <div className="row between gap wrap align-center">
-                            <strong>{t('Non-real training')}</strong>
+                            <strong>{t('Degraded training')}</strong>
                             <Badge tone={nonRealTrainingCount > 0 ? 'warning' : 'neutral'}>{nonRealTrainingCount}</Badge>
                           </div>
                         </Panel>
                         <Panel as="li" className="workspace-record-item compact" tone="soft">
                           <div className="row between gap wrap align-center">
-                            <strong>{t('Fallback inference')}</strong>
+                            <strong>{t('Degraded inference')}</strong>
                             <Badge tone={fallbackInferenceCount > 0 ? 'warning' : 'neutral'}>{fallbackInferenceCount}</Badge>
                           </div>
                         </Panel>
@@ -1038,6 +1179,8 @@ export default function ProfessionalConsolePage() {
                                 ? t('Recent model work')
                                 : priorityMode === 'attachment'
                                   ? t('Attachment follow-up')
+                                  : priorityMode === 'starter'
+                                    ? t('Starter task')
                                   : t('Idle lane')}
                           </strong>
                           <Badge tone="info">
@@ -1047,10 +1190,15 @@ export default function ProfessionalConsolePage() {
                                 ? recentMyModels.length
                                 : priorityMode === 'attachment'
                                   ? recentProcessingAttachments.length
+                                  : priorityMode === 'starter'
+                                    ? nextOnboardingStepIndex
                                   : 0}
                           </Badge>
                         </div>
                         <small className="muted">{priorityDescription}</small>
+                        {priorityMode === 'starter' && nextOnboardingStep ? (
+                          <small className="muted">{t('Next: {step}', { step: nextOnboardingStep.label })}</small>
+                        ) : null}
                         {priorityMode !== 'empty' ? (
                           <ButtonLink to={priorityCta.to} variant="secondary" size="sm" block>
                             {priorityCta.label}

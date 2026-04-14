@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FileAttachment, ModelRecord } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
+import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
-import { Card, Panel } from '../components/ui/Surface';
+import { Card } from '../components/ui/Surface';
 import {
   WorkspaceHero,
   WorkspaceMetricGrid,
@@ -21,6 +24,7 @@ import { api } from '../services/api';
 
 const backgroundRefreshIntervalMs = 5000;
 const modelTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
+const createModelOnboardingDismissedStorageKey = 'vistral-create-model-onboarding-dismissed';
 
 const buildModelFilesSignature = (modelId: string | null, files: FileAttachment[]): string =>
   JSON.stringify({
@@ -97,6 +101,37 @@ export default function CreateModelPage() {
     [modelFiles]
   );
   const draftStatusLabel = draftModel ? t(draftModel.status) : t('not started');
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'metadata',
+        label: t('Create metadata shell'),
+        detail: t('Start with name, description, model type, and visibility so the draft has a stable identity.'),
+        done: Boolean(draftModel),
+        to: '/models/create',
+        cta: t('Fill metadata')
+      },
+      {
+        key: 'artifact',
+        label: t('Upload ready artifact'),
+        detail: t('Add at least one ready model file before moving into parameter review and approval submission.'),
+        done: readyFileCount > 0,
+        to: '/models/create',
+        cta: t('Upload model file')
+      },
+      {
+        key: 'submit',
+        label: t('Submit approval request'),
+        detail: t('Use the final review step to submit the draft into the approval queue and keep governance traceable.'),
+        done: draftModel?.status === 'pending_approval',
+        to: '/admin/models/pending',
+        cta: t('Open Approval Queue'),
+        secondaryTo: '/models/my-models',
+        secondaryLabel: t('Open My Models')
+      }
+    ],
+    [draftModel, readyFileCount, t]
+  );
 
   useBackgroundPolling(
     () => {
@@ -491,6 +526,30 @@ export default function CreateModelPage() {
         }
         main={
           <div className="workspace-main-stack">
+            <WorkspaceOnboardingCard
+              title={t('Model draft first-run guide')}
+              description={t('Use this wizard to move from model metadata into artifact upload, parameter review, and approval submission.')}
+              summary={t('Guide status is computed from draft creation, ready artifact count, and approval queue status.')}
+              storageKey={createModelOnboardingDismissedStorageKey}
+              steps={onboardingSteps.map((stepItem) => ({
+                key: stepItem.key,
+                label: stepItem.label,
+                detail: stepItem.detail,
+                done: stepItem.done,
+                primaryAction: {
+                  to: stepItem.to,
+                  label: stepItem.cta
+                },
+                secondaryAction:
+                  stepItem.secondaryTo && stepItem.secondaryLabel
+                    ? {
+                        to: stepItem.secondaryTo,
+                        label: stepItem.secondaryLabel
+                      }
+                    : undefined
+              }))}
+            />
+
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Current step')}
@@ -536,6 +595,13 @@ export default function CreateModelPage() {
                   variant="empty"
                   title={t('No draft yet.')}
                   description={t('Create the metadata shell first, then upload model artifacts in the next step.')}
+                  extra={
+                    <WorkspaceFollowUpHint
+                      detail={t(
+                        'Start with name, type, visibility, and description on the left. When step 1 is complete, this inspector will reflect the draft immediately.'
+                      )}
+                    />
+                  }
                 />
               )}
             </Card>
@@ -560,20 +626,21 @@ export default function CreateModelPage() {
               </ul>
             </Card>
 
-            <Panel as="article" className="workspace-inspector-card">
-              <div className="stack tight">
-                <h3>{t('Review links')}</h3>
-                <small className="muted">{t('Track draft progress and approval results from the model workspace.')}</small>
-              </div>
-              <div className="workspace-button-stack">
-                <ButtonLink to="/models/my-models" variant="secondary" block>
-                  {t('Manage My Models')}
-                </ButtonLink>
-                <ButtonLink to="/models/versions" variant="secondary" block>
-                  {t('Open Model Versions')}
-                </ButtonLink>
-              </div>
-            </Panel>
+            <WorkspaceActionPanel
+              title={t('Review links')}
+              description={t('Track draft progress and approval results from the model workspace.')}
+              surface="panel"
+              actions={
+                <>
+                  <ButtonLink to="/models/my-models" variant="secondary" block>
+                    {t('Manage My Models')}
+                  </ButtonLink>
+                  <ButtonLink to="/models/versions" variant="secondary" block>
+                    {t('Open Model Versions')}
+                  </ButtonLink>
+                </>
+              }
+            />
           </div>
         }
       />

@@ -48,6 +48,7 @@ import { HiddenFileInput, Input, Select, Textarea } from '../components/ui/Field
 import { api } from '../services/api';
 import { AUTH_UPDATED_EVENT, emitAuthUpdated } from '../services/authSession';
 import { LLM_CONFIG_UPDATED_EVENT } from '../services/llmConfig';
+import { isFallbackExecutionSource } from '../utils/inferenceSource';
 
 interface LocalChatHistoryItem {
   id: string;
@@ -1054,6 +1055,7 @@ interface ConversationMessageViewportProps {
   formatConversationActionLabel: (action: ConversationActionMetadata['action']) => string;
   formatConversationActionStatusLabel: (status: ConversationActionMetadata['status']) => string;
   formatConversationActionFieldLabel: (field: string) => string;
+  formatConversationActionFieldValue: (field: string, value: unknown) => string;
   resolveConversationActionHref: (action: ConversationActionMetadata) => string | null;
   resolveConversationActionLinks: (action: ConversationActionMetadata) => Array<{ label: string; href: string }>;
   resolveMessageAttachmentNames: (message: MessageRecord) => string[];
@@ -1075,6 +1077,7 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
   formatConversationActionLabel,
   formatConversationActionStatusLabel,
   formatConversationActionFieldLabel,
+  formatConversationActionFieldValue,
   resolveConversationActionHref,
   resolveConversationActionLinks,
   resolveMessageAttachmentNames
@@ -1224,6 +1227,17 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
               <ul className="chat-message-list">
                 {visibleMessages.map((message) => {
                 const actionMetadata = message.metadata?.conversation_action ?? null;
+                const actionExecutionSource = actionMetadata?.collected_fields.execution_source ?? '';
+                const isInferenceFallbackResult =
+                  actionMetadata?.action === 'run_model_inference' &&
+                  actionMetadata.status === 'completed' &&
+                  isFallbackExecutionSource(actionExecutionSource);
+                const actionDisplayStatus = isInferenceFallbackResult ? 'failed' : actionMetadata?.status ?? 'failed';
+                const actionDisplayStatusLabel = isInferenceFallbackResult
+                  ? t('Degraded mode')
+                  : actionMetadata
+                    ? formatConversationActionStatusLabel(actionMetadata.status)
+                    : formatConversationActionStatusLabel('failed');
                 const actionHref = actionMetadata ? resolveConversationActionHref(actionMetadata) : null;
                 const actionLinks = normalizeActionLinks(actionMetadata
                   ? actionMetadata.action_links && actionMetadata.action_links.length > 0
@@ -1259,11 +1273,11 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                         </small>
                       ) : null}
                       {actionMetadata ? (
-                        <div className={`chat-message-action-card ${actionMetadata.status}`}>
+                        <div className={`chat-message-action-card ${actionDisplayStatus}`}>
                           <div className="chat-message-action-card-header">
                             <strong>{formatConversationActionLabel(actionMetadata.action)}</strong>
-                            <span className={`chat-message-action-status ${actionMetadata.status}`}>
-                              {formatConversationActionStatusLabel(actionMetadata.status)}
+                            <span className={`chat-message-action-status ${actionDisplayStatus}`}>
+                              {actionDisplayStatusLabel}
                             </span>
                           </div>
                           {actionMetadata.missing_fields.length > 0 ? (
@@ -1284,7 +1298,8 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                               <ul className="chat-message-action-details">
                                 {Object.entries(actionMetadata.collected_fields).map(([field, value]) => (
                                   <li key={`${message.id}-collected-${field}`}>
-                                    <strong>{formatConversationActionFieldLabel(field)}:</strong> {value}
+                                    <strong>{formatConversationActionFieldLabel(field)}:</strong>{' '}
+                                    {formatConversationActionFieldValue(field, value)}
                                   </li>
                                 ))}
                               </ul>
@@ -2047,6 +2062,12 @@ export default function ConversationPage() {
       if (action === 'create_training_job') {
         return t('Create Training Job');
       }
+      if (action === 'run_model_inference') {
+        return t('Run Inference');
+      }
+      if (action === 'console_api_call') {
+        return t('Console API');
+      }
       return t('Create Model');
     },
     [t]
@@ -2127,7 +2148,52 @@ export default function ConversationPage() {
       if (field === 'dataset_item_id') {
         return t('Dataset Item');
       }
+      if (field === 'model_id') {
+        return t('Model');
+      }
+      if (field === 'model_version_id') {
+        return t('Model Version');
+      }
+      if (field === 'profile_id') {
+        return t('Runtime Profile');
+      }
+      if (field === 'overwrite_endpoint') {
+        return t('Overwrite endpoints');
+      }
+      if (field === 'inference_run_id') {
+        return t('Inference Run');
+      }
+      if (field === 'execution_source') {
+        return t('Execution Status');
+      }
       return field;
+    },
+    [t]
+  );
+
+  const formatConversationActionFieldValue = useCallback(
+    (field: string, value: unknown): string => {
+      if (field === 'execution_source') {
+        const source = typeof value === 'string' ? value.trim() : '';
+        if (!source) {
+          return t('Unknown execution');
+        }
+        return isFallbackExecutionSource(source) ? t('Degraded mode') : t('Real execution');
+      }
+      if (typeof value === 'string') {
+        return value;
+      }
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+      }
+      if (value === null || value === undefined) {
+        return '';
+      }
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
     },
     [t]
   );
@@ -2197,7 +2263,9 @@ export default function ConversationPage() {
             href: modelVersionId ? `/inference/validate?modelVersion=${encodeURIComponent(modelVersionId)}` : '/inference/validate'
           }
         ],
-        send_inference_feedback: [{ label: t('Open Inference Validation'), href: '/inference/validate' }]
+        send_inference_feedback: [{ label: t('Open Inference Validation'), href: '/inference/validate' }],
+        activate_runtime_profile: [{ label: t('Open Runtime Settings'), href: '/settings/runtime' }],
+        auto_configure_runtime_settings: [{ label: t('Open Runtime Settings'), href: '/settings/runtime' }]
       };
       return linkMap[api] ?? [];
     },
@@ -2568,21 +2636,106 @@ export default function ConversationPage() {
     }
   }, [closeMobileSidebar, conversation?.id, t]);
 
-  const deleteHistoryItem = useCallback((id: string) => {
-    appendHiddenHistoryIds([id]);
-    setHistory((previous) => previous.filter((item) => item.id !== id));
-    if (editingConversationId === id) {
-      cancelRenameConversation();
+  const deleteHistoryItem = useCallback(
+    async (id: string) => {
+      setError('');
+      try {
+        await api.deleteConversation(id);
+      } catch (deleteError) {
+        setError((deleteError as Error).message);
+        return;
+      }
+
+      appendHiddenHistoryIds([id]);
+      setHistory((previous) => previous.filter((item) => item.id !== id));
+      if (editingConversationId === id) {
+        cancelRenameConversation();
+      }
+      if (conversation?.id === id) {
+        setConversation(null);
+        setMessages([]);
+        setInput('');
+        setSelectedAttachmentIds([]);
+        setAttachmentListExpanded(false);
+      }
+      setNotice(t('Conversation deleted.'));
+      refreshConversations().catch(() => {
+        // Keep local state even when background sync is unavailable.
+      });
+    },
+    [
+      appendHiddenHistoryIds,
+      cancelRenameConversation,
+      conversation?.id,
+      editingConversationId,
+      refreshConversations,
+      t
+    ]
+  );
+  const clearAllHistory = useCallback(async () => {
+    if (history.length === 0) {
+      setNotice(t('No conversation history to clear.'));
+      return;
     }
-    if (conversation?.id === id) {
-      setConversation(null);
-      setMessages([]);
-      setInput('');
-      setSelectedAttachmentIds([]);
-      setAttachmentListExpanded(false);
+
+    const confirmed = window.confirm(t('Delete all conversation history visible in this account?'));
+    if (!confirmed) {
+      return;
     }
-    setNotice(t('Removed from sidebar (local).'));
-  }, [appendHiddenHistoryIds, cancelRenameConversation, conversation?.id, editingConversationId, t]);
+
+    setError('');
+    const ids = history.map((item) => item.id);
+    const results = await Promise.allSettled(ids.map((id) => api.deleteConversation(id)));
+    const deletedIds: string[] = [];
+    let failedCount = 0;
+
+    results.forEach((result, index) => {
+      const id = ids[index];
+      if (!id) {
+        return;
+      }
+      if (result.status === 'fulfilled') {
+        deletedIds.push(id);
+        return;
+      }
+      failedCount += 1;
+    });
+
+    if (deletedIds.length > 0) {
+      const deletedIdSet = new Set(deletedIds);
+      appendHiddenHistoryIds(deletedIds);
+      setHistory((previous) => previous.filter((item) => !deletedIdSet.has(item.id)));
+      if (editingConversationId && deletedIdSet.has(editingConversationId)) {
+        cancelRenameConversation();
+      }
+      if (conversation?.id && deletedIdSet.has(conversation.id)) {
+        setConversation(null);
+        setMessages([]);
+        setInput('');
+        setSelectedAttachmentIds([]);
+        setAttachmentListExpanded(false);
+      }
+    }
+
+    if (failedCount > 0) {
+      setError(t('Failed to delete {count} conversations.', { count: failedCount }));
+      setNotice(t('History cleared with partial failures.'));
+    } else {
+      setNotice(t('History cleared.'));
+    }
+
+    refreshConversations().catch(() => {
+      // Keep local state even when background sync is unavailable.
+    });
+  }, [
+    appendHiddenHistoryIds,
+    cancelRenameConversation,
+    conversation?.id,
+    editingConversationId,
+    history,
+    refreshConversations,
+    t
+  ]);
 
   const sortedHistory = useMemo(
     () => sortHistoryItems(history, pinnedHistoryOrder),
@@ -2726,7 +2879,7 @@ export default function ConversationPage() {
     } else if (action === 'pin') {
       toggleHistoryPin(contextMenuItem.id);
     } else if (action === 'delete') {
-      deleteHistoryItem(contextMenuItem.id);
+      void deleteHistoryItem(contextMenuItem.id);
     }
 
     closeHistoryContextMenu();
@@ -3172,6 +3325,19 @@ export default function ConversationPage() {
                 +
               </Button>
             </div>
+            <div className="row gap wrap">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void clearAllHistory();
+                }}
+                disabled={sending || authRequired || history.length === 0}
+              >
+                {t('Clear history')}
+              </Button>
+            </div>
           </div>
 
           <div className="chat-sidebar-scroll">
@@ -3359,6 +3525,7 @@ export default function ConversationPage() {
           formatConversationActionLabel={formatConversationActionLabel}
           formatConversationActionStatusLabel={formatConversationActionStatusLabel}
           formatConversationActionFieldLabel={formatConversationActionFieldLabel}
+          formatConversationActionFieldValue={formatConversationActionFieldValue}
           resolveConversationActionHref={resolveConversationActionHref}
           resolveConversationActionLinks={resolveConversationActionLinks}
           resolveMessageAttachmentNames={resolveMessageAttachmentNames}

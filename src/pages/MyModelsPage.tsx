@@ -1,14 +1,14 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, User } from '../../shared/domain';
-import StateBlock from '../components/StateBlock';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import ModelInventory from '../components/models/ModelInventory';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import { FilterToolbar, InlineAlert, KPIStatRow, PageHeader } from '../components/ui/ConsolePage';
+import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
 import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -21,6 +21,7 @@ import { api } from '../services/api';
 const readyStatusSet = new Set<ModelRecord['status']>(['approved', 'published']);
 const terminalTrainingStatuses = new Set<TrainingJobRecord['status']>(['completed', 'failed', 'cancelled']);
 const modelStatusOptions = ['draft', 'pending_approval', 'approved', 'rejected', 'published', 'deprecated'] as const;
+const myModelsOnboardingDismissedStorageKey = 'vistral-my-models-onboarding-dismissed';
 type LoadMode = 'initial' | 'manual';
 
 export default function MyModelsPage() {
@@ -263,7 +264,7 @@ export default function MyModelsPage() {
                 hint:
                   counts.unknownVersions > 0
                     ? t('Includes unknown authenticity evidence. Review training and version details before production use.')
-                    : t('Includes template/simulated/non-real evidence. Review training and version details before production use.')
+                    : t('Includes degraded or non-real evidence. Review training and version details before production use.')
               }
             ];
           }
@@ -295,6 +296,38 @@ export default function MyModelsPage() {
     searchText.trim().length > 0 ||
     statusFilter !== 'all' ||
     laneFilter !== 'all';
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'drafts',
+        label: t('Create or restore your draft lane'),
+        detail: t('Your ownership lane starts with at least one draft so model status and review history have a stable home.'),
+        done: models.length > 0,
+        to: '/models/create',
+        cta: t('Create Model Draft')
+      },
+      {
+        key: 'statuses',
+        label: t('Track readiness and review state'),
+        detail: t('Use the lane and status filters to separate drafts, pending approvals, and ready models before taking action.'),
+        done:
+          filteredSummary.ready > 0 ||
+          filteredSummary.pending > 0 ||
+          filteredSummary.draftOrRework > 0,
+        to: '/models/my-models',
+        cta: t('Review ownership lane')
+      },
+      {
+        key: 'versions',
+        label: t('Continue into version registration'),
+        detail: t('Once a model has completed training evidence, move into the version lane for registration and deployment follow-up.'),
+        done: modelVersions.length > 0,
+        to: '/models/versions',
+        cta: t('Open Model Versions')
+      }
+    ],
+    [filteredSummary.draftOrRework, filteredSummary.pending, filteredSummary.ready, modelVersions.length, models.length, t]
+  );
 
   const summary = useMemo(
     () => ({
@@ -333,143 +366,122 @@ export default function MyModelsPage() {
 
   return (
     <WorkspacePage>
-      <WorkspaceHero
+      <PageHeader
         eyebrow={t('Ownership lane')}
         title={t('My Models')}
         description={t('Track your draft, pending, and ready models in one place.')}
-        stats={[
+        primaryAction={{
+          label: loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh'),
+          onClick: () => {
+            load('manual').catch(() => {
+              // no-op
+            });
+          },
+          disabled: loading || refreshing
+        }}
+        secondaryActions={
+          <ButtonLink to="/models/create" variant="secondary" size="sm">
+            {t('Create New Model')}
+          </ButtonLink>
+        }
+      />
+
+      <KPIStatRow
+        items={[
           {
             label: t('Owned models'),
-            value: summary.total
+            value: summary.total,
+            tone: 'info',
+            hint: t('Ownership-scoped model inventory.')
           },
           {
             label: t('Ready models'),
-            value: summary.ready
+            value: summary.ready,
+            tone: summary.ready > 0 ? 'success' : 'neutral',
+            hint: t('Models that are already approved or published for downstream usage.')
           },
           {
             label: t('Pending reviews'),
-            value: summary.pending
-          }
-        ]}
-      />
-
-      {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
-      {result ? <StateBlock variant="success" title={t('Action Completed')} description={result} /> : null}
-
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Owned models'),
-            description: t('Ownership-scoped model inventory.'),
-            value: summary.total
-          },
-          {
-            title: t('Ready models'),
-            description: t('Models that are already approved or published for downstream usage.'),
-            value: summary.ready
-          },
-          {
-            title: t('Pending reviews'),
-            description: t('Pending approvals in your lane.'),
             value: summary.pending,
-            tone: summary.pending > 0 ? 'attention' : 'default'
+            tone: summary.pending > 0 ? 'warning' : 'neutral',
+            hint: t('Pending approvals in your lane.')
           },
           {
-            title: t('Drafts / rework'),
-            description: t('Draft or rejected models that still need edits before they can move forward.'),
-            value: summary.draftOrRework
+            label: t('Drafts / rework'),
+            value: summary.draftOrRework,
+            tone: 'neutral',
+            hint: t('Draft or rejected models that still need edits before they can move forward.')
           },
           {
-            title: t('Authenticity risk'),
-            description: t('Models in current view linked to non-real/unknown version evidence.'),
+            label: t('Authenticity risk'),
             value: filteredRiskyModels,
-            tone: filteredRiskyModels > 0 ? 'attention' : 'default'
+            tone: filteredRiskyModels > 0 ? 'warning' : 'neutral',
+            hint: t('Models in current view linked to non-real/unknown version evidence.')
           }
         ]}
       />
+
+      {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}
+      {result ? <InlineAlert tone="success" title={t('Action Completed')} description={result} /> : null}
 
       <WorkspaceWorkbench
         toolbar={
-          <Card as="section" className="workspace-toolbar-card">
-            <div className="workspace-toolbar-head">
-              <div className="workspace-toolbar-copy">
-                <h3>{t('Ownership Controls')}</h3>
-                <small className="muted">
-                  {t('Narrow your lane to ready, pending, or rework models before acting on versions or new drafts.')}
-                </small>
-              </div>
-              <div className="workspace-toolbar-actions">
-                <ButtonLink to="/models/create" size="sm">
-                  {t('Create New Model')}
-                </ButtonLink>
-                {hasActiveFilters ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
-                    {t('Clear filters')}
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    load('manual').catch(() => {
-                      // no-op
-                    });
-                  }}
-                  disabled={loading || refreshing}
-                >
-                  {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
-                </Button>
-              </div>
-            </div>
-
-            <div className="workspace-filter-grid">
-              <label className="stack tight">
-                <small className="muted">{t('Search')}</small>
-                <Input
-                  value={searchText}
-                  onChange={(event) => setSearchText(event.target.value)}
-                  placeholder={t('Search by name, description, or model type')}
-                />
-              </label>
-              <label className="stack tight">
-                <small className="muted">{t('Lane')}</small>
-                <Select
-                  value={laneFilter}
-                  onChange={(event) =>
-                    setLaneFilter(event.target.value as 'all' | 'ready' | 'pending' | 'draft_rework')
-                  }
-                >
-                  <option value="all">{t('all')}</option>
-                  <option value="ready">{t('Ready')}</option>
-                  <option value="pending">{t('Pending review')}</option>
-                  <option value="draft_rework">{t('Drafts / rework')}</option>
-                </Select>
-              </label>
-              <label className="stack tight">
-                <small className="muted">{t('Status')}</small>
-                <Select
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value as 'all' | ModelRecord['status'])}
-                >
-                  <option value="all">{t('all')}</option>
-                  {modelStatusOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {t(option)}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <div className="stack tight">
-                <small className="muted">{t('Owner view')}</small>
-                <div className="row gap wrap">
-                  <Badge tone="neutral">{currentUser?.username ?? t('guest')}</Badge>
+          <FilterToolbar
+            filters={
+              <>
+                <label className="stack tight">
+                  <small className="muted">{t('Search')}</small>
+                  <Input
+                    value={searchText}
+                    onChange={(event) => setSearchText(event.target.value)}
+                    placeholder={t('Search by name, description, or model type')}
+                  />
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Lane')}</small>
+                  <Select
+                    value={laneFilter}
+                    onChange={(event) =>
+                      setLaneFilter(event.target.value as 'all' | 'ready' | 'pending' | 'draft_rework')
+                    }
+                  >
+                    <option value="all">{t('all')}</option>
+                    <option value="ready">{t('Ready')}</option>
+                    <option value="pending">{t('Pending review')}</option>
+                    <option value="draft_rework">{t('Drafts / rework')}</option>
+                  </Select>
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Status')}</small>
+                  <Select
+                    value={statusFilter}
+                    onChange={(event) => setStatusFilter(event.target.value as 'all' | ModelRecord['status'])}
+                  >
+                    <option value="all">{t('all')}</option>
+                    {modelStatusOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {t(option)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <div className="stack tight">
+                  <small className="muted">{t('Owner view')}</small>
+                  <div className="row gap wrap">
+                    <Badge tone="neutral">{currentUser?.username ?? t('guest')}</Badge>
+                  </div>
                 </div>
-              </div>
-            </div>
-
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
+              </>
+            }
+            actions={
+              hasActiveFilters ? (
+                <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                  {t('Clear filters')}
+                </Button>
+              ) : undefined
+            }
+            summary={
+              <div className="row gap wrap">
                 <Badge tone="info">{t('Matched')}: {filteredSummary.total}</Badge>
                 <Badge tone="neutral">{t('Ready models')}: {filteredSummary.ready}</Badge>
                 <Badge tone={filteredSummary.pending > 0 ? 'warning' : 'neutral'}>
@@ -481,11 +493,28 @@ export default function MyModelsPage() {
                 </Badge>
                 {jobInsightsLoading ? <Badge tone="neutral">{t('Checking authenticity...')}</Badge> : null}
               </div>
-            </div>
-          </Card>
+            }
+          />
         }
         main={
           <div className="workspace-main-stack">
+            <WorkspaceOnboardingCard
+              title={t('My models first-run guide')}
+              description={t('Use this page to track the models you own from draft through approval and version follow-up.')}
+              summary={t('Guide status is computed from owned model records, lane signals, and version availability.')}
+              storageKey={myModelsOnboardingDismissedStorageKey}
+              steps={onboardingSteps.map((stepItem) => ({
+                key: stepItem.key,
+                label: stepItem.label,
+                detail: stepItem.detail,
+                done: stepItem.done,
+                primaryAction: {
+                  to: stepItem.to,
+                  label: stepItem.cta
+                }
+              }))}
+            />
+
             <ModelInventory
               title={t('Owned Model Inventory')}
               description={t(
@@ -495,6 +524,16 @@ export default function MyModelsPage() {
               loadingDescription={t('Checking ownership-scoped models.')}
               emptyTitle={t('No owned models yet.')}
               emptyDescription={t('Your created models will appear here once you start a draft.')}
+              emptyExtra={
+                <div className="row gap wrap">
+                  <ButtonLink to="/models/create" variant="secondary" size="sm">
+                    {t('Create Model Draft')}
+                  </ButtonLink>
+                  <ButtonLink to="/models/versions" variant="ghost" size="sm">
+                    {t('Open Model Versions')}
+                  </ButtonLink>
+                </div>
+              }
               models={filteredModels}
               loading={loading}
               refreshing={refreshing}
@@ -554,27 +593,35 @@ export default function MyModelsPage() {
               </div>
             </Card>
 
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Create next draft')}
-                description={t('Start a new model draft when you are ready to upload artifacts or prepare approval.')}
-              />
+            <WorkspaceActionPanel
+              title={t('Create next draft')}
+              description={t('Start a new model draft when you are ready to upload artifacts or prepare approval.')}
+              actions={
+                <ButtonLink to="/models/create" variant="secondary">
+                  {t('Create New Model')}
+                </ButtonLink>
+              }
+            >
               <strong className="workspace-side-metric">{summary.draftOrRework}</strong>
               <small className="muted">
                 {t('Drafts / rework')}: {summary.draftOrRework}
               </small>
-              <div className="workspace-button-stack">
-                <ButtonLink to="/models/create" variant="secondary">
-                  {t('Create New Model')}
-                </ButtonLink>
-              </div>
-            </Card>
+            </WorkspaceActionPanel>
 
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Approval follow-up')}
-                description={t('Keep the next operational jump close: register versions, explore shared catalog, or continue authoring.')}
-              />
+            <WorkspaceActionPanel
+              title={t('Approval follow-up')}
+              description={t('Keep the next operational jump close: register versions, explore shared catalog, or continue authoring.')}
+              actions={
+                <>
+                  <ButtonLink to="/models/versions" variant="secondary" size="sm">
+                    {t('Open Model Versions')}
+                  </ButtonLink>
+                  <ButtonLink to="/models/explore" variant="secondary" size="sm">
+                    {t('Explore Model Catalog')}
+                  </ButtonLink>
+                </>
+              }
+            >
               <ul className="workspace-record-list compact">
                 <Panel as="li" className="workspace-record-item compact" tone="soft">
                   <div className="row between gap wrap">
@@ -602,15 +649,7 @@ export default function MyModelsPage() {
                   </small>
                 </Panel>
               </ul>
-              <div className="workspace-button-stack">
-                <ButtonLink to="/models/versions" variant="secondary" size="sm">
-                  {t('Open Model Versions')}
-                </ButtonLink>
-                <ButtonLink to="/models/explore" variant="secondary" size="sm">
-                  {t('Explore Model Catalog')}
-                </ButtonLink>
-              </div>
-            </Card>
+            </WorkspaceActionPanel>
           </div>
         }
       />

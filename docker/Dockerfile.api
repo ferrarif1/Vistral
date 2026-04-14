@@ -1,4 +1,4 @@
-ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-alpine
+ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-bookworm-slim
 FROM ${NODE_BASE_IMAGE} AS builder
 
 WORKDIR /app
@@ -13,14 +13,85 @@ COPY tsconfig.api.json ./
 
 RUN npm run build:api
 
+ARG DEBIAN_APT_MIRROR=http://deb.debian.org/debian
+ARG DEBIAN_APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG PIP_TORCH_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
 FROM ${NODE_BASE_IMAGE} AS runtime
 
 WORKDIR /app
+ARG DEBIAN_APT_MIRROR
+ARG DEBIAN_APT_SECURITY_MIRROR
+ARG PIP_INDEX_URL
+ARG PIP_EXTRA_INDEX_URL
+ARG PIP_TORCH_INDEX_URL
+ARG PIP_TRUSTED_HOST
+ENV PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+
+RUN set -eux; \
+  rm -f /etc/apt/sources.list; \
+  rm -f /etc/apt/sources.list.d/*; \
+  printf "deb %s bookworm main\n" "${DEBIAN_APT_MIRROR}" > /etc/apt/sources.list; \
+  printf "deb %s bookworm-updates main\n" "${DEBIAN_APT_MIRROR}" >> /etc/apt/sources.list; \
+  printf "deb %s bookworm-security main\n" "${DEBIAN_APT_SECURITY_MIRROR}" >> /etc/apt/sources.list; \
+  apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; \
+  for attempt in 1 2 3; do \
+    if apt-get install -y --fix-missing --no-install-recommends \
+      python3 \
+      python3-venv \
+      python3-pip \
+      ca-certificates \
+      libglib2.0-0 \
+      libgl1 \
+      libglx0 \
+      libgomp1 \
+      libsm6 \
+      libxext6 \
+      libxrender1; then \
+      break; \
+    fi; \
+    apt-get -y --fix-broken install --fix-missing || true; \
+    if [ "${attempt}" = "3" ]; then \
+      exit 1; \
+    fi; \
+    apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update || true; \
+    sleep 5; \
+  done; \
+  rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/vistral-venv
+
+COPY docker/requirements.runtime.txt /tmp/requirements.runtime.txt
+COPY docker/requirements.runtime.torch.txt /tmp/requirements.runtime.torch.txt
+RUN set -eux; \
+  torch_index_url="${PIP_TORCH_INDEX_URL}"; \
+  if [ -z "${torch_index_url}" ]; then \
+    torch_index_url="${PIP_EXTRA_INDEX_URL}"; \
+  fi; \
+  pip_args="--no-cache-dir --retries 5 --timeout 60 --index-url ${PIP_INDEX_URL}"; \
+  pip_torch_args="--no-cache-dir --retries 5 --timeout 60"; \
+  if [ -n "${torch_index_url}" ]; then \
+    pip_torch_args="${pip_torch_args} --index-url ${torch_index_url}"; \
+  fi; \
+  if [ -n "${PIP_TRUSTED_HOST}" ]; then \
+    pip_args="${pip_args} --trusted-host ${PIP_TRUSTED_HOST}"; \
+    pip_torch_args="${pip_torch_args} --trusted-host ${PIP_TRUSTED_HOST}"; \
+  fi; \
+  env -u PIP_INDEX_URL -u PIP_EXTRA_INDEX_URL -u PIP_TRUSTED_HOST \
+    /opt/vistral-venv/bin/python -m pip install ${pip_torch_args} --no-deps -r /tmp/requirements.runtime.torch.txt; \
+  env -u PIP_INDEX_URL -u PIP_EXTRA_INDEX_URL -u PIP_TRUSTED_HOST \
+    /opt/vistral-venv/bin/python -m pip install ${pip_args} -r /tmp/requirements.runtime.txt; \
+  /opt/vistral-venv/bin/python -c "import paddle; import paddleocr; import ultralytics; import doctr; print('runtime-python-ok', paddle.__version__)"
 
 COPY --from=builder /app/build/api ./build/api
+COPY scripts/local-runners ./scripts/local-runners
 
 ENV API_PORT=8787
 ENV API_HOST=0.0.0.0
+ENV PATH="/opt/vistral-venv/bin:${PATH}"
+ENV VISTRAL_PYTHON_BIN=/opt/vistral-venv/bin/python
 
 EXPOSE 8787
 

@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs, statSync } from 'node:fs';
 import path from 'node:path';
 import type {
   ModelFramework,
+  RuntimeApiKeyPolicy,
   RuntimeConnectivityErrorKind,
   RuntimeConnectivityRecord,
   TaskType,
@@ -22,13 +23,19 @@ import type {
   ValidateDatasetInput,
   ValidateDatasetResult
 } from '../../shared/runtime';
-import { runtimeSettings } from './store';
+import { persistRuntimeSettings, runtimeSettings } from './store';
+import { bundledLocalRunnerCommands, resolveBundledLocalModelPath } from './runtimeDefaults';
 
 const delay = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface FrameworkRuntimeConfig {
   endpoint: string;
   apiKey: string;
+  defaultModelId: string;
+  defaultModelVersionId: string;
+  modelApiKeys: Record<string, string>;
+  modelApiKeyPolicies: Record<string, RuntimeApiKeyPolicy>;
+  localModelPath: string;
   localTrainCommand: string;
   localPredictCommand: string;
 }
@@ -36,6 +43,11 @@ interface FrameworkRuntimeConfig {
 const emptyFrameworkRuntimeConfig: FrameworkRuntimeConfig = {
   endpoint: '',
   apiKey: '',
+  defaultModelId: '',
+  defaultModelVersionId: '',
+  modelApiKeys: {},
+  modelApiKeyPolicies: {},
+  localModelPath: '',
   localTrainCommand: '',
   localPredictCommand: ''
 };
@@ -47,6 +59,12 @@ const resolveFrameworkRuntimeConfigFromEnv = (
     return {
       endpoint: (process.env.PADDLEOCR_RUNTIME_ENDPOINT ?? '').trim(),
       apiKey: (process.env.PADDLEOCR_RUNTIME_API_KEY ?? '').trim(),
+      defaultModelId: '',
+      defaultModelVersionId: '',
+      modelApiKeys: {},
+      modelApiKeyPolicies: {},
+      localModelPath:
+        (process.env.PADDLEOCR_LOCAL_MODEL_PATH ?? '').trim() || resolveBundledLocalModelPath(framework),
       localTrainCommand: (process.env.PADDLEOCR_LOCAL_TRAIN_COMMAND ?? '').trim(),
       localPredictCommand: (process.env.PADDLEOCR_LOCAL_PREDICT_COMMAND ?? '').trim()
     };
@@ -56,6 +74,12 @@ const resolveFrameworkRuntimeConfigFromEnv = (
     return {
       endpoint: (process.env.DOCTR_RUNTIME_ENDPOINT ?? '').trim(),
       apiKey: (process.env.DOCTR_RUNTIME_API_KEY ?? '').trim(),
+      defaultModelId: '',
+      defaultModelVersionId: '',
+      modelApiKeys: {},
+      modelApiKeyPolicies: {},
+      localModelPath:
+        (process.env.DOCTR_LOCAL_MODEL_PATH ?? '').trim() || resolveBundledLocalModelPath(framework),
       localTrainCommand: (process.env.DOCTR_LOCAL_TRAIN_COMMAND ?? '').trim(),
       localPredictCommand: (process.env.DOCTR_LOCAL_PREDICT_COMMAND ?? '').trim()
     };
@@ -64,67 +88,360 @@ const resolveFrameworkRuntimeConfigFromEnv = (
   return {
     endpoint: (process.env.YOLO_RUNTIME_ENDPOINT ?? '').trim(),
     apiKey: (process.env.YOLO_RUNTIME_API_KEY ?? '').trim(),
+    defaultModelId: '',
+    defaultModelVersionId: '',
+    modelApiKeys: {},
+    modelApiKeyPolicies: {},
+    localModelPath:
+      (process.env.YOLO_LOCAL_MODEL_PATH ?? '').trim() || resolveBundledLocalModelPath(framework),
     localTrainCommand: (process.env.YOLO_LOCAL_TRAIN_COMMAND ?? '').trim(),
     localPredictCommand: (process.env.YOLO_LOCAL_PREDICT_COMMAND ?? '').trim()
   };
 };
 
-const resolveLocalPythonBin = (): string => {
-  const configured = resolveRuntimeControlSettings().pythonBin;
-  if (configured) {
-    return configured;
+const normalizePythonBinCandidate = (value: string): string => {
+  if (!value.trim()) {
+    return '';
   }
+  const tokens = tokenizeCommand(value.trim());
+  if (tokens.length > 0) {
+    return tokens[0].trim();
+  }
+  return value.trim();
+};
+
+const isPathLikeCommand = (value: string): boolean =>
+  path.isAbsolute(value) || value.startsWith('.') || value.includes('/') || value.includes('\\');
+
+const resolveUsablePythonCandidate = (value: string): string | null => {
+  const normalized = normalizePythonBinCandidate(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (!isPathLikeCommand(normalized)) {
+    return normalized;
+  }
+
+  const resolved = path.isAbsolute(normalized) ? normalized : path.resolve(process.cwd(), normalized);
+  if (!existsSync(resolved)) {
+    return null;
+  }
+  try {
+    const stats = statSync(resolved);
+    if (!stats.isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return resolved;
+};
+
+const resolveLocalPythonBin = (): string => {
+  const runtimeControls = resolveRuntimeControlSettings();
+  const localRuntimeVenvCandidates =
+    process.platform === 'win32'
+      ? [
+          path.resolve('C:\\opt\\vistral-venv\\Scripts\\python.exe'),
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'Scripts', 'python.exe'),
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'Scripts', 'python')
+        ]
+      : [
+          '/opt/vistral-venv/bin/python',
+          '/opt/vistral-venv/bin/python3',
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'bin', 'python3'),
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'bin', 'python')
+        ];
+
+  const defaultCommandCandidates =
+    process.platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python'];
+
+  const candidates = [
+    runtimeControls.pythonBin,
+    (process.env.VISTRAL_PYTHON_BIN ?? '').trim(),
+    (process.env.PYTHON_BIN ?? '').trim(),
+    ...localRuntimeVenvCandidates,
+    ...defaultCommandCandidates
+  ];
+
+  const visited = new Set<string>();
+  for (const candidate of candidates) {
+    const usable = resolveUsablePythonCandidate(candidate);
+    if (!usable) {
+      continue;
+    }
+    const dedupeKey = process.platform === 'win32' ? usable.toLowerCase() : usable;
+    if (visited.has(dedupeKey)) {
+      continue;
+    }
+    visited.add(dedupeKey);
+    return usable;
+  }
+
   return process.platform === 'win32' ? 'python' : 'python3';
 };
 
 const resolveEffectiveRuntimeConfig = (
   framework: ModelFramework
 ): FrameworkRuntimeConfig => {
+  const normalizeIsoDate = (value: unknown): string | null => {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Date.parse(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return new Date(parsed).toISOString();
+  };
   const fallback = runtimeSettings.updated_at
     ? emptyFrameworkRuntimeConfig
     : resolveFrameworkRuntimeConfigFromEnv(framework);
   const stored = runtimeSettings.frameworks[framework];
+  const resolvedModelApiKeys =
+    stored?.model_api_keys && typeof stored.model_api_keys === 'object'
+      ? Object.fromEntries(
+          Object.entries(stored.model_api_keys)
+            .map(([key, value]) => [key.trim(), typeof value === 'string' ? value.trim() : ''])
+            .filter(([key]) => Boolean(key))
+        )
+      : { ...fallback.modelApiKeys };
+  const rawPolicies =
+    stored?.model_api_key_policies &&
+    typeof stored.model_api_key_policies === 'object' &&
+    !Array.isArray(stored.model_api_key_policies)
+      ? (stored.model_api_key_policies as Record<string, RuntimeApiKeyPolicy>)
+      : {};
+  const mergedPolicyKeys = new Set<string>([
+    ...Object.keys(resolvedModelApiKeys),
+    ...Object.keys(rawPolicies)
+  ]);
+  const resolvedPolicies: Record<string, RuntimeApiKeyPolicy> = {};
+
+  for (const rawKey of mergedPolicyKeys) {
+    const key = rawKey.trim();
+    if (!key) {
+      continue;
+    }
+    const rawPolicy = rawPolicies[key];
+    const apiKey =
+      typeof rawPolicy?.api_key === 'string' && rawPolicy.api_key.trim()
+        ? rawPolicy.api_key.trim()
+        : (resolvedModelApiKeys[key] ?? '').trim();
+    const maxCalls =
+      typeof rawPolicy?.max_calls === 'number' && Number.isFinite(rawPolicy.max_calls)
+        ? Math.max(0, Math.floor(rawPolicy.max_calls))
+        : null;
+    const usedCallsRaw =
+      typeof rawPolicy?.used_calls === 'number' && Number.isFinite(rawPolicy.used_calls)
+        ? Math.max(0, Math.floor(rawPolicy.used_calls))
+        : 0;
+    const usedCalls = typeof maxCalls === 'number' ? Math.min(usedCallsRaw, maxCalls) : usedCallsRaw;
+
+    resolvedPolicies[key] = {
+      api_key: apiKey,
+      expires_at: normalizeIsoDate(rawPolicy?.expires_at) ?? null,
+      max_calls: maxCalls,
+      used_calls: usedCalls,
+      last_used_at: normalizeIsoDate(rawPolicy?.last_used_at) ?? null
+    };
+  }
+
+  const resolvedLocalModelPath =
+    (typeof stored?.local_model_path === 'string' ? stored.local_model_path.trim() : '') ||
+    fallback.localModelPath ||
+    resolveBundledLocalModelPath(framework);
+  const resolvedLocalTrainCommand =
+    (typeof stored?.local_train_command === 'string' ? stored.local_train_command.trim() : '') ||
+    fallback.localTrainCommand ||
+    bundledLocalRunnerCommands[framework].train;
+  const resolvedLocalPredictCommand =
+    (typeof stored?.local_predict_command === 'string' ? stored.local_predict_command.trim() : '') ||
+    fallback.localPredictCommand ||
+    bundledLocalRunnerCommands[framework].predict;
+
   return {
     endpoint:
       typeof stored?.endpoint === 'string' ? stored.endpoint.trim() : fallback.endpoint,
     apiKey:
       typeof stored?.api_key === 'string' ? stored.api_key.trim() : fallback.apiKey,
-    localTrainCommand:
-      typeof stored?.local_train_command === 'string'
-        ? stored.local_train_command.trim()
-        : fallback.localTrainCommand,
-    localPredictCommand:
-      typeof stored?.local_predict_command === 'string'
-        ? stored.local_predict_command.trim()
-        : fallback.localPredictCommand
+    defaultModelId:
+      typeof stored?.default_model_id === 'string'
+        ? stored.default_model_id.trim()
+        : fallback.defaultModelId,
+    defaultModelVersionId:
+      typeof stored?.default_model_version_id === 'string'
+        ? stored.default_model_version_id.trim()
+        : fallback.defaultModelVersionId,
+    modelApiKeys: resolvedModelApiKeys,
+    modelApiKeyPolicies: resolvedPolicies,
+    localModelPath: resolvedLocalModelPath,
+    localTrainCommand: resolvedLocalTrainCommand,
+    localPredictCommand: resolvedLocalPredictCommand
   };
 };
 
-const bundledLocalRunnerCommands: Record<
-  ModelFramework,
-  {
-    train: string;
-    predict: string;
+const resolveRuntimeApiKeyForInput = (
+  config: FrameworkRuntimeConfig,
+  input: PredictInput
+): {
+  apiKey: string;
+  binding: 'framework' | 'model' | 'model_version' | 'none';
+  bindingKey: string | null;
+  policy: RuntimeApiKeyPolicy | null;
+} => {
+  const modelVersionId = (input.modelVersionId ?? '').trim() || config.defaultModelVersionId;
+  const modelId = (input.modelId ?? '').trim() || config.defaultModelId;
+  const modelApiKeys = config.modelApiKeys ?? {};
+  const modelApiKeyPolicies = config.modelApiKeyPolicies ?? {};
+
+  if (modelVersionId) {
+    const bindingKey = `model_version:${modelVersionId}`;
+    const value = (modelApiKeys[bindingKey] ?? '').trim();
+    if (value) {
+      return {
+        apiKey: value,
+        binding: 'model_version',
+        bindingKey,
+        policy: modelApiKeyPolicies[bindingKey] ?? null
+      };
+    }
   }
-> = {
-  paddleocr: {
-    train:
-      '{{python_bin}} {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
-    predict:
-      '{{python_bin}} {{repo_root}}/scripts/local-runners/paddleocr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
-  },
-  doctr: {
-    train:
-      '{{python_bin}} {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
-    predict:
-      '{{python_bin}} {{repo_root}}/scripts/local-runners/doctr_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
-  },
-  yolo: {
-    train:
-      '{{python_bin}} {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}',
-    predict:
-      '{{python_bin}} {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}'
+
+  if (modelId) {
+    const bindingKey = `model:${modelId}`;
+    const value = (modelApiKeys[bindingKey] ?? '').trim();
+    if (value) {
+      return {
+        apiKey: value,
+        binding: 'model',
+        bindingKey,
+        policy: modelApiKeyPolicies[bindingKey] ?? null
+      };
+    }
   }
+
+  if (config.apiKey.trim()) {
+    return {
+      apiKey: config.apiKey.trim(),
+      binding: 'framework',
+      bindingKey: null,
+      policy: null
+    };
+  }
+
+  return { apiKey: '', binding: 'none', bindingKey: null, policy: null };
+};
+
+const assertRuntimeApiKeyPolicyUsable = (
+  framework: ModelFramework,
+  bindingKey: string,
+  policy: RuntimeApiKeyPolicy
+): void => {
+  const nowTime = Date.now();
+  if (policy.expires_at) {
+    const expiresAtMs = Date.parse(policy.expires_at);
+    if (Number.isFinite(expiresAtMs) && expiresAtMs <= nowTime) {
+      throw new Error(
+        `${framework} runtime API key expired for binding ${bindingKey}. expires_at=${policy.expires_at}`
+      );
+    }
+  }
+  if (typeof policy.max_calls === 'number' && Number.isFinite(policy.max_calls)) {
+    const maxCalls = Math.max(0, Math.floor(policy.max_calls));
+    const usedCalls =
+      typeof policy.used_calls === 'number' && Number.isFinite(policy.used_calls)
+        ? Math.max(0, Math.floor(policy.used_calls))
+        : 0;
+    if (usedCalls >= maxCalls) {
+      throw new Error(
+        `${framework} runtime API key quota exceeded for binding ${bindingKey}. used_calls=${usedCalls} max_calls=${maxCalls}`
+      );
+    }
+  }
+};
+
+const recordRuntimeApiKeyUsage = async (
+  framework: ModelFramework,
+  bindingKey: string,
+  resolvedApiKey: string
+): Promise<void> => {
+  const frameworkConfig = runtimeSettings.frameworks[framework];
+  if (!frameworkConfig || !frameworkConfig.model_api_key_policies) {
+    return;
+  }
+  const policy = frameworkConfig.model_api_key_policies[bindingKey];
+  if (!policy) {
+    return;
+  }
+  if ((policy.api_key ?? '').trim() !== resolvedApiKey.trim()) {
+    return;
+  }
+
+  const nextUsedCalls =
+    typeof policy.used_calls === 'number' && Number.isFinite(policy.used_calls)
+      ? Math.max(0, Math.floor(policy.used_calls)) + 1
+      : 1;
+  const maxCalls =
+    typeof policy.max_calls === 'number' && Number.isFinite(policy.max_calls)
+      ? Math.max(0, Math.floor(policy.max_calls))
+      : null;
+
+  frameworkConfig.model_api_key_policies[bindingKey] = {
+    ...policy,
+    used_calls: typeof maxCalls === 'number' ? Math.min(nextUsedCalls, maxCalls) : nextUsedCalls,
+    last_used_at: new Date().toISOString()
+  };
+  frameworkConfig.model_api_keys = Object.fromEntries(
+    Object.entries(frameworkConfig.model_api_key_policies)
+      .map(([key, item]) => [key, (item.api_key ?? '').trim()])
+      .filter(([, keyValue]) => Boolean(keyValue))
+  );
+  runtimeSettings.updated_at = runtimeSettings.updated_at ?? new Date().toISOString();
+  await persistRuntimeSettings();
+};
+
+const buildFrameworkCommandEnvOverrides = (
+  framework: ModelFramework,
+  config: FrameworkRuntimeConfig
+): Record<string, string> => {
+  const modelPath = (config.localModelPath ?? '').trim();
+  if (!modelPath) {
+    return {};
+  }
+  const resolvedModelPath = path.isAbsolute(modelPath)
+    ? modelPath
+    : path.resolve(process.cwd(), modelPath);
+
+  if (framework === 'yolo') {
+    return {
+      YOLO_LOCAL_MODEL_PATH: resolvedModelPath,
+      VISTRAL_YOLO_MODEL_PATH: resolvedModelPath
+    };
+  }
+
+  if (framework === 'paddleocr') {
+    return {
+      PADDLEOCR_LOCAL_MODEL_PATH: resolvedModelPath
+    };
+  }
+
+  return {
+    DOCTR_LOCAL_MODEL_PATH: resolvedModelPath
+  };
+};
+
+const resolveLocalModelPathForCommand = (modelPath: string | null | undefined): string => {
+  const normalized = (modelPath ?? '').trim();
+  if (!normalized) {
+    return '';
+  }
+  return path.isAbsolute(normalized) ? normalized : path.resolve(process.cwd(), normalized);
 };
 
 const localRunnerTimeoutMs = (() => {
@@ -487,6 +804,7 @@ const runLocalCommand = async (
   options: {
     workingDir: string;
     values: Record<string, string>;
+    envOverrides?: Record<string, string>;
     onLog?: (line: string) => void | Promise<void>;
   }
 ): Promise<LocalCommandExecutionResult> => {
@@ -541,7 +859,10 @@ const runLocalCommand = async (
   await new Promise<void>((resolve, reject) => {
     const child = spawn(executable, spawnArgs, {
       cwd: options.workingDir,
-      env: process.env
+      env: {
+        ...process.env,
+        ...options.envOverrides
+      }
     });
     const timeout = setTimeout(() => {
       child.kill('SIGTERM');
@@ -944,17 +1265,25 @@ const callRuntimePredict = async (
       'Content-Type': 'application/json'
     };
 
-    if (config.apiKey) {
-      headers.Authorization = `Bearer ${config.apiKey}`;
+    const runtimeAuth = resolveRuntimeApiKeyForInput(config, input);
+    if (runtimeAuth.bindingKey && runtimeAuth.policy) {
+      assertRuntimeApiKeyPolicyUsable(framework, runtimeAuth.bindingKey, runtimeAuth.policy);
     }
 
+    if (runtimeAuth.apiKey) {
+      headers.Authorization = `Bearer ${runtimeAuth.apiKey}`;
+    }
+
+    const resolvedModelId = (input.modelId ?? '').trim() || config.defaultModelId;
+    const resolvedModelVersionId =
+      (input.modelVersionId ?? '').trim() || config.defaultModelVersionId;
     const response = await fetch(config.endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         framework,
-        model_id: input.modelId,
-        model_version_id: input.modelVersionId,
+        model_id: resolvedModelId,
+        model_version_id: resolvedModelVersionId,
         model_artifact_path: input.modelArtifactPath ?? null,
         input_attachment_id: input.inputAttachmentId,
         filename: input.filename,
@@ -977,7 +1306,16 @@ const callRuntimePredict = async (
       );
     }
 
-    return parseRuntimeOutput(framework, input, payload);
+    const parsed = parseRuntimeOutput(framework, input, payload);
+    if (runtimeAuth.bindingKey && runtimeAuth.binding !== 'framework' && runtimeAuth.binding !== 'none') {
+      await recordRuntimeApiKeyUsage(framework, runtimeAuth.bindingKey, runtimeAuth.apiKey);
+    }
+    parsed.raw_output = {
+      ...parsed.raw_output,
+      runtime_auth_binding: runtimeAuth.binding,
+      runtime_auth_binding_key: runtimeAuth.bindingKey
+    };
+    return parsed;
   } finally {
     clearTimeout(timeout);
   }
@@ -1063,23 +1401,26 @@ const callLocalPredictCommand = async (
     `${framework}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
   );
   const workingDir = path.resolve(process.cwd(), '.data', 'runtime-local-predict');
+  const resolvedLocalModelPath = resolveLocalModelPathForCommand(config.localModelPath);
   const values = {
     repo_root: process.cwd(),
     python_bin: resolveLocalPythonBin(),
     framework,
-    model_id: input.modelId,
-    model_version_id: input.modelVersionId,
+    model_id: (input.modelId ?? '').trim() || config.defaultModelId,
+    model_version_id: (input.modelVersionId ?? '').trim() || config.defaultModelVersionId,
     task_type: input.taskType,
     input_path: input.inputStoragePath ?? '',
     filename: input.filename,
     mime_type: input.inputMimeType ?? '',
-    model_path: input.modelArtifactPath ?? '',
+    model_path: resolveLocalModelPathForCommand(input.modelArtifactPath) || resolvedLocalModelPath,
+    local_model_path: resolvedLocalModelPath,
     output_path: fallbackOutputPath
   };
 
   const execution = await runLocalCommand(commandTemplate, {
     workingDir,
-    values
+    values,
+    envOverrides: buildFrameworkCommandEnvOverrides(framework, config)
   });
 
   let payloadRaw: unknown = null;
@@ -1321,6 +1662,64 @@ export const checkRuntimeConnectivity = async (
   }
 };
 
+export const probeRuntimeEndpointConnectivity = async (
+  framework: ModelFramework,
+  endpoint: string,
+  apiKey = ''
+): Promise<RuntimeConnectivityRecord> => {
+  const checkedAt = new Date().toISOString();
+  const normalizedEndpoint = endpoint.trim();
+  if (!normalizedEndpoint) {
+    return {
+      framework,
+      configured: false,
+      reachable: false,
+      endpoint: null,
+      source: 'not_configured',
+      error_kind: 'none',
+      checked_at: checkedAt,
+      message: 'Runtime endpoint is not configured.'
+    };
+  }
+
+  const runtime: FrameworkRuntimeConfig = {
+    endpoint: normalizedEndpoint,
+    apiKey: apiKey.trim(),
+    defaultModelId: '',
+    defaultModelVersionId: '',
+    modelApiKeys: {},
+    modelApiKeyPolicies: {},
+    localModelPath: '',
+    localTrainCommand: '',
+    localPredictCommand: ''
+  };
+
+  try {
+    await callRuntimePredict(framework, runtime, buildConnectivityProbeInput(framework));
+    return {
+      framework,
+      configured: true,
+      reachable: true,
+      endpoint: normalizedEndpoint,
+      source: 'reachable',
+      error_kind: 'none',
+      checked_at: checkedAt,
+      message: 'Runtime endpoint responded with compatible payload.'
+    };
+  } catch (error) {
+    return {
+      framework,
+      configured: true,
+      reachable: false,
+      endpoint: normalizedEndpoint,
+      source: 'unreachable',
+      error_kind: classifyConnectivityError(error),
+      checked_at: checkedAt,
+      message: (error as Error).message
+    };
+  }
+};
+
 const createTrainer = (
   framework: ModelFramework,
   supportedTasks: TaskType[],
@@ -1378,6 +1777,7 @@ const createTrainer = (
       dataset_id: input.datasetId,
       task_type: input.taskType,
       base_model: input.baseModel,
+      local_model_path: resolveLocalModelPathForCommand(runtime.localModelPath),
       workspace_dir: input.workspaceDir ?? '',
       config_path: input.configPath ?? '',
       summary_path: input.summaryPath ?? '',
@@ -1392,6 +1792,7 @@ const createTrainer = (
         workingDir:
           input.workspaceDir ?? path.resolve(process.cwd(), '.data', 'training-jobs', input.trainingJobId),
         values,
+        envOverrides: buildFrameworkCommandEnvOverrides(framework, runtime),
         onLog: input.onLog
       });
     } catch (error) {

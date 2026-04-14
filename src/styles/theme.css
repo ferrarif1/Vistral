@@ -3444,6 +3444,22 @@ small {
   gap: var(--space-2);
 }
 
+.annotation-queue-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas-muted);
+}
+
+.annotation-queue-context > * {
+  min-width: 0;
+}
+
 .annotation-queue-advanced-filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
@@ -3451,6 +3467,26 @@ small {
   margin-top: var(--space-2);
   min-width: 0;
   max-width: 100%;
+}
+
+.annotation-queue-primary-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(160px, 0.8fr);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.annotation-queue-more-filters {
+  margin-top: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.annotation-queue-quick-filter-row {
+  display: grid;
+  gap: 8px;
 }
 
 .annotation-queue-advanced-filters > * {
@@ -3475,7 +3511,7 @@ small {
   gap: var(--space-2);
 }
 
-.annotation-queue-lowconf-row {
+.annotation-queue-footer {
   margin-top: var(--space-2);
   display: flex;
   flex-wrap: wrap;
@@ -3484,6 +3520,7 @@ small {
   gap: var(--space-2);
 }
 
+.annotation-queue-footer-actions,
 .annotation-queue-nav-actions {
   display: inline-flex;
   flex-wrap: wrap;
@@ -3493,10 +3530,33 @@ small {
   max-width: 100%;
 }
 
+.annotation-workspace-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.annotation-workspace-model-select {
+  flex: 1 1 240px;
+  min-width: min(260px, 100%);
+  max-width: 100%;
+}
+
 .annotation-queue-shortcuts {
   margin-right: 2px;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.annotation-utility-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.annotation-return-point {
+  min-width: min(280px, 100%);
+  max-width: 100%;
 }
 
 .annotation-review-metadata-list {
@@ -3511,6 +3571,19 @@ small {
 
 .annotation-review-metadata-list li {
   overflow-wrap: anywhere;
+}
+
+.annotation-review-inline-summary {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas-muted);
+  padding: 10px 12px;
+}
+
+.annotation-review-inline-summary .workspace-record-summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .prediction-candidate-list {
@@ -3528,9 +3601,48 @@ small {
   align-self: flex-start;
 }
 
+.workspace-disclosure {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas-muted);
+  overflow: hidden;
+}
+
+.workspace-disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  cursor: pointer;
+  list-style: none;
+  padding: 12px 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.workspace-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-disclosure[open] summary {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.workspace-disclosure-content {
+  display: grid;
+  gap: var(--space-3);
+  padding: 12px 14px 14px;
+}
+
 @media (max-width: 960px) {
+  .annotation-queue-primary-filters,
   .annotation-queue-advanced-filters {
     grid-template-columns: 1fr;
+  }
+
+  .annotation-return-point {
+    min-width: 100%;
   }
 }
 
@@ -3568,6 +3680,33 @@ small {
   gap: var(--space-2);
 }
 
+.annotation-action-groups {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.annotation-action-group {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.annotation-review-support-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.annotation-review-support-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.annotation-review-support-card strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .review-action-row {
   align-items: center;
   flex-wrap: wrap;
@@ -3600,6 +3739,12 @@ small {
   word-break: break-word;
 }
 
+@media (max-width: 960px) {
+  .annotation-review-support-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
 .workspace-record-item.selected {
   border-color: var(--color-success-border);
   box-shadow: none;
@@ -3612,6 +3757,23 @@ small {
   gap: 10px;
   min-width: 0;
   max-width: 100%;
+}
+
+.annotation-ocr-entry-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.annotation-ocr-entry-main {
+  flex: 1 1 320px;
+  min-width: min(320px, 100%);
+  max-width: 100%;
+}
+
+.annotation-ocr-options {
+  margin-top: var(--space-2);
 }
 
 .annotation-ocr-grid .span-2 {

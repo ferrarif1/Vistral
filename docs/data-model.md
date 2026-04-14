@@ -281,7 +281,7 @@ Runtime notes (current implementation):
 - local training defaults to bundled runner templates (`scripts/local-runners/*_train_runner.py`) and runs as `execution_mode=local_command` when runner invocation succeeds
 - `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` can override bundled runner command templates
 - if bundled runner command invocation fails (for example missing python dependency), lifecycle falls back to `execution_mode=simulated` with explicit log reason
-- when `VISTRAL_RUNNER_ENABLE_REAL=1`, bundled OCR local train runners may run dependency-backed OCR probe execution on materialized manifest samples (`mode=real_probe`) and otherwise stay in template mode with explicit `fallback_reason`
+- when `VISTRAL_RUNNER_ENABLE_REAL` is not explicitly disabled (`0/false/no/off/disabled`; deployment default can stay `auto`), bundled OCR local train runners may run dependency-backed OCR probe execution on materialized manifest samples (`mode=real_probe`) and otherwise stay in template mode with explicit `fallback_reason`
 - `execution_mode` is explicitly persisted per training job (no longer inferred only from logs)
 - training detail API also exposes parsed artifact runtime summary (mode/fallback/model path hints) for UI observability
 - when `execution_target=worker` and worker endpoint is reachable, control plane can dispatch training to worker endpoint and ingest returned logs/metrics/artifact summary into existing job runtime records
@@ -423,8 +423,11 @@ Attributes:
 - `task_type` (TaskType)
 - `framework` (Framework)
 - `status` (`queued` | `running` | `completed` | `failed`)
-- `execution_source` (for example `yolo_runtime`, `yolo_local_command`, `explicit_fallback_runtime_failed`, `explicit_fallback_local_command_failed`, `base_empty`)
+- `execution_source` (for example `yolo_runtime`, `yolo_local_command`, `yolo_local_command_fallback`, `explicit_fallback_runtime_failed`, `explicit_fallback_local_command_failed`, `base_empty`)
   - local deterministic pseudo inferencer source (`<framework>_local`) is retired; use explicit fallback markers instead.
+  - backend normalizes this field from runtime evidence:
+    - keep explicit fallback/template/mock markers as-is
+    - otherwise append `_fallback` when fallback evidence exists (for example fallback reason or `raw_output.meta.mode=template`) so consumers do not mistake non-real output as real execution
 - `raw_output` (JSON)
 - `normalized_output` (JSON)
 - `feedback_dataset_id` (FK Dataset, nullable)
@@ -444,6 +447,16 @@ Attributes:
 - `frameworks` (object keyed by framework id)
   - `paddleocr.endpoint`
   - `paddleocr.api_key` (server-side secret; never returned in plain text)
+  - `paddleocr.default_model_id` (optional model id used as framework-level default selection in runtime UI)
+  - `paddleocr.default_model_version_id` (optional model version id used as framework-level default selection)
+  - `paddleocr.model_api_keys` (optional object map for model-aware remote auth routing)
+  - `paddleocr.model_api_key_policies` (optional object map with auth policy per binding key)
+    - `api_key`
+    - `expires_at` (nullable ISO datetime)
+    - `max_calls` (nullable int)
+    - `used_calls` (int, server managed)
+    - `last_used_at` (nullable ISO datetime, server managed)
+  - `paddleocr.local_model_path` (optional local model/runtime asset path; mainly for self-hosted runtime hints)
   - `paddleocr.local_train_command`
   - `paddleocr.local_predict_command`
   - `doctr.*` (same fields)
@@ -456,9 +469,30 @@ Attributes:
 Rules:
 - runtime adapters should read effective config dynamically at execution time (not only on process boot).
 - when no UI-saved runtime settings exist, adapters can use environment-variable defaults as fallback.
+- when runtime python env vars are unset, default `controls.python_bin` falls back to platform command (`python3` on POSIX, `python` on Windows).
 - once runtime settings are saved from UI, saved values become the primary source of truth until cleared.
+- when `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS` is enabled (default), blank local command fields are auto-filled with bundled runner templates for each framework.
+- blank `local_model_path` values can fall back to deployment env/default discovery:
+  - `PADDLEOCR_LOCAL_MODEL_PATH`
+  - `DOCTR_LOCAL_MODEL_PATH`
+  - `YOLO_LOCAL_MODEL_PATH`
+  - YOLO also remains backward compatible with `VISTRAL_YOLO_MODEL_PATH` / `REAL_YOLO_MODEL_PATH`
+- when `.data/runtime-models/yolo11n.pt` exists, runtime settings/readiness may surface it as the default local YOLO weight path even without manual env editing.
+- runtime auto-config endpoint can probe candidate endpoints (`VISTRAL_RUNTIME_AUTO_ENDPOINT_CANDIDATES_JSON` + built-in defaults) and write first reachable endpoint per framework.
+- runtime auto-config can also fill blank `local_model_path` values when a known local model candidate exists on disk.
+- if `controls.python_bin` resolves to a missing path-like location, runtime adapters should skip it and fallback to the next interpreter candidate (`.data/runtime-python/.venv` then PATH `python3/python`) to avoid hard failures caused by stale path settings.
 - API responses expose masked key metadata (`has_api_key`, `api_key_masked`) and must not leak raw secrets.
+- API responses also expose masked model-key metadata (`model_api_keys_meta`) and must not leak raw model-level secrets.
 - save operation supports `keep_existing_api_keys=true` so blank key inputs keep previously saved secrets.
+- `model_api_keys` key format:
+  - `model:<model_id>` binds one remote API key to a model
+  - `model_version:<model_version_id>` binds one remote API key to a model version
+- runtime remote auth resolution should prefer `model_version` binding, then `model` binding, then framework-level `api_key`.
+- when model key policies are configured, remote runtime call must fail fast before dispatch when:
+  - key is expired (`expires_at <= now`)
+  - key quota is exhausted (`used_calls >= max_calls`)
+- successful remote runtime calls should increment `used_calls` and update `last_used_at` for the matched model binding key.
+- local mode/local command execution does not require API key; local predict should keep explicit `model_id`/`model_version_id` in command payload/context.
 
 ## 5. State Transition Rules
 
@@ -498,6 +532,10 @@ Rules:
 
 Template marker rule:
 - when `raw_output.meta.mode=template`, the run should be treated as non-real template output even if `normalized_output.source=<framework>_local_command`.
+
+`execution_source` normalization rule:
+- `execution_source` uses `normalized_output.source`/stored source as base marker.
+- when fallback evidence exists but base marker is not already explicit fallback/template/mock/base-empty, backend appends `_fallback` (for example `yolo_local_command_fallback`, `paddleocr_runtime_fallback`).
 
 OCR fallback safety contract:
 - when OCR local command/runtime execution fails and fallback is applied, `ocr.lines` and `ocr.words` must remain empty arrays unless runtime/local command explicitly returned real OCR content.

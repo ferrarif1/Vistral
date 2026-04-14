@@ -19,22 +19,23 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-runner-real-positive] jq is required."
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "[smoke-runner-real-positive] python3 is required."
+CHECK_PYTHON_BIN="${VISTRAL_PYTHON_BIN:-${PYTHON_BIN:-python3}}"
+if ! command -v "${CHECK_PYTHON_BIN}" >/dev/null 2>&1; then
+  echo "[smoke-runner-real-positive] python runtime is required: ${CHECK_PYTHON_BIN}"
   exit 1
 fi
 
-REAL_MODEL_PATH="${REAL_YOLO_MODEL_PATH:-${VISTRAL_YOLO_MODEL_PATH:-}}"
+REAL_MODEL_PATH="${YOLO_LOCAL_MODEL_PATH:-${REAL_YOLO_MODEL_PATH:-${VISTRAL_YOLO_MODEL_PATH:-}}}"
 if [[ -z "${REAL_MODEL_PATH}" ]]; then
-  echo "[smoke-runner-real-positive] SKIP: REAL_YOLO_MODEL_PATH or VISTRAL_YOLO_MODEL_PATH is not set."
+  echo "[smoke-runner-real-positive] SKIP: YOLO_LOCAL_MODEL_PATH / REAL_YOLO_MODEL_PATH / VISTRAL_YOLO_MODEL_PATH is not set."
   exit 0
 fi
 if [[ ! -f "${REAL_MODEL_PATH}" ]]; then
   echo "[smoke-runner-real-positive] SKIP: model file not found: ${REAL_MODEL_PATH}"
   exit 0
 fi
-if ! python3 -c "import ultralytics" >/dev/null 2>&1; then
-  echo "[smoke-runner-real-positive] SKIP: python package ultralytics is unavailable."
+if ! "${CHECK_PYTHON_BIN}" -c "import ultralytics" >/dev/null 2>&1; then
+  echo "[smoke-runner-real-positive] SKIP: python package ultralytics is unavailable in ${CHECK_PYTHON_BIN}."
   exit 0
 fi
 
@@ -64,9 +65,12 @@ cd "${ROOT_DIR}"
 APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
 UPLOAD_STORAGE_ROOT="${APP_DATA_DIR}/uploads" \
 TRAINING_WORKDIR_ROOT="${APP_DATA_DIR}/training" \
+LLM_CONFIG_SECRET="smoke-runner-real-positive-${API_PORT}" \
+VISTRAL_PYTHON_BIN="${VISTRAL_PYTHON_BIN:-python3}" \
 VISTRAL_RUNNER_ENABLE_REAL=1 \
+YOLO_LOCAL_MODEL_PATH="${REAL_MODEL_PATH}" \
 VISTRAL_YOLO_MODEL_PATH="${REAL_MODEL_PATH}" \
-YOLO_LOCAL_PREDICT_COMMAND='python3 {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}' \
+YOLO_LOCAL_PREDICT_COMMAND='{{python_bin}} {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --model-path {{model_path}} --output-path {{output_path}}' \
 API_HOST="${API_HOST}" \
 API_PORT="${API_PORT}" \
 npm run dev:api >"${API_LOG}" 2>&1 &

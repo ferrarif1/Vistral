@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   isCuratedFoundationModelName,
@@ -35,7 +36,13 @@ import {
   users
 } from './store';
 import { hashPassword, verifyPassword } from './auth';
-import { checkRuntimeConnectivity, getTrainerByFramework } from './runtimeAdapters';
+import {
+  checkRuntimeConnectivity,
+  getTrainerByFramework,
+  probeRuntimeEndpointConnectivity
+} from './runtimeAdapters';
+import { applyBundledLocalCommandDefaults, resolveBundledLocalModelPath } from './runtimeDefaults';
+import { inspectDoctrPreseedAssets, readLocalRuntimeBootstrapStatus } from './runtimeBootstrap';
 import type {
   ActivateTrainingWorkerResult,
   AnnotationRecord,
@@ -66,7 +73,9 @@ import type {
   InferenceRunRecord,
   LlmConfig,
   LlmConfigView,
+  RuntimeApiKeyMetaView,
   RuntimeFrameworkConfig,
+  RuntimeFrameworkConfigView,
   RuntimeProfileView,
   RuntimeSettingsRecord,
   RuntimeSettingsView,
@@ -82,7 +91,11 @@ import type {
   RegisterModelVersionInput,
   ResetUserPasswordInput,
   ReviewAnnotationInput,
+  RuntimeBootstrapAssetSnapshot,
   RuntimeConnectivityRecord,
+  RuntimeReadinessFrameworkSnapshot,
+  RuntimeReadinessIssue,
+  RuntimeReadinessReport,
   RuntimeMetricsRetentionSummary,
   RunInferenceInput,
   TrainingSchedulerDecision,
@@ -113,6 +126,15 @@ import type {
 const delay = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
 const normalizeUsername = (value: string) => value.trim().toLowerCase();
+const normalizeAttachmentIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
 const toEnvFlagBoolean = (value: string | undefined, fallback: boolean): boolean => {
   if (typeof value !== 'string') {
     return fallback;
@@ -299,6 +321,109 @@ const maskApiKey = (key: string): string => {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 };
 
+const buildRuntimeModelApiKeysMeta = (
+  keys: Record<string, string> | null | undefined,
+  policies: RuntimeFrameworkConfig['model_api_key_policies'] | null | undefined
+): RuntimeFrameworkConfigView['model_api_keys_meta'] => {
+  const nowTime = Date.now();
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const legacyKeys = keys ?? {};
+  const policyMap = policies ?? {};
+  const bindingKeys = new Set<string>([
+    ...Object.keys(legacyKeys),
+    ...Object.keys(policyMap)
+  ]);
+
+  return Object.fromEntries(
+    Array.from(bindingKeys)
+      .map((bindingKey) => bindingKey.trim())
+      .filter(Boolean)
+      .map((bindingKey) => {
+        const policy = policyMap[bindingKey];
+        const apiKey =
+          typeof policy?.api_key === 'string' && policy.api_key.trim()
+            ? policy.api_key.trim()
+            : typeof legacyKeys[bindingKey] === 'string'
+              ? legacyKeys[bindingKey].trim()
+              : '';
+        const expiresAt =
+          typeof policy?.expires_at === 'string' && policy.expires_at.trim()
+            ? policy.expires_at.trim()
+            : null;
+        const parsedExpire = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+        let expiresStatus: RuntimeApiKeyMetaView['expires_status'] = 'none';
+        let expiresInDays: number | null = null;
+        if (Number.isFinite(parsedExpire)) {
+          if (parsedExpire <= nowTime) {
+            expiresStatus = 'expired';
+            expiresInDays = 0;
+          } else {
+            const daysLeft = Math.max(1, Math.ceil((parsedExpire - nowTime) / oneDayMs));
+            expiresInDays = daysLeft;
+            if (daysLeft <= 3) {
+              expiresStatus = 'within_3_days';
+            } else if (daysLeft <= 7) {
+              expiresStatus = 'within_7_days';
+            } else {
+              expiresStatus = 'healthy';
+            }
+          }
+        }
+        const isExpired = expiresStatus === 'expired';
+        const maxCalls =
+          typeof policy?.max_calls === 'number' && Number.isFinite(policy.max_calls)
+            ? Math.max(0, Math.floor(policy.max_calls))
+            : null;
+        const usedCallsRaw =
+          typeof policy?.used_calls === 'number' && Number.isFinite(policy.used_calls)
+            ? Math.max(0, Math.floor(policy.used_calls))
+            : 0;
+        const usedCalls =
+          typeof maxCalls === 'number' ? Math.min(usedCallsRaw, maxCalls) : usedCallsRaw;
+        const remainingCalls =
+          typeof maxCalls === 'number' ? Math.max(0, maxCalls - usedCalls) : null;
+
+        return [
+          bindingKey,
+          {
+            has_api_key: Boolean(apiKey),
+            api_key_masked: maskApiKey(apiKey),
+            expires_at: expiresAt,
+            expires_status: expiresStatus,
+            expires_in_days: expiresInDays,
+            max_calls: maxCalls,
+            used_calls: usedCalls,
+            remaining_calls: remainingCalls,
+            is_expired: isExpired
+          }
+        ] as const;
+      })
+      .map(([bindingKey, meta]) => [
+        bindingKey,
+        {
+          ...meta
+        }
+      ])
+  );
+};
+
+const toRuntimeFrameworkConfigView = (
+  config: RuntimeFrameworkConfig
+): RuntimeFrameworkConfigView => ({
+  endpoint: config.endpoint,
+  default_model_id: config.default_model_id,
+  default_model_version_id: config.default_model_version_id,
+  model_api_keys_meta: buildRuntimeModelApiKeysMeta(
+    config.model_api_keys,
+    config.model_api_key_policies
+  ),
+  local_model_path: config.local_model_path,
+  local_train_command: config.local_train_command,
+  local_predict_command: config.local_predict_command,
+  has_api_key: config.api_key.length > 0,
+  api_key_masked: maskApiKey(config.api_key)
+});
+
 const normalizeLlmConfig = (input: Partial<LlmConfig>): LlmConfig => {
   const safeTempRaw =
     typeof input.temperature === 'number' && Number.isFinite(input.temperature)
@@ -330,6 +455,11 @@ interface RuntimeProfileRecord {
 const emptyRuntimeFrameworkConfig: RuntimeFrameworkConfig = {
   endpoint: '',
   api_key: '',
+  default_model_id: '',
+  default_model_version_id: '',
+  model_api_keys: {},
+  model_api_key_policies: {},
+  local_model_path: '',
   local_train_command: '',
   local_predict_command: ''
 };
@@ -351,8 +481,37 @@ const emptyRuntimeControlConfig: RuntimeSettingsRecord['controls'] = {
   disable_inference_fallback: false
 };
 
+const runtimeDefaultPythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
+const runtimeDefaultPythonCandidates =
+  process.platform === 'win32'
+    ? ['C:\\opt\\vistral-venv\\Scripts\\python.exe', 'python']
+    : ['/opt/vistral-venv/bin/python', '/opt/vistral-venv/bin/python3', 'python3', 'python'];
+
+const resolveRuntimeDefaultPythonBin = (): string => {
+  const fromEnv = (process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN ?? '').trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  const existingPathCandidate = runtimeDefaultPythonCandidates.find(
+    (candidate) => (candidate.includes('/') || candidate.includes('\\')) && existsSync(candidate)
+  );
+  if (existingPathCandidate) {
+    return existingPathCandidate;
+  }
+
+  const preferredPathCandidate = runtimeDefaultPythonCandidates.find(
+    (candidate) => candidate.includes('/') || candidate.includes('\\')
+  );
+  if (preferredPathCandidate) {
+    return preferredPathCandidate;
+  }
+
+  return runtimeDefaultPythonExecutable;
+};
+
 const getEnvRuntimeControlConfig = (): RuntimeSettingsRecord['controls'] => ({
-  python_bin: (process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN ?? '').trim(),
+  python_bin: resolveRuntimeDefaultPythonBin(),
   disable_simulated_train_fallback: parseRuntimeBoolean(
     process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
     false
@@ -360,67 +519,267 @@ const getEnvRuntimeControlConfig = (): RuntimeSettingsRecord['controls'] => ({
   disable_inference_fallback: parseRuntimeBoolean(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, false)
 });
 
+const runtimeAutoEndpointDefaults: Record<ModelFramework, string[]> = {
+  paddleocr: [
+    'http://127.0.0.1:9393/predict',
+    'http://localhost:9393/predict',
+    'http://127.0.0.1:9395/predict',
+    'http://localhost:9395/predict'
+  ],
+  doctr: [
+    'http://127.0.0.1:9395/predict',
+    'http://localhost:9395/predict',
+    'http://127.0.0.1:9393/predict',
+    'http://localhost:9393/predict'
+  ],
+  yolo: [
+    'http://127.0.0.1:9394/predict',
+    'http://localhost:9394/predict',
+    'http://127.0.0.1:9393/predict',
+    'http://localhost:9393/predict'
+  ]
+};
+
+const parseRuntimeAutoEndpointCandidatesFromEnv = (): Partial<Record<ModelFramework, string[]>> => {
+  const raw = (process.env.VISTRAL_RUNTIME_AUTO_ENDPOINT_CANDIDATES_JSON ?? '').trim();
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    const payload = parsed as Partial<Record<ModelFramework, unknown>>;
+    const normalize = (value: unknown): string[] => {
+      if (!Array.isArray(value)) {
+        return [];
+      }
+      return value
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter((entry): entry is string => Boolean(entry));
+    };
+    return {
+      paddleocr: normalize(payload.paddleocr),
+      doctr: normalize(payload.doctr),
+      yolo: normalize(payload.yolo)
+    };
+  } catch {
+    return {};
+  }
+};
+
+const resolveRuntimeAutoEndpointCandidates = (framework: ModelFramework): string[] => {
+  const envCandidates = parseRuntimeAutoEndpointCandidatesFromEnv()[framework] ?? [];
+  const defaults = runtimeAutoEndpointDefaults[framework];
+  const merged = [...envCandidates, ...defaults];
+  const dedupe = new Set<string>();
+  const values: string[] = [];
+  for (const entry of merged) {
+    const candidate = entry.trim();
+    if (!candidate || dedupe.has(candidate)) {
+      continue;
+    }
+    dedupe.add(candidate);
+    values.push(candidate);
+  }
+  return values;
+};
+
 const getEnvRuntimeFrameworkConfig = (framework: ModelFramework): RuntimeFrameworkConfig => {
   if (framework === 'paddleocr') {
-    return {
+    return applyBundledLocalCommandDefaults(framework, {
       endpoint: (process.env.PADDLEOCR_RUNTIME_ENDPOINT ?? '').trim(),
       api_key: (process.env.PADDLEOCR_RUNTIME_API_KEY ?? '').trim(),
+      default_model_id: '',
+      default_model_version_id: '',
+      model_api_keys: {},
+      model_api_key_policies: {},
+      local_model_path:
+        (process.env.PADDLEOCR_LOCAL_MODEL_PATH ?? '').trim() || resolveBundledLocalModelPath(framework),
       local_train_command: (process.env.PADDLEOCR_LOCAL_TRAIN_COMMAND ?? '').trim(),
       local_predict_command: (process.env.PADDLEOCR_LOCAL_PREDICT_COMMAND ?? '').trim()
-    };
+    });
   }
 
   if (framework === 'doctr') {
-    return {
+    return applyBundledLocalCommandDefaults(framework, {
       endpoint: (process.env.DOCTR_RUNTIME_ENDPOINT ?? '').trim(),
       api_key: (process.env.DOCTR_RUNTIME_API_KEY ?? '').trim(),
+      default_model_id: '',
+      default_model_version_id: '',
+      model_api_keys: {},
+      model_api_key_policies: {},
+      local_model_path:
+        (process.env.DOCTR_LOCAL_MODEL_PATH ?? '').trim() || resolveBundledLocalModelPath(framework),
       local_train_command: (process.env.DOCTR_LOCAL_TRAIN_COMMAND ?? '').trim(),
       local_predict_command: (process.env.DOCTR_LOCAL_PREDICT_COMMAND ?? '').trim()
-    };
+    });
   }
 
-  return {
+  return applyBundledLocalCommandDefaults(framework, {
     endpoint: (process.env.YOLO_RUNTIME_ENDPOINT ?? '').trim(),
     api_key: (process.env.YOLO_RUNTIME_API_KEY ?? '').trim(),
+    default_model_id: '',
+    default_model_version_id: '',
+    model_api_keys: {},
+    model_api_key_policies: {},
+    local_model_path:
+      (process.env.YOLO_LOCAL_MODEL_PATH ?? '').trim() || resolveBundledLocalModelPath(framework),
     local_train_command: (process.env.YOLO_LOCAL_TRAIN_COMMAND ?? '').trim(),
     local_predict_command: (process.env.YOLO_LOCAL_PREDICT_COMMAND ?? '').trim()
-  };
+  });
 };
 
 const normalizeRuntimeFrameworkConfig = (
+  framework: ModelFramework,
   input: Partial<RuntimeFrameworkConfig> | null | undefined,
   fallback: RuntimeFrameworkConfig
-): RuntimeFrameworkConfig => ({
-  endpoint: typeof input?.endpoint === 'string' ? input.endpoint.trim() : fallback.endpoint,
-  api_key: typeof input?.api_key === 'string' ? input.api_key.trim() : fallback.api_key,
-  local_train_command:
-    typeof input?.local_train_command === 'string'
-      ? input.local_train_command.trim()
-      : fallback.local_train_command,
-  local_predict_command:
-    typeof input?.local_predict_command === 'string'
-      ? input.local_predict_command.trim()
-      : fallback.local_predict_command
-});
+): RuntimeFrameworkConfig => {
+  const normalizeIsoDate = (value: unknown): string | null => {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Date.parse(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return new Date(parsed).toISOString();
+  };
+  const normalizedLegacyModelApiKeys =
+    input?.model_api_keys && typeof input.model_api_keys === 'object'
+      ? Object.fromEntries(
+          Object.entries(input.model_api_keys)
+            .map(([key, value]) => [key.trim(), typeof value === 'string' ? value.trim() : ''])
+            .filter(([key]) => Boolean(key))
+        )
+      : { ...fallback.model_api_keys };
+  const fallbackPolicies = fallback.model_api_key_policies ?? {};
+  const rawPolicies =
+    input?.model_api_key_policies &&
+    typeof input.model_api_key_policies === 'object' &&
+    !Array.isArray(input.model_api_key_policies)
+      ? (input.model_api_key_policies as Record<string, unknown>)
+      : {};
+  const mergedKeys = new Set<string>([
+    ...Object.keys(fallbackPolicies),
+    ...Object.keys(normalizedLegacyModelApiKeys),
+    ...Object.keys(rawPolicies)
+  ]);
+  const normalizedPolicies: RuntimeFrameworkConfig['model_api_key_policies'] = {};
+
+  for (const rawKey of mergedKeys) {
+    const key = rawKey.trim();
+    if (!key) {
+      continue;
+    }
+    const fallbackPolicy = fallbackPolicies[key];
+    const rawPolicy = rawPolicies[key];
+    const policyEntry =
+      rawPolicy && typeof rawPolicy === 'object' && !Array.isArray(rawPolicy)
+        ? (rawPolicy as Record<string, unknown>)
+        : null;
+    const apiKey =
+      typeof policyEntry?.api_key === 'string'
+        ? policyEntry.api_key.trim()
+        : (normalizedLegacyModelApiKeys[key] ?? fallbackPolicy?.api_key ?? '').trim();
+    const maxCalls =
+      typeof policyEntry?.max_calls === 'number' && Number.isFinite(policyEntry.max_calls)
+        ? Math.max(0, Math.floor(policyEntry.max_calls))
+        : typeof fallbackPolicy?.max_calls === 'number' && Number.isFinite(fallbackPolicy.max_calls)
+          ? Math.max(0, Math.floor(fallbackPolicy.max_calls))
+          : null;
+    const usedCallsRaw =
+      typeof policyEntry?.used_calls === 'number' && Number.isFinite(policyEntry.used_calls)
+        ? Math.max(0, Math.floor(policyEntry.used_calls))
+        : typeof fallbackPolicy?.used_calls === 'number' && Number.isFinite(fallbackPolicy.used_calls)
+          ? Math.max(0, Math.floor(fallbackPolicy.used_calls))
+          : 0;
+    const usedCalls = typeof maxCalls === 'number' ? Math.min(usedCallsRaw, maxCalls) : usedCallsRaw;
+
+    normalizedPolicies[key] = {
+      api_key: apiKey,
+      expires_at:
+        normalizeIsoDate(policyEntry?.expires_at) ??
+        normalizeIsoDate(fallbackPolicy?.expires_at) ??
+        null,
+      max_calls: maxCalls,
+      used_calls: usedCalls,
+      last_used_at:
+        normalizeIsoDate(policyEntry?.last_used_at) ??
+        normalizeIsoDate(fallbackPolicy?.last_used_at) ??
+        null
+    };
+  }
+
+  const normalizedPolicyKeys = Object.fromEntries(
+    Object.entries(normalizedPolicies)
+      .map(([key, policy]) => [key, (policy.api_key ?? '').trim()])
+      .filter(([, apiKey]) => Boolean(apiKey))
+  );
+
+  return applyBundledLocalCommandDefaults(framework, {
+    endpoint: typeof input?.endpoint === 'string' ? input.endpoint.trim() : fallback.endpoint,
+    api_key: typeof input?.api_key === 'string' ? input.api_key.trim() : fallback.api_key,
+    default_model_id:
+      typeof input?.default_model_id === 'string'
+        ? input.default_model_id.trim()
+        : fallback.default_model_id,
+    default_model_version_id:
+      typeof input?.default_model_version_id === 'string'
+        ? input.default_model_version_id.trim()
+        : fallback.default_model_version_id,
+    model_api_keys: normalizedPolicyKeys,
+    model_api_key_policies: normalizedPolicies,
+    local_model_path:
+      typeof input?.local_model_path === 'string'
+        ? input.local_model_path.trim()
+        : fallback.local_model_path,
+    local_train_command:
+      typeof input?.local_train_command === 'string'
+        ? input.local_train_command.trim()
+        : fallback.local_train_command,
+    local_predict_command:
+      typeof input?.local_predict_command === 'string'
+        ? input.local_predict_command.trim()
+        : fallback.local_predict_command
+  });
+};
 
 const normalizeRuntimeControlConfig = (
   input: Partial<RuntimeSettingsRecord['controls']> | null | undefined,
   fallback: RuntimeSettingsRecord['controls']
-): RuntimeSettingsRecord['controls'] => ({
-  python_bin: typeof input?.python_bin === 'string' ? input.python_bin.trim() : fallback.python_bin,
-  disable_simulated_train_fallback:
-    typeof input?.disable_simulated_train_fallback === 'boolean'
-      ? input.disable_simulated_train_fallback
-      : fallback.disable_simulated_train_fallback,
-  disable_inference_fallback:
-    typeof input?.disable_inference_fallback === 'boolean'
-      ? input.disable_inference_fallback
-      : fallback.disable_inference_fallback
-});
+): RuntimeSettingsRecord['controls'] => {
+  const requestedPythonBin = typeof input?.python_bin === 'string' ? input.python_bin.trim() : '';
+  const preferredPythonBin = resolveRuntimeDefaultPythonBin();
+  const shouldPromotePreferredPythonBin =
+    Boolean(preferredPythonBin) &&
+    preferredPythonBin !== requestedPythonBin &&
+    ['/usr/bin/python3', 'python3', 'python', ''].includes(requestedPythonBin);
+
+  return {
+    python_bin: shouldPromotePreferredPythonBin
+      ? preferredPythonBin
+      : requestedPythonBin || fallback.python_bin,
+    disable_simulated_train_fallback:
+      typeof input?.disable_simulated_train_fallback === 'boolean'
+        ? input.disable_simulated_train_fallback
+        : fallback.disable_simulated_train_fallback,
+    disable_inference_fallback:
+      typeof input?.disable_inference_fallback === 'boolean'
+        ? input.disable_inference_fallback
+        : fallback.disable_inference_fallback
+  };
+};
 
 const getStoredRuntimeFrameworkConfig = (framework: ModelFramework): RuntimeFrameworkConfig => {
   const fallback = runtimeSettings.updated_at ? emptyRuntimeFrameworkConfig : getEnvRuntimeFrameworkConfig(framework);
-  return normalizeRuntimeFrameworkConfig(runtimeSettings.frameworks[framework], fallback);
+  return normalizeRuntimeFrameworkConfig(framework, runtimeSettings.frameworks[framework], fallback);
 };
 
 const getStoredRuntimeControlConfig = (): RuntimeSettingsRecord['controls'] => {
@@ -480,9 +839,13 @@ const parseRuntimeProfilesFromEnv = (): RuntimeProfileRecord[] => {
             : 'Runtime profile loaded from deployment environment.',
         source: 'env',
         frameworks: {
-          paddleocr: normalizeRuntimeFrameworkConfig(frameworks.paddleocr, emptyRuntimeFrameworkConfig),
-          doctr: normalizeRuntimeFrameworkConfig(frameworks.doctr, emptyRuntimeFrameworkConfig),
-          yolo: normalizeRuntimeFrameworkConfig(frameworks.yolo, emptyRuntimeFrameworkConfig)
+          paddleocr: normalizeRuntimeFrameworkConfig(
+            'paddleocr',
+            frameworks.paddleocr,
+            emptyRuntimeFrameworkConfig
+          ),
+          doctr: normalizeRuntimeFrameworkConfig('doctr', frameworks.doctr, emptyRuntimeFrameworkConfig),
+          yolo: normalizeRuntimeFrameworkConfig('yolo', frameworks.yolo, emptyRuntimeFrameworkConfig)
         },
         controls: normalizeRuntimeControlConfig(candidate.controls, emptyRuntimeControlConfig)
       });
@@ -501,9 +864,13 @@ const buildRuntimeProfiles = (record: RuntimeSettingsRecord): RuntimeProfileReco
     description: 'Current persisted runtime configuration used by API runtime adapters.',
     source: 'saved',
     frameworks: {
-      paddleocr: normalizeRuntimeFrameworkConfig(record.frameworks.paddleocr, emptyRuntimeFrameworkConfig),
-      doctr: normalizeRuntimeFrameworkConfig(record.frameworks.doctr, emptyRuntimeFrameworkConfig),
-      yolo: normalizeRuntimeFrameworkConfig(record.frameworks.yolo, emptyRuntimeFrameworkConfig)
+      paddleocr: normalizeRuntimeFrameworkConfig(
+        'paddleocr',
+        record.frameworks.paddleocr,
+        emptyRuntimeFrameworkConfig
+      ),
+      doctr: normalizeRuntimeFrameworkConfig('doctr', record.frameworks.doctr, emptyRuntimeFrameworkConfig),
+      yolo: normalizeRuntimeFrameworkConfig('yolo', record.frameworks.yolo, emptyRuntimeFrameworkConfig)
     },
     controls: normalizeRuntimeControlConfig(record.controls, emptyRuntimeControlConfig)
   };
@@ -516,27 +883,9 @@ const toRuntimeProfileView = (profile: RuntimeProfileRecord): RuntimeProfileView
   description: profile.description,
   source: profile.source,
   frameworks: {
-    paddleocr: {
-      endpoint: profile.frameworks.paddleocr.endpoint,
-      local_train_command: profile.frameworks.paddleocr.local_train_command,
-      local_predict_command: profile.frameworks.paddleocr.local_predict_command,
-      has_api_key: profile.frameworks.paddleocr.api_key.length > 0,
-      api_key_masked: maskApiKey(profile.frameworks.paddleocr.api_key)
-    },
-    doctr: {
-      endpoint: profile.frameworks.doctr.endpoint,
-      local_train_command: profile.frameworks.doctr.local_train_command,
-      local_predict_command: profile.frameworks.doctr.local_predict_command,
-      has_api_key: profile.frameworks.doctr.api_key.length > 0,
-      api_key_masked: maskApiKey(profile.frameworks.doctr.api_key)
-    },
-    yolo: {
-      endpoint: profile.frameworks.yolo.endpoint,
-      local_train_command: profile.frameworks.yolo.local_train_command,
-      local_predict_command: profile.frameworks.yolo.local_predict_command,
-      has_api_key: profile.frameworks.yolo.api_key.length > 0,
-      api_key_masked: maskApiKey(profile.frameworks.yolo.api_key)
-    }
+    paddleocr: toRuntimeFrameworkConfigView(profile.frameworks.paddleocr),
+    doctr: toRuntimeFrameworkConfigView(profile.frameworks.doctr),
+    yolo: toRuntimeFrameworkConfigView(profile.frameworks.yolo)
   },
   controls: {
     python_bin: profile.controls.python_bin,
@@ -1192,33 +1541,301 @@ const getCurrentRuntimeSettingsView = (): RuntimeSettingsView => {
     active_profile_id: record.active_profile_id,
     available_profiles: profiles.map((item) => toRuntimeProfileView(item)),
     frameworks: {
-      paddleocr: {
-        endpoint: record.frameworks.paddleocr.endpoint,
-        local_train_command: record.frameworks.paddleocr.local_train_command,
-        local_predict_command: record.frameworks.paddleocr.local_predict_command,
-        has_api_key: Boolean(record.frameworks.paddleocr.api_key),
-        api_key_masked: maskApiKey(record.frameworks.paddleocr.api_key)
-      },
-      doctr: {
-        endpoint: record.frameworks.doctr.endpoint,
-        local_train_command: record.frameworks.doctr.local_train_command,
-        local_predict_command: record.frameworks.doctr.local_predict_command,
-        has_api_key: Boolean(record.frameworks.doctr.api_key),
-        api_key_masked: maskApiKey(record.frameworks.doctr.api_key)
-      },
-      yolo: {
-        endpoint: record.frameworks.yolo.endpoint,
-        local_train_command: record.frameworks.yolo.local_train_command,
-        local_predict_command: record.frameworks.yolo.local_predict_command,
-        has_api_key: Boolean(record.frameworks.yolo.api_key),
-        api_key_masked: maskApiKey(record.frameworks.yolo.api_key)
-      }
+      paddleocr: toRuntimeFrameworkConfigView(record.frameworks.paddleocr),
+      doctr: toRuntimeFrameworkConfigView(record.frameworks.doctr),
+      yolo: toRuntimeFrameworkConfigView(record.frameworks.yolo)
     },
     controls: {
       python_bin: record.controls.python_bin,
       disable_simulated_train_fallback: record.controls.disable_simulated_train_fallback,
       disable_inference_fallback: record.controls.disable_inference_fallback
     }
+  };
+};
+
+const isPathLikeCommand = (value: string): boolean =>
+  path.isAbsolute(value) || value.startsWith('.') || value.includes('/') || value.includes('\\');
+
+const extractExecutableToken = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.startsWith('"')) {
+    const closingQuote = trimmed.indexOf('"', 1);
+    if (closingQuote > 1) {
+      return trimmed.slice(1, closingQuote).trim();
+    }
+  }
+  if (trimmed.startsWith("'")) {
+    const closingQuote = trimmed.indexOf("'", 1);
+    if (closingQuote > 1) {
+      return trimmed.slice(1, closingQuote).trim();
+    }
+  }
+  return trimmed.split(/\s+/)[0]?.trim() ?? '';
+};
+
+const probePythonCommand = (value: string): { ok: boolean; executable: string; reason: string } => {
+  const executable = extractExecutableToken(value);
+  if (!executable) {
+    return {
+      ok: false,
+      executable: '',
+      reason: 'empty candidate'
+    };
+  }
+
+  const probe = spawnSync(executable, ['--version'], {
+    encoding: 'utf8',
+    timeout: 2800,
+    windowsHide: true
+  });
+  if (probe.error) {
+    return {
+      ok: false,
+      executable,
+      reason: probe.error.message
+    };
+  }
+  if (probe.status !== 0) {
+    return {
+      ok: false,
+      executable,
+      reason: `exit ${probe.status ?? 'unknown'}`
+    };
+  }
+  return {
+    ok: true,
+    executable,
+    reason: ''
+  };
+};
+
+const resolveRuntimeReadinessPython = (
+  requestedPythonBin: string
+): {
+  requested: string | null;
+  resolved: string | null;
+  issues: RuntimeReadinessIssue[];
+} => {
+  const issues: RuntimeReadinessIssue[] = [];
+  const requested = requestedPythonBin.trim() || null;
+  const localRuntimeVenvCandidates =
+    process.platform === 'win32'
+      ? [
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'Scripts', 'python.exe'),
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'Scripts', 'python')
+        ]
+      : [
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'bin', 'python3'),
+          path.resolve(process.cwd(), '.data', 'runtime-python', '.venv', 'bin', 'python')
+        ];
+  const candidates = [
+    requestedPythonBin.trim(),
+    (process.env.VISTRAL_PYTHON_BIN ?? '').trim(),
+    (process.env.PYTHON_BIN ?? '').trim(),
+    ...localRuntimeVenvCandidates,
+    ...(process.platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python'])
+  ].filter(Boolean);
+  const visited = new Set<string>();
+  for (const candidate of candidates) {
+    const executable = extractExecutableToken(candidate);
+    if (!executable) {
+      continue;
+    }
+    const dedupeKey = process.platform === 'win32' ? executable.toLowerCase() : executable;
+    if (visited.has(dedupeKey)) {
+      continue;
+    }
+    visited.add(dedupeKey);
+    const probe = probePythonCommand(candidate);
+    if (probe.ok) {
+      return {
+        requested,
+        resolved: probe.executable,
+        issues
+      };
+    }
+    if (requested && candidate === requested) {
+      const issueCode = isPathLikeCommand(requested)
+        ? 'runtime_python_bin_path_unavailable'
+        : 'runtime_python_bin_unavailable';
+      issues.push({
+        code: issueCode,
+        level: 'warning',
+        message: `Configured python_bin is unavailable (${probe.reason}). Fallback candidate probing will continue.`,
+        remediation:
+          'Set runtime_controls.python_bin to an existing executable path, or leave it blank to allow platform defaults (python3/python).'
+      });
+    }
+  }
+
+  issues.push({
+    code: 'runtime_python_not_available',
+    level: 'error',
+    message: 'No usable Python executable detected. Configure runtime_controls.python_bin or install python3/python.',
+    remediation:
+      'Install Python and ensure python3/python is on PATH, or set runtime_controls.python_bin to a valid executable.'
+  });
+
+  return {
+    requested,
+    resolved: null,
+    issues
+  };
+};
+
+const runtimeFrameworkModuleRequirement: Record<ModelFramework, string> = {
+  paddleocr: 'paddleocr',
+  doctr: 'doctr',
+  yolo: 'ultralytics'
+};
+
+const probePythonModule = (pythonBin: string, moduleName: string): { ok: boolean; reason: string } => {
+  const probe = spawnSync(
+    pythonBin,
+    [
+      '-c',
+      `import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(${JSON.stringify(moduleName)}) else 1)`
+    ],
+    {
+      encoding: 'utf8',
+      timeout: 3000,
+      windowsHide: true
+    }
+  );
+  if (probe.error) {
+    return {
+      ok: false,
+      reason: probe.error.message
+    };
+  }
+  if (probe.status !== 0) {
+    return {
+      ok: false,
+      reason: `module ${moduleName} not detected`
+    };
+  }
+  return {
+    ok: true,
+    reason: ''
+  };
+};
+
+const buildPipInstallCommand = (pythonBin: string, moduleName: string): string =>
+  `${pythonBin} -m pip install ${moduleName}`;
+
+const parseRuntimeTimestampMs = (value: string | null | undefined): number | null => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+type LocalCommandProbeResult = {
+  ok: boolean;
+  level: RuntimeReadinessIssue['level'];
+  message: string;
+};
+
+const probeLocalCommandTemplate = (
+  template: string,
+  resolvedPythonBin: string | null
+): LocalCommandProbeResult => {
+  const trimmed = template.trim();
+  if (!trimmed) {
+    return {
+      ok: false,
+      level: 'warning',
+      message: 'command template is empty'
+    };
+  }
+
+  const executable = extractExecutableToken(trimmed);
+  if (!executable) {
+    return {
+      ok: false,
+      level: 'warning',
+      message: 'command executable token is empty'
+    };
+  }
+
+  if (executable === '{{python_bin}}') {
+    if (resolvedPythonBin) {
+      return {
+        ok: true,
+        level: 'warning',
+        message: ''
+      };
+    }
+    return {
+      ok: false,
+      level: 'error',
+      message: 'command depends on {{python_bin}} but no usable python executable was resolved'
+    };
+  }
+
+  if (/^\{\{.+\}\}$/.test(executable)) {
+    return {
+      ok: false,
+      level: 'warning',
+      message: `unsupported executable placeholder ${executable}`
+    };
+  }
+
+  if (isPathLikeCommand(executable)) {
+    const resolvedPath = path.isAbsolute(executable)
+      ? executable
+      : path.resolve(process.cwd(), executable);
+    if (!existsSync(resolvedPath)) {
+      return {
+        ok: false,
+        level: 'error',
+        message: `executable path not found: ${resolvedPath}`
+      };
+    }
+    try {
+      const stats = statSync(resolvedPath);
+      if (!stats.isFile()) {
+        return {
+          ok: false,
+          level: 'error',
+          message: `executable path is not a file: ${resolvedPath}`
+        };
+      }
+    } catch (pathError) {
+      return {
+        ok: false,
+        level: 'error',
+        message: `unable to read executable path: ${(pathError as Error).message}`
+      };
+    }
+    return {
+      ok: true,
+      level: 'warning',
+      message: ''
+    };
+  }
+
+  const probe = spawnSync(executable, ['--version'], {
+    encoding: 'utf8',
+    timeout: 2800,
+    windowsHide: true
+  });
+  if (probe.error) {
+    return {
+      ok: false,
+      level: 'error',
+      message: probe.error.message
+    };
+  }
+
+  return {
+    ok: true,
+    level: 'warning',
+    message: ''
   };
 };
 
@@ -1692,7 +2309,11 @@ const buildConsoleActionLinks = (
         href: modelVersionId ? `/inference/validate?modelVersion=${encodeURIComponent(modelVersionId)}` : '/inference/validate'
       }
     ],
-    send_inference_feedback: [{ label: chinese ? '打开推理验证' : 'Open Inference Validation', href: '/inference/validate' }]
+    send_inference_feedback: [{ label: chinese ? '打开推理验证' : 'Open Inference Validation', href: '/inference/validate' }],
+    activate_runtime_profile: [{ label: chinese ? '打开 Runtime 设置' : 'Open Runtime Settings', href: '/settings/runtime' }],
+    auto_configure_runtime_settings: [
+      { label: chinese ? '打开 Runtime 设置' : 'Open Runtime Settings', href: '/settings/runtime' }
+    ]
   };
   return links[api] ?? [];
 };
@@ -2240,30 +2861,187 @@ const detectConversationInferenceIntent = (content: string, attachmentIds: strin
   return /(识别|推理|检测|ocr|read|predict|inference|analy[sz]e|请分析|帮我识别)/i.test(content);
 };
 
+const resolveInferenceFallbackReason = (run: InferenceRunRecord): string => {
+  const rawOutput =
+    run.raw_output && typeof run.raw_output === 'object' && !Array.isArray(run.raw_output)
+      ? (run.raw_output as Record<string, unknown>)
+      : {};
+  const directReasonCandidates = [
+    rawOutput.runtime_fallback_reason,
+    rawOutput.local_command_fallback_reason
+  ];
+  for (const candidate of directReasonCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  const rawMeta =
+    rawOutput.meta && typeof rawOutput.meta === 'object' && !Array.isArray(rawOutput.meta)
+      ? (rawOutput.meta as Record<string, unknown>)
+      : null;
+  const metaFallback = rawMeta?.fallback_reason;
+  if (typeof metaFallback === 'string' && metaFallback.trim()) {
+    return metaFallback.trim();
+  }
+  return '';
+};
+
+const sourceHasFallbackMarker = (value: string): boolean => /(fallback|template|mock|base_empty)/i.test(value);
+
+const parseBooleanLikeRuntimeFlag = (value: unknown): boolean => {
+  if (value === true) {
+    return true;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0;
+  }
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+};
+
+const hasInferenceFallbackEvidence = (rawOutput: Record<string, unknown>): boolean => {
+  const directCandidates = [rawOutput.runtime_fallback_reason, rawOutput.local_command_fallback_reason];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return true;
+    }
+  }
+
+  const rawMeta =
+    rawOutput.meta && typeof rawOutput.meta === 'object' && !Array.isArray(rawOutput.meta)
+      ? (rawOutput.meta as Record<string, unknown>)
+      : null;
+  if (typeof rawMeta?.fallback_reason === 'string' && rawMeta.fallback_reason.trim()) {
+    return true;
+  }
+  if (typeof rawMeta?.mode === 'string' && rawMeta.mode.trim().toLowerCase() === 'template') {
+    return true;
+  }
+  return parseBooleanLikeRuntimeFlag(rawOutput.local_command_template_mode);
+};
+
+const resolvePredictionExecutionSource = (prediction: {
+  raw_output: Record<string, unknown>;
+  normalized_output: Record<string, unknown>;
+}): string => {
+  const sourceRaw = prediction.normalized_output.source;
+  const source =
+    typeof sourceRaw === 'string' && sourceRaw.trim()
+      ? sourceRaw.trim()
+      : 'unknown';
+  if (sourceHasFallbackMarker(source)) {
+    return source;
+  }
+  if (!hasInferenceFallbackEvidence(prediction.raw_output)) {
+    return source;
+  }
+  return source === 'unknown' ? 'explicit_fallback_detected' : `${source}_fallback`;
+};
+
+const resolveInferenceSource = (run: InferenceRunRecord): string => {
+  const executionSource =
+    typeof run.execution_source === 'string' && run.execution_source.trim()
+      ? run.execution_source.trim()
+      : '';
+  const normalizedSourceRaw = run.normalized_output?.normalized_output?.source;
+  const normalizedSource =
+    typeof normalizedSourceRaw === 'string' && normalizedSourceRaw.trim()
+      ? normalizedSourceRaw.trim()
+      : '';
+
+  const preferNormalized =
+    normalizedSource &&
+    sourceHasFallbackMarker(normalizedSource) &&
+    !sourceHasFallbackMarker(executionSource);
+  if (preferNormalized) {
+    return normalizedSource;
+  }
+  if (!sourceHasFallbackMarker(executionSource) && hasInferenceFallbackEvidence(run.raw_output)) {
+    if (normalizedSource) {
+      return sourceHasFallbackMarker(normalizedSource) ? normalizedSource : `${normalizedSource}_fallback`;
+    }
+    return executionSource ? `${executionSource}_fallback` : 'explicit_fallback_detected';
+  }
+  return executionSource || normalizedSource || 'unknown';
+};
+
+const isNonRealInferenceRun = (run: InferenceRunRecord): boolean => {
+  const source = resolveInferenceSource(run).trim().toLowerCase();
+  if (source.includes('fallback') || source.includes('template') || source.includes('mock') || source === 'base_empty') {
+    return true;
+  }
+  const fallbackReason = resolveInferenceFallbackReason(run);
+  if (fallbackReason) {
+    return true;
+  }
+  return hasInferenceFallbackEvidence(
+    run.raw_output && typeof run.raw_output === 'object' && !Array.isArray(run.raw_output)
+      ? (run.raw_output as Record<string, unknown>)
+      : {}
+  );
+};
+
 const formatInferenceSummary = (run: InferenceRunRecord, inputText: string, attachmentLabel: string): string => {
   const chinese = hasChineseText(inputText);
   const output = run.normalized_output;
-  const source = run.execution_source;
+  const source = resolveInferenceSource(run);
+  const nonReal = isNonRealInferenceRun(run);
+  const fallbackReason = resolveInferenceFallbackReason(run);
+  const fallbackReasonText = fallbackReason
+    ? chinese
+      ? `原因：${fallbackReason}`
+      : `Reason: ${fallbackReason}`
+    : '';
   if (run.task_type === 'ocr') {
     const lines = output.ocr.lines.map((item) => item.text).filter(Boolean).slice(0, 5);
     const detail = lines.length > 0 ? lines.join(' | ') : chinese ? '未返回可读文本。' : 'No OCR lines returned.';
+    if (nonReal) {
+      const suffix = fallbackReasonText ? ` ${fallbackReasonText}` : '';
+      return chinese
+        ? `OCR 推理返回了回退/模板结果（${source}），并非真实识别。文件：${attachmentLabel}。${detail}${suffix}`
+        : `OCR inference returned fallback/template output (${source}), not real recognition. File: ${attachmentLabel}. ${detail}${suffix}`;
+    }
     return chinese
       ? `已完成 OCR 推理（${source}）。文件：${attachmentLabel}。识别结果：${detail}`
       : `OCR inference completed (${source}). File: ${attachmentLabel}. Result: ${detail}`;
   }
   if (run.task_type === 'detection' || run.task_type === 'obb') {
     const count = output.boxes.length + output.rotated_boxes.length;
+    if (nonReal) {
+      const suffix = fallbackReasonText ? ` ${fallbackReasonText}` : '';
+      return chinese
+        ? `目标检测返回了回退/模板结果（${source}），并非真实推理。文件：${attachmentLabel}。当前结果 ${count} 个目标。${suffix}`
+        : `Detection returned fallback/template output (${source}), not real inference. File: ${attachmentLabel}. Current result ${count} objects.${suffix}`;
+    }
     return chinese
       ? `已完成目标检测推理（${source}）。文件：${attachmentLabel}。检测到 ${count} 个目标。`
       : `Detection inference completed (${source}). File: ${attachmentLabel}. Detected ${count} objects.`;
   }
   if (run.task_type === 'segmentation') {
     const count = output.polygons.length + output.masks.length;
+    if (nonReal) {
+      const suffix = fallbackReasonText ? ` ${fallbackReasonText}` : '';
+      return chinese
+        ? `分割返回了回退/模板结果（${source}），并非真实推理。文件：${attachmentLabel}。分割结果 ${count} 项。${suffix}`
+        : `Segmentation returned fallback/template output (${source}), not real inference. File: ${attachmentLabel}. Segmentation outputs: ${count}.${suffix}`;
+    }
     return chinese
       ? `已完成分割推理（${source}）。文件：${attachmentLabel}。分割结果 ${count} 项。`
       : `Segmentation inference completed (${source}). File: ${attachmentLabel}. Segmentation outputs: ${count}.`;
   }
   const top = output.labels[0];
+  if (nonReal) {
+    const suffix = fallbackReasonText ? ` ${fallbackReasonText}` : '';
+    return chinese
+      ? `分类返回了回退/模板结果（${source}），并非真实推理。文件：${attachmentLabel}。Top-1：${top?.label ?? 'unknown'} (${top?.score ?? 0}).${suffix}`
+      : `Classification returned fallback/template output (${source}), not real inference. File: ${attachmentLabel}. Top-1: ${top?.label ?? 'unknown'} (${top?.score ?? 0}).${suffix}`;
+  }
   return chinese
     ? `已完成分类推理（${source}）。文件：${attachmentLabel}。Top-1：${top?.label ?? 'unknown'} (${top?.score ?? 0}).`
     : `Classification inference completed (${source}). File: ${attachmentLabel}. Top-1: ${top?.label ?? 'unknown'} (${top?.score ?? 0}).`;
@@ -2320,6 +3098,8 @@ const resolveConversationInferenceAction = async (
       input_attachment_id: readyAttachment.id,
       task_type: taskType
     });
+    const nonReal = isNonRealInferenceRun(run);
+    const chinese = hasChineseText(content);
     const summary = formatInferenceSummary(run, content, readyAttachment.filename);
     return {
       content: summary,
@@ -2332,7 +3112,19 @@ const resolveConversationInferenceAction = async (
       }, {
         createdEntityType: null,
         createdEntityId: run.id,
-        createdEntityLabel: readyAttachment.filename
+        createdEntityLabel: readyAttachment.filename,
+        actionLinks: nonReal
+          ? [
+              {
+                label: chinese ? '打开推理验证' : 'Open Inference Validation',
+                href: `/inference/validate?modelVersion=${encodeURIComponent(version.id)}`
+              },
+              {
+                label: chinese ? '打开 Runtime 设置' : 'Open Runtime Settings',
+                href: '/settings/runtime'
+              }
+            ]
+          : []
       })
     };
   } catch (error) {
@@ -2378,6 +3170,9 @@ const suggestAttachmentRefs = (): string[] =>
 
 const suggestModelVersionRefs = (): string[] =>
   modelVersions.slice(0, 8).map((item) => `${item.version_name} (${item.id})`);
+
+const suggestDatasetVersionRefs = (): string[] =>
+  datasetVersions.slice(0, 8).map((item) => `${item.version_name} (${item.id})`);
 
 const resolveDatasetReference = (content: string): string => {
   const byId = extractPatternValue(content, [/\b(d-\d+)\b/i]);
@@ -2450,6 +3245,20 @@ const resolveAnnotationReference = (content: string): string => {
   }
   return '';
 };
+
+const inferRuntimeProfileIdFromText = (content: string): string =>
+  inferActionNameFromText(content) ||
+  extractQuotedValue(content) ||
+  extractPatternValue(content, [/(?:activate|切换|切到)\s+(?:runtime\s+)?profile\s+([a-z0-9._-]{2,80})/i]) ||
+  extractPatternValue(content, [/(?:runtime\s+)?profile\s*[:：]\s*([a-z0-9._-]{2,80})/i]);
+
+const detectRuntimeAutoConfigureIntent = (content: string): boolean =>
+  /(?:自动配置|自动探测|auto[- ]?config(?:ure)?|auto configure).*(?:runtime|运行时)|(?:runtime|运行时).*(?:自动配置|自动探测|auto[- ]?config(?:ure)?|auto configure)/i.test(
+    content
+  );
+
+const inferRuntimeAutoConfigureOverwriteFromText = (content: string): boolean =>
+  /(覆盖|替换|overwrite|replace|重写|强制)/i.test(content);
 
 const parseConsoleOpsPayload = (content: string): ConsoleOpsPayload | null => {
   const match = content.trim().match(/^\/ops\s+(\{[\s\S]+\})$/i);
@@ -2543,14 +3352,12 @@ const buildNaturalConsoleOpsPayload = (
       }
     };
   }
-  if (/(预标注|pre-?annotat)/i.test(content) && datasetId && modelId) {
+  if (/(预标注|pre-?annotat)/i.test(content) && datasetId && modelVersionId) {
     return {
       api: 'run_dataset_pre_annotations',
       params: {
         dataset_id: datasetId,
-        source_model_id: modelId,
-        source_model_version_id: modelVersionId || undefined,
-        task_type: taskType ?? 'detection'
+        model_version_id: modelVersionId
       }
     };
   }
@@ -2615,8 +3422,16 @@ const buildNaturalConsoleOpsPayload = (
       }
     };
   }
+  if (detectRuntimeAutoConfigureIntent(content)) {
+    return {
+      api: 'auto_configure_runtime_settings',
+      params: {
+        overwrite_endpoint: inferRuntimeAutoConfigureOverwriteFromText(content)
+      }
+    };
+  }
   if (/(激活.*runtime profile|activate runtime profile|切换 runtime profile)/i.test(content)) {
-    const profileId = inferActionNameFromText(content) || extractQuotedValue(content);
+    const profileId = inferRuntimeProfileIdFromText(content);
     if (profileId) {
       return {
         api: 'activate_runtime_profile',
@@ -2658,28 +3473,36 @@ const buildNaturalConsoleOpsPayload = (
 
 const detectNaturalConsoleIntentMissingFields = (
   content: string
-): { api: string; missingFields: string[] } | null => {
+): { api: string; missingFields: string[]; params?: Record<string, unknown> } | null => {
   const lower = content.toLowerCase();
-  const hasDatasetId = /\b(d-\d+)\b/i.test(content);
-  const hasAttachmentId = /\b(f-\d+)\b/i.test(content);
-  const hasRunId = /\b(ir-\d+)\b/i.test(content);
-  const hasJobId = /\b(tj-[a-z0-9-]+)\b/i.test(content);
-  const hasModelId = /\b(m-\d+)\b/i.test(content);
-  const hasModelVersionId = /\b(mv-\d+)\b/i.test(content);
+  const datasetId = extractEntityId(content, /\b(d-\d+)\b/i);
+  const attachmentId = extractEntityId(content, /\b(f-\d+)\b/i);
+  const runId = extractEntityId(content, /\b(ir-\d+)\b/i);
+  const jobId = extractEntityId(content, /\b(tj-[a-z0-9-]+)\b/i);
+  const modelId = extractEntityId(content, /\b(m-\d+)\b/i);
+  const modelVersionId = extractEntityId(content, /\b(mv-\d+)\b/i);
+  const hasDatasetId = Boolean(datasetId);
+  const hasAttachmentId = Boolean(attachmentId);
+  const hasRunId = Boolean(runId);
+  const hasJobId = Boolean(jobId);
+  const hasModelId = Boolean(modelId);
+  const hasModelVersionId = Boolean(modelVersionId);
   const taskType = inferTaskTypeFromText(content);
-  const hasReviewStatus = /(通过|approved?|approve|拒绝|驳回|rejected?|reject)/i.test(content);
+  const reviewStatus =
+    /(通过|approved?|approve)/i.test(content) ? 'approved' : /(拒绝|驳回|rejected?|reject)/i.test(content) ? 'rejected' : '';
+  const hasReviewStatus = Boolean(reviewStatus);
 
   if (/(取消训练|cancel training)/i.test(content) && !hasJobId) {
-    return { api: 'cancel_training_job', missingFields: ['job_id'] };
+    return { api: 'cancel_training_job', missingFields: ['job_id'], params: {} };
   }
   if (/(重试训练|retry training)/i.test(content) && !hasJobId) {
-    return { api: 'retry_training_job', missingFields: ['job_id'] };
+    return { api: 'retry_training_job', missingFields: ['job_id'], params: {} };
   }
   if (/(查看|列出|list).*(标注|annotation)/i.test(content) && !hasDatasetId) {
-    return { api: 'list_dataset_annotations', missingFields: ['dataset_id'] };
+    return { api: 'list_dataset_annotations', missingFields: ['dataset_id'], params: {} };
   }
   if (/(导出|export).*(标注|annotation)/i.test(content) && !hasDatasetId) {
-    return { api: 'export_dataset_annotations', missingFields: ['dataset_id'] };
+    return { api: 'export_dataset_annotations', missingFields: ['dataset_id'], params: {} };
   }
   if (/(导入|import).*(标注|annotation)/i.test(content) && (!hasDatasetId || !hasAttachmentId)) {
     const missing = [];
@@ -2689,20 +3512,31 @@ const detectNaturalConsoleIntentMissingFields = (
     if (!hasAttachmentId) {
       missing.push('attachment_id');
     }
-    return { api: 'import_dataset_annotations', missingFields: missing };
+    return {
+      api: 'import_dataset_annotations',
+      missingFields: missing,
+      params: {
+        ...(datasetId ? { dataset_id: datasetId } : {}),
+        ...(attachmentId ? { attachment_id: attachmentId } : {})
+      }
+    };
   }
-  if (/(预标注|pre-?annotat)/i.test(content) && (!hasDatasetId || !hasModelId || !taskType)) {
+  if (/(预标注|pre-?annotat)/i.test(content) && (!hasDatasetId || !hasModelVersionId)) {
     const missing = [];
     if (!hasDatasetId) {
       missing.push('dataset_id');
     }
-    if (!hasModelId) {
-      missing.push('source_model_id');
+    if (!hasModelVersionId) {
+      missing.push('model_version_id');
     }
-    if (!taskType) {
-      missing.push('task_type');
-    }
-    return { api: 'run_dataset_pre_annotations', missingFields: missing };
+    return {
+      api: 'run_dataset_pre_annotations',
+      missingFields: missing,
+      params: {
+        ...(datasetId ? { dataset_id: datasetId } : {}),
+        ...(modelVersionId ? { model_version_id: modelVersionId } : {})
+      }
+    };
   }
   if (/(运行推理|执行推理|run inference|inference)/i.test(content) && (!hasModelVersionId || !hasAttachmentId || !taskType)) {
     const missing = [];
@@ -2715,7 +3549,15 @@ const detectNaturalConsoleIntentMissingFields = (
     if (!taskType) {
       missing.push('task_type');
     }
-    return { api: 'run_inference', missingFields: missing };
+    return {
+      api: 'run_inference',
+      missingFields: missing,
+      params: {
+        ...(modelVersionId ? { model_version_id: modelVersionId } : {}),
+        ...(attachmentId ? { input_attachment_id: attachmentId } : {}),
+        ...(taskType ? { task_type: taskType } : {})
+      }
+    };
   }
   if (/(反馈回流|inference feedback|反馈到数据集)/i.test(content) && (!hasRunId || !hasDatasetId)) {
     const missing = [];
@@ -2725,10 +3567,17 @@ const detectNaturalConsoleIntentMissingFields = (
     if (!hasDatasetId) {
       missing.push('dataset_id');
     }
-    return { api: 'send_inference_feedback', missingFields: missing };
+    return {
+      api: 'send_inference_feedback',
+      missingFields: missing,
+      params: {
+        ...(runId ? { run_id: runId } : {}),
+        ...(datasetId ? { dataset_id: datasetId } : {})
+      }
+    };
   }
   if (/(创建数据集版本|create dataset version)/i.test(content) && !hasDatasetId) {
-    return { api: 'create_dataset_version', missingFields: ['dataset_id'] };
+    return { api: 'create_dataset_version', missingFields: ['dataset_id'], params: {} };
   }
   if (/(注册模型版本|register model version)/i.test(content) && (!hasModelId || !hasJobId)) {
     const missing = [];
@@ -2738,16 +3587,27 @@ const detectNaturalConsoleIntentMissingFields = (
     if (!hasJobId) {
       missing.push('training_job_id');
     }
-    return { api: 'register_model_version', missingFields: missing };
+    return {
+      api: 'register_model_version',
+      missingFields: missing,
+      params: {
+        ...(modelId ? { model_id: modelId } : {}),
+        ...(jobId ? { training_job_id: jobId } : {})
+      }
+    };
   }
   if (/(提交审批|submit approval)/i.test(content) && !hasModelId) {
-    return { api: 'submit_approval_request', missingFields: ['model_id'] };
+    return { api: 'submit_approval_request', missingFields: ['model_id'], params: {} };
   }
-  if (/(激活.*runtime profile|activate runtime profile|切换 runtime profile)/i.test(content) && !extractQuotedValue(content)) {
-    return { api: 'activate_runtime_profile', missingFields: ['profile_id'] };
+  if (/(激活.*runtime profile|activate runtime profile|切换 runtime profile)/i.test(content)) {
+    const profileId = inferRuntimeProfileIdFromText(content);
+    if (!profileId) {
+      return { api: 'activate_runtime_profile', missingFields: ['profile_id'], params: {} };
+    }
   }
   if (/(更新标注|写入标注|upsert annotation)/i.test(content)) {
-    const hasDatasetItemId = /\b(di-[a-z0-9-]+)\b/i.test(content);
+    const datasetItemId = extractEntityId(content, /\b(di-[a-z0-9-]+)\b/i);
+    const hasDatasetItemId = Boolean(datasetItemId);
     if (!hasDatasetItemId || !taskType) {
       const missing = [];
       if (!hasDatasetItemId) {
@@ -2756,11 +3616,19 @@ const detectNaturalConsoleIntentMissingFields = (
       if (!taskType) {
         missing.push('task_type');
       }
-      return { api: 'upsert_dataset_annotation', missingFields: missing };
+      return {
+        api: 'upsert_dataset_annotation',
+        missingFields: missing,
+        params: {
+          ...(datasetItemId ? { dataset_item_id: datasetItemId } : {}),
+          ...(taskType ? { task_type: taskType } : {})
+        }
+      };
     }
   }
   if (/(审核标注|review annotation)/i.test(content)) {
-    const hasAnnotationId = /\b(ann-[a-z0-9-]+)\b/i.test(content);
+    const annotationId = extractEntityId(content, /\b(ann-[a-z0-9-]+)\b/i);
+    const hasAnnotationId = Boolean(annotationId);
     if (!hasAnnotationId || !hasReviewStatus) {
       const missing = [];
       if (!hasAnnotationId) {
@@ -2769,7 +3637,14 @@ const detectNaturalConsoleIntentMissingFields = (
       if (!hasReviewStatus) {
         missing.push('status');
       }
-      return { api: 'review_dataset_annotation', missingFields: missing };
+      return {
+        api: 'review_dataset_annotation',
+        missingFields: missing,
+        params: {
+          ...(annotationId ? { annotation_id: annotationId } : {}),
+          ...(reviewStatus ? { status: reviewStatus } : {})
+        }
+      };
     }
   }
   if (lower.includes('runtime profile') && !/(activate|切换)/i.test(content)) {
@@ -2797,6 +3672,18 @@ const suggestionsForMissingConsoleField = (field: string): string[] => {
   if (field === 'model_version_id' || field === 'source_model_version_id') {
     return suggestModelVersionRefs();
   }
+  if (field === 'dataset_version_id') {
+    return suggestDatasetVersionRefs();
+  }
+  if (field === 'framework') {
+    return ['paddleocr', 'doctr', 'yolo'];
+  }
+  if (field === 'model_type') {
+    return ['ocr', 'detection', 'classification', 'segmentation', 'obb'];
+  }
+  if (field === 'visibility') {
+    return ['private', 'workspace', 'public'];
+  }
   if (field === 'task_type') {
     return ['ocr', 'detection', 'classification', 'segmentation', 'obb'];
   }
@@ -2807,7 +3694,10 @@ const suggestionsForMissingConsoleField = (field: string): string[] => {
     return annotations.slice(0, 8).map((item) => item.id);
   }
   if (field === 'status') {
-    return ['approved', 'rejected'];
+    return ['approved', 'rejected', 'annotated', 'in_progress'];
+  }
+  if (field === 'source') {
+    return ['manual', 'import', 'pre_annotation'];
   }
   if (field === 'profile_id') {
     const record = getCurrentRuntimeSettingsRecord();
@@ -2869,6 +3759,38 @@ const fillConsoleMissingField = (
     }
     return false;
   }
+  if (field === 'dataset_version_id') {
+    const resolved = inferDatasetVersionIdFromText(content);
+    if (resolved) {
+      params.dataset_version_id = resolved;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'framework') {
+    const inferred = inferFrameworkFromText(content);
+    if (inferred) {
+      params.framework = inferred;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'model_type') {
+    const inferred = inferTaskTypeFromText(content);
+    if (inferred) {
+      params.model_type = inferred;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'visibility') {
+    const inferred = inferVisibilityFromText(content);
+    if (inferred) {
+      params.visibility = inferred;
+      return true;
+    }
+    return false;
+  }
   if (field === 'task_type') {
     const inferred = inferTaskTypeFromText(content);
     if (inferred) {
@@ -2884,6 +3806,29 @@ const fillConsoleMissingField = (
     }
     if (/(拒绝|驳回|rejected?|reject)/i.test(content)) {
       params.status = 'rejected';
+      return true;
+    }
+    if (/(标注完成|annotated?)/i.test(content)) {
+      params.status = 'annotated';
+      return true;
+    }
+    if (/(处理中|进行中|in[_ -]?progress)/i.test(content)) {
+      params.status = 'in_progress';
+      return true;
+    }
+    return false;
+  }
+  if (field === 'source') {
+    if (/(manual|手动)/i.test(content)) {
+      params.source = 'manual';
+      return true;
+    }
+    if (/(import|导入)/i.test(content)) {
+      params.source = 'import';
+      return true;
+    }
+    if (/(pre[-_ ]?annotation|预标注)/i.test(content)) {
+      params.source = 'pre_annotation';
       return true;
     }
     return false;
@@ -2904,8 +3849,36 @@ const fillConsoleMissingField = (
     }
     return false;
   }
-  if (field === 'profile_id') {
+  if (field === 'name' || field === 'version_name') {
     const candidate = inferActionNameFromText(content) || extractQuotedValue(content);
+    if (candidate) {
+      params[field] = candidate;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'base_model') {
+    const candidate = inferBaseModelFromText(content) || extractQuotedValue(content);
+    if (candidate) {
+      params.base_model = candidate;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'description' || field === 'reason' || field === 'review_notes') {
+    const candidate = inferDescriptionFromText(content) || extractQuotedValue(content);
+    if (candidate) {
+      params[field] = candidate;
+      return true;
+    }
+    return false;
+  }
+  if (field === 'profile_id') {
+    const candidate =
+      inferActionNameFromText(content) ||
+      extractQuotedValue(content) ||
+      extractPatternValue(content, [/^\s*([a-z0-9._-]{2,80})\s*$/i]) ||
+      extractPatternValue(content, [/(?:profile|配置)\s*[:：]?\s*([a-z0-9._-]{2,80})/i]);
     if (candidate) {
       params.profile_id = candidate;
       return true;
@@ -2915,11 +3888,172 @@ const fillConsoleMissingField = (
   return false;
 };
 
+const hasNonEmptyConsoleParam = (params: Record<string, unknown>, field: string): boolean =>
+  typeof params[field] === 'string' && String(params[field]).trim().length > 0;
+
+const detectConsolePayloadMissingFields = (
+  api: string,
+  params: Record<string, unknown>
+): string[] => {
+  if (api === 'list_dataset_annotations' || api === 'export_dataset_annotations' || api === 'create_dataset_version') {
+    return hasNonEmptyConsoleParam(params, 'dataset_id') ? [] : ['dataset_id'];
+  }
+
+  if (api === 'import_dataset_annotations') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'dataset_id')) {
+      missing.push('dataset_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'attachment_id')) {
+      missing.push('attachment_id');
+    }
+    return missing;
+  }
+
+  if (api === 'run_inference') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'model_version_id')) {
+      missing.push('model_version_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'input_attachment_id')) {
+      missing.push('input_attachment_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'task_type')) {
+      missing.push('task_type');
+    }
+    return missing;
+  }
+
+  if (api === 'run_dataset_pre_annotations') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'dataset_id')) {
+      missing.push('dataset_id');
+    }
+    const hasModelVersion =
+      hasNonEmptyConsoleParam(params, 'model_version_id') ||
+      hasNonEmptyConsoleParam(params, 'source_model_version_id');
+    if (!hasModelVersion) {
+      missing.push('model_version_id');
+    }
+    return missing;
+  }
+
+  if (api === 'cancel_training_job' || api === 'retry_training_job') {
+    return hasNonEmptyConsoleParam(params, 'job_id') ? [] : ['job_id'];
+  }
+
+  if (api === 'send_inference_feedback') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'run_id')) {
+      missing.push('run_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'dataset_id')) {
+      missing.push('dataset_id');
+    }
+    return missing;
+  }
+
+  if (api === 'activate_runtime_profile') {
+    return hasNonEmptyConsoleParam(params, 'profile_id') ? [] : ['profile_id'];
+  }
+
+  if (api === 'create_dataset') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'name')) {
+      missing.push('name');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'task_type')) {
+      missing.push('task_type');
+    }
+    return missing;
+  }
+
+  if (api === 'create_model_draft') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'name')) {
+      missing.push('name');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'model_type')) {
+      missing.push('model_type');
+    }
+    return missing;
+  }
+
+  if (api === 'create_training_job') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'name')) {
+      missing.push('name');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'task_type')) {
+      missing.push('task_type');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'framework')) {
+      missing.push('framework');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'dataset_id')) {
+      missing.push('dataset_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'dataset_version_id')) {
+      missing.push('dataset_version_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'base_model')) {
+      missing.push('base_model');
+    }
+    return missing;
+  }
+
+  if (api === 'register_model_version') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'model_id')) {
+      missing.push('model_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'training_job_id')) {
+      missing.push('training_job_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'version_name')) {
+      missing.push('version_name');
+    }
+    return missing;
+  }
+
+  if (api === 'submit_approval_request') {
+    return hasNonEmptyConsoleParam(params, 'model_id') ? [] : ['model_id'];
+  }
+
+  if (api === 'upsert_dataset_annotation') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'dataset_id')) {
+      missing.push('dataset_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'dataset_item_id')) {
+      missing.push('dataset_item_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'task_type')) {
+      missing.push('task_type');
+    }
+    return missing;
+  }
+
+  if (api === 'review_dataset_annotation') {
+    const missing: string[] = [];
+    if (!hasNonEmptyConsoleParam(params, 'annotation_id')) {
+      missing.push('annotation_id');
+    }
+    if (!hasNonEmptyConsoleParam(params, 'status')) {
+      missing.push('status');
+    }
+    return missing;
+  }
+
+  return [];
+};
+
 const highRiskConsoleApis = new Set([
   'create_dataset',
   'create_model_draft',
   'create_training_job',
   'activate_runtime_profile',
+  'auto_configure_runtime_settings',
   'register_model_version',
   'submit_approval_request',
   'send_inference_feedback',
@@ -3005,7 +4139,7 @@ const resolveConsoleApiAction = async (
             api: naturalMissing.api,
             payload_json: JSON.stringify({
               api: naturalMissing.api,
-              params: {}
+              params: naturalMissing.params ?? {}
             })
           },
           {
@@ -3054,7 +4188,7 @@ const resolveConsoleApiAction = async (
           api: missing.api,
           payload_json: JSON.stringify({
             api: missing.api,
-            params: {}
+            params: missing.params ?? {}
           })
         }, {
           missingFields: missing.missingFields,
@@ -3067,6 +4201,25 @@ const resolveConsoleApiAction = async (
 
   const normalizedApi = payload.api.trim().toLowerCase();
   const params = payload.params ?? {};
+  const payloadMissingFields = detectConsolePayloadMissingFields(normalizedApi, params);
+  if (payloadMissingFields.length > 0) {
+    const summary = hasChineseText(content)
+      ? `控制台 API ${normalizedApi} 缺少参数：${payloadMissingFields.join(', ')}`
+      : `Console API ${normalizedApi} is missing parameters: ${payloadMissingFields.join(', ')}`;
+    return {
+      content: summary,
+      metadata: toActionMetadata('console_api_call', 'requires_input', summary, {
+        api: normalizedApi,
+        payload_json: JSON.stringify({
+          api: normalizedApi,
+          params
+        })
+      }, {
+        missingFields: payloadMissingFields,
+        suggestions: payloadMissingFields.flatMap((field) => suggestionsForMissingConsoleField(field)).slice(0, 8)
+      })
+    };
+  }
   const confirmed = Boolean(payload.confirm) || resolveConversationConfirmation(content, pendingAction);
   if (highRiskConsoleApis.has(normalizedApi) && !confirmed) {
     const confirmationPhrase = resolveConfirmationPhrase(content, pendingAction);
@@ -3234,7 +4387,7 @@ const resolveConsoleApiAction = async (
 
     if (normalizedApi === 'import_dataset_annotations') {
       const result = await importDatasetAnnotations(String(params.dataset_id ?? ''), {
-        format: String(params.format ?? '') as 'yolo' | 'coco' | 'labelme' | 'ocr',
+        format: String(params.format ?? 'yolo') as 'yolo' | 'coco' | 'labelme' | 'ocr',
         attachment_id: String(params.attachment_id ?? '')
       });
       const summary = hasChineseText(content)
@@ -3252,7 +4405,7 @@ const resolveConsoleApiAction = async (
 
     if (normalizedApi === 'export_dataset_annotations') {
       const result = await exportDatasetAnnotations(String(params.dataset_id ?? ''), {
-        format: String(params.format ?? '') as 'yolo' | 'coco' | 'labelme' | 'ocr'
+        format: String(params.format ?? 'yolo') as 'yolo' | 'coco' | 'labelme' | 'ocr'
       });
       const summary = hasChineseText(content)
         ? `控制台 API export_dataset_annotations 已执行：${result.filename} (${result.attachment_id})。`
@@ -3289,8 +4442,8 @@ const resolveConsoleApiAction = async (
       const updated = await upsertDatasetAnnotation(String(params.dataset_id ?? ''), {
         dataset_item_id: String(params.dataset_item_id ?? ''),
         task_type: String(params.task_type ?? '') as TaskType,
-        source: String(params.source ?? '') as 'manual' | 'import' | 'pre_annotation',
-        status: String(params.status ?? '') as
+        source: String(params.source ?? 'manual') as 'manual' | 'import' | 'pre_annotation',
+        status: String(params.status ?? 'annotated') as
           | 'unannotated'
           | 'in_progress'
           | 'annotated'
@@ -3315,9 +4468,22 @@ const resolveConsoleApiAction = async (
     }
 
     if (normalizedApi === 'review_dataset_annotation') {
+      const annotationId = String(params.annotation_id ?? '');
+      const datasetIdFromAnnotation = (() => {
+        const annotation = annotations.find((item) => item.id === annotationId);
+        if (!annotation) {
+          return '';
+        }
+        const datasetItem = datasetItems.find((item) => item.id === annotation.dataset_item_id);
+        return datasetItem?.dataset_id ?? '';
+      })();
+      const datasetId =
+        typeof params.dataset_id === 'string' && params.dataset_id.trim()
+          ? params.dataset_id.trim()
+          : datasetIdFromAnnotation;
       const updated = await reviewDatasetAnnotation(
-        String(params.dataset_id ?? ''),
-        String(params.annotation_id ?? ''),
+        datasetId,
+        annotationId,
         {
         status: String(params.status ?? '') as 'approved' | 'rejected',
         review_reason_code:
@@ -3350,7 +4516,11 @@ const resolveConsoleApiAction = async (
         String(params.dataset_id ?? ''),
         {
           model_version_id:
-            typeof params.source_model_version_id === 'string' ? params.source_model_version_id : undefined
+            typeof params.model_version_id === 'string'
+              ? params.model_version_id
+              : typeof params.source_model_version_id === 'string'
+                ? params.source_model_version_id
+                : undefined
         }
       );
       const summary = hasChineseText(content)
@@ -3497,6 +4667,30 @@ const resolveConsoleApiAction = async (
       };
     }
 
+    if (normalizedApi === 'auto_configure_runtime_settings') {
+      if (
+        typeof params.overwrite_endpoint !== 'undefined' &&
+        typeof params.overwrite_endpoint !== 'boolean'
+      ) {
+        throw new Error('overwrite_endpoint must be boolean when provided.');
+      }
+      const overwriteEndpoint = params.overwrite_endpoint === true;
+      const view = await autoConfigureRuntimeSettings({
+        overwrite_endpoint: overwriteEndpoint
+      });
+      const summary = hasChineseText(content)
+        ? `控制台 API auto_configure_runtime_settings 已执行（overwrite_endpoint=${overwriteEndpoint ? 'true' : 'false'}），当前 profile=${view.active_profile_id ?? 'saved'}。`
+        : `Console API auto_configure_runtime_settings executed (overwrite_endpoint=${overwriteEndpoint ? 'true' : 'false'}), active_profile=${view.active_profile_id ?? 'saved'}.`;
+      return {
+        content: summary,
+        metadata: toActionMetadata('console_api_call', 'completed', summary, {
+          api: normalizedApi,
+          overwrite_endpoint: overwriteEndpoint ? 'true' : 'false',
+          active_profile_id: view.active_profile_id ?? 'saved'
+        })
+      };
+    }
+
     const unsupportedSummary = hasChineseText(content)
       ? `暂不支持的控制台 API：${normalizedApi}`
       : `Unsupported console API: ${normalizedApi}`;
@@ -3599,23 +4793,23 @@ const resolveConversationAction = async (
     return consoleApiResolution;
   }
 
-  const extractionResolution = resolveConversationExtractionAction(conversation.id, content);
-  if (extractionResolution) {
-    return extractionResolution;
-  }
-  const inferenceResolution = await resolveConversationInferenceAction(
-    conversation,
-    content,
-    attachmentIds,
-    currentUser
-  );
-  if (inferenceResolution) {
-    return inferenceResolution;
-  }
   const explicitAction = detectConversationActionType(content);
   const action = explicitAction ?? pendingAction?.action ?? null;
 
   if (!action) {
+    const extractionResolution = resolveConversationExtractionAction(conversation.id, content);
+    if (extractionResolution) {
+      return extractionResolution;
+    }
+    const inferenceResolution = await resolveConversationInferenceAction(
+      conversation,
+      content,
+      attachmentIds,
+      currentUser
+    );
+    if (inferenceResolution) {
+      return inferenceResolution;
+    }
     return null;
   }
 
@@ -8741,6 +9935,45 @@ export async function renameConversation(
   return conversation;
 }
 
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await delay(90);
+  const currentUser = findCurrentUser();
+  const conversation = assertConversationAccess(conversationId, currentUser);
+
+  let deletedMessageCount = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.conversation_id === conversation.id) {
+      messages.splice(index, 1);
+      deletedMessageCount += 1;
+    }
+  }
+
+  const deletedConversationAttachments: FileAttachment[] = [];
+  for (let index = attachments.length - 1; index >= 0; index -= 1) {
+    const attachment = attachments[index];
+    if (
+      attachment &&
+      attachment.attached_to_type === 'Conversation' &&
+      attachment.attached_to_id === conversation.id
+    ) {
+      attachments.splice(index, 1);
+      deletedConversationAttachments.push(attachment);
+    }
+  }
+
+  await Promise.all(deletedConversationAttachments.map((attachment) => removeStoredAttachmentBinary(attachment)));
+
+  const conversationIndex = conversations.findIndex((item) => item.id === conversation.id);
+  if (conversationIndex >= 0) {
+    conversations.splice(conversationIndex, 1);
+  }
+
+  logAudit('conversation_deleted', 'Conversation', conversation.id, {
+    message_count: String(deletedMessageCount),
+    attachment_count: String(deletedConversationAttachments.length)
+  });
+}
+
 export async function listModelAttachments(modelId: string): Promise<FileAttachment[]> {
   await delay(120);
   const currentUser = findCurrentUser();
@@ -8884,6 +10117,7 @@ export async function startConversation(
 ): Promise<{ conversation: ConversationRecord; messages: MessageRecord[] }> {
   await delay();
   const currentUser = findCurrentUser();
+  const normalizedAttachmentIds = normalizeAttachmentIds(input.attachment_ids);
 
   const model = assertModelAccess(input.model_id, currentUser);
 
@@ -8904,20 +10138,20 @@ export async function startConversation(
     conversation_id: createdConversation.id,
     sender: 'user',
     content: input.initial_message,
-    attachment_ids: input.attachment_ids,
+    attachment_ids: normalizedAttachmentIds,
     metadata: {},
     created_at: now()
   };
 
   const fileNames = attachments
-    .filter((item) => input.attachment_ids.includes(item.id))
+    .filter((item) => normalizedAttachmentIds.includes(item.id))
     .map((item) => item.filename);
 
   const effectiveLlmConfig = getEffectiveConversationLlmConfig(input.llm_config);
   const actionResolution = await resolveConversationAction(
     createdConversation,
     input.initial_message,
-    input.attachment_ids,
+    normalizedAttachmentIds,
     currentUser
   );
   const assistantContent =
@@ -8941,7 +10175,7 @@ export async function startConversation(
   messages.push(userMessage, assistantMessage);
 
   for (const attachment of attachments) {
-    if (input.attachment_ids.includes(attachment.id) && attachment.attached_to_type === 'Conversation') {
+    if (normalizedAttachmentIds.includes(attachment.id) && attachment.attached_to_type === 'Conversation') {
       attachment.attached_to_id = createdConversation.id;
       attachment.updated_at = now();
     }
@@ -8963,26 +10197,27 @@ export async function sendConversationMessage(
   await delay();
   const currentUser = findCurrentUser();
   const conversation = assertConversationAccess(input.conversation_id, currentUser);
+  const normalizedAttachmentIds = normalizeAttachmentIds(input.attachment_ids);
 
   const userMessage: MessageRecord = {
     id: nextId('msg'),
     conversation_id: conversation.id,
     sender: 'user',
     content: input.content,
-    attachment_ids: input.attachment_ids,
+    attachment_ids: normalizedAttachmentIds,
     metadata: {},
     created_at: now()
   };
 
   const fileNames = attachments
-    .filter((item) => input.attachment_ids.includes(item.id))
+    .filter((item) => normalizedAttachmentIds.includes(item.id))
     .map((item) => item.filename);
 
   const effectiveLlmConfig = getEffectiveConversationLlmConfig(input.llm_config);
   const actionResolution = await resolveConversationAction(
     conversation,
     input.content,
-    input.attachment_ids,
+    normalizedAttachmentIds,
     currentUser
   );
   const assistantContent =
@@ -11322,10 +12557,7 @@ export async function runInference(input: RunInferenceInput): Promise<InferenceR
     task_type: input.task_type,
     framework: version.framework,
     status: 'completed',
-    execution_source:
-      typeof prediction.normalized_output.source === 'string'
-        ? prediction.normalized_output.source
-        : 'unknown',
+    execution_source: resolvePredictionExecutionSource(prediction),
     raw_output: prediction.raw_output,
     normalized_output: prediction,
     feedback_dataset_id: null,
@@ -11706,6 +12938,230 @@ export async function getRuntimeSettings(): Promise<RuntimeSettingsView> {
   return getCurrentRuntimeSettingsView();
 }
 
+export async function getRuntimeReadiness(): Promise<RuntimeReadinessReport> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can access runtime readiness.');
+
+  const record = getCurrentRuntimeSettingsRecord();
+  const pythonSnapshot = resolveRuntimeReadinessPython(record.controls.python_bin);
+  const issues: RuntimeReadinessIssue[] = [...pythonSnapshot.issues];
+  const bootstrapStatus = readLocalRuntimeBootstrapStatus();
+  const doctrPreseedAssets = inspectDoctrPreseedAssets();
+  const bootstrapAssets: RuntimeBootstrapAssetSnapshot[] = [doctrPreseedAssets];
+  const controls = {
+    python_bin: record.controls.python_bin,
+    disable_simulated_train_fallback: record.controls.disable_simulated_train_fallback,
+    disable_inference_fallback: record.controls.disable_inference_fallback
+  };
+
+  const connectivityChecks = await Promise.all(
+    runtimeFrameworks.map(async (framework) => {
+      const connectivity = await checkRuntimeConnectivity(framework);
+      const frameworkConfig = record.frameworks[framework];
+      const endpointConfigured = frameworkConfig.endpoint.trim().length > 0;
+      const localTrainConfigured = frameworkConfig.local_train_command.trim().length > 0;
+      const localPredictConfigured = frameworkConfig.local_predict_command.trim().length > 0;
+      const localModelPath = frameworkConfig.local_model_path.trim();
+      const frameworkBootstrapStatus = bootstrapStatus[framework];
+      const snapshot: RuntimeReadinessFrameworkSnapshot = {
+        framework,
+        endpoint_configured: endpointConfigured,
+        endpoint_reachable: connectivity.reachable,
+        local_train_command_configured: localTrainConfigured,
+        local_predict_command_configured: localPredictConfigured,
+        effective_mode: endpointConfigured
+          ? 'endpoint'
+          : localTrainConfigured || localPredictConfigured
+            ? 'local_command'
+            : 'bundled_local_runner'
+      };
+
+      if (endpointConfigured && !connectivity.reachable) {
+        const endpointHint = frameworkConfig.endpoint.trim();
+        issues.push({
+          code: `runtime_endpoint_unreachable_${framework}`,
+          level: 'warning',
+          message: `${framework} endpoint configured but connectivity probe failed (${connectivity.error_kind}).`,
+          remediation:
+            `Verify ${framework} runtime endpoint health/network/auth settings, or clear endpoint to use validated local fallback path.`,
+          remediation_command: endpointHint ? `curl -i ${endpointHint}` : undefined
+        });
+      }
+      if (!endpointConfigured && !pythonSnapshot.resolved) {
+        issues.push({
+          code: `runtime_no_endpoint_and_python_missing_${framework}`,
+          level: 'error',
+          message: `${framework} has no endpoint configured and no usable Python fallback was detected.`,
+          remediation:
+            'Configure runtime endpoint for this framework, or install Python runtime and local framework dependencies.'
+        });
+      }
+
+      const endpointReady = endpointConfigured && connectivity.reachable;
+      const bootstrapFailureAtMs = parseRuntimeTimestampMs(frameworkBootstrapStatus.failure_at);
+      const bootstrapReadyAtMs = parseRuntimeTimestampMs(frameworkBootstrapStatus.ready_at);
+      const hasUnresolvedLocalBootstrapFailure =
+        !endpointConfigured &&
+        bootstrapFailureAtMs !== null &&
+        (bootstrapReadyAtMs === null || bootstrapFailureAtMs >= bootstrapReadyAtMs);
+      if (hasUnresolvedLocalBootstrapFailure) {
+        const fallbackOnly =
+          !endpointConfigured && !localTrainConfigured && !localPredictConfigured;
+        const failedAtLabel = frameworkBootstrapStatus.failure_at ?? 'unknown_time';
+        const failureReason = frameworkBootstrapStatus.failure_reason ?? 'unknown runtime bootstrap error';
+        const remediation =
+          framework === 'doctr'
+            ? 'Fix doctr local bootstrap, or pre-seed docTR model files via VISTRAL_DOCTR_PRESEEDED_MODELS_DIR / VISTRAL_DOCTR_PRESEEDED_MODELS_URLS, or configure a healthy doctr endpoint.'
+            : `Fix ${framework} local dependency/model bootstrap (or preseed model cache in restricted network), or configure a healthy ${framework} endpoint for this framework.`;
+        const remediationCommand =
+          framework === 'doctr' && doctrPreseedAssets.missing_files.length > 0
+            ? 'npm run setup:doctr-preseed'
+            : undefined;
+        issues.push({
+          code: `runtime_bootstrap_failed_${framework}`,
+          level: fallbackOnly ? 'error' : 'warning',
+          message: `${framework} local runtime bootstrap failed at ${failedAtLabel}: ${failureReason}.`,
+          remediation,
+          remediation_command: remediationCommand
+        });
+      }
+
+      if (localModelPath) {
+        const resolvedLocalModelPath = path.resolve(localModelPath);
+        const localModelPathExists = existsSync(resolvedLocalModelPath);
+        if (!localModelPathExists) {
+          issues.push({
+            code: `runtime_local_model_path_missing_${framework}`,
+            level: endpointReady ? 'warning' : 'error',
+            message: `${framework} local model path does not exist: ${resolvedLocalModelPath}`,
+            remediation:
+              `Update ${framework} local model path in Runtime Settings or place the required model asset at that location.`
+          });
+        }
+      } else if (framework === 'yolo' && !endpointReady) {
+        issues.push({
+          code: 'runtime_local_model_path_missing_yolo',
+          level: 'warning',
+          message:
+            'yolo has no reachable endpoint and no local model path configured. Real local training/inference may still fall back.',
+          remediation:
+            'Set a local YOLO weight path in Runtime Settings (or keep a discovered weight under .data/runtime-models/) before relying on real local execution.'
+        });
+      }
+
+      return snapshot;
+    })
+  );
+
+  if (connectivityChecks.every((item) => !item.endpoint_configured)) {
+    issues.push({
+      code: 'runtime_all_framework_endpoints_missing',
+      level: 'warning',
+      message:
+        'No framework endpoint is configured. Runtime will rely on local command/bundled fallback paths.',
+      remediation:
+        'Configure at least one production runtime endpoint in Runtime Settings, or verify local command path readiness for all required frameworks.'
+    });
+  }
+
+  if (
+    controls.disable_inference_fallback &&
+    connectivityChecks.some(
+      (item) =>
+        !item.endpoint_configured &&
+        !item.local_predict_command_configured &&
+        item.effective_mode === 'bundled_local_runner'
+    )
+  ) {
+    issues.push({
+      code: 'runtime_strict_inference_requires_local_readiness',
+      level: 'warning',
+      message:
+        'Inference strict mode is enabled while some frameworks only rely on bundled local runner defaults.',
+      remediation:
+        'Either configure runtime/local predict commands for required frameworks or disable strict inference fallback guard temporarily.'
+    });
+  }
+
+  if (
+    controls.disable_simulated_train_fallback &&
+    connectivityChecks.some(
+      (item) =>
+        !item.endpoint_configured &&
+        !item.local_train_command_configured &&
+        item.effective_mode === 'bundled_local_runner'
+    )
+  ) {
+    issues.push({
+      code: 'runtime_strict_train_requires_local_readiness',
+      level: 'warning',
+      message:
+        'Training strict mode is enabled while some frameworks only rely on bundled local runner defaults.',
+      remediation:
+        'Either configure runtime/local train commands for required frameworks or disable strict simulated-train fallback guard temporarily.'
+    });
+  }
+
+  const resolvedPythonBin = pythonSnapshot.resolved;
+  if (resolvedPythonBin) {
+    connectivityChecks.forEach((frameworkState) => {
+      const endpointReady = frameworkState.endpoint_configured && frameworkState.endpoint_reachable;
+      const moduleName = runtimeFrameworkModuleRequirement[frameworkState.framework];
+
+      if (!moduleName) {
+        return;
+      }
+
+      if (!endpointReady && frameworkState.effective_mode === 'bundled_local_runner') {
+        const moduleProbe = probePythonModule(resolvedPythonBin, moduleName);
+        if (!moduleProbe.ok) {
+          issues.push({
+            code: `runtime_python_module_missing_${frameworkState.framework}`,
+            level: 'error',
+            message: `Local ${frameworkState.framework} runtime requires Python module "${moduleName}" (${moduleProbe.reason}).`,
+            remediation: `Install dependency in runtime python environment: pip install ${moduleName}`,
+            remediation_command: buildPipInstallCommand(resolvedPythonBin, moduleName)
+          });
+        }
+      }
+
+      if (!endpointReady && frameworkState.effective_mode === 'local_command') {
+        const frameworkConfig = record.frameworks[frameworkState.framework];
+        const commandProbeTargets: Array<{ key: 'train' | 'predict'; template: string }> = [
+          { key: 'train', template: frameworkConfig.local_train_command },
+          { key: 'predict', template: frameworkConfig.local_predict_command }
+        ];
+        commandProbeTargets.forEach((target) => {
+          const probe = probeLocalCommandTemplate(target.template, resolvedPythonBin);
+          if (!probe.ok) {
+            issues.push({
+              code: `runtime_local_command_${target.key}_invalid_${frameworkState.framework}`,
+              level: probe.level,
+              message: `${frameworkState.framework} ${target.key} command check failed: ${probe.message}.`,
+              remediation:
+                `Fix ${frameworkState.framework} ${target.key} command in Runtime Settings. Ensure executable exists and placeholders (for example {{python_bin}}) are resolvable.`
+            });
+          }
+        });
+      }
+    });
+  }
+
+  const hasError = issues.some((issue) => issue.level === 'error');
+  const hasWarning = issues.some((issue) => issue.level === 'warning');
+  return {
+    checked_at: now(),
+    status: hasError ? 'not_ready' : hasWarning ? 'degraded' : 'ready',
+    python_bin_requested: pythonSnapshot.requested,
+    python_bin_resolved: pythonSnapshot.resolved,
+    strict_controls: controls,
+    frameworks: connectivityChecks,
+    bootstrap_assets: bootstrapAssets,
+    issues
+  };
+}
+
 export async function saveRuntimeSettings(input: {
   runtime_config: RuntimeSettingsRecord['frameworks'];
   runtime_controls?: Partial<RuntimeSettingsRecord['controls']>;
@@ -11720,14 +13176,96 @@ export async function saveRuntimeSettings(input: {
 
   runtimeFrameworks.forEach((framework) => {
     const submitted = normalizeRuntimeFrameworkConfig(
+      framework,
       input.runtime_config?.[framework],
       emptyRuntimeFrameworkConfig
     );
     const previous = existing.frameworks[framework];
+    const submittedModelApiKeys = submitted.model_api_keys ?? {};
+    const previousModelApiKeys = previous.model_api_keys ?? {};
+    const submittedModelApiKeyPolicies = submitted.model_api_key_policies ?? {};
+    const previousModelApiKeyPolicies = previous.model_api_key_policies ?? {};
+    const mergedModelApiKeys: Record<string, string> = {};
+    const mergedModelApiKeyPolicies: RuntimeFrameworkConfig['model_api_key_policies'] = {};
+    const modelApiKeyBindingKeys = new Set<string>([
+      ...Object.keys(previousModelApiKeys),
+      ...Object.keys(submittedModelApiKeys),
+      ...Object.keys(previousModelApiKeyPolicies),
+      ...Object.keys(submittedModelApiKeyPolicies)
+    ]);
+
+    for (const rawBindingKey of modelApiKeyBindingKeys) {
+      const bindingKey = rawBindingKey.trim();
+      if (!bindingKey) {
+        continue;
+      }
+      const submittedPolicy = submittedModelApiKeyPolicies[bindingKey];
+      const previousPolicy = previousModelApiKeyPolicies[bindingKey];
+      const submittedKey =
+        (submittedPolicy?.api_key ?? submittedModelApiKeys[bindingKey] ?? '').trim();
+      const previousKey =
+        (previousPolicy?.api_key ?? previousModelApiKeys[bindingKey] ?? '').trim();
+      const resolvedKey =
+        submittedKey || (keepExistingApiKeys && previousKey ? previousKey : '');
+
+      if (!resolvedKey) {
+        continue;
+      }
+
+      const submittedMaxCalls =
+        submittedPolicy && typeof submittedPolicy.max_calls === 'number'
+          ? Math.max(0, Math.floor(submittedPolicy.max_calls))
+          : null;
+      const previousMaxCalls =
+        previousPolicy && typeof previousPolicy.max_calls === 'number'
+          ? Math.max(0, Math.floor(previousPolicy.max_calls))
+          : null;
+      const resolvedMaxCalls = submittedPolicy
+        ? submittedPolicy.max_calls === null
+          ? null
+          : submittedMaxCalls
+        : keepExistingApiKeys
+          ? previousMaxCalls
+          : null;
+      const resolvedExpiresAt = submittedPolicy
+        ? submittedPolicy.expires_at ?? null
+        : keepExistingApiKeys
+          ? previousPolicy?.expires_at ?? null
+          : null;
+      const canReuseCounters =
+        previousPolicy &&
+        previousKey &&
+        resolvedKey === previousKey;
+      const reusedUsedCalls =
+        canReuseCounters && typeof previousPolicy.used_calls === 'number'
+          ? Math.max(0, Math.floor(previousPolicy.used_calls))
+          : 0;
+      const resolvedUsedCalls =
+        typeof resolvedMaxCalls === 'number'
+          ? Math.min(reusedUsedCalls, resolvedMaxCalls)
+          : reusedUsedCalls;
+      const resolvedLastUsedAt =
+        canReuseCounters && previousPolicy.last_used_at ? previousPolicy.last_used_at : null;
+
+      mergedModelApiKeys[bindingKey] = resolvedKey;
+      mergedModelApiKeyPolicies[bindingKey] = {
+        api_key: resolvedKey,
+        expires_at: resolvedExpiresAt,
+        max_calls: resolvedMaxCalls,
+        used_calls: resolvedUsedCalls,
+        last_used_at: resolvedLastUsedAt
+      };
+    }
+
     runtimeSettings.frameworks[framework] = {
       endpoint: submitted.endpoint,
+      default_model_id: submitted.default_model_id,
+      default_model_version_id: submitted.default_model_version_id,
+      local_model_path: submitted.local_model_path,
       local_train_command: submitted.local_train_command,
       local_predict_command: submitted.local_predict_command,
+      model_api_keys: mergedModelApiKeys,
+      model_api_key_policies: mergedModelApiKeyPolicies,
       api_key:
         keepExistingApiKeys && !submitted.api_key.trim() ? previous.api_key : submitted.api_key
     };
@@ -11789,6 +13327,243 @@ export async function activateRuntimeProfile(profileId: string): Promise<Runtime
     updated_by: currentUser.id
   });
   return getCurrentRuntimeSettingsView();
+}
+
+export async function autoConfigureRuntimeSettings(input?: {
+  overwrite_endpoint?: boolean;
+}): Promise<RuntimeSettingsView> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can auto-configure runtime settings.');
+
+  const overwriteEndpoint = input?.overwrite_endpoint === true;
+  const existing = getCurrentRuntimeSettingsRecord();
+  const matchedEndpoints: Partial<Record<ModelFramework, string>> = {};
+
+  for (const framework of runtimeFrameworks) {
+    const currentConfig = existing.frameworks[framework];
+    let endpoint = currentConfig.endpoint.trim();
+
+    if (!endpoint || overwriteEndpoint) {
+      const candidates = resolveRuntimeAutoEndpointCandidates(framework);
+      for (const candidate of candidates) {
+        const probe = await probeRuntimeEndpointConnectivity(framework, candidate, currentConfig.api_key);
+        if (probe.reachable) {
+          endpoint = candidate;
+          matchedEndpoints[framework] = candidate;
+          break;
+        }
+      }
+    }
+
+    runtimeSettings.frameworks[framework] = normalizeRuntimeFrameworkConfig(
+      framework,
+      {
+        endpoint,
+        api_key: currentConfig.api_key,
+        default_model_id: currentConfig.default_model_id,
+        default_model_version_id: currentConfig.default_model_version_id,
+        model_api_keys: currentConfig.model_api_keys,
+        model_api_key_policies: currentConfig.model_api_key_policies,
+        local_model_path: currentConfig.local_model_path,
+        local_train_command: currentConfig.local_train_command,
+        local_predict_command: currentConfig.local_predict_command
+      },
+      emptyRuntimeFrameworkConfig
+    );
+  }
+
+  runtimeSettings.controls = normalizeRuntimeControlConfig(
+    existing.controls,
+    getEnvRuntimeControlConfig()
+  );
+  runtimeSettings.active_profile_id = 'saved';
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  logAudit('runtime_settings_auto_configured', 'System', 'runtime-settings', {
+    updated_by: currentUser.id,
+    overwrite_endpoint: overwriteEndpoint ? 'true' : 'false',
+    matched_endpoints: JSON.stringify(matchedEndpoints)
+  });
+
+  return getCurrentRuntimeSettingsView();
+}
+
+export async function generateRuntimeApiKey(): Promise<{ api_key: string }> {
+  await delay(40);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can generate runtime API keys.');
+
+  const apiKey = `vsk_${randomBytes(24).toString('base64url')}`;
+  logAudit('runtime_api_key_generated', 'System', 'runtime-settings', {
+    updated_by: currentUser.id
+  });
+  return {
+    api_key: apiKey
+  };
+}
+
+export async function revokeRuntimeApiKey(input: {
+  framework: ModelFramework;
+  binding_key?: string | null;
+}): Promise<RuntimeSettingsView> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can revoke runtime API keys.');
+
+  const framework = input.framework;
+  const bindingKeyRaw = (input.binding_key ?? '').trim();
+  const scope = !bindingKeyRaw || bindingKeyRaw === 'framework' ? 'framework' : 'binding';
+  const existing = getCurrentRuntimeSettingsRecord();
+  const currentConfig = existing.frameworks[framework];
+  if (!currentConfig) {
+    throw new Error('Runtime framework config not found.');
+  }
+
+  if (scope === 'framework') {
+    runtimeSettings.frameworks[framework] = normalizeRuntimeFrameworkConfig(
+      framework,
+      {
+        endpoint: currentConfig.endpoint,
+        api_key: '',
+        default_model_id: currentConfig.default_model_id,
+        default_model_version_id: currentConfig.default_model_version_id,
+        model_api_keys: currentConfig.model_api_keys,
+        model_api_key_policies: currentConfig.model_api_key_policies,
+        local_model_path: currentConfig.local_model_path,
+        local_train_command: currentConfig.local_train_command,
+        local_predict_command: currentConfig.local_predict_command
+      },
+      emptyRuntimeFrameworkConfig
+    );
+  } else {
+    const bindingKey = bindingKeyRaw;
+    if (!bindingKey.startsWith('model:') && !bindingKey.startsWith('model_version:')) {
+      throw new Error(
+        'binding_key must be "framework", "model:<model_id>", or "model_version:<model_version_id>".'
+      );
+    }
+    const nextModelApiKeys = { ...currentConfig.model_api_keys };
+    const nextModelApiKeyPolicies = { ...currentConfig.model_api_key_policies };
+    delete nextModelApiKeys[bindingKey];
+    delete nextModelApiKeyPolicies[bindingKey];
+
+    runtimeSettings.frameworks[framework] = normalizeRuntimeFrameworkConfig(
+      framework,
+      {
+        endpoint: currentConfig.endpoint,
+        api_key: currentConfig.api_key,
+        default_model_id: currentConfig.default_model_id,
+        default_model_version_id: currentConfig.default_model_version_id,
+        model_api_keys: nextModelApiKeys,
+        model_api_key_policies: nextModelApiKeyPolicies,
+        local_model_path: currentConfig.local_model_path,
+        local_train_command: currentConfig.local_train_command,
+        local_predict_command: currentConfig.local_predict_command
+      },
+      emptyRuntimeFrameworkConfig
+    );
+  }
+
+  runtimeSettings.active_profile_id = 'saved';
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  logAudit('runtime_api_key_revoked', 'System', 'runtime-settings', {
+    updated_by: currentUser.id,
+    framework,
+    binding_key: scope === 'framework' ? 'framework' : bindingKeyRaw
+  });
+
+  return getCurrentRuntimeSettingsView();
+}
+
+export async function rotateRuntimeApiKey(input: {
+  framework: ModelFramework;
+  binding_key?: string | null;
+}): Promise<{ api_key: string; settings: RuntimeSettingsView }> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can rotate runtime API keys.');
+
+  const framework = input.framework;
+  const bindingKeyRaw = (input.binding_key ?? '').trim();
+  const scope = !bindingKeyRaw || bindingKeyRaw === 'framework' ? 'framework' : 'binding';
+  const existing = getCurrentRuntimeSettingsRecord();
+  const currentConfig = existing.frameworks[framework];
+  if (!currentConfig) {
+    throw new Error('Runtime framework config not found.');
+  }
+
+  const generatedKey = `vsk_${randomBytes(24).toString('base64url')}`;
+
+  if (scope === 'framework') {
+    runtimeSettings.frameworks[framework] = normalizeRuntimeFrameworkConfig(
+      framework,
+      {
+        endpoint: currentConfig.endpoint,
+        api_key: generatedKey,
+        default_model_id: currentConfig.default_model_id,
+        default_model_version_id: currentConfig.default_model_version_id,
+        model_api_keys: currentConfig.model_api_keys,
+        model_api_key_policies: currentConfig.model_api_key_policies,
+        local_model_path: currentConfig.local_model_path,
+        local_train_command: currentConfig.local_train_command,
+        local_predict_command: currentConfig.local_predict_command
+      },
+      emptyRuntimeFrameworkConfig
+    );
+  } else {
+    const bindingKey = bindingKeyRaw;
+    if (!bindingKey.startsWith('model:') && !bindingKey.startsWith('model_version:')) {
+      throw new Error(
+        'binding_key must be "framework", "model:<model_id>", or "model_version:<model_version_id>".'
+      );
+    }
+    const nextModelApiKeys = { ...currentConfig.model_api_keys };
+    const nextModelApiKeyPolicies = { ...currentConfig.model_api_key_policies };
+    const previousPolicy = currentConfig.model_api_key_policies[bindingKey];
+    nextModelApiKeys[bindingKey] = generatedKey;
+    nextModelApiKeyPolicies[bindingKey] = {
+      api_key: generatedKey,
+      expires_at: previousPolicy?.expires_at ?? null,
+      max_calls: previousPolicy?.max_calls ?? null,
+      used_calls: 0,
+      last_used_at: null
+    };
+
+    runtimeSettings.frameworks[framework] = normalizeRuntimeFrameworkConfig(
+      framework,
+      {
+        endpoint: currentConfig.endpoint,
+        api_key: currentConfig.api_key,
+        default_model_id: currentConfig.default_model_id,
+        default_model_version_id: currentConfig.default_model_version_id,
+        model_api_keys: nextModelApiKeys,
+        model_api_key_policies: nextModelApiKeyPolicies,
+        local_model_path: currentConfig.local_model_path,
+        local_train_command: currentConfig.local_train_command,
+        local_predict_command: currentConfig.local_predict_command
+      },
+      emptyRuntimeFrameworkConfig
+    );
+  }
+
+  runtimeSettings.active_profile_id = 'saved';
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  logAudit('runtime_api_key_rotated', 'System', 'runtime-settings', {
+    updated_by: currentUser.id,
+    framework,
+    binding_key: scope === 'framework' ? 'framework' : bindingKeyRaw
+  });
+
+  return {
+    api_key: generatedKey,
+    settings: getCurrentRuntimeSettingsView()
+  };
 }
 
 export async function submitApprovalRequest(

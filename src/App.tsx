@@ -25,6 +25,8 @@ const TrainingJobDetailPage = lazy(() => import('./pages/TrainingJobDetailPage')
 const ModelVersionsPage = lazy(() => import('./pages/ModelVersionsPage'));
 const InferenceValidationPage = lazy(() => import('./pages/InferenceValidationPage'));
 const RuntimeSettingsPage = lazy(() => import('./pages/RuntimeSettingsPage'));
+const WorkerSettingsPage = lazy(() => import('./pages/WorkerSettingsPage'));
+const RuntimeTemplatesPage = lazy(() => import('./pages/RuntimeTemplatesPage'));
 
 export default function App() {
   const { t } = useI18n();
@@ -52,6 +54,8 @@ export default function App() {
             <Route path="/settings/account" element={<AccountSettingsPage />} />
             <Route path="/settings/llm" element={<LlmSettingsPage />} />
             <Route path="/settings/runtime" element={<RuntimeSettingsPage />} />
+            <Route path="/settings/workers" element={<WorkerSettingsPage />} />
+            <Route path="/settings/runtime/templates" element={<RuntimeTemplatesPage />} />
             <Route path="/conversation" element={<Navigate to="/workspace/chat" replace />} />
             <Route path="/models/explore" element={<ModelsExplorePage />} />
             <Route path="/models/my-models" element={<MyModelsPage />} />

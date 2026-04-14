@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type ReactNode, type UIEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type UIEvent } from 'react';
 
 interface VirtualListProps<T> {
   items: T[];
@@ -11,6 +11,7 @@ interface VirtualListProps<T> {
   listClassName?: string;
   rowClassName?: string;
   ariaLabel?: string;
+  scrollToIndex?: number | null;
 }
 
 export default function VirtualList<T>({
@@ -23,9 +24,11 @@ export default function VirtualList<T>({
   className,
   listClassName,
   rowClassName,
-  ariaLabel
+  ariaLabel,
+  scrollToIndex
 }: VirtualListProps<T>) {
   const [scrollTop, setScrollTop] = useState(0);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
 
   const totalHeight = items.length * itemHeight;
   const viewportHeight = Math.max(height, itemHeight);
@@ -64,8 +67,39 @@ export default function VirtualList<T>({
     minHeight: itemHeight
   };
 
+  useEffect(() => {
+    if (
+      scrollToIndex === null ||
+      scrollToIndex === undefined ||
+      scrollToIndex < 0 ||
+      scrollToIndex >= items.length
+    ) {
+      return;
+    }
+
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const rowTop = scrollToIndex * itemHeight;
+    const rowBottom = rowTop + itemHeight;
+    const viewportTop = viewport.scrollTop;
+    const viewportBottom = viewportTop + viewportHeight;
+
+    if (rowTop < viewportTop) {
+      viewport.scrollTo({ top: rowTop });
+      return;
+    }
+
+    if (rowBottom > viewportBottom) {
+      viewport.scrollTo({ top: rowBottom - viewportHeight });
+    }
+  }, [itemHeight, items.length, scrollToIndex, viewportHeight]);
+
   return (
     <div
+      ref={viewportRef}
       className={className ? `virtual-list-viewport ${className}` : 'virtual-list-viewport'}
       style={viewportStyle}
       onScroll={onScroll}

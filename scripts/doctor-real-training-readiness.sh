@@ -4,10 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-REAL_YOLO_MODEL_PATH="${REAL_YOLO_MODEL_PATH:-${VISTRAL_YOLO_MODEL_PATH:-}}"
+REAL_YOLO_MODEL_PATH="${YOLO_LOCAL_MODEL_PATH:-${REAL_YOLO_MODEL_PATH:-${VISTRAL_YOLO_MODEL_PATH:-}}}"
 STATUS="ready"
 ISSUES=()
 NOTES=()
+PYTHON_BIN_CANDIDATE="${VISTRAL_PYTHON_BIN:-${PYTHON_BIN:-python3}}"
+PYTHON_BIN="${PYTHON_BIN_CANDIDATE}"
 
 append_issue() {
   ISSUES+=("$1")
@@ -18,16 +20,21 @@ append_note() {
   NOTES+=("$1")
 }
 
-if ! command -v python3 >/dev/null 2>&1; then
-  append_issue "python3_not_found"
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+fi
+
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  append_issue "python_not_found"
 else
-  append_note "python3=$(python3 --version 2>/dev/null | tr -d '\n')"
+  append_note "python_bin=${PYTHON_BIN}"
+  append_note "python_version=$("${PYTHON_BIN}" --version 2>/dev/null | tr -d '\n')"
 fi
 
 check_python_module() {
   local module_name="$1"
   local issue_key="$2"
-  if ! python3 - <<PY >/dev/null 2>&1
+  if ! "${PYTHON_BIN}" - <<PY >/dev/null 2>&1
 import importlib.util
 import sys
 sys.exit(0 if importlib.util.find_spec("${module_name}") else 1)
@@ -39,15 +46,15 @@ PY
   fi
 }
 
-if command -v python3 >/dev/null 2>&1; then
+if command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   check_python_module "ultralytics" "missing_python_module_ultralytics"
   check_python_module "paddleocr" "missing_python_module_paddleocr"
   check_python_module "doctr" "missing_python_module_doctr"
 fi
 
-if command -v python3 >/dev/null 2>&1; then
+if command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   numpy_version="$(
-    python3 - <<'PY' 2>/dev/null
+    "${PYTHON_BIN}" - <<'PY' 2>/dev/null
 import importlib.util
 if not importlib.util.find_spec("numpy"):
     print("")
@@ -109,9 +116,9 @@ if [[ "${STATUS}" != "ready" ]]; then
   cat <<'EOF'
 [doctor-real-training-readiness] next_steps:
   1. Install Python deps for real branch:
-     python3 -m pip install "numpy<2" ultralytics paddleocr python-doctr
+     python3 -m pip install "numpy<2" "paddlepaddle==3.2.0" "paddleocr==3.4.0" ultralytics python-doctr
   2. Set model path (existing local weight file):
-     export VISTRAL_YOLO_MODEL_PATH=/absolute/path/to/yolo11n.pt
+     export YOLO_LOCAL_MODEL_PATH=/absolute/path/to/yolo11n.pt
   3. Re-run:
      npm run doctor:real-training-readiness
   4. Then run positive real check:

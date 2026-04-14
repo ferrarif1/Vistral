@@ -60,6 +60,8 @@ const zhCN: Record<string, string> = {
   'Admin Verify Reports': '管理验收报告',
   'LLM Settings': 'LLM 设置',
   'Runtime Settings': 'Runtime 设置',
+  'Runtime Templates': 'Runtime 模板',
+  'Worker Settings': 'Worker 设置',
   User: '普通用户',
   Admin: '管理员',
   'Vistral Prototype': 'Vistral 原型',
@@ -124,6 +126,297 @@ const zhCN: Record<string, string> = {
   'Workspace overview': '工作区概览',
   'Keep approvals, recent model work, and next actions in one place.':
     '把审批、最近模型工作和下一步操作集中在一个地方。',
+  'New to Vistral? Start here': '第一次使用 Vistral？从这里开始',
+  'Follow this guided path to understand the full visual-model loop without guessing where to click.':
+    '沿着这条引导路径即可理解完整视觉模型闭环，不需要猜下一步该点哪里。',
+  'Hide guide': '隐藏引导',
+  'Show guide': '显示引导',
+  'Page tips': '页面提示',
+  'Current page guide': '当前页面引导',
+  'Hide inline guide': '隐藏页内引导',
+  'Show inline guide': '显示页内引导',
+  'Close tips': '关闭提示',
+  'Inline guide is visible on this page.': '当前页面中的引导卡片正在显示。',
+  'Inline guide is hidden on this page.': '当前页面中的引导卡片已隐藏。',
+  'Inline guide hidden. Use Page tips or reopen here anytime.': '页内引导已隐藏。你仍可通过“页面提示”或在此重新打开。',
+  'Recommended next step': '建议下一步',
+  'All steps on this page are complete.': '当前页面的步骤已全部完成。',
+  'You can reopen any step below if you want a quick refresher.':
+    '如果你想快速回顾，可以从下方重新打开任一步骤。',
+  'Show full checklist': '显示完整清单',
+  'Hide full checklist': '收起完整清单',
+  'Guide is hidden. This page is already complete, but you can reopen the walkthrough anytime.':
+    '引导已隐藏。当前页面已完成，但你仍可随时重新打开完整指引。',
+  'Use this starter task to begin the first complete visual-model loop without scanning the whole console.':
+    '使用这个首任务即可开始你的第一条视觉模型闭环，不需要先把整个控制台看一遍。',
+  'Getting started': '开始上手',
+  'Start your first loop': '开始你的第一条闭环',
+  'Starter task': '首任务',
+  'Next: {step}': '下一步：{step}',
+  'Next dataset step': '下一步数据准备动作',
+  'Finish one clear preparation action here before moving into annotation or training.':
+    '先在这里完成一个明确的数据准备动作，再进入标注或训练。',
+  'Next dataset detail step': '下一步数据集详情动作',
+  'Finish one clear dataset action here before moving deeper into annotation or training.':
+    '先在这里完成一个明确的数据集动作，再继续进入更深的标注或训练流程。',
+  'Jump to Create Panel': '跳转到创建面板',
+  'Jump to Upload Section': '跳转到上传区域',
+  'Open Version Controls': '打开版本控制区',
+  'Back to Console': '返回控制台',
+  'Back to Datasets': '返回数据集',
+  'Dataset starter task': '数据集首任务',
+  'Each step links to the exact workspace page and updates from real records.':
+    '每一步都提供直达页面，并根据真实记录更新完成状态。',
+  'Create your first dataset': '创建你的第一个数据集',
+  'Prepare OCR/detection assets and define a clear data scope before training.':
+    '先准备 OCR/检测数据资产，并在训练前明确数据范围。',
+  'Annotate and review samples': '完成样本标注与复核',
+  'Open dataset detail and move samples through annotation/review before versioning.':
+    '进入数据集详情，把样本走完标注/复核流程后再做版本。',
+  'Launch training job': '发起训练任务',
+  'Bind a dataset version snapshot and run training with readiness checks visible.':
+    '绑定数据集版本快照，并在可见就绪检查下启动训练。',
+  'Register model version': '注册模型版本',
+  'Promote completed training output into a traceable model version for runtime usage.':
+    '将已完成训练输出提升为可追溯模型版本，供运行时使用。',
+  'Validate inference and close feedback loop': '验证推理并闭合反馈回路',
+  'Run inference, inspect fallback markers, and send bad cases back to datasets.':
+    '执行推理、检查回退标记，并把坏样本回流到数据集。',
+  'Run inference, inspect execution quality markers, and send bad cases back to datasets.':
+    '执行推理、检查执行质量标记，并把坏样本回流到数据集。',
+  'Guide is hidden. Click Show guide anytime to reopen the step-by-step onboarding lane.':
+    '引导已隐藏。你可以随时点击“显示引导”重新打开分步上手路径。',
+  'Model catalog first-run guide': '模型目录新手引导',
+  'Use this page to understand what is already available in the shared model catalog before creating or registering anything new.':
+    '通过这个页面先了解共享模型目录里已经有哪些可用资产，再决定是否创建或注册新的模型。',
+  'Guide status is computed from visible catalog records, readiness signals, and ownership/version follow-up availability.':
+    '引导完成度基于当前可见目录记录、就绪信号以及所有权/版本后续入口计算。',
+  'Scan shared catalog': '浏览共享模型目录',
+  'Start by browsing visible models and narrowing the catalog with filters that match your current task.':
+    '先浏览当前可见模型，并用筛选条件把目录收敛到与你当前任务相关的范围。',
+  'Review catalog': '查看目录',
+  'Recognize ready vs risky models': '识别可用模型与风险模型',
+  'Use approval status, visibility, and authenticity signals to decide whether a model is ready for real usage.':
+    '结合审批状态、可见性和真实性信号，判断模型是否适合真实使用。',
+  'Inspect model signals': '查看模型信号',
+  'Continue into ownership or versions': '继续进入“我的模型”或版本页',
+  'Move into your owned models or registered versions when you need to continue authoring or deployment follow-up.':
+    '当你需要继续模型创作或部署跟进时，转入“我的模型”或已注册版本页面。',
+  'My models first-run guide': '我的模型新手引导',
+  'Use this page to track the models you own from draft through approval and version follow-up.':
+    '通过这个页面跟踪你拥有的模型，从草稿到审批，再到版本后续动作。',
+  'Guide status is computed from owned model records, lane signals, and version availability.':
+    '引导完成度基于你拥有的模型记录、泳道状态信号和版本可用性计算。',
+  'Create or restore your draft lane': '创建或恢复草稿泳道',
+  'Your ownership lane starts with at least one draft so model status and review history have a stable home.':
+    '你的个人模型泳道应从至少一个草稿开始，这样模型状态与审核历史才有稳定归属。',
+  'Review ownership lane': '查看个人模型泳道',
+  'Continue into version registration': '继续进入版本注册',
+  'Once a model has completed training evidence, move into the version lane for registration and deployment follow-up.':
+    '当模型已经具备训练完成证据后，转入版本泳道进行注册和部署后续操作。',
+  'Model draft first-run guide': '模型草稿新手引导',
+  'Use this wizard to move from model metadata into artifact upload, parameter review, and approval submission.':
+    '使用这个向导，从模型元数据开始，逐步完成工件上传、参数复核与审批提交。',
+  'Guide status is computed from draft creation, ready artifact count, and approval queue status.':
+    '引导完成度基于草稿创建、ready 工件数量和审批队列状态计算。',
+  'Create metadata shell': '创建元数据草稿壳',
+  'Start with name, description, model type, and visibility so the draft has a stable identity.':
+    '先填写名称、描述、模型类型和可见性，让草稿先拥有稳定身份。',
+  'Fill metadata': '填写元数据',
+  'Upload ready artifact': '上传可用工件',
+  'Add at least one ready model file before moving into parameter review and approval submission.':
+    '在进入参数复核和审批提交前，至少添加一个 ready 的模型文件。',
+  'Upload model file': '上传模型文件',
+  'Submit approval request': '提交审批请求',
+  'Use the final review step to submit the draft into the approval queue and keep governance traceable.':
+    '在最终复核步骤中把草稿提交到审批队列，确保治理链路可追踪。',
+  'Approval queue first-run guide': '审批队列新手引导',
+  'Use this page to review model submissions, make governance decisions, and keep the audit trail intact.':
+    '通过这个页面审核模型提交、做出治理决策，并保持审计链路完整。',
+  'Guide status is computed from pending and reviewed approval requests in the current queue.':
+    '引导完成度基于当前队列中的待审批和已审批请求计算。',
+  'Open pending requests': '打开待审批请求',
+  'Start from the oldest request so model submissions are processed in a predictable order.':
+    '从最早的请求开始处理，让模型提交流转顺序保持可预期。',
+  'Review queue': '查看审批队列',
+  'Approve or reject with traceability': '在可追踪前提下批准或拒绝',
+  'Every decision should move the request forward while keeping requester, model scope, and review note context visible.':
+    '每一个决定都应推动请求向前，同时保持申请人、模型范围和审核备注上下文可见。',
+  'Make decision': '做出决定',
+  'Cross-check audit trail': '交叉检查审计链路',
+  'Use audit logs after approval work to confirm governance events are recorded for later review.':
+    '完成审批后查看审计日志，确认治理事件已经被记录，方便后续复核。',
+  'Training detail first-run guide': '训练详情新手引导',
+  'Use this page to interpret run state, inspect execution evidence, and continue into the next scoped workflow.':
+    '通过这个页面理解运行状态、检查执行证据，并继续进入下一步带范围的工作流。',
+  'Guide status is computed from current run status, evidence availability, and follow-up readiness.':
+    '引导完成度基于当前任务状态、证据可用性和后续动作就绪状态计算。',
+  'Read current run status': '查看当前运行状态',
+  'Start from status, dataset snapshot, and execution target so you know whether this run is queued, active, or finished.':
+    '先看状态、数据集快照和执行目标，明确当前任务是在排队、运行中还是已经结束。',
+  'Check logs, metrics, and artifact evidence': '检查日志、指标和工件证据',
+  'As the run progresses, use this page to confirm that logs, metrics, and output artifacts are appearing as expected.':
+    '随着任务推进，使用这个页面确认日志、指标和输出工件是否按预期出现。',
+  'Inspect run evidence': '检查运行证据',
+  'Continue into dataset or validation follow-up': '继续进入数据集或验证后续',
+  'After the run stabilizes, continue into dataset review or inference validation from the same scoped context.':
+    '当任务稳定后，可沿用当前范围上下文继续进入数据集复核或推理验证。', 
+  'Dataset first-run guide': '数据集新手引导',
+  'This page is your data preparation entry. Finish these steps before annotation and training.':
+    '这个页面是数据准备入口。先完成这里的步骤，再进入标注和训练。',
+  'Create dataset shell': '创建数据集容器',
+  'Start by creating one dataset record so uploads, annotation, and versions have a stable home.':
+    '先创建一个数据集记录，让上传、标注和版本都有稳定归属。',
+  'Prepare dataset to ready state': '将数据集准备到 ready 状态',
+  'Open one dataset detail page, upload files, organize split, and create a usable snapshot.':
+    '打开任一数据集详情，完成上传、切分整理，并创建可用快照版本。',
+  'Continue to annotation or training': '继续进入标注或训练',
+  'When at least one dataset is ready, move directly into annotation queue or training setup.':
+    '当至少一个数据集 ready 后，可直接进入标注队列或训练配置。',
+  'Guide status is computed from real dataset records in this workspace.':
+    '引导完成度基于当前工作区真实数据集记录计算。',
+  'Training first-run guide': '训练新手引导',
+  'Use this page to launch reproducible training from dataset snapshots, not ad-hoc state.':
+    '在这个页面基于数据集快照发起可复现实验，而不是依赖临时状态。',
+  'Confirm task and run scope': '确认任务与运行范围',
+  'Set job name, task type, and framework so this run has a clear target.':
+    '先设置任务名称、任务类型和框架，确保本次训练目标明确。',
+  'Stay on current step': '留在当前步骤',
+  'Bind dataset version snapshot': '绑定数据集版本快照',
+  'Training launch must bind an explicit dataset version, not an implicit latest dataset state.':
+    '训练启动必须绑定明确的数据集版本，不能依赖隐式“最新状态”。',
+  'Pass launch readiness gates': '通过启动就绪门禁',
+  'Dataset ready, train split available, and annotation coverage > 0 are required before launch.':
+    '启动前必须满足：数据集 ready、train 切分可用、标注覆盖率大于 0。',
+  'Check readiness source': '检查就绪来源',
+  'Confirm runtime strict guard': '确认 runtime 严格门禁',
+  'If strict guard is off, explicit risk confirmation is required before launch.':
+    '若严格门禁关闭，启动前必须显式确认风险。',
+  'Confirm runtime safety guard': '确认 Runtime 安全保护',
+  'If the safety guard is off, explicit risk confirmation is required before launch.':
+    '若安全保护关闭，启动前必须显式确认风险。',
+  'Guide status is computed from your current form and selected dataset version context.':
+    '引导完成度基于当前表单状态与所选数据集版本上下文计算。',
+  'Validation first-run guide': '验证新手引导',
+  'This page closes the loop: validate output quality, then feed bad samples back for the next training cycle.':
+    '该页面用于闭合循环：验证输出质量，再把坏样本回流到下一轮训练。',
+  'Confirm runtime and model version': '确认 runtime 与模型版本',
+  'Start by checking runtime connectivity and selecting one model version for this validation round.':
+    '先检查 runtime 连通性，并选择本轮验证使用的模型版本。',
+  'Upload input and run validation': '上传输入并执行验证',
+  'Keep at least one ready input attachment, then run inference and inspect normalized output.':
+    '至少保留一个 ready 输入附件，再执行推理并检查归一化输出。',
+  'Route failure sample back to dataset': '将失败样本回流到数据集',
+  'Send low-quality predictions back into dataset queues so annotation and retraining can continue.':
+    '将低质量预测回流到数据集队列，继续标注与再训练。',
+  'Guide status is computed from runtime checks, run records, and feedback history.':
+    '引导完成度基于 runtime 检查、运行记录和回流历史计算。',
+  'Open runtime status': '打开 runtime 状态',
+  'Open validation controls': '打开验证控制区',
+  'Open inference inputs': '打开推理输入区',
+  'Open feedback routing': '打开回流操作区',
+  'Open latest output': '打开最新输出区',
+  'Next validation step': '下一步验证动作',
+  'Finish one clear validation action here before switching datasets or sending feedback.':
+    '先完成一个明确的验证动作，再切换数据集或发送回流。',
+  'Dataset detail first-run guide': '数据集详情新手引导',
+  'Use this page to complete upload, queue preparation, versioning, and training handoff in one lane.':
+    '通过这个页面可在同一工作线完成上传、队列准备、版本化与训练交接。',
+  'Upload ready dataset files': '上传可用数据文件',
+  'Start by uploading files and waiting for at least one ready item in this dataset.':
+    '先上传文件，并等待本数据集中至少出现一个 ready 样本。',
+  'Run annotation and review queues': '推进标注与复核队列',
+  'Open annotation workspace and move samples through annotate/review states.':
+    '打开标注工作台，把样本推进到标注/复核状态流中。',
+  'Create dataset version snapshot': '创建数据集版本快照',
+  'Version snapshots keep training and validation reproducible for this dataset.':
+    '版本快照可保证该数据集上的训练与验证可复现。',
+  'Launch scoped training': '发起范围训练',
+  'Use selected version readiness and launch training from this dataset context.':
+    '基于所选版本就绪状态，在当前数据集上下文中直接发起训练。',
+  'Guide status is computed from ready files, annotation records, version snapshots, and launch readiness.':
+    '引导完成度基于 ready 文件、标注记录、版本快照与启动就绪状态计算。',
+  'No items yet. Finish the recommended step below to unlock split, review, and version work.':
+    '当前还没有样本。先完成下面建议的步骤，才能解锁切分、复核和版本化工作。',
+  'Training queue first-run guide': '训练队列新手引导',
+  'This page is your training control lane: launch runs, monitor queues, inspect evidence, and continue validation.':
+    '该页面是训练控制主线：发起任务、监控队列、检查执行证据并继续验证。',
+  'Create or load training runs': '创建或加载训练任务',
+  'Start with at least one run so this queue can track progress and execution evidence.':
+    '先有至少一个任务，队列才能开始追踪进度与执行证据。',
+  'Monitor active queue': '监控活跃队列',
+  'Use active queue to track queued, running, and evaluating jobs in real time.':
+    '通过活跃队列实时跟踪排队中、运行中与评估中的任务。',
+  'Open live queue': '打开活跃队列',
+  'Inspect job detail and authenticity': '检查任务详情与真实性',
+  'Open one job detail to verify logs, metrics, and real/template execution evidence.':
+    '打开任一任务详情，核对日志、指标与真实/模板执行证据。',
+  'Continue to validation lane': '继续到验证工作线',
+  'After a run is selected, jump to scoped inference validation for close-loop checks.':
+    '选择任务后，直接跳转到带范围的推理验证以完成闭环检查。',
+  'Guide status is computed from real queue, selection, and terminal run states.':
+    '引导完成度基于真实队列、当前选择与终态任务状态计算。',
+  'Next training queue step': '下一步训练队列动作',
+  'Finish one clear training-control action here before checking logs or validation.':
+    '先完成一个明确的训练控制动作，再去查看日志或验证结果。',
+  'No active jobs yet. Finish the recommended training step below to populate this queue.':
+    '当前还没有活跃任务。先完成下面建议的训练步骤，这个队列才会出现内容。',
+  'Training starter task': '训练首任务',
+  'Select first job': '选择第一个任务',
+  'Next training setup step': '下一步训练准备动作',
+  'Finish one clear setup action here before launching the run.':
+    '先完成一个明确的训练准备动作，再启动本次训练任务。',
+  'Jump to task scope': '跳转到任务范围',
+  'Jump to snapshot step': '跳转到快照步骤',
+  'Annotation first-run guide': '标注新手引导',
+  'Use this page to move queue samples through annotation and review, then continue scoped validation/training lanes.':
+    '使用该页面将队列样本推进到标注与复核流程，再继续带范围的验证/训练工作线。',
+  'Select queue sample': '选择队列样本',
+  'Pick one sample from queue filters so edits and review actions stay focused.':
+    '从当前队列筛选中选择一个样本，让编辑与复核动作保持聚焦。',
+  'Focus queue': '聚焦当前队列',
+  'Create annotation payload': '生成标注载荷',
+  'Add boxes/OCR lines/polygons and save at least one annotation state for this item.':
+    '添加框/OCR 行/多边形，并至少保存一次该样本的标注状态。',
+  'Submit into review flow': '提交到复核流程',
+  'Move annotations from editing states into in_review/approved/rejected lifecycle.':
+    '把标注从编辑态推进到 in_review/approved/rejected 生命周期。',
+  'Continue to next loop lane': '继续下一条闭环工作线',
+  'After review signals exist, continue with scoped training jobs or validation follow-up.':
+    '有复核信号后，继续进入带范围的训练任务或验证跟进。',
+  'Next annotation step': '下一步标注动作',
+  'Finish one clear review-lane action here before switching queues or leaving the workbench.':
+    '先完成一个明确的复核工作线动作，再切换队列或离开当前工作台。',
+  'Open annotation canvas': '打开标注画布',
+  'Open annotation actions': '打开标注动作区',
+  'No queue items yet. Finish the recommended review step below to continue.':
+    '当前队列还没有可处理样本。先完成下面建议的复核步骤，再继续。',
+  'Open Dataset Detail': '打开数据集详情',
+  'Guide status is computed from selected sample, annotation status, review actions, and approved queue count.':
+    '引导完成度基于已选样本、标注状态、复核动作与已通过队列数量计算。',
+  'Version first-run guide': '模型版本新手引导',
+  'Use this page to register real completed runs, inspect lineage, and hand off into validation.':
+    '该页面用于注册真实完成训练、检查版本血缘，并将结果交接到验证流程。',
+  'Prepare authenticity-verified completed jobs': '准备通过真实性校验的已完成任务',
+  'Only local-command completed jobs with real execution evidence are eligible for registration.':
+    '只有具备真实执行证据的 local-command 已完成任务，才允许用于版本注册。',
+  'Register at least one model version': '至少注册一个模型版本',
+  'Bind model + completed run and create a traceable version record.':
+    '绑定模型与已完成任务，创建可追溯的版本记录。',
+  'Open version inventory': '打开版本清单',
+  'Inspect selected version lineage': '检查已选版本血缘',
+  'Open one version and verify linked model, job, artifact, and authenticity signals.':
+    '打开一个版本并核对关联模型、任务、产物与真实性信号。',
+  'Run scoped inference validation from selected version context.':
+    '从当前选中版本上下文发起带范围的推理验证。',
+  'Guide status is computed from completed-job evidence, registered versions, and selected inspector state.':
+    '引导完成度基于已完成任务证据、已注册版本数量和当前检查面板状态计算。',
+  'Next version step': '下一步版本动作',
+  'Finish one clear version action here before comparing outputs or switching to validation.':
+    '先完成一个明确的版本动作，再进行对比或切换到验证流程。',
+  'Open registration lane': '打开版本注册区',
+  'Select first version': '选择第一个版本',
+  'Version starter task': '版本首任务',
   'Loading overview': '正在加载概览',
   'Approval queue visibility': '审批队列可见',
   'Quick jump to model workflows': '快速跳转模型流程',
@@ -351,6 +644,7 @@ const zhCN: Record<string, string> = {
   'Approve & Next': '通过并处理下一条',
   'Reject & Next': '拒绝并处理下一条',
   'Fetching latest audit logs.': '获取最新审计日志中。',
+  'Audit log first-run guide': '审计日志新手引导',
   'Admin Audit Logs': '管理审计日志',
   'Governance Trail': '治理轨迹',
   'Only admin can view audit logs.': '仅管理员可查看审计日志。',
@@ -375,6 +669,22 @@ const zhCN: Record<string, string> = {
   'Recent audit timeline': '近期审计时间线',
   'Newest records first so governance follow-up stays easy to trace.':
     '按最新优先展示，便于持续追踪治理跟进。',
+  'Use this page to read governance history, compare user vs system events, and continue into adjacent admin lanes without losing context.':
+    '通过这个页面阅读治理历史、区分用户与系统事件，并在不丢失上下文的情况下继续进入相邻管理泳道。',
+  'Guide status is computed from retained audit records and visible governance event mix.':
+    '引导完成度基于已保留的审计记录和当前可见的治理事件分布计算。',
+  'Review governance timeline': '查看治理时间线',
+  'Start from the newest governance records so policy-sensitive actions are easy to trace.':
+    '从最新治理记录开始查看，让敏感操作的来龙去脉更容易追踪。',
+  'Review timeline': '查看时间线',
+  'Separate user vs system actions': '区分用户动作与系统动作',
+  'Use event badges and counts to distinguish operator actions from background automation before deciding what to review next.':
+    '在决定下一步查看什么之前，先用事件标签和计数区分人工操作与后台自动流程。',
+  'Compare event types': '对比事件类型',
+  'Continue into adjacent admin lanes': '继续进入相邻管理泳道',
+  'Jump from audit logs into approvals or verification evidence when the timeline reveals the next governance action.':
+    '当时间线已经指向下一步治理动作时，可直接从审计日志跳到审批或验收证据页面。',
+  'Open approval queue': '打开审批队列',
   'Top entity types': '高频资源类型',
   'The most frequently touched resources in the current audit view.':
     '当前审计视图中最常被触达的资源类型。',
@@ -391,6 +701,16 @@ const zhCN: Record<string, string> = {
   'No target record': '无目标记录',
   'Metadata fields: {count}': '元数据字段：{count}',
   'No metadata fields': '无元数据字段',
+  'Search by action, entity, actor, or detailed fields': '按动作、实体、操作者或详细字段搜索',
+  Details: '详细信息',
+  'Detailed fields: {count}': '详细字段：{count}',
+  'No detailed fields': '无详细字段',
+  'Open one governance record here when you need full context, actor identity, and detailed metadata.':
+    '当你需要完整上下文、操作者身份和详细元数据时，可在这里展开单条治理记录。',
+  'Open one governance record here when you need full context, actor identity, and detailed fields.':
+    '当你需要完整上下文、操作者身份和详细字段时，可在这里展开单条治理记录。',
+  'Detailed metadata (advanced)': '详细元数据（高级）',
+  'Detailed fields (advanced)': '详细字段（高级）',
   'View raw context': '查看原始上下文',
   'Actor: {actor}': '操作者：{actor}',
   'Recorded by background automation.': '该记录由后台自动流程生成。',
@@ -473,6 +793,17 @@ const zhCN: Record<string, string> = {
   'Check Runtime Connectivity': '检查 Runtime 连通性',
   'Use one settings entry, then switch between Account, LLM, and runtime controls here.':
     '通过统一的设置入口，在账户、LLM 和 Runtime 子标签之间切换。',
+  'Use one settings entry, then switch between Account, LLM, Runtime, Runtime Templates, and Workers here.':
+    '通过统一设置入口，在 Account、LLM、Runtime、Runtime 模板和 Workers 子标签之间切换。',
+  'Copy runtime endpoint integration snippets in one dedicated page. Runtime/Worker state operations stay on their own pages.':
+    '在独立页面复制 Runtime 接入模板；Runtime/Worker 状态操作保留在各自页面。',
+  'Snippet only': '仅模板内容',
+  'Template framework': '模板框架',
+  'Choose one framework and copy env/curl/request/response snippets.':
+    '选择一个框架并复制环境变量/curl/请求/响应示例。',
+  'Page boundary': '页面边界',
+  'This page only provides integration snippets. Runtime configuration/readiness and worker lifecycle stay in their own pages.':
+    '本页仅提供接入模板。Runtime 配置/就绪检查与 Worker 生命周期操作保留在独立页面。',
   'Manage password access and admin-only account provisioning from one place.':
     '在一个页面里统一管理密码访问与管理员专属的账号开通。',
   'Current user': '当前用户',
@@ -696,6 +1027,13 @@ const zhCN: Record<string, string> = {
   'Title cannot be empty.': '标题不能为空。',
   'Conversation renamed.': '会话已重命名。',
   'Conversation restored.': '会话已恢复。',
+  'Conversation deleted.': '会话已删除。',
+  'Clear history': '清空历史',
+  'No conversation history to clear.': '当前没有可清空的会话历史。',
+  'Delete all conversation history visible in this account?': '确认删除当前账号可见的全部会话历史吗？',
+  'Failed to delete {count} conversations.': '有 {count} 条会话删除失败。',
+  'History cleared.': '历史记录已清空。',
+  'History cleared with partial failures.': '历史记录已清空，但存在部分删除失败。',
   'Removed from sidebar (local).': '已从侧栏移除（本地）。',
   'Cleared local chat sidebar.': '已清空本地会话侧栏。',
   'Hidden chats are visible again.': '隐藏会话已重新显示。',
@@ -835,44 +1173,84 @@ const zhCN: Record<string, string> = {
     'Runtime 端点已配置但当前不可达，在恢复前推理会继续走降级路径。',
   'Runtime endpoint is not configured. Inference uses fallback mode by default.':
     'Runtime 端点尚未配置，推理默认使用降级模式。',
+  'Runtime endpoint unavailable': 'Runtime 端点不可用',
+  'Local runner command unavailable': '本地 Runner 命令不可用',
+  'Runtime dependency missing': 'Runtime 依赖缺失',
+  'Model artifact unavailable': '模型产物不可用',
+  'Template-mode fallback': '模板模式降级',
+  'No explicit fallback reason': '未提供明确降级原因',
+  'Needs runtime troubleshooting': '需要继续排查 Runtime',
   'Fallback Mode': '降级模式',
+  'Degraded mode': '降级模式',
+  Degraded: '降级',
   'Latest Inference Output': '最新推理输出',
   'Review runtime source, preview image, normalized output, and raw payload from the selected run.':
     '查看所选运行的 runtime 来源、预览图、统一输出与原始 payload。',
+  'Review execution status, preview image, normalized output, and raw payload from the selected run.':
+    '查看所选运行的执行状态、预览图、统一输出与原始 payload。',
+  'Review execution status, preview image, normalized output, and detailed diagnostics from the selected run.':
+    '查看所选运行的执行状态、预览图、统一输出与详细诊断信息。',
   'No Runs Yet': '暂无运行记录',
   'Run inference to inspect outputs.': '请先运行推理以查看输出。',
+  'Run inference once to inspect normalized output, execution status, and feedback routing options.':
+    '请先运行一次推理，以查看统一输出、执行状态与反馈路由选项。',
   'Select Run': '选择运行记录',
   'Runtime Fallback Active': 'Runtime 降级生效中',
+  'Degraded output active': '降级输出生效中',
   'Using mock fallback because runtime call failed: {reason}': 'Runtime 调用失败，已使用 mock 降级：{reason}',
   'Using mock fallback because runtime endpoint is unavailable.': 'Runtime 端点不可用，已使用 mock 降级。',
   'Using explicit fallback because runtime or local command failed: {reason}':
     'Runtime 或本地命令失败，已使用显式降级结果：{reason}',
+  'Using degraded output because runtime or local execution failed: {reason}':
+    'Runtime 或本地执行失败，当前使用降级输出：{reason}',
   'Using explicit fallback because runtime endpoint is unavailable.':
     'Runtime 端点不可用，已使用显式降级结果。',
+  'Using degraded output because runtime endpoint is unavailable.':
+    'Runtime 端点不可用，当前使用降级输出。',
   'Runtime Bridge Active': 'Runtime 桥接已生效',
   'Prediction output is coming from configured runtime endpoint.': '当前预测输出来自已配置的 Runtime 端点。',
   'Local Runner Active': '本地 Runner 已生效',
+  'Local runner degraded mode': '本地 Runner 降级模式',
   'Prediction output is coming from local framework runner and version-bound artifact when available.':
     '当前预测输出来自本地框架 Runner，并优先使用模型版本绑定产物。',
   'Template Runner Fallback': '模板 Runner 降级',
+  'Prediction output is coming from built-in degraded runner because real framework execution is unavailable.':
+    '当前预测输出来自内置降级 Runner，真实框架执行暂不可用。',
+  'Prediction output is coming from built-in degraded runner because real framework execution is unavailable: {reason}':
+    '当前预测输出来自内置降级 Runner，真实框架执行暂不可用：{reason}',
   'Prediction output is coming from bundled template runner because real framework execution is unavailable.':
     '当前预测输出来自仓库内置模板 Runner，真实框架执行暂不可用。',
   'Prediction output is coming from bundled template runner because real framework execution is unavailable: {reason}':
     '当前预测输出来自仓库内置模板 Runner，真实框架执行暂不可用：{reason}',
   'Real execution': '真实执行',
+  'Degraded output': '降级输出',
   'Template execution': '模板执行',
   'Simulated execution': '模拟执行',
   'Unknown execution': '未知执行',
+  'Degraded execution': '降级执行',
+  'Needs verification': '需要复核',
   'Result authenticity': '结果真实性',
   'Template/Simulated Training Result': '模板/模拟训练结果',
+  'Training output needs verification': '训练输出需要复核',
   'Current training output is not produced by a fully real framework run. Verify runtime dependencies before publishing this version.':
     '当前训练输出并非完整真实框架执行产物，发布该版本前请先确认 runtime 依赖。',
+  'Current training output is not from a fully verified run. Verify runtime dependencies before publishing this version.':
+    '当前训练输出尚未通过完整真实性校验，发布该版本前请先确认 runtime 依赖。',
   'Current training output is not produced by a fully real framework run. Verify runtime dependencies before publishing this version. Fallback reason from runner: {reason}':
     '当前训练输出并非完整真实框架执行产物，发布该版本前请先确认 runtime 依赖。Runner 回退原因：{reason}',
+  'Current training output is not from a fully verified run. Verify runtime dependencies before publishing this version. Reason: {reason}':
+    '当前训练输出尚未通过完整真实性校验，发布该版本前请先确认 runtime 依赖。原因：{reason}',
   'Execution detail is still incomplete for this terminal run. Verify runtime dependencies and artifact metadata before publishing this version.':
     '该终态任务的执行明细仍不完整，发布该版本前请先确认 runtime 依赖与产物元数据。',
+  'Execution details are still incomplete for this run. Verify runtime dependencies and artifact metadata before publishing this version.':
+    '该任务的执行明细仍不完整，发布该版本前请先确认 runtime 依赖与产物元数据。',
   'Needs runtime verification': '需校验 runtime',
+  'Degradation reason': '降级原因',
   'Refreshing execution summary...': '正在刷新执行摘要...',
+  'Selected job finished without fully verified real training evidence. Review details before model registration.':
+    '当前任务结束时缺少完整真实训练证据，模型注册前请先复核详情。',
+  'Selected job finished without fully verified real training evidence. Review details before model registration. Reason: {reason}':
+    '当前任务结束时缺少完整真实训练证据，模型注册前请先复核详情。原因：{reason}',
   'Selected job ended without fully real training evidence. Review detail before model registration.':
     '当前任务结束时缺少完整真实训练证据，模型注册前请先复核详情。',
   'Selected job ended without fully real training evidence. Review detail before model registration. Fallback reason from runner: {reason}':
@@ -904,6 +1282,14 @@ const zhCN: Record<string, string> = {
   'Only datasets with task {taskType} are shown for feedback.':
     '反馈目标仅展示任务类型为 {taskType} 的数据集。',
   'Run detail unavailable': '运行详情暂不可用',
+  'Current output is degraded and not from real OCR recognition':
+    '当前结果为降级输出，不是真实 OCR 识别',
+  'Fix runtime or local prediction command configuration before using this result for business decisions.':
+    '请先修复 runtime 或本地预测命令配置，再使用该结果做业务判断。',
+  'No text recognized or this run produced no real OCR output':
+    '未识别到文本 / 本次运行未产生真实 OCR 结果',
+  'Check runtime or local command configuration and retry.':
+    '请检查 runtime 或本地命令配置后重试。',
   'Refresh selected run': '刷新当前运行详情',
   'Select model version and ready attachment first.': '请先选择模型版本和 ready 状态附件。',
   'Inference run {runId} completed.': '推理运行 {runId} 已完成。',
@@ -938,9 +1324,230 @@ const zhCN: Record<string, string> = {
     '查看每个框架是否可达，以及接入是否完整。',
   'Runtime controls': 'Runtime 控制区',
   'Runtime strict controls': 'Runtime 严格控制',
+  'Runtime readiness': 'Runtime 就绪度',
+  'Runtime readiness check failed': 'Runtime 就绪度检查失败',
+  'Checking runtime readiness': '检查 Runtime 就绪度中',
+  'Checking local runtime environment and framework availability.':
+    '正在检查本地 Runtime 环境与框架可用性。',
+  'Detecting Python executor, strict controls, and framework readiness.':
+    '正在探测 Python 可执行、严格控制项与框架就绪度。',
+  'Refresh readiness': '刷新就绪度',
+  'Auto-configuring...': '自动配置中...',
+  'Auto configure (safe)': '自动配置（保守）',
+  'Auto configure (overwrite endpoints)': '自动配置（覆盖端点）',
+  'Prepare local-only draft': '准备纯本地草稿',
+  'Runtime auto-config completed.': 'Runtime 自动配置已完成。',
+  'Runtime auto-config completed (including endpoint overwrite).':
+    'Runtime 自动配置已完成（已覆盖端点）。',
+  'Switched all frameworks to local-only draft mode. Save runtime settings to apply.':
+    '已将所有框架切换为纯本地草稿模式。请保存 Runtime 设置以生效。',
+  'Apply local quick setup': '应用本地快速配置',
+  'Applying...': '应用中...',
+  'Local-only runtime settings applied.': '纯本地 Runtime 配置已应用。',
+  'Local quick start (single machine)': '本地快速开始（单机）',
+  'Local quick-start progress': '本地快速上手进度',
+  'Runtime quick-start snapshot': 'Runtime 快速上手快照',
+  'Next runtime action': 'Runtime 下一步动作',
+  'Runtime setup snapshot unavailable': 'Runtime 设置快照不可用',
+  'Prefer a local-first path? Use this to keep endpoint/API key optional and get to readiness checks faster.':
+    '想走本地优先路径？可用这里把 endpoint/API key 保持为可选，并更快进入就绪检查。',
+  'Local quick setup is complete. Continue to inference validation.':
+    '本地快速配置已完成，可以继续进入推理验证。',
+  'Use local quick setup to save a local-first runtime baseline, then run readiness checks.':
+    '使用本地快速配置先保存本地优先基线，然后再运行就绪检查。',
+  'Local-only path active': '纯本地路径已启用',
+  'Runtime is currently configured for local-only execution on this machine.':
+    '当前 Runtime 已配置为仅在本机执行的本地模式。',
+  'Running initial runtime auto-config...': '正在执行首次 Runtime 自动配置...',
+  'Initial runtime auto-config completed.': '首次 Runtime 自动配置已完成。',
+  'Auto-configure will probe candidate runtime endpoints and overwrite existing endpoint fields. Continue?':
+    '自动配置将探测候选 Runtime 端点并覆盖现有端点字段，是否继续？',
+  'Manual-only required checks': '仍需人工确认项',
+  'Action required': '需要处理',
+  'Auto-config handles defaults, but these items still require manual confirmation for production readiness.':
+    '自动配置会处理默认项，但这些检查仍需人工确认后才适合生产使用。',
+  'Runtime API key (optional, endpoint auth only)': 'Runtime API key（可选，仅远程端点鉴权使用）',
+  'For local-only mode (no endpoint), API key can stay empty.':
+    '纯本地模式（不配置 endpoint）时，API key 可保持为空。',
+  'All frameworks are in local mode': '所有框架均处于本地模式',
+  'API key fields are hidden in local mode. Switch a framework to endpoint mode if remote auth is required.':
+    '本地模式下已隐藏 API key 字段。如需远程鉴权，请先将对应框架切换到 Endpoint 模式。',
+  'Runtime setup path': 'Runtime 配置路径',
+  'Choose runtime setup path': '选择 Runtime 配置路径',
+  'Start with one clear setup path. Keep expert maintenance collapsed until you really need it.':
+    '先选择一条清晰的配置路径，低频维护项等真正需要时再展开。',
+  'Local mode': '本地模式',
+  'Endpoint mode': 'Endpoint 模式',
+  'Use local mode': '使用本地模式',
+  'Use endpoint mode': '使用 Endpoint 模式',
+  'Local quick setup path': '本地快速配置路径',
+  'Best for first-time single-machine usage. No endpoint or API key is required.':
+    '最适合首次单机使用。不需要 endpoint，也不需要 API key。',
+  Recommended: '推荐',
+  'Profile activation path': 'Profile 激活路径',
+  'Use this when deployment/runtime profiles are already prepared by your environment or ops team.':
+    '当你的环境或运维团队已经准备好 deployment/runtime profile 时，优先走这条路径。',
+  'Selected profile': '当前选择的 Profile',
+  selected: '已选择',
+  'Custom framework setup': '自定义框架配置',
+  'Manually adjust framework mode, endpoint, auth, and local overrides when the guided paths are not enough.':
+    '当引导路径不够用时，再手动调整框架模式、endpoint、鉴权和本地覆盖项。',
+  'Expert runtime controls': '专家级 Runtime 控件',
+  'Keep low-frequency maintenance, fallback controls, and raw overrides here so first-run setup stays calm.':
+    '把低频维护动作、回退控制和原始覆盖项收纳在这里，让首次配置界面保持平静。',
+  'Keep low-frequency maintenance, fallback controls, and advanced command overrides here so first-run setup stays calm.':
+    '把低频维护动作、回退控制和高级命令覆盖项收纳在这里，让首次配置界面保持平静。',
+  'Keep low-frequency maintenance, safety controls, and advanced command overrides here so first-run setup stays calm.':
+    '把低频维护动作、安全控制和高级命令覆盖项收纳在这里，让首次配置界面保持平静。',
+  'All frameworks are in local mode, so API key fields stay hidden by default.':
+    '所有框架都处于本地模式，因此 API key 字段默认保持隐藏。',
+  'This framework will run through local command or bundled runner path on this machine. No API key is needed.':
+    '该框架将通过本机本地命令或内置 runner 执行，不需要 API key。',
+  'Optional. Leave empty to use built-in local runner preset.':
+    '可选。留空则使用内置本地 Runner 预设。',
+  'This framework will call a remote runtime endpoint. API key is optional and only needed when that endpoint requires auth.':
+    '该框架将调用远程 Runtime endpoint。API key 为可选，仅在远程端点需要鉴权时才需填写。',
+  'Generate key': '生成 key',
+  'Rotate key': '轮换 key',
+  'Revoke key': '撤销 key',
+  'Generated a new runtime API key. Save runtime settings to persist it.':
+    '已生成新的 Runtime API key。请保存 Runtime 设置以持久化。',
+  'Runtime API key binding revoked.': '已撤销 Runtime API key 绑定。',
+  'Framework runtime API key revoked.': '已撤销 Framework Runtime API key。',
+  'Runtime API key rotated and copied. Save this key in your remote runtime service.':
+    'Runtime API key 已轮换并复制。请将该 key 保存到远端 Runtime 服务。',
+  'Runtime API key rotated. Copy and configure it in your remote runtime service now.':
+    'Runtime API key 已轮换。请立即复制并配置到远端 Runtime 服务。',
+  'Generated key must also be configured and validated by the remote runtime service.':
+    '生成的 key 还需要在远端 Runtime 服务同步配置并校验后才会生效。',
+  'This model-level key only works after remote runtime is configured with the same key.':
+    '模型级 key 只有在远端 Runtime 配置了相同 key 后才会生效。',
+  'This model-version key only works after remote runtime is configured with the same key.':
+    '模型版本级 key 只有在远端 Runtime 配置了相同 key 后才会生效。',
+  'Model key expires at {expiresAt}.': '模型级 key 过期时间：{expiresAt}。',
+  'Model version key expires at {expiresAt}.': '模型版本级 key 过期时间：{expiresAt}。',
+  'Expiring <=3d': '3 天内过期',
+  'Expiring <=7d': '7 天内过期',
+  'Model key expired. Rotate key and sync remote runtime now.':
+    '模型级 key 已过期。请立即轮换并同步远端 Runtime。',
+  'Model key expires in {days} day(s). Rotate soon.':
+    '模型级 key 将在 {days} 天后过期，请尽快轮换。',
+  'Model key expires in {days} day(s). Plan key rotation.':
+    '模型级 key 将在 {days} 天后过期，请安排轮换。',
+  'Model version key expired. Rotate key and sync remote runtime now.':
+    '模型版本级 key 已过期。请立即轮换并同步远端 Runtime。',
+  'Model version key expires in {days} day(s). Rotate soon.':
+    '模型版本级 key 将在 {days} 天后过期，请尽快轮换。',
+  'Model version key expires in {days} day(s). Plan key rotation.':
+    '模型版本级 key 将在 {days} 天后过期，请安排轮换。',
+  'Per-model auth routing': '按模型鉴权路由',
+  'Only needed when remote runtime differentiates auth by model or model version.':
+    '仅当远端 Runtime 需要按模型或模型版本区分鉴权时才需要配置。',
+  'Configure each framework in local mode or endpoint mode directly from UI.':
+    '可在 UI 中直接为每个框架选择本地模式或 Endpoint 模式。',
+  'Local model path': '本地模型路径',
+  'Local runtime overrides': '本地 Runtime 覆盖项',
+  'Optional local path and command overrides for operators who need non-default runners or weights.':
+    '仅供需要非默认 runner 或权重路径的操作人员使用的本地覆盖项。',
+  'YOLO local model path': 'YOLO 本地模型路径',
+  'Optional. Recommended for YOLO real local execution.':
+    '可选。推荐为 YOLO 的真实本地执行配置。',
+  'Optional. Leave blank unless this framework needs a local model asset path.':
+    '可选。除非该框架需要本地模型资源路径，否则可留空。',
+  'Used for local real training/inference when endpoint is unavailable or you prefer local weights.':
+    '当 endpoint 不可用，或你希望优先使用本地权重时，此路径将用于真实本地训练/推理。',
+  'Only needed when this framework relies on local model assets instead of remote runtime defaults.':
+    '仅当该框架依赖本地模型资源、而不是远程 Runtime 默认模型时才需要填写。',
+  'LLM key configuration': 'LLM Key 配置',
+  'Checking whether a usable LLM API key is already configured.':
+    '正在检查是否已配置可用的 LLM API key。',
+  'Unable to load LLM settings. Verify account/session, then open LLM settings to confirm API key state.':
+    '无法加载 LLM 设置。请先确认账户会话状态，再打开 LLM 设置检查 API key。',
+  'LLM key is configured. Conversation and assistant routing can use real provider credentials.':
+    'LLM key 已配置。对话与助手路由可以使用真实提供商凭据。',
+  'No active LLM API key is configured. Chat and ops bridge may stay in mock/default mode until key is set.':
+    '当前未配置有效的 LLM API key。在配置前，对话与 ops bridge 可能停留在 mock/default 模式。',
+  'Runtime endpoint availability': 'Runtime 端点可用性',
+  'Checking runtime endpoint reachability across frameworks.':
+    '正在检查各框架 Runtime 端点可达性。',
+  'At least one framework endpoint is reachable. Real runtime execution path is available.':
+    '至少一个框架端点可达，已具备真实 Runtime 执行路径。',
+  'Endpoint is configured but currently unreachable. Fix connectivity, or keep safety guards enabled before production runs.':
+    '端点已配置但当前不可达。请修复连通性，或在生产前保持安全保护开启。',
+  'No reachable runtime endpoint. You can continue with local execution, but production runs require either a reachable endpoint or a verified local environment.':
+    '当前没有可达 Runtime 端点。你可以继续本地执行，但生产运行需要可达端点或已验证的本地环境。',
+  'Local runtime dependencies': '本地 Runtime 依赖',
+  'Checking local runtime environment (Python and command configuration).':
+    '正在检查本地 Runtime 环境（Python 与命令配置）。',
+  'Local runtime has blocking issues ({errors} errors / {warnings} warnings). Run fix commands in readiness panel.':
+    '本地 Runtime 存在阻塞问题（{errors} 个错误 / {warnings} 个告警）。请在就绪度面板执行修复命令。',
+  'Local runtime has follow-up warnings ({warnings}). Recommended to fix before production runs.':
+    '本地 Runtime 仍有后续告警（{warnings}）。建议在生产运行前修复。',
+  'No blocking local runtime dependency issues detected.':
+    '未检测到阻塞性的本地 Runtime 依赖问题。',
+  'Distributed worker capacity': '分布式 Worker 容量',
+  'Checking worker availability and scheduler capacity.':
+    '正在检查 Worker 可用性与调度容量。',
+  'Worker registry is visible to admin only. Use admin account to configure distributed workers.':
+    'Worker 注册表仅管理员可见。请使用管理员账号配置分布式 Worker。',
+  'Online workers are available for load-aware scheduling.':
+    '已存在在线 Worker，可用于负载感知调度。',
+  'No online worker detected. Single-machine mode still works; add worker nodes for elastic training capacity.':
+    '未检测到在线 Worker。单机模式仍可运行；如需弹性训练能力请增加 Worker 节点。',
+  'python_bin requested': '请求的 python_bin',
+  'python_bin resolved': '解析出的 python_bin',
+  unavailable: '不可用',
+  Issues: '问题',
+  'Fix commands': '修复命令集合',
+  'Copy all commands': '复制全部命令',
+  'Deduplicated from current issues. Run on runtime host and then refresh readiness.':
+    '已按当前问题去重。请在 Runtime 主机执行后再刷新就绪度。',
+  Remediation: '修复建议',
+  'Copy fix': '复制修复建议',
+  'Fix command': '修复命令',
+  'Copy command': '复制命令',
+  'Operations checklist': '运维清单',
+  'Copy checklist': '复制清单',
+  'Issue details': '问题明细',
+  'Grouped fix commands': '分组修复命令',
+  'Endpoint checks': '端点检查',
+  'Python dependency fixes': 'Python 依赖修复',
+  'Local command fixes': '本地命令修复',
+  'Local execution command fixes': '本地执行命令修复',
+  'Strict-mode follow-ups': '严格模式后续处理',
+  'Safety guard follow-ups': '安全保护后续处理',
+  'General fixes': '通用修复',
+  'No blocking runtime issues detected.': '未发现阻塞性的 Runtime 问题。',
+  'Advanced diagnostics and fix commands': '高级诊断与修复命令',
+  'Issue code': '问题代码',
+  'Configured Python executable': '配置的 Python 可执行文件',
+  'Detected Python executable': '检测到的 Python 可执行文件',
+  'docTR local bootstrap recovery': 'docTR 本地引导恢复',
+  'docTR model warmup failed in local mode': 'docTR 本地模式模型预热失败',
+  'Pre-seed docTR model files, then restart API and refresh readiness.':
+    '请先预置 docTR 模型文件，再重启 API 并刷新就绪检查。',
+  'Runtime preseed directory': 'Runtime 预置目录',
+  'Host preseed directory hint': '宿主机预置目录提示',
+  'Required files': '必需文件',
+  'Missing files': '缺失文件',
+  'All expected preseed files are present.': '预期预置文件均已存在。',
+  'Quick recovery commands': '快速恢复命令',
+  'docTR recovery commands': 'docTR 恢复命令',
   'Control whether runtime can fallback to simulated/template outputs, and choose default Python executable for bundled runners.':
     '控制 Runtime 是否允许 simulated/template 降级输出，并指定内置 Runner 默认 Python 可执行文件。',
+  'Set safety behavior for runtime output, and choose the default Python executable for built-in runners.':
+    '设置 Runtime 输出的安全行为，并指定内置 Runner 的默认 Python 可执行文件。',
+  'Safety guards': '安全保护',
+  'Runtime safety guards': 'Runtime 安全保护',
+  'Runtime safety guard': 'Runtime 安全保护',
+  'Build ID': '构建 ID',
+  'Quick local setup': '本地快速配置',
+  'Complete this three-step path first. It keeps runtime usable without endpoint/API key setup.':
+    '先完成这三个步骤。无需配置 endpoint/API Key 也能保证 Runtime 可用。',
+  'Done {done}/{total}': '已完成 {done}/{total}',
+  'Open issues': '待处理问题',
   'Bundled runner Python executable': '内置 Runner Python 可执行文件',
+  'Built-in runner Python executable': '内置 Runner Python 可执行文件',
   'platform default': '平台默认',
   'Leave blank to use platform default (python3 / python)':
     '留空则使用平台默认值（python3 / python）',
@@ -948,8 +1555,98 @@ const zhCN: Record<string, string> = {
     '禁用 simulated 训练回退（本地 Runner 命令缺失/不可用时直接失败）',
   'Disable inference fallback (reject template/fallback runtime outputs and return explicit error)':
     '禁用推理回退（拒绝 template/fallback 输出并返回显式错误）',
+  'Stop training immediately when local execution command is unavailable':
+    '当本地执行命令不可用时，立即停止训练。',
+  'Block degraded inference output and return an explicit error':
+    '阻止降级推理输出，并返回明确错误。',
+  'Block fallback inference output and return an explicit error':
+    '阻止降级推理输出，并返回明确错误。',
+  'Sample framework': '示例框架',
   'Runtime strict mode status unavailable': 'Runtime 严格模式状态不可用',
+  'Runtime safety status unavailable': 'Runtime 安全状态不可用',
+  'Clear UI-saved runtime settings and switch back to environment defaults?':
+    '确认清除 UI 中保存的 Runtime 设置，并恢复为环境默认值吗？',
+  'Runtime safety status is unavailable. Resolve runtime settings before creating this training job.':
+    'Runtime 安全状态不可用。请先修复 Runtime 设置，再创建训练任务。',
+  'Runtime safety guard is off. Confirm risk acknowledgment before creating this training job.':
+    'Runtime 安全保护已关闭。请先确认风险，再创建训练任务。',
+  'Loading runtime safety status...': '正在加载 Runtime 安全状态...',
+  'Safety guard is active: degraded training output is blocked.':
+    '安全保护已开启：已阻止降级训练输出。',
+  'Risk confirmed: this launch may return degraded output when local execution fails.':
+    '已确认风险：当本地执行失败时，本次启动可能返回降级输出。',
+  'Safety guard is off. Confirm risk acknowledgment before launch.':
+    '安全保护已关闭。请在启动前确认风险。',
+  'Resolve runtime settings first. Training launch stays blocked until safety status can be verified.':
+    '请先修复 Runtime 设置。训练启动会持续阻断，直到安全状态可验证。',
+  'Runtime safety guard is off': 'Runtime 安全保护已关闭',
+  'Runtime safety guard is active': 'Runtime 安全保护已开启',
+  'Version authenticity checks now use runtime safety guards. Built-in runner Python: {pythonBin}.':
+    '版本真实性检查已启用 Runtime 安全保护。内置 Runner Python：{pythonBin}。',
+  'This page may still show jobs with degraded output. Enable runtime safety guards before registration.':
+    '当前页面仍可能出现降级输出任务。注册前请先启用 Runtime 安全保护。',
+  'Linked training run contains degraded-output evidence. Review training job detail before production usage. Reason: {reason}':
+    '关联训练任务包含降级输出证据。生产使用前请先复核训练详情。原因：{reason}',
+  'Linked training run contains non-real execution evidence. Review training job detail before production usage.':
+    '关联训练任务包含非真实执行证据。生产使用前请先复核训练详情。',
+  'Includes degraded or non-real evidence. Review training and version details before production use.':
+    '包含降级或非真实执行证据。生产使用前请先复核训练与版本详情。',
+  'Only completed jobs with verified real execution can be registered as model versions.':
+    '只有完成且通过真实执行校验的训练任务，才可注册为模型版本。',
+  '{count} completed jobs are hidden because they were not completed through local execution path.':
+    '有 {count} 个已完成任务因非本地执行路径而被隐藏。',
+  'Checking training job authenticity...': '正在检查训练任务真实性...',
+  'Jobs with degraded output are blocked': '含降级输出的任务已被阻断',
+  '{count} completed jobs are excluded because execution evidence is degraded or incomplete.':
+    '有 {count} 个已完成任务因执行证据降级或不完整而被排除。',
+  'Registration keeps authenticity checks on. Jobs with degraded output are blocked by default.':
+    '版本注册默认开启真实性检查，含降级输出的任务会被阻断。',
+  'Training and inference safety guards are reflected in this workspace. Built-in runner Python: {pythonBin}.':
+    '该页面已同步训练与推理的安全保护状态。内置 Runner Python：{pythonBin}。',
+  'This training detail may still include degraded-output evidence. Enable runtime safety guards before production approval.':
+    '该训练详情仍可能包含降级输出证据。生产审批前请先启用 Runtime 安全保护。',
+  'Surface degraded outputs early so production decisions stay safe.':
+    '尽早暴露降级输出，保障生产决策安全。',
+  'Non-real training outputs': '非真实训练输出',
+  'Degraded training': '降级训练',
+  'Degraded training (24h)': '降级训练（24h）',
+  'Terminal training jobs with degraded output in the last 24 hours.':
+    '最近 24 小时内出现降级输出的终态训练任务数量。',
+  'Terminal jobs with degraded or incomplete execution evidence.': '终态任务中存在降级或不完整执行证据。',
+  'Fallback inference runs': '降级推理运行',
+  'Degraded inference': '降级推理',
+  'Degraded inference (24h)': '降级推理（24h）',
+  'Degraded inference runs': '降级推理运行',
+  'Inference runs marked as fallback/template/mock output.': '被标记为回退/模板/mock 输出的推理运行。',
+  'Inference runs marked as degraded output.': '被标记为降级输出的推理运行。',
+  'Share of inference runs without degraded-output markers.':
+    '推理运行中未出现降级输出标记的占比。',
+  'Inference runs with degraded output in the last 24 hours.':
+    '最近 24 小时内出现降级输出的推理运行数量。',
+  'Top degradation reasons': '主要降级原因',
+  'Training degradation reasons': '训练降级原因',
+  'Inference degradation reasons': '推理降级原因',
+  'Inference degradation alerts': '推理降级告警',
+  'Local execution path': '本地执行路径',
+  'This launch may return degraded output when local execution command is unavailable. Enable the safety guard for production runs.':
+    '当本地执行命令不可用时，本次启动可能返回降级输出。生产运行前请开启安全保护。',
   'Open Runtime Settings': '打开 Runtime 设置',
+  'Runtime Profile': 'Runtime 配置档',
+  'Overwrite endpoints': '覆盖端点',
+  'Inference safety guard is active': '推理安全保护已开启',
+  'Inference safety guard is off': '推理安全保护未开启',
+  'Degraded inference output is blocked. Built-in runner Python: {pythonBin}.':
+    '降级推理输出已被阻止。内置 Runner Python：{pythonBin}。',
+  'Inference may still return degraded output when runtime or local execution fails. Enable the safety guard in Runtime settings before production validation.':
+    '当 Runtime 或本地执行失败时，推理仍可能返回降级输出。生产验证前请在 Runtime 设置中开启安全保护。',
+  'Inference safety guard': '推理安全保护',
+  'Training safety guard': '训练安全保护',
+  'Training safety guard is active': '训练安全保护已开启',
+  'Training safety guard is off': '训练安全保护未开启',
+  'Degraded training output is blocked. Built-in runner Python: {pythonBin}.':
+    '降级训练输出已被阻止。内置 Runner Python：{pythonBin}。',
+  'Training may return degraded output when local execution command is unavailable. Enable the safety guard in Runtime settings before production runs.':
+    '当本地执行命令不可用时，训练可能返回降级输出。生产运行前请在 Runtime 设置中开启安全保护。',
   'Inference strict fallback guard is active': '推理严格回退保护已开启',
   'Inference strict fallback guard is off': '推理严格回退保护未开启',
   'Inference fallback/template outputs are blocked. Bundled runner python: {pythonBin}.':
@@ -963,6 +1660,71 @@ const zhCN: Record<string, string> = {
     '模拟/模板训练回退已被阻止。内置 Runner Python：{pythonBin}。',
   'Training may fallback to simulated/template outputs when local runner command is unavailable. Enable strict guard in Runtime settings before production runs.':
     '当本地 Runner 命令不可用时，训练仍可能回退到模拟/模板输出。请在 Runtime 设置中开启严格保护后再进行生产训练。',
+  'Runtime first-run guide': 'Runtime 新手引导',
+  'Use this page to prepare runtime connectivity before real inference/training.':
+    '通过本页先完成 Runtime 连通性准备，再进入真实推理/训练。',
+  'Configure at least one framework': '至少配置一个框架',
+  'Complete endpoint or local command settings (or run auto-config) so framework checks can run.':
+    '先完成 endpoint 或本地命令配置（或运行自动配置），让框架检查可执行。',
+  'Open runtime configuration': '打开 Runtime 配置',
+  'Activate runtime profile': '激活 Runtime Profile',
+  'Switch active runtime profile so checks and execution follow the intended target.':
+    '切换当前激活的 Runtime Profile，让检查和执行都指向目标环境。',
+  'Activate profile': '激活 Profile',
+  'Pass readiness checks': '通过就绪检查',
+  'Resolve local environment issues and safety checks before production runs.':
+    '在生产运行前先解决本地环境问题，并完成安全检查。',
+  'Run readiness checks': '执行就绪检查',
+  'After readiness is green, run inference validation with real runtime output.':
+    '就绪状态通过后，进入推理验证并确认真实 Runtime 输出。',
+  'Runtime guide status is computed from runtime settings, profile activation, readiness report, and connectivity checks.':
+    'Runtime 引导完成度基于配置状态、Profile 激活、就绪报告与连通性检查实时计算。',
+  'Next runtime step': '下一步 Runtime 设置动作',
+  'Finish one clear runtime setup action here before switching to validation.':
+    '先完成一个明确的 Runtime 设置动作，再切换到验证流程。',
+  'LLM first-run guide': 'LLM 新手引导',
+  'Use this page to finish provider setup before relying on chat responses.':
+    '在依赖对话结果前，先通过本页完成 LLM 提供方配置。',
+  'Set provider endpoint and model': '设置提供方端点与模型',
+  'Use preset or manual input to keep Base URL and model explicit.':
+    '可使用预设或手动输入，确保 Base URL 与模型配置明确。',
+  'Open LLM configuration': '打开 LLM 配置',
+  'Save one API key': '保存一次 API Key',
+  'Save key once so later edits can reuse masked key without retyping.':
+    '先保存一次 key，后续编辑即可复用掩码 key，无需反复输入。',
+  'Enable custom LLM mode': '启用自定义 LLM 模式',
+  'Turn on custom mode so chat workspace uses your saved provider settings.':
+    '启用自定义模式后，对话工作区会使用你已保存的提供方配置。',
+  'Run connection test and continue to chat': '执行连接测试并继续对话',
+  'Verify connection first, then return to conversation workspace for real usage.':
+    '先验证连接，再回到对话工作区进行真实使用。',
+  'Guide status is computed from saved endpoint/model/key state plus latest connection test result.':
+    '引导完成度基于已保存的端点/模型/key 状态和最近一次连接测试结果计算。',
+  'Next LLM step': '下一步 LLM 设置动作',
+  'Finish one clear LLM setup action here before testing chat usage.':
+    '先完成一个明确的 LLM 设置动作，再去测试实际对话使用。',
+  'Account first-run guide': '账户新手引导',
+  'Use this page to secure access first, then continue to the next setup tabs.':
+    '先通过本页完成账号安全与身份确认，再继续后续设置。',
+  'Guide changes by role so new users only see the steps that matter now.':
+    '引导会根据角色变化，让新用户只看到当前真正相关的步骤。',
+  'Next account step': '下一步账户设置动作',
+  'Finish one clear account setup action here before moving to the next settings tab.':
+    '先完成一个明确的账户设置动作，再进入下一项设置。',
+  'Confirm signed-in identity': '确认当前登录身份',
+  'Check current username, role, and last-login context before changing settings.':
+    '在修改设置前，先确认当前用户名、角色与最近登录信息。',
+  'Review current account': '查看当前账户',
+  'Rotate password': '修改密码',
+  'Change password once so this account is ready for continued daily usage.':
+    '先完成一次密码修改，让当前账号适合持续日常使用。',
+  'Review account directory': '检查账户目录',
+  'Admins should confirm account list, status safety rules, and provisioning path.':
+    '管理员应先确认账号列表、状态安全规则与开通路径。',
+  'Open account directory': '打开账户目录',
+  'Continue to next settings tab': '继续下一项设置',
+  'After account basics are ready, continue with LLM or Runtime setup.':
+    '账户基础准备完成后，继续进入 LLM 或 Runtime 设置。',
   'Filter the diagnostics surface and rerun selected checks without leaving the page.':
     '无需离开当前页面，就能筛选诊断视图并重新执行选定检查。',
   'Execution watch': '执行观察',
@@ -990,6 +1752,8 @@ const zhCN: Record<string, string> = {
     'Runtime 返回非 200 状态，请检查端点路径与鉴权。',
   'Runtime payload shape is incompatible. Check response JSON contract.':
     'Runtime payload 结构不兼容，请检查响应 JSON 契约。',
+  'Runtime response format is incompatible. Verify endpoint response fields.':
+    'Runtime 返回格式不兼容，请检查端点响应字段。',
   'No connectivity error.': '没有连通性错误。',
   'Unknown runtime error. Check runtime logs for details.': '未知 Runtime 错误，请查看运行日志详情。',
   'Environment Variables': '环境变量',
@@ -1000,6 +1764,10 @@ const zhCN: Record<string, string> = {
   'Predict request payload': '预测请求载荷',
   'Predict Response Payload (expected minimal shape)': '预测响应载荷（期望最小结构）',
   'Predict response payload': '预测响应载荷',
+  'Prediction request example (from Vistral)': '预测请求示例（来自 Vistral）',
+  'Prediction request example': '预测请求示例',
+  'Prediction response example (expected minimum fields)': '预测响应示例（期望最小字段）',
+  'Prediction response example': '预测响应示例',
   optional: '可选',
   'Refresh All': '刷新全部',
   'Check Selected': '检查当前选择',
@@ -1009,6 +1777,9 @@ const zhCN: Record<string, string> = {
   'Runtime Integration Templates': 'Runtime 接入模板',
   'Executable snippets for framework runtime adapters. Use this to align payload contracts quickly.':
     '面向框架 Runtime 适配器的可执行片段，可用于快速对齐 payload 契约。',
+  'Runtime connection examples': 'Runtime 连接示例',
+  'Copy example snippets for endpoint setup, health checks, and request/response field alignment.':
+    '复制端点配置、健康检查和请求/响应字段对齐示例。',
   'Recent Execution Summary': '近期执行摘要',
   'Loading Summary': '加载摘要中',
   'Collecting recent training and inference execution sources.': '正在汇总近期训练与推理执行来源。',
@@ -1093,6 +1864,8 @@ const zhCN: Record<string, string> = {
   'Bootstrap draft': '配对草稿',
   'Docker-first by default. These fields define the pairing token and startup template.':
     '默认优先使用 Docker。这里的字段会决定配对令牌与启动模板。',
+  'Docker-first by default. These fields define the pairing token and startup command preset.':
+    '默认优先使用 Docker。这里的字段会决定配对令牌与启动命令预设。',
   'Worker public host / IP': 'Worker 对外主机 / IP',
   'Worker bind port': 'Worker 绑定端口',
   'Max concurrency': '最大并发',
@@ -1142,6 +1915,7 @@ const zhCN: Record<string, string> = {
   'Recommended path for remote worker nodes. Starts the worker directly in setup mode.':
     '推荐给远端 worker 节点使用，可直接以 setup 模式启动 worker。',
   'Script fallback': '脚本备用方案',
+  'Script startup alternative': '脚本启动备选',
   'Use this when the operator already has the repository and wants a shell-only path.':
     '如果操作者已拿到仓库并且只想走 shell 路径，可使用这里的脚本方案。',
   'Worker-local finish': 'Worker 本地收尾',
@@ -1172,7 +1946,9 @@ const zhCN: Record<string, string> = {
   Workers: 'Worker 数量',
   'Loading Workers': '加载 Worker 中',
   'Collecting training worker score and health signals.': '正在收集训练 Worker 的评分与健康信号。',
+  'Collecting worker status and recent activity.': '正在收集 Worker 状态与近期活动。',
   'Worker scheduler observability is visible to administrators only.': '仅管理员可查看 Worker 调度观测信息。',
+  'Worker management is visible to administrators only.': '仅管理员可查看 Worker 管理信息。',
   'Worker list unavailable': 'Worker 列表不可用',
   'No workers': '暂无 Worker',
   'No training workers are currently registered in the control plane.':
@@ -1190,6 +1966,18 @@ const zhCN: Record<string, string> = {
   'scheduler note': '调度说明',
   'Adjust endpoint, scheduler status, or capacity without leaving the runtime page.':
     '无需离开 Runtime 页面，即可调整端点、调度状态或容量配置。',
+  'Use this drawer to inspect worker status and apply targeted changes without leaving the main list.':
+    '在这个抽屉中查看 Worker 状态并执行针对性操作，无需离开主列表。',
+  'Worker health': 'Worker 健康状态',
+  Healthy: '健康',
+  'Needs attention': '需关注',
+  'Limited telemetry': '监控数据有限',
+  'Advanced diagnostics': '高级诊断',
+  'Scheduler score': '调度评分',
+  'Scheduler penalty / bonus': '调度惩罚 / 加分',
+  'Registration source': '注册来源',
+  'Open the main worker inventory to inspect heartbeat, load, and worker health detail.':
+    '打开主 Worker 列表，查看心跳、负载与健康状态详情。',
   'Manually register an existing worker endpoint when you do not need the guided pairing flow.':
     '若不需要引导式配对流程，也可以手动注册已有的 worker 端点。',
   Registration: '注册来源',
@@ -1227,6 +2015,7 @@ const zhCN: Record<string, string> = {
   'No check data yet.': '暂无检查数据。',
   'Run {runId} · Task {task} · Framework {framework}': '运行 {runId} · 任务 {task} · 框架 {framework}',
   'runtime source': '运行来源',
+  'Execution Status': '执行状态',
   'runtime framework': '运行框架',
   'runner mode': 'Runner 模式',
   real: '真实',
@@ -1668,6 +2457,7 @@ const zhCN: Record<string, string> = {
   'Worker assigned': '已分配 Worker',
   'Awaiting worker assignment': '等待 Worker 分配',
   'Local fallback': '本地兜底执行',
+  'Local execution lane': '本地执行通道',
   Score: '评分',
   Load: '负载',
   Penalty: '惩罚',
@@ -1749,23 +2539,62 @@ const zhCN: Record<string, string> = {
   dispatch_redispatch: '重新派发',
   dispatch_fallback: '降级回退',
   'Open from training jobs list.': '请从训练任务列表页进入。',
+  'Annotation Lane': '标注工作线',
   'Annotation Workspace': '标注工作区',
+  'Task {task}. Keep one sample in focus and move it through annotation and review.':
+    '任务类型：{task}。在这里聚焦处理一个样本，并把它推进到标注与复核流程中。',
+  'Task {task} · Version {version}. Keep one sample in focus and move it through annotation and review.':
+    '任务类型：{task} · 当前版本：{version}。在这里聚焦处理一个样本，并把它推进到标注与复核流程中。',
+  'Review queue status, annotate items, and complete approvals in one flow.':
+    '在一个工作流里查看队列状态、完成标注，并推进审核决策。',
+  Queue: '队列',
+  Visible: '可见',
+  Approved: '已通过',
+  Rejected: '已拒绝',
+  'Back to Dataset': '返回数据集',
   'Annotation Queue': '标注队列',
+  'Queue summary': '队列概览',
+  'All splits': '全部切分',
+  'More filters': '更多筛选',
+  'Hide extra filters': '收起额外筛选',
+  'Search filename': '搜索文件名',
+  'Filter metadata/tag (supports key=value)': '筛选元数据或标签（支持 key=value）',
+  'Clear filters': '清空筛选',
+  'Queue filters cleared.': '队列筛选已清空。',
+  'No active queue filters': '当前没有启用中的筛选条件。',
+  'Metadata quick filters': '元数据快捷筛选',
+  'Low-confidence samples': '低置信样本',
+  'Low-confidence signals': '低置信信号',
+  'Only low-confidence': '只看低置信样本',
+  'Tag · low_confidence': '标签 · 低置信',
+  'Show full queue': '显示完整队列',
+  'No Matching Model Version': '暂无匹配模型版本',
+  'Register a model version with same task type before pre-annotation.':
+    '请先准备同任务类型的模型版本，再执行预标注。',
+  'This review workbench needs dataset samples first. Upload files and build the queue from dataset detail.':
+    '这个复核工作台需要先有数据集样本。请先在数据集详情页上传文件并生成队列。',
+  'Open scoped jobs': '打开当前范围训练任务',
+  'Feedback Return': '回流样本',
+  'Feedback reason · {value}': '回流原因 · {value}',
   'Visible items {visible} / {total}': '当前可见条目 {visible} / {total}',
   'Queue position {current} / {total}': '队列位置 {current} / {total}',
+  'Queue {current} / {total}': '队列 {current} / {total}',
   'No item selected in current queue.': '当前队列尚未选中条目。',
   'Queue shortcuts: J next · K previous': '队列快捷键：J 下一条 · K 上一条',
+  'Need shortcuts or saved points? Open workspace tools.': '需要查看快捷键或返回点时，可打开工作台工具。',
+  'Queue Focus': '当前队列定位',
   'Previous Item': '上一条',
   'Next Item': '下一条',
+  Remaining: '剩余',
   'In-review queue {current} / {total}': '审核中队列 {current} / {total}',
   'Remaining after current: {count}': '当前条目之后剩余：{count}',
   'Reject reason is required for reject actions.': '执行拒绝时必须选择拒绝原因。',
   'Optional review metadata': '可选审核信息',
   'Review shortcuts: A approve · R reject': '审核快捷键：A 通过 · R 拒绝',
   'Review shortcuts: A approve-next · R reject-next': '审核快捷键：A 通过下一条 · R 拒绝下一条',
-  'Review saved. {count} items remain in in_review queue.': '审核已保存，in_review 队列还剩 {count} 条。',
-  'In-review queue cleared. Great job.': 'in_review 队列已清空，做得很好。',
-  'In-review queue is clear.': 'in_review 队列已清空。',
+  'Review saved. {count} items remain in in_review queue.': '审核已保存，待复核队列还剩 {count} 条。',
+  'In-review queue cleared. Great job.': '待复核队列已清空，做得很好。',
+  'In-review queue is clear.': '待复核队列已清空。',
   'Open Needs Work Queue': '打开待处理队列',
   'Open Rejected Queue': '打开已拒绝队列',
   'Open Approved Queue': '打开已通过队列',
@@ -1774,32 +2603,136 @@ const zhCN: Record<string, string> = {
   'Open Approved Queue ({count})': '打开已通过队列（{count}）',
   'Follow-up shortcuts: press 1 / 2 / 3 to open visible queues.': '后续快捷键：按 1 / 2 / 3 打开当前可见队列。',
   'Switched to {queue} queue.': '已切换到 {queue} 队列。',
+  'In-review queue cleared. Switched to {queue}.': '待复核队列已清空，已切换到 {queue}。',
+  'In-review queue cleared. No follow-up queues with pending items.': '待复核队列已清空，当前没有可跟进的后续队列。',
   'Shortcut {key}': '快捷键 {key}',
   'No follow-up queues with pending items.': '当前没有可继续处理的后续队列。',
   'All submitted items are now processed. Switch queue filters for follow-up.':
     '当前提交审核的条目都已处理完，可切换其他队列继续跟进。',
   'All items': '全部条目',
+  'Visible items': '可见条目',
+  'History 0/0': '历史 0/0',
+  'History {current}/{total}': '历史 {current}/{total}',
+  'Review Session History': '复核会话历史',
+  'Session history is auto-saved per dataset/version on this browser.':
+    '当前浏览器会按数据集/版本自动保存复核会话历史。',
+  Latest: '最近一次',
+  Reopen: '重新打开',
+  'Reopen + Context': '重新打开并恢复上下文',
+  'Previous Reviewed': '上一条已复核',
+  'Next Reviewed': '下一条已复核',
+  'History shortcuts: Alt+, previous · Alt+. next': '历史快捷键：Alt+, 上一条 · Alt+. 下一条',
+  'Reopen with saved queue context': '重新打开时恢复保存的队列上下文',
   'Open from dataset detail page.': '请从数据集详情页进入。',
   'No dataset item selected': '未选择数据集条目',
+  'Current sample': '当前样本',
   'File unavailable': '文件暂不可用',
   'Select Item': '选择条目',
   Annotate: '标注',
   'Editing Locked': '编辑已锁定',
   'This annotation is locked while review is in progress.': '该标注正在审核中，当前不可编辑。',
-  'Move rejected annotation back to in_progress before editing again.': '请先将拒绝标注移回 in_progress，再继续编辑。',
+  'Move rejected annotation back to in_progress before editing again.': '请先将已拒绝标注移回进行中，再继续编辑。',
   'Approved annotations are read-only in this workspace.': '已通过的标注在当前工作区中为只读。',
   'Requested dataset is unavailable.': '请求的数据集不可用。',
   'Preparing annotation workspace.': '准备标注工作区中。',
   'Back to Dataset Detail': '返回数据集详情',
+  'Annotation Controls': '标注控制区',
+  'Workspace actions': '工作台动作',
+  'Run pre-annotation, refresh this lane, or open adjacent workflow pages.':
+    '在这里执行预标注、刷新当前工作线，或跳转到相邻工作页面。',
+  'Keep queue prep, pre-annotation, and workspace navigation together before entering the review lane.':
+    '把队列准备、预标注和工作区跳转收纳在同一区域，再进入复核主流程。',
+  'Open workspace tools': '打开工作台工具',
+  'Hide workspace tools': '收起工作台工具',
+  'Workspace tools': '工作台工具',
+  'Advanced shortcuts, review-session tracking, and return points stay here so the main workbench can stay focused.':
+    '快捷键、复核会话追踪和返回点等高阶工具收纳在这里，让主工作面保持聚焦。',
+  'Auto-switch to follow-up queue when review queue is empty': '当待复核队列清空后自动切换到后续队列',
+  'Open shortcut guide': '打开快捷键说明',
+  'Hide shortcut guide': '收起快捷键说明',
+  'Session reviewed': '本次会话已复核',
+  'Session start': '会话开始',
+  'Last review': '最近一次复核',
+  'Avg/review': '平均每次复核',
+  'Reset Session Counter': '重置会话计数',
+  'Shortcut actions auto-advance to next sample': '快捷操作后自动进入下一条样本',
+  'Shortcut auto-advance enabled.': '已开启快捷操作自动跳转。',
+  'Shortcut auto-advance disabled.': '已关闭快捷操作自动跳转。',
+  'Toggle shortcut auto-advance': '切换快捷操作自动跳转',
+  'Auto-switch after in_review clear enabled.': '已开启待复核队列清空后的自动切换。',
+  'Auto-switch after in_review clear disabled.': '已关闭待复核队列清空后的自动切换。',
+  'Set Return Point': '设置返回点',
+  'Return To Point': '返回到保存点',
+  'Clear Return Points': '清空返回点',
+  'Reopen Last Reviewed': '重新打开最近复核样本',
+  'Return point': '返回点',
+  'Return point label': '返回点名称',
+  'Return point label cannot be empty.': '返回点名称不能为空。',
+  'Save current workspace point to slot 1': '把当前工作点保存到槽位 1',
+  'Return to saved workspace point': '返回到已保存的工作点',
+  'Return to workspace point slot 1/2/3': '返回到槽位 1/2/3 的工作点',
+  'Lock/unlock workspace return point slot 1': '锁定或解锁槽位 1 的工作点',
+  'No saved workspace return point yet.': '当前还没有已保存的工作点。',
+  'No saved workspace return point to lock.': '当前没有可锁定的工作点。',
+  'No saved workspace point in slot {slot}.': '槽位 {slot} 中没有保存的工作点。',
+  'Saved workspace point has no selectable item.': '保存的工作点没有可选样本。',
+  'Saved workspace point item is no longer available.': '保存的工作点对应样本已不可用。',
+  'Select a sample before saving workspace return point.': '请先选中一个样本，再保存工作点。',
+  'Returned to saved workspace point: {file}': '已返回保存的工作点：{file}',
+  'Workspace return point saved to slot 1.': '工作点已保存到槽位 1。',
+  'Workspace return point refreshed in slot 1.': '槽位 1 的工作点已刷新。',
+  'Workspace return point slot 1 locked.': '槽位 1 的工作点已锁定。',
+  'Workspace return point slot 1 unlocked.': '槽位 1 的工作点已解锁。',
+  'All return point slots are locked. Unlock one before saving a new point.':
+    '所有工作点槽位都已锁定，请先解锁一个槽位再保存新工作点。',
+  'Return': '返回',
+  Locked: '已锁定',
+  Unlocked: '未锁定',
+  Unlock: '解锁',
+  Lock: '锁定',
+  'Slot {slot}': '槽位 {slot}',
+  'Annotation Shortcut Guide': '标注快捷键说明',
+  'Move to next/previous sample in current queue': '在当前队列中切换上一条或下一条样本',
+  'Switch queue (all / needs_work / in_review / rejected / approved)':
+    '切换队列（全部 / 待处理 / 待复核 / 已拒绝 / 已通过）',
+  'Toggle low-confidence-only filter': '切换仅看低置信样本筛选',
+  'Jump to next low-confidence sample in current queue': '跳到当前队列中的下一条低置信样本',
+  'Clear queue filters': '清空队列筛选',
+  'Submit review when status is annotated': '当状态为已标注时提交审核',
+  'Toggle auto-switch after in_review queue clears': '切换“待复核队列清空后自动跳转”',
+  'Reopen latest reviewed sample in session': '重新打开本次会话中最近复核的样本',
+  'Reopen latest reviewed sample with saved queue context': '重新打开最近复核样本并恢复保存的队列上下文',
+  'Open previous/next reviewed sample in history': '打开历史中的上一条或下一条已复核样本',
+  'Focus queue search input': '聚焦队列搜索框',
+  'Focus metadata filter input': '聚焦元数据筛选框',
+  'Approve or reject while in_review': '在待复核状态下执行通过或拒绝',
+  'Set reject reason quickly while in_review': '在待复核状态下快速设置拒绝原因',
+  Tip: '提示',
+  'Enable auto-switch in toolbar to jump to next non-empty queue after in_review is cleared.':
+    '可在工具区开启自动跳转，在待复核队列清空后自动进入下一个非空队列。',
+  'Press ? to toggle this panel, Esc to close it.': '按 ? 打开或关闭本面板，按 Esc 关闭。',
+  'Ctrl/Cmd': 'Ctrl/Cmd',
   'Run Pre-Annotation': '执行预标注',
   'Upload dataset files first.': '请先上传数据集文件。',
   'Annotation Canvas': '标注画布',
   'OCR Text Lines': 'OCR 文本行',
+  'Saved lines': '已保存文本行',
+  'Type one line from the image, then add it to the current sample.':
+    '先输入图片里的一行文字，再把它加入当前样本。',
   'Line Text': '文本行',
+  'Enter text from the image': '输入图片中的文字',
   Confidence: '置信度',
   'Region Binding': '区域绑定',
+  'OCR optional fields': 'OCR 可选项',
+  Configured: '已设置',
+  'Confidence (optional)': '置信度（可选）',
+  'Link to region (optional)': '绑定区域（可选）',
+  'Linked region': '已绑定区域',
+  'No linked region': '未绑定区域',
   'Add OCR Line': '添加 OCR 行',
   'No OCR Lines': '暂无 OCR 行',
+  'No OCR Lines Yet': '还没有 OCR 文本行',
+  'Add the first text line you want to keep from this image.': '先添加这张图中你要保留的第一行文本。',
   'Add OCR text lines and optionally bind to regions.': '添加 OCR 文本行，并可选绑定到区域。',
   region: '区域',
   confidence: '置信度',
@@ -1807,32 +2740,145 @@ const zhCN: Record<string, string> = {
   'Segmentation Polygon Canvas': '分割多边形画布',
   'Annotation Actions': '标注操作',
   'No annotation yet for selected item.': '当前条目尚无标注。',
+  'Annotation updated': '标注更新时间',
+  'Sample Review Workbench': '当前样本摘要',
+  'No tags': '暂无标签',
+  'Key sample fields': '关键样本字段',
+  'No extra sample fields': '当前样本没有额外字段。',
+  'Operational metadata': '样本字段',
+  'Showing {count} metadata fields.': '当前仅展示前 {count} 个元数据字段。',
+  'Inference run': '推理运行',
+  'Feedback reason': '回流原因',
+  'Source attachment': '来源附件',
+  'Imported attachment': '导入附件',
+  'Original filename': '原始文件名',
+  'Latest review': '最近复核结论',
+  'Review time': '复核时间',
+  'Prediction Compare': '预测对比',
+  'pre_annotation source': '预标注结果',
+  'No prediction source': '暂无预测来源',
+  'Show annotation overlay': '显示标注覆盖层',
+  'Show prediction overlay': '显示预测覆盖层',
+  'Only low-confidence pre-annotation candidates': '仅查看低置信预标注候选',
+  'Prediction confidence threshold': '预测置信阈值',
+  'Visible prediction candidates': '当前可见预测候选',
+  'Low-confidence candidates': '低置信候选',
+  'Showing first {count} prediction candidates.': '当前仅展示前 {count} 个预测候选。',
+  'below threshold': '低于阈值',
+  'Use in OCR editor': '填入 OCR 编辑器',
+  'Focus Next Low-confidence Item': '定位下一条低置信样本',
+  'Tag Sample as Low-confidence': '标记为低置信样本',
+  'Remove Low-confidence Tag': '移除低置信标记',
+  'Low-confidence tag': '低置信标签',
+  'Open Inference Validation': '打开推理验证',
+  'Use this panel to compare pre-annotation output with your current annotation.':
+    '通过这个面板对比预标注结果与当前标注内容。',
+  'Prediction compare becomes available after pre-annotation or prediction feedback is attached to this sample.':
+    '当样本带有预标注或预测回流结果后，这里会出现预测对比能力。',
+  'Current queue only keeps low-confidence pre-annotation samples.':
+    '当前队列只保留低置信度的预标注样本。',
+  'Queue is currently filtered to low-confidence samples only.':
+    '当前队列已切换为“仅看低置信样本”。',
+  'Current sample already carries pre-annotation output and can be reviewed here.':
+    '当前样本已经带有预标注结果，可直接在这里对比复核。',
+  'Run pre-annotation first if you want prediction overlay and low-confidence triage here.':
+    '如果希望在这里使用预测覆盖层和低置信分流，请先执行预标注。',
+  'Prediction line loaded into OCR editor. Adjust and add it as needed.':
+    '预测文本行已载入 OCR 编辑器，可继续调整后加入标注。',
+  'Selected sample tagged as low-confidence triage.': '已将当前样本标记为低置信分流。',
+  'Low-confidence triage tag removed from selected sample.': '已移除当前样本的低置信分流标记。',
+  'Low-confidence-only filter enabled.': '已开启仅看低置信样本筛选。',
+  'Low-confidence-only filter disabled.': '已关闭仅看低置信样本筛选。',
+  'No additional low-confidence sample found in current queue.': '当前队列中没有更多低置信样本。',
+  'Moved to next low-confidence sample in current queue.': '已跳转到当前队列中的下一条低置信样本。',
+  'No low-confidence prediction signals in the current filtered queue.':
+    '当前筛选后的队列中没有低置信预测信号。',
+  'Low-confidence Radar': '低置信雷达',
+  'Low conf': '低置信',
+  'Open sample': '打开样本',
+  'Review actions': '复核动作',
+  'Approve or reject only after the selected annotation enters review.':
+    '只有当当前标注进入待复核后，才能在这里执行通过或拒绝。',
+  'No review-ready annotation': '当前还没有可复核的标注',
+  'Create or update annotation first, then come back here to review it.':
+    '请先完成或更新标注，随后回到这里执行复核。',
+  'Waiting for review submission': '等待进入复核',
+  'Submit the current annotation for review before using these actions.':
+    '请先把当前标注提交到复核队列，再使用这里的动作。',
   'Latest Review Context': '最近一次审核上下文',
+  'Latest review snapshot': '最近一次复核快照',
   'No review comment yet.': '当前还没有审核备注。',
+  'Review session summary': '复核会话摘要',
+  'Saved workspace points': '已保存工作点',
+  'Use Page tips for the full walkthrough.': '如需完整引导，可随时使用右上角的 Page tips。',
+  'Review reason: {reason}': '退回原因：{reason}',
+  'Contains {count} low-confidence prediction signals.': '包含 {count} 个低置信预测信号。',
+  'Open this sample to continue annotation or review.': '打开该样本后可继续标注或复核。',
   'Undo Last Change': '撤销上一步',
   'Save In Progress': '保存为进行中',
+  'Save as in_progress': '保存为进行中',
+  'Save In Progress & Next': '保存为进行中并切到下一条',
   'Mark Annotated': '标记为已标注',
+  'Mark as annotated': '标记为已标注',
+  'Mark Annotated & Next': '标记为已标注并切到下一条',
   'Annotation saved as {status}.': '标注已保存为 {status}。',
+  'Annotation saved as {status}. Continued to next item.': '标注已保存为 {status}，并已进入下一条样本。',
+  'Annotation saved as {status}. No more items in current queue.': '标注已保存为 {status}，当前队列已无更多样本。',
   'Submit Review': '提交审核',
+  'Submit Review & Next': '提交审核并切到下一条',
+  'Suggested order: save progress -> mark annotated -> submit review.':
+    '建议顺序：先保存进行中，再标记为已标注，最后提交复核。',
+  'Keep editing': '继续编辑',
+  'Use these actions while you are still refining this sample.':
+    '当你还在完善当前样本时，优先使用这一组动作。',
+  'Move forward': '推进流程',
+  'When this sample is ready, move it into the next workflow stage.':
+    '当当前样本准备好后，用这一组动作把它推进到下一阶段。',
+  'Approve sample': '通过当前样本',
+  'Use this path when the current annotation is ready to pass review.':
+    '当当前标注已经可以通过复核时，使用这一条路径。',
+  'Send back for fixes': '退回修改',
+  'Choose one reason before sending this sample back for another edit pass.':
+    '在退回当前样本前，先选择一个原因，方便下一轮修改。',
   'No Annotation': '无标注',
   'Create or update annotation first.': '请先创建或更新标注。',
   'Not In Review': '未进入审核',
-  'Move annotation to in_review before approve/reject.': '请先将标注提交到 in_review 再执行通过/拒绝。',
+  'Move annotation to in_review before approve/reject.': '请先将标注提交到待复核，再执行通过或拒绝。',
   'Quality Score': '质量评分',
   'Reject Reason': '拒绝原因',
   'Review Comment': '审核备注',
   'Move Rejected Annotation Back to In Progress': '将拒绝标注移回进行中',
   'Select a reject reason before rejecting this annotation.': '拒绝该标注前请先选择原因。',
+  'Review shortcuts and optional notes': '快捷键与可选备注',
   'Switch queue filters or run pre-annotation to continue.': '可切换队列筛选，或先执行预标注后继续。',
+  'Upload sample files first, then come back here to annotate and review them.':
+    '请先上传样本文件，再回到这里进行标注和复核。',
+  'Try another queue or run pre-annotation to bring more samples into this lane.':
+    '可以切换到其他队列，或先执行预标注，把更多样本带入当前工作线。',
   'OCR line text cannot be empty.': 'OCR 文本内容不能为空。',
   'OCR confidence must be a valid number.': 'OCR 置信度必须是有效数字。',
   'Annotation {annotationId} saved as {status}.': '标注 {annotationId} 已保存为 {status}。',
   'Annotation submitted for review.': '标注已提交审核。',
   'Annotation {status}.': '标注状态：{status}。',
   'Annotation {status}. Continued to next in-review item.': '标注已{status}，已进入下一条审核中条目。',
-  'Annotation {status}. No more items in in_review queue.': '标注已{status}，当前 in_review 队列已无更多条目。',
+  'Annotation {status}. No more items in in_review queue.': '标注已{status}，当前待复核队列已无更多条目。',
+  'Annotation submitted for review. Continued to next item.': '标注已提交审核，并已进入下一条样本。',
+  'Annotation submitted for review. No more items in current queue.': '标注已提交审核，当前队列已无更多样本。',
   'Pre-annotation completed. created {created}, updated {updated}.': '预标注完成：新增 {created}，更新 {updated}。',
-  'Rejected annotation moved back to in_progress.': '已将拒绝标注移回 in_progress。',
+  'Rejected annotation moved back to in_progress.': '已将拒绝标注移回进行中。',
+  'More review context': '更多复核上下文',
+  'Open queue position, review history, and low-confidence triage only when you need more context.':
+    '当你需要更多上下文时，再展开查看队列位置、复核历史和低置信分流。',
+  '{count} reviewed in this session': '本次会话已复核 {count} 条',
+  '{count} samples need attention': '当前有 {count} 条样本需关注',
+  'Low-confidence item count': '低置信条目数',
+  'No reviewed sample in current session yet.': '当前会话里还没有已复核样本。',
+  'No reviewed samples in current session yet.': '当前会话里还没有已复核样本。',
+  'Reviewed sample is no longer available in current dataset.': '已复核样本在当前数据集中已不可用。',
+  'Reopened reviewed sample: {file}': '已重新打开复核样本：{file}',
+  'Reopened reviewed sample with saved queue context: {file}': '已恢复队列上下文并重新打开复核样本：{file}',
+  'Reject reason set to {reason}.': '拒绝原因已设置为：{reason}',
+  'Reject reason shortcut: Shift+1..6': '拒绝原因快捷键：Shift+1..6',
   'Drag to create box. Click box to edit.': '拖拽创建框，点击框可编辑。',
   'Delete Selected Box': '删除已选框',
   'Clear All Boxes': '清空全部框',
@@ -1858,11 +2904,28 @@ const zhCN: Record<string, string> = {
   'Rotated Boxes': '旋转框',
   Polygons: '多边形',
   'OCR Lines': 'OCR 行',
+  'Verification reports first-run guide': '验收报告新手引导',
   'Admin Verification Reports': '管理验收报告',
   'Scanning deployment verification reports.': '扫描部署验收报告中。',
   'Only admin can view deployment verification reports.': '仅管理员可查看部署验收报告。',
   'No Reports Yet': '暂无报告',
   'Run docker verification scripts to generate reports.': '请运行 docker 验证脚本生成报告。',
+  'Use this page to filter deployment evidence, focus failed checks, and export the exact report slice needed for release governance.':
+    '通过这个页面筛选部署证据、聚焦失败检查，并导出发布治理所需的精确报告切片。',
+  'Guide status is computed from loaded reports, active filters, and export-ready evidence on the current page.':
+    '引导完成度基于已加载报告、当前激活的筛选条件以及本页可导出的证据计算。',
+  'Load deployment evidence': '加载部署证据',
+  'Start by confirming deployment verification reports are present so release review is grounded in recorded evidence.':
+    '先确认部署验收报告已经存在，让发布评审建立在真实记录的证据之上。',
+  'Review reports': '查看报告',
+  'Filter failed or scoped results': '筛选失败项或目标范围',
+  'Use keyword, status, base URL, and date controls to narrow evidence down to the release slice you actually need.':
+    '使用关键词、状态、Base URL 和日期控制，把证据范围收敛到你当前真正需要的发布切片。',
+  'Filter reports': '筛选报告',
+  'Export governance evidence': '导出治理证据',
+  'Once the current slice is correct, export the filtered JSON or continue into audit logs for broader governance follow-up.':
+    '当当前切片已正确时，可导出筛选后的 JSON，或继续进入审计日志做更广的治理跟进。',
+  'Export evidence': '导出证据',
   'metrics rows': '指标行数',
   Refresh: '刷新',
   'Reports generated by `docker:verify:full` are collected from server runtime data.':
@@ -1905,6 +2968,10 @@ const zhCN: Record<string, string> = {
   'No checks to show for current filter.': '当前筛选条件下无可展示检查项。',
   '{label} copied.': '{label} 已复制。',
   'Copy failed: {message}': '复制失败：{message}',
+  from: '来自',
+  queue: '队列',
+  slot: '槽位',
+  needs_work: '待处理',
   uploading: '上传中',
   processing: '处理中',
   ready: '就绪',

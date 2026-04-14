@@ -25,7 +25,7 @@ echo "[setup-real-training-env] upgrading pip/setuptools/wheel"
 "${PIP_BIN}" install --upgrade pip setuptools wheel
 
 echo "[setup-real-training-env] installing real runtime dependencies"
-"${PIP_BIN}" install "numpy<2" ultralytics paddleocr python-doctr
+"${PIP_BIN}" install "numpy<2" "paddlepaddle==3.2.0" "paddleocr==3.4.0" ultralytics python-doctr
 
 mkdir -p "${MODELS_DIR}"
 
@@ -42,12 +42,12 @@ fi
 
 if [[ ! -f "${YOLO_MODEL_PATH}" ]]; then
   echo "[setup-real-training-env] warning: YOLO model file is missing at ${YOLO_MODEL_PATH}"
-  echo "[setup-real-training-env] place a yolo11n-compatible weight file there or set VISTRAL_YOLO_MODEL_PATH manually."
+  echo "[setup-real-training-env] place a yolo11n-compatible weight file there or set YOLO_LOCAL_MODEL_PATH manually."
 fi
 
 echo "[setup-real-training-env] DONE"
 echo "[setup-real-training-env] next:"
 echo "  export PATH=\"${ROOT_DIR}/${VENV_DIR}/bin:\$PATH\""
-echo "  export VISTRAL_YOLO_MODEL_PATH=\"${ROOT_DIR}/${YOLO_MODEL_PATH}\""
+echo "  export YOLO_LOCAL_MODEL_PATH=\"${ROOT_DIR}/${YOLO_MODEL_PATH}\""
 echo "  npm run doctor:real-training-readiness"
 echo "  npm run smoke:runner-real-positive"

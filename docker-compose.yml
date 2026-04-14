@@ -4,7 +4,13 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api
       args:
-        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:20-alpine}
+        NODE_BASE_IMAGE: ${API_NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:20-bookworm-slim}
+        DEBIAN_APT_MIRROR: ${API_DEBIAN_APT_MIRROR:-http://deb.debian.org/debian}
+        DEBIAN_APT_SECURITY_MIRROR: ${API_DEBIAN_APT_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
+        PIP_INDEX_URL: ${API_PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_EXTRA_INDEX_URL: ${API_PIP_EXTRA_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        PIP_TORCH_INDEX_URL: ${API_PIP_TORCH_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${API_PIP_TRUSTED_HOST:-}
     image: ${VISTRAL_API_IMAGE:-vistral-api:round1}
     container_name: vistral-api
     environment:
@@ -14,6 +20,20 @@ services:
       DEFAULT_USER_ID: ${DEFAULT_USER_ID:-u-1}
       DEFAULT_USER_PASSWORD: ${DEFAULT_USER_PASSWORD:-mock-pass}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-mock-pass-admin}
+      VISTRAL_PYTHON_BIN: ${VISTRAL_PYTHON_BIN:-/opt/vistral-venv/bin/python}
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: ${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}
+      VISTRAL_AUTO_BOOTSTRAP_YOLO_MODEL: ${VISTRAL_AUTO_BOOTSTRAP_YOLO_MODEL:-1}
+      VISTRAL_AUTO_BOOTSTRAP_PADDLEOCR_MODELS: ${VISTRAL_AUTO_BOOTSTRAP_PADDLEOCR_MODELS:-1}
+      VISTRAL_AUTO_BOOTSTRAP_DOCTR_MODELS: ${VISTRAL_AUTO_BOOTSTRAP_DOCTR_MODELS:-1}
+      VISTRAL_RUNTIME_BOOTSTRAP_BLOCKING: ${VISTRAL_RUNTIME_BOOTSTRAP_BLOCKING:-0}
+      VISTRAL_RUNTIME_BOOTSTRAP_TIMEOUT_MS: ${VISTRAL_RUNTIME_BOOTSTRAP_TIMEOUT_MS:-180000}
+      VISTRAL_RUNTIME_MODELS_ROOT: ${VISTRAL_RUNTIME_MODELS_ROOT:-/app/.data/runtime-models}
+      PADDLE_HOME: ${PADDLE_HOME:-/app/.data/runtime-models/paddle-home}
+      HF_HOME: ${HF_HOME:-/app/.data/runtime-models/hf-home}
+      DOCTR_CACHE_DIR: ${DOCTR_CACHE_DIR:-/app/.data/runtime-models/doctr-cache}
+      VISTRAL_DOCTR_PRESEEDED_MODELS_DIR: ${VISTRAL_DOCTR_PRESEEDED_MODELS_DIR:-/app/runtime-preseed/doctr}
+      VISTRAL_DOCTR_PRESEEDED_MODELS_URLS: ${VISTRAL_DOCTR_PRESEEDED_MODELS_URLS:-}
+      ULTRALYTICS_CONFIG_DIR: ${ULTRALYTICS_CONFIG_DIR:-/app/.data/runtime-models/ultralytics}
       PADDLEOCR_RUNTIME_ENDPOINT: ${PADDLEOCR_RUNTIME_ENDPOINT:-}
       PADDLEOCR_RUNTIME_API_KEY: ${PADDLEOCR_RUNTIME_API_KEY:-}
       DOCTR_RUNTIME_ENDPOINT: ${DOCTR_RUNTIME_ENDPOINT:-}
@@ -26,6 +46,7 @@ services:
       - "8787"
     volumes:
       - vistral-data:/app/.data
+      - ./runtime-assets/doctr-preseed:/app/runtime-preseed/doctr:ro
     healthcheck:
       test:
         [

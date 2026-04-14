@@ -10,3 +10,5 @@ vite.config.d.ts
 release/
 __pycache__/
 *.pyc
+runtime-assets/doctr-preseed/*
+!runtime-assets/doctr-preseed/.gitkeep

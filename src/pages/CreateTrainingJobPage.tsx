@@ -2,10 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { DatasetRecord, DatasetVersionRecord, RequirementTaskDraft } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
+import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
+import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
@@ -24,6 +28,7 @@ const curatedBaseModelCatalog = {
   yolo: ['yolo11n']
 } as const;
 const taskTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
+const createTrainingOnboardingDismissedStorageKey = 'vistral-create-training-onboarding-dismissed';
 
 type TrainingFramework = keyof typeof curatedBaseModelCatalog;
 const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
@@ -78,6 +83,9 @@ export default function CreateTrainingJobPage() {
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
   const preferredDatasetAppliedRef = useRef(false);
   const preferredVersionAppliedRef = useRef(false);
+  const jobNameInputRef = useRef<HTMLInputElement | null>(null);
+  const datasetVersionSelectRef = useRef<HTMLSelectElement | null>(null);
+  const currentStepCardRef = useRef<HTMLDivElement | null>(null);
   const draftAnnotationType = taskDraft?.recommended_annotation_type ?? taskDraft?.annotation_type ?? '';
 
   useEffect(() => {
@@ -336,7 +344,7 @@ export default function CreateTrainingJobPage() {
     if (runtimeSettingsError) {
       setFeedback({
         variant: 'error',
-        text: t('Runtime strict mode status is unavailable. Resolve runtime settings before creating this training job.')
+        text: t('Runtime safety status is unavailable. Resolve runtime settings before creating this training job.')
       });
       return;
     }
@@ -344,7 +352,7 @@ export default function CreateTrainingJobPage() {
     if (!runtimeSettingsLoading && !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed) {
       setFeedback({
         variant: 'error',
-        text: t('Runtime strict fallback guard is off. Confirm risk acknowledgment before creating this training job.')
+        text: t('Runtime safety guard is off. Confirm risk acknowledgment before creating this training job.')
       });
       return;
     }
@@ -443,17 +451,17 @@ export default function CreateTrainingJobPage() {
         : t('Launch readiness becomes available after a dataset version is selected.')
     },
     {
-      label: t('Runtime strict guard'),
+      label: t('Runtime safety guard'),
       done: strictLaunchGateReady && !runtimeSettingsLoading && !runtimeSettingsError,
       hint: runtimeSettingsLoading
-        ? t('Loading runtime strict mode status...')
+        ? t('Loading runtime safety status...')
         : runtimeSettingsError
           ? t('Runtime settings unavailable. Resolve Runtime settings before launch.')
           : runtimeDisableSimulatedTrainFallback
-            ? t('Strict guard is active: simulated/template fallback is blocked.')
+            ? t('Safety guard is active: degraded training output is blocked.')
             : nonStrictLaunchConfirmed
-              ? t('Risk confirmed: this launch may fallback to simulated/template outputs.')
-              : t('Strict guard is off. Confirm risk acknowledgment before launch.')
+              ? t('Risk confirmed: this launch may return degraded output when local execution fails.')
+              : t('Safety guard is off. Confirm risk acknowledgment before launch.')
     },
     {
       label: t('Params'),
@@ -472,7 +480,84 @@ export default function CreateTrainingJobPage() {
           : t('This run will be ready for final review after earlier steps are completed.')
     }
   ];
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'scope',
+        label: t('Confirm task and run scope'),
+        detail: t('Set job name, task type, and framework so this run has a clear target.'),
+        done: Boolean(name.trim()) && Boolean(framework),
+        to: '/training/jobs/new',
+        cta: t('Jump to task scope')
+      },
+      {
+        key: 'snapshot',
+        label: t('Bind dataset version snapshot'),
+        detail: t('Training launch must bind an explicit dataset version, not an implicit latest dataset state.'),
+        done: Boolean(selectedDatasetVersion),
+        to: selectedDataset ? `/datasets/${selectedDataset.id}` : '/datasets',
+        cta:
+          selectedDataset && datasetVersions.length > 0
+            ? t('Jump to snapshot step')
+            : selectedDataset
+              ? t('Open Dataset Detail')
+              : t('Manage Datasets')
+      },
+      {
+        key: 'readiness',
+        label: t('Pass launch readiness gates'),
+        detail: t('Dataset ready, train split available, and annotation coverage > 0 are required before launch.'),
+        done: launchReady,
+        to: scopedDatasetDetailPath,
+        cta: t('Check readiness source')
+      },
+      {
+        key: 'strict',
+        label: t('Confirm runtime safety guard'),
+        detail: t('If the safety guard is off, explicit risk confirmation is required before launch.'),
+        done: !runtimeSettingsLoading && !runtimeSettingsError && strictLaunchGateReady,
+        to: '/settings/runtime',
+        cta: t('Open Runtime Settings')
+      }
+    ],
+    [
+      framework,
+      launchReady,
+      name,
+      runtimeSettingsError,
+      runtimeSettingsLoading,
+      scopedDatasetDetailPath,
+      datasetVersions.length,
+      selectedDataset,
+      selectedDatasetVersion,
+      strictLaunchGateReady,
+      t
+    ]
+  );
+  const nextOnboardingStep = useMemo(
+    () => onboardingSteps.find((item) => !item.done) ?? null,
+    [onboardingSteps]
+  );
+  const nextOnboardingStepIndex = useMemo(
+    () => (nextOnboardingStep ? onboardingSteps.findIndex((item) => item.key === nextOnboardingStep.key) + 1 : 0),
+    [nextOnboardingStep, onboardingSteps]
+  );
 
+  const focusTaskScopeStep = () => {
+    setStep(0);
+    currentStepCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.setTimeout(() => {
+      jobNameInputRef.current?.focus();
+    }, 180);
+  };
+
+  const focusSnapshotStep = () => {
+    setStep(1);
+    currentStepCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.setTimeout(() => {
+      datasetVersionSelectRef.current?.focus();
+    }, 180);
+  };
   const renderStage = () => {
     if (step === 0) {
       return (
@@ -484,7 +569,7 @@ export default function CreateTrainingJobPage() {
           <div className="workspace-form-grid">
             <label className="workspace-form-span-2">
               {t('Training Job Name')}
-              <Input value={name} onChange={(event) => setName(event.target.value)} />
+              <Input ref={jobNameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
             </label>
             <label>
               {t('Task Type')}
@@ -533,6 +618,13 @@ export default function CreateTrainingJobPage() {
               variant="empty"
               title={t('No Matching Dataset')}
               description={t('Create dataset for selected task type first.')}
+              extra={
+                <div className="row gap wrap">
+                  <ButtonLink to="/datasets" variant="secondary" size="sm">
+                    {t('Open Datasets')}
+                  </ButtonLink>
+                </div>
+              }
             />
           ) : null}
           <div className="workspace-form-grid">
@@ -549,6 +641,7 @@ export default function CreateTrainingJobPage() {
             <label>
               {t('Dataset Version')}
               <Select
+                ref={datasetVersionSelectRef}
                 value={datasetVersionId}
                 onChange={(event) => setDatasetVersionId(event.target.value)}
                 disabled={!selectedDataset || versionsLoading || datasetVersions.length === 0}
@@ -726,9 +819,9 @@ export default function CreateTrainingJobPage() {
         {runtimeSettingsError ? (
           <Panel as="section" className="workspace-record-item compact" tone="soft">
             <div className="stack tight">
-              <strong>{t('Runtime strict mode status unavailable')}</strong>
+              <strong>{t('Runtime safety status unavailable')}</strong>
               <small className="muted">
-                {t('Resolve runtime settings first. Training launch stays blocked until strict status can be verified.')}
+                {t('Resolve runtime settings first. Training launch stays blocked until safety status can be verified.')}
               </small>
             </div>
             <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
@@ -739,10 +832,10 @@ export default function CreateTrainingJobPage() {
         {!runtimeSettingsLoading && !runtimeSettingsError && !runtimeDisableSimulatedTrainFallback ? (
           <Panel as="section" className="workspace-record-item compact" tone="soft">
             <div className="stack tight">
-              <strong>{t('Runtime strict fallback guard is off')}</strong>
+              <strong>{t('Runtime safety guard is off')}</strong>
               <small className="muted">
                 {t(
-                  'This launch may fallback to simulated/template outputs when local runner command is unavailable. Enable strict guard for production runs.'
+                  'This launch may return degraded output when local execution command is unavailable. Enable the safety guard for production runs.'
                 )}
               </small>
             </div>
@@ -808,7 +901,7 @@ export default function CreateTrainingJobPage() {
         runtimeSettingsError ? (
           <StateBlock
             variant="empty"
-            title={t('Runtime strict mode status unavailable')}
+            title={t('Runtime safety status unavailable')}
             description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
             extra={
               <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
@@ -819,23 +912,23 @@ export default function CreateTrainingJobPage() {
         ) : runtimeDisableSimulatedTrainFallback ? (
           <StateBlock
             variant="success"
-            title={t('Training strict fallback guard is active')}
+            title={t('Training safety guard is active')}
             description={t(
-              'Simulated/template training fallback is blocked. Bundled runner python: {pythonBin}.',
+              'Degraded training output is blocked. Built-in runner Python: {pythonBin}.',
               { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
             )}
             extra={
               <Badge tone={runtimeDisableInferenceFallback ? 'success' : 'warning'}>
-                {t('Inference strict')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
+                {t('Inference safety guard')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
               </Badge>
             }
           />
         ) : (
           <StateBlock
             variant="error"
-            title={t('Training strict fallback guard is off')}
+            title={t('Training safety guard is off')}
             description={t(
-              'Training may fallback to simulated/template outputs when local runner command is unavailable. Enable strict guard in Runtime settings before production runs.'
+              'Training may return degraded output when local execution command is unavailable. Enable the safety guard in Runtime settings before production runs.'
             )}
             extra={
               <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
@@ -936,7 +1029,62 @@ export default function CreateTrainingJobPage() {
         }
         main={
           <div className="workspace-main-stack">
-            <Card as="article">
+            <WorkspaceOnboardingCard
+              title={t('Training first-run guide')}
+              description={t('Use this page to launch reproducible training from dataset snapshots, not ad-hoc state.')}
+              summary={t('Guide status is computed from your current form and selected dataset version context.')}
+              storageKey={createTrainingOnboardingDismissedStorageKey}
+              steps={onboardingSteps.map((item) => ({
+                key: item.key,
+                label: item.label,
+                detail: item.detail,
+                done: item.done,
+                primaryAction: {
+                  to: item.to,
+                  label: item.cta,
+                  onClick:
+                    item.key === 'scope'
+                      ? focusTaskScopeStep
+                      : item.key === 'snapshot' && selectedDataset && datasetVersions.length > 0
+                        ? focusSnapshotStep
+                        : undefined
+                }
+              }))}
+	            />
+
+	            {nextOnboardingStep ? (
+	              <WorkspaceNextStepCard
+	                title={t('Next training setup step')}
+	                description={t('Finish one clear setup action here before launching the run.')}
+	                stepLabel={nextOnboardingStep.label}
+	                stepDetail={nextOnboardingStep.detail}
+	                current={nextOnboardingStepIndex}
+	                total={onboardingSteps.length}
+	                actions={
+	                  <div className="row gap wrap">
+	                    {nextOnboardingStep.key === 'scope' ? (
+	                      <Button type="button" variant="secondary" size="sm" onClick={focusTaskScopeStep}>
+	                        {t('Jump to task scope')}
+	                      </Button>
+	                    ) : nextOnboardingStep.key === 'snapshot' && selectedDataset && datasetVersions.length > 0 ? (
+	                      <Button type="button" variant="secondary" size="sm" onClick={focusSnapshotStep}>
+	                        {t('Jump to snapshot step')}
+	                      </Button>
+	                    ) : (
+	                      <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
+	                        {nextOnboardingStep.cta}
+	                      </ButtonLink>
+	                    )}
+	                    <ButtonLink to="/workspace/console" variant="ghost" size="sm">
+	                      {t('Back to Console')}
+	                    </ButtonLink>
+	                  </div>
+	                }
+	              />
+	            ) : null}
+
+            <div ref={currentStepCardRef}>
+              <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Current step')}
                 description={stepTitles[step]}
@@ -944,7 +1092,8 @@ export default function CreateTrainingJobPage() {
               />
               <small className="muted">{stepDescriptions[step]}</small>
               <StepIndicator steps={steps} current={step} />
-            </Card>
+              </Card>
+            </div>
             {renderStage()}
           </div>
         }
@@ -1008,6 +1157,21 @@ export default function CreateTrainingJobPage() {
                   variant="empty"
                   title={t('No requirement draft yet.')}
                   description={t('Use the assist card to convert a free-form requirement into a structured training starting point.')}
+                  extra={
+                    <WorkspaceFollowUpHint
+                      layout="inline"
+                      actions={
+                        <>
+                          <ButtonLink to="/workspace/chat" variant="secondary" size="sm">
+                            {t('Open Chat Workspace')}
+                          </ButtonLink>
+                          <ButtonLink to="/datasets" variant="ghost" size="sm">
+                            {t('Open Datasets')}
+                          </ButtonLink>
+                        </>
+                      }
+                    />
+                  }
                 />
               )}
             </Card>
@@ -1032,20 +1196,21 @@ export default function CreateTrainingJobPage() {
               </ul>
             </Card>
 
-            <Panel as="article" className="workspace-inspector-card">
-              <div className="stack tight">
-                <h3>{t('Launch lane')}</h3>
-                <small className="muted">{t('Keep the main training actions and supporting routes close together.')}</small>
-              </div>
-              <div className="workspace-button-stack">
-                <ButtonLink to={scopedDatasetDetailPath} variant="secondary" block>
-                  {selectedDataset ? t('Open scoped dataset') : t('Manage Datasets')}
-                </ButtonLink>
-                <ButtonLink to={scopedJobsPath} variant="secondary" block>
-                  {t('Open Training Jobs')}
-                </ButtonLink>
-              </div>
-            </Panel>
+            <WorkspaceActionPanel
+              title={t('Launch lane')}
+              description={t('Keep the main training actions and supporting routes close together.')}
+              surface="panel"
+              actions={
+                <>
+                  <ButtonLink to={scopedDatasetDetailPath} variant="secondary" block>
+                    {selectedDataset ? t('Open scoped dataset') : t('Manage Datasets')}
+                  </ButtonLink>
+                  <ButtonLink to={scopedJobsPath} variant="secondary" block>
+                    {t('Open Training Jobs')}
+                  </ButtonLink>
+                </>
+              }
+            />
           </div>
         }
       />

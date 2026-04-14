@@ -70,6 +70,9 @@ License file is not yet added in this baseline; add one before production distri
 ## Docker Quick Start
 1. `cp .env.example .env`
 2. `npm run docker:up`
+   - Optional pull retry tuning for unstable mirror/network:
+     - `DOCKER_PULL_RETRIES=5 npm run docker:up`
+     - `DOCKER_PULL_RETRY_DELAY_SECONDS=4 npm run docker:up`
 3. Open `http://127.0.0.1:8080`
 4. Run `npm run docker:healthcheck`
 5. Run `npm run docker:verify:full`
@@ -140,6 +143,7 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - when `EXPECTED_TRAINING_DATASET_ID` / `EXPECTED_TRAINING_DATASET_VERSION_ID` are not provided, it auto-prepares a trainable detection dataset/version target by default (`AUTO_PREPARE_TRAINING_TARGET=true`)
 - `npm run smoke:conversation-ops-bridge`
   - validates natural-language ops bridge end-to-end: intent routing, missing-field prompts, follow-up parameter completion, and high-risk confirmation gate
+  - default mode keeps high-risk branches non-mutating to avoid local data/runtime drift; set `SMOKE_OPS_BRIDGE_EXECUTE_MUTATIONS=true` to include final mutation execution checks
 - `npm run smoke:runtime-profile-activation`
   - validates runtime profile activation from env-provided profiles: profile list visibility, `active_profile_id` switch, and activated framework config projection in response view
 - `npm run smoke:inference-feedback-guard`
@@ -151,7 +155,7 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - `npm run smoke:no-seed-hardcoding`
   - guards against hardcoded seed entity ids (`d-*`, `dv-*`, `mv-*`, `f-*`, etc.) in smoke/verify scripts so deployment-mode tests stay portable
 - `npm run smoke:core-closure`
-  - runs the core closure suite (`no-seed-hardcoding` + `foundation-reset` + `adapter-no-placeholder` + `training-template-guard` + `model-version-register-gate` + `account-governance` + `phase2` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
+  - runs the core closure suite (`no-seed-hardcoding` + `foundation-reset` + `adapter-no-placeholder` + `training-template-guard` + `model-version-register-gate` + `account-governance` + `phase2` + `runtime-success` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
 - `npm run smoke:llm-settings`
   - verifies LLM settings save/edit/clear flow, including keeping the saved key while editing and loading encrypted config after API restart
 - `npm run smoke:runtime-settings-persistence`
@@ -194,7 +198,7 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - `npm run smoke:runner-real-positive`
   - optional positive test for real YOLO branch (`meta.mode=real`); skips automatically when model/dependency prerequisites are missing
 - `npm run doctor:real-training-readiness`
-  - checks whether current machine is ready for real local training/inference branch (`ultralytics`/`paddleocr`/`doctr` + `VISTRAL_YOLO_MODEL_PATH`)
+  - checks whether current machine is ready for real local training/inference branch (`ultralytics`/`paddleocr`/`doctr` + local YOLO weight path, preferred `YOLO_LOCAL_MODEL_PATH`)
 - `npm run setup:real-training-env`
   - bootstraps a local Python venv, installs real-branch deps, and tries to prepare a YOLO weight file for positive real-mode checks
 - `npm run smoke:runtime-metrics-retention`
@@ -243,9 +247,11 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - command timeout: `LOCAL_RUNNER_TIMEOUT_MS`
   - strict non-simulated train fallback switch: `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK=1` (fail fast when local runner command is missing/unavailable)
   - strict non-fallback inference switch: `VISTRAL_DISABLE_INFERENCE_FALLBACK=1` (runtime/local predict must return real output; template/fallback outputs are rejected)
-  - optional real-runner switch: `VISTRAL_RUNNER_ENABLE_REAL=1`
+  - optional real-runner switch: `VISTRAL_RUNNER_ENABLE_REAL=auto` (default auto-try; set `0` to force template mode)
   - optional real-runner hints:
-    - `VISTRAL_YOLO_MODEL_PATH`
+    - `PADDLEOCR_LOCAL_MODEL_PATH`
+    - `DOCTR_LOCAL_MODEL_PATH`
+    - `YOLO_LOCAL_MODEL_PATH` (preferred; legacy `VISTRAL_YOLO_MODEL_PATH` / `REAL_YOLO_MODEL_PATH` also supported)
     - `VISTRAL_PADDLEOCR_LANG`, `VISTRAL_PADDLEOCR_USE_GPU`
     - `VISTRAL_DOCTR_DET_ARCH`, `VISTRAL_DOCTR_RECO_ARCH`
   - reusable runner templates: `scripts/local-runners/`

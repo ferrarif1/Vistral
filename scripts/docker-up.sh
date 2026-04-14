@@ -6,6 +6,28 @@ cd "${ROOT_DIR}"
 
 VISTRAL_API_IMAGE="${VISTRAL_API_IMAGE:-vistral-api:round1}"
 VISTRAL_WEB_IMAGE="${VISTRAL_WEB_IMAGE:-vistral-web:round1}"
+DOCKER_PULL_RETRIES="${DOCKER_PULL_RETRIES:-3}"
+DOCKER_PULL_RETRY_DELAY_SECONDS="${DOCKER_PULL_RETRY_DELAY_SECONDS:-2}"
+
+docker_pull_with_retry() {
+  local image="$1"
+  local attempt=1
+  local max_attempts="${DOCKER_PULL_RETRIES}"
+
+  while [ "${attempt}" -le "${max_attempts}" ]; do
+    if docker pull "${image}" >&2; then
+      return 0
+    fi
+
+    if [ "${attempt}" -lt "${max_attempts}" ]; then
+      echo "[docker-up] warning: pull failed for ${image} (attempt ${attempt}/${max_attempts}), retrying in ${DOCKER_PULL_RETRY_DELAY_SECONDS}s..." >&2
+      sleep "${DOCKER_PULL_RETRY_DELAY_SECONDS}"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
 
 pick_base_image() {
   local env_name="$1"
@@ -14,7 +36,7 @@ pick_base_image() {
   local requested="${!env_name:-}"
   if [ -n "${requested}" ]; then
     echo "[docker-up] pulling ${env_name}=${requested}" >&2
-    if docker pull "${requested}" >&2; then
+    if docker_pull_with_retry "${requested}"; then
       printf '%s' "${requested}"
       return 0
     fi
@@ -31,7 +53,7 @@ pick_base_image() {
   local candidate
   for candidate in "$@"; do
     echo "[docker-up] trying ${env_name}=${candidate}" >&2
-    if docker pull "${candidate}" >&2; then
+    if docker_pull_with_retry "${candidate}"; then
       printf '%s' "${candidate}"
       return 0
     fi
@@ -55,6 +77,12 @@ NODE_BASE_IMAGE="$(
     "docker.m.daocloud.io/library/node:20-alpine" \
     "node:20-alpine"
 )"
+API_NODE_BASE_IMAGE="$(
+  pick_base_image \
+    API_NODE_BASE_IMAGE \
+    "docker.m.daocloud.io/library/node:20-bookworm-slim" \
+    "node:20-bookworm-slim"
+)"
 NGINX_BASE_IMAGE="$(
   pick_base_image \
     NGINX_BASE_IMAGE \
@@ -63,6 +91,7 @@ NGINX_BASE_IMAGE="$(
 )"
 
 echo "[docker-up] starting pure docker stack build + up"
+echo "  API_NODE_BASE_IMAGE=${API_NODE_BASE_IMAGE}"
 echo "  NODE_BASE_IMAGE=${NODE_BASE_IMAGE}"
 echo "  NGINX_BASE_IMAGE=${NGINX_BASE_IMAGE}"
 echo "  VISTRAL_API_IMAGE=${VISTRAL_API_IMAGE}"
@@ -71,6 +100,7 @@ echo "  VISTRAL_WEB_IMAGE=${VISTRAL_WEB_IMAGE}"
 compose_env=(
   "DOCKER_BUILDKIT=0"
   "COMPOSE_DOCKER_CLI_BUILD=0"
+  "API_NODE_BASE_IMAGE=${API_NODE_BASE_IMAGE}"
   "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}"
   "NGINX_BASE_IMAGE=${NGINX_BASE_IMAGE}"
   "VISTRAL_API_IMAGE=${VISTRAL_API_IMAGE}"

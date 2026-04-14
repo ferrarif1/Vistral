@@ -42,6 +42,11 @@ def write_json(path: str, payload: dict) -> None:
         json.dump(payload, fp, ensure_ascii=False, indent=2)
 
 
+def should_try_real() -> bool:
+    normalized = os.getenv('VISTRAL_RUNNER_ENABLE_REAL', 'auto').strip().lower()
+    return normalized not in {'0', 'false', 'no', 'off', 'disabled'}
+
+
 def build_metric_summary(metrics: Dict[str, float]) -> Dict[str, float]:
     accuracy = clamp(metrics.get('accuracy', 0.0), 0.0, 0.9999)
     cer = clamp(metrics.get('cer', 0.0), 0.0001, 1.0)
@@ -261,7 +266,7 @@ def build_paddleocr_predictor(language: str, use_gpu: bool):
 
 
 def try_real_train(args, config: dict):
-    if os.getenv('VISTRAL_RUNNER_ENABLE_REAL', '0') != '1':
+    if not should_try_real():
         return None, ''
 
     if args.task_type != 'ocr':

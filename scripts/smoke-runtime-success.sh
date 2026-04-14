@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 API_HOST="${API_HOST:-127.0.0.1}"
+AUTH_USERNAME="${AUTH_USERNAME:-admin}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-mock-pass-admin}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-runtime-success] jq is required."
@@ -37,6 +39,7 @@ PY
 fi
 RUNTIME_ENDPOINT="http://127.0.0.1:${RUNTIME_MOCK_PORT}/predict"
 BASE_URL="http://${API_HOST}:${API_PORT}"
+DOCTR_SMOKE_EXPECTED_MISSING_FILE="vistral-smoke-doctr-missing.bin"
 
 COOKIE_FILE="$(mktemp)"
 API_LOG="$(mktemp)"
@@ -108,9 +111,11 @@ fi
 
 API_HOST="${API_HOST}" \
 API_PORT="${API_PORT}" \
+LLM_CONFIG_SECRET="smoke-runtime-success-${API_PORT}" \
 PADDLEOCR_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
 DOCTR_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
 YOLO_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
+VISTRAL_DOCTR_EXPECTED_MODEL_FILES="${DOCTR_SMOKE_EXPECTED_MISSING_FILE}" \
 MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
 npm run dev:api >"$API_LOG" 2>&1 &
 API_PID=$!
@@ -139,6 +144,45 @@ csrf_token="$(echo "$csrf_payload" | jq -r '.data.csrf_token // empty')"
 if [[ -z "$csrf_token" ]]; then
   echo "[smoke-runtime-success] Failed to obtain CSRF token"
   echo "$csrf_payload"
+  exit 1
+fi
+
+login_payload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -X POST "${BASE_URL}/api/auth/login" \
+  -d "{\"username\":\"${AUTH_USERNAME}\",\"password\":\"${AUTH_PASSWORD}\"}")"
+login_ok="$(echo "$login_payload" | jq -r '.success // false')"
+if [[ "$login_ok" != "true" ]]; then
+  echo "[smoke-runtime-success] admin login failed"
+  echo "$login_payload"
+  exit 1
+fi
+
+csrf_payload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/auth/csrf")"
+csrf_token="$(echo "$csrf_payload" | jq -r '.data.csrf_token // empty')"
+if [[ -z "$csrf_token" ]]; then
+  echo "[smoke-runtime-success] Failed to refresh CSRF token after login"
+  echo "$csrf_payload"
+  exit 1
+fi
+
+runtime_readiness_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/runtime/readiness")"
+runtime_readiness_ok="$(echo "$runtime_readiness_resp" | jq -r '.success // false')"
+runtime_readiness_bootstrap_assets_array="$(
+  echo "$runtime_readiness_resp" | jq -r '(.data.bootstrap_assets | type) == "array"'
+)"
+runtime_readiness_doctr_asset_count="$(
+  echo "$runtime_readiness_resp" | jq -r '[.data.bootstrap_assets[]? | select(.framework=="doctr")] | length'
+)"
+runtime_readiness_doctr_expected_count="$(
+  echo "$runtime_readiness_resp" | jq -r --arg expected "${DOCTR_SMOKE_EXPECTED_MISSING_FILE}" '[.data.bootstrap_assets[]? | select(.framework=="doctr") | .expected_files[]? | select(.name==$expected)] | length'
+)"
+runtime_readiness_doctr_missing_count="$(
+  echo "$runtime_readiness_resp" | jq -r --arg expected "${DOCTR_SMOKE_EXPECTED_MISSING_FILE}" '[.data.bootstrap_assets[]? | select(.framework=="doctr") | .missing_files[]? | select(.==$expected)] | length'
+)"
+if [[ "$runtime_readiness_ok" != "true" || "$runtime_readiness_bootstrap_assets_array" != "true" || "$runtime_readiness_doctr_asset_count" -lt 1 || "$runtime_readiness_doctr_expected_count" -lt 1 || "$runtime_readiness_doctr_missing_count" -lt 1 ]]; then
+  echo "[smoke-runtime-success] runtime readiness bootstrap_assets contract assertion failed"
+  echo "$runtime_readiness_resp"
   exit 1
 fi
 
@@ -302,6 +346,174 @@ if [[ "$doctr_source" != "doctr_runtime" || "$doctr_lines" -lt 1 || -n "$doctr_f
   exit 1
 fi
 
+runtime_policy_binding_key="model_version:${detection_model_version_id}"
+
+save_runtime_policy_settings() {
+  local policy_payload="$1"
+  local save_resp=""
+  save_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -d "$policy_payload" \
+    "${BASE_URL}/api/settings/runtime")"
+  local save_ok=""
+  save_ok="$(echo "$save_resp" | jq -r '.success // false')"
+  if [[ "$save_ok" != "true" ]]; then
+    echo "[smoke-runtime-success] failed to save runtime policy settings"
+    echo "$save_resp"
+    exit 1
+  fi
+}
+
+quota_exhausted_payload="$(
+  jq -nc \
+    --arg endpoint "$RUNTIME_ENDPOINT" \
+    --arg binding "$runtime_policy_binding_key" \
+    '{
+      runtime_config: {
+        paddleocr: { endpoint: $endpoint, api_key: "", model_api_keys: {}, model_api_key_policies: {} },
+        doctr: { endpoint: $endpoint, api_key: "", model_api_keys: {}, model_api_key_policies: {} },
+        yolo: {
+          endpoint: $endpoint,
+          api_key: "",
+          model_api_keys: { ($binding): "" },
+          model_api_key_policies: {
+            ($binding): {
+              api_key: "mv-quota-key",
+              expires_at: null,
+              max_calls: 1,
+              used_calls: 0,
+              last_used_at: null
+            }
+          }
+        }
+      },
+      keep_existing_api_keys: false
+    }'
+)"
+save_runtime_policy_settings "$quota_exhausted_payload"
+
+yolo_quota_seed_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${detection_input_attachment_id}\",\"task_type\":\"detection\"}" \
+  "${BASE_URL}/api/inference/runs")"
+yolo_quota_seed_source="$(echo "$yolo_quota_seed_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
+if [[ "$yolo_quota_seed_source" != "yolo_runtime" ]]; then
+  echo "[smoke-runtime-success] runtime model API key quota seed-call failed"
+  echo "$yolo_quota_seed_result"
+  exit 1
+fi
+
+yolo_quota_block_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${detection_input_attachment_id}\",\"task_type\":\"detection\"}" \
+  "${BASE_URL}/api/inference/runs")"
+yolo_quota_block_source="$(echo "$yolo_quota_block_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
+yolo_quota_block_reason="$(echo "$yolo_quota_block_result" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+if [[ "$yolo_quota_block_source" != "explicit_fallback_runtime_failed" || "$yolo_quota_block_reason" != *"quota exceeded"* ]]; then
+  echo "[smoke-runtime-success] runtime model API key quota guard assertion failed"
+  echo "$yolo_quota_block_result"
+  exit 1
+fi
+
+expired_payload="$(
+  jq -nc \
+    --arg endpoint "$RUNTIME_ENDPOINT" \
+    --arg binding "$runtime_policy_binding_key" \
+    '{
+      runtime_config: {
+        paddleocr: { endpoint: $endpoint, api_key: "", model_api_keys: {}, model_api_key_policies: {} },
+        doctr: { endpoint: $endpoint, api_key: "", model_api_keys: {}, model_api_key_policies: {} },
+        yolo: {
+          endpoint: $endpoint,
+          api_key: "",
+          model_api_keys: { ($binding): "" },
+          model_api_key_policies: {
+            ($binding): {
+              api_key: "mv-expired-key",
+              expires_at: "2020-01-01T00:00:00Z",
+              max_calls: null,
+              used_calls: 0,
+              last_used_at: null
+            }
+          }
+        }
+      },
+      keep_existing_api_keys: false
+    }'
+)"
+save_runtime_policy_settings "$expired_payload"
+
+yolo_expired_block_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${detection_input_attachment_id}\",\"task_type\":\"detection\"}" \
+  "${BASE_URL}/api/inference/runs")"
+yolo_expired_block_source="$(echo "$yolo_expired_block_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
+yolo_expired_block_reason="$(echo "$yolo_expired_block_result" | jq -r '.data.raw_output.runtime_fallback_reason // empty')"
+if [[ "$yolo_expired_block_source" != "explicit_fallback_runtime_failed" || "$yolo_expired_block_reason" != *"API key expired"* ]]; then
+  echo "[smoke-runtime-success] runtime model API key expiry guard assertion failed"
+  echo "$yolo_expired_block_result"
+  exit 1
+fi
+
+success_with_counter_payload="$(
+  jq -nc \
+    --arg endpoint "$RUNTIME_ENDPOINT" \
+    --arg binding "$runtime_policy_binding_key" \
+    '{
+      runtime_config: {
+        paddleocr: { endpoint: $endpoint, api_key: "", model_api_keys: {}, model_api_key_policies: {} },
+        doctr: { endpoint: $endpoint, api_key: "", model_api_keys: {}, model_api_key_policies: {} },
+        yolo: {
+          endpoint: $endpoint,
+          api_key: "",
+          model_api_keys: { ($binding): "" },
+          model_api_key_policies: {
+            ($binding): {
+              api_key: "mv-ok-key",
+              expires_at: null,
+              max_calls: 2,
+              used_calls: 0,
+              last_used_at: null
+            }
+          }
+        }
+      },
+      keep_existing_api_keys: false
+    }'
+)"
+save_runtime_policy_settings "$success_with_counter_payload"
+
+yolo_counter_result="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"model_version_id\":\"${detection_model_version_id}\",\"input_attachment_id\":\"${detection_input_attachment_id}\",\"task_type\":\"detection\"}" \
+  "${BASE_URL}/api/inference/runs")"
+yolo_counter_source="$(echo "$yolo_counter_result" | jq -r '.data.normalized_output.normalized_output.source // empty')"
+if [[ "$yolo_counter_source" != "yolo_runtime" ]]; then
+  echo "[smoke-runtime-success] runtime model API key success path failed"
+  echo "$yolo_counter_result"
+  exit 1
+fi
+
+runtime_after_counter="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/settings/runtime")"
+counter_used_calls="$(echo "$runtime_after_counter" | jq -r --arg binding "$runtime_policy_binding_key" '.data.frameworks.yolo.model_api_keys_meta[$binding].used_calls // -1')"
+counter_remaining_calls="$(echo "$runtime_after_counter" | jq -r --arg binding "$runtime_policy_binding_key" '.data.frameworks.yolo.model_api_keys_meta[$binding].remaining_calls // -1')"
+counter_is_expired="$(
+  echo "$runtime_after_counter" | jq -r --arg binding "$runtime_policy_binding_key" '
+    .data.frameworks.yolo.model_api_keys_meta[$binding].is_expired
+    | if . == null then "missing" else tostring end
+  '
+)"
+if [[ "$counter_used_calls" != "1" || "$counter_remaining_calls" != "1" || "$counter_is_expired" != "false" ]]; then
+  echo "[smoke-runtime-success] runtime model API key usage counter assertion failed"
+  echo "$runtime_after_counter"
+  exit 1
+fi
+
 echo "[smoke-runtime-success] PASS"
 echo "runtime_endpoint=${RUNTIME_ENDPOINT}"
 echo "yolo_source=${yolo_source}"
@@ -309,3 +521,6 @@ echo "paddle_source=${paddle_source}"
 echo "doctr_source=${doctr_source}"
 echo "doctr_training_job_id=${doctr_training_job_id}"
 echo "doctr_model_version_id=${doctr_model_version_id}"
+echo "policy_binding=${runtime_policy_binding_key}"
+echo "policy_used_calls=${counter_used_calls}"
+echo "policy_remaining_calls=${counter_remaining_calls}"

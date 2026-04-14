@@ -85,11 +85,15 @@
 - 模型版本注册约束：
   - `execution_mode=simulated|unknown` 的训练任务禁止注册模型版本
   - `execution_mode=local_command` 时，若产物摘要存在非真实证据（`mode=template`、存在 `fallback_reason`、或 `training_performed=false`）也必须拒绝注册，除非显式设置 `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
+- 当 `VISTRAL_RUNNER_ENABLE_REAL` 未被显式关闭（`0/false/no/off/disabled`；部署默认可保持 `auto`）时，内置本地训练 runner 会优先尝试依赖驱动的真实执行或 OCR probe；依赖/模型不可用时再显式回退为 `template` 并保留 `fallback_reason`
 - app 状态初始化模式可通过 `APP_STATE_BOOTSTRAP_MODE` 配置：
   - `full`（默认）：保留当前原型种子数据基线
   - `minimal`：当不存在持久化 app-state 时，仅初始化账号与基座模型，不注入数据集/训练/推理种子记录
 - `inference_runs.execution_source`：
-  - 保存当前推理来源标记（例如 `yolo_runtime`、`yolo_local_command`、`explicit_fallback_runtime_failed`、`explicit_fallback_local_command_failed`、`base_empty`）
+  - 保存当前推理来源标记（例如 `yolo_runtime`、`yolo_local_command`、`yolo_local_command_fallback`、`explicit_fallback_runtime_failed`、`explicit_fallback_local_command_failed`、`base_empty`）
+  - 后端会基于回退证据进行归一化：
+    - 已是显式 fallback/template/mock/base-empty 标记时保持原值
+    - 其余来源一旦检测到回退证据（如 fallback reason、`raw_output.meta.mode=template`），会追加 `_fallback` 后缀，避免 UI 把非真实结果误判为真实执行
 - template 标记规则：
   - 当 `raw_output.meta.mode=template` 时，即使 `execution_source=<framework>_local_command`，也应按非真实推理结果处理。
 - OCR 回退安全约束：
@@ -107,6 +111,16 @@
   - `updated_at`（可空；为空表示尚未通过 UI 保存覆盖）
   - `frameworks.paddleocr.endpoint`
   - `frameworks.paddleocr.api_key`（服务端密钥，不可明文返回）
+  - `frameworks.paddleocr.default_model_id`（可选：该 framework 的默认模型）
+  - `frameworks.paddleocr.default_model_version_id`（可选：该 framework 的默认模型版本）
+  - `frameworks.paddleocr.model_api_keys`（可选：模型级远程鉴权 key 映射）
+  - `frameworks.paddleocr.model_api_key_policies`（可选：模型级鉴权策略映射）
+    - `api_key`
+    - `expires_at`（可空 ISO 时间）
+    - `max_calls`（可空整数）
+    - `used_calls`（整数，服务端维护）
+    - `last_used_at`（可空 ISO 时间，服务端维护）
+  - `frameworks.paddleocr.local_model_path`（可选：本地模型/运行时资源路径，主要用于自托管 real local 分支）
   - `frameworks.paddleocr.local_train_command`
   - `frameworks.paddleocr.local_predict_command`
   - `frameworks.doctr.*`（同上）
@@ -117,9 +131,28 @@
 - 规则：
   - runtime 适配器应在执行时动态读取配置，而不是只在进程启动时读取一次
   - 当不存在 UI 保存配置时，允许按环境变量做兜底
+  - 当 runtime 的 Python 环境变量未设置时，`controls.python_bin` 默认回退为平台命令（POSIX=`python3`，Windows=`python`）
   - 一旦从 UI 保存，保存值即成为主配置来源，直到显式清空
+  - 当 `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS` 启用（默认）时，空的本地命令字段会自动填充为每个 framework 的内置 runner 模板
+  - 空的 `local_model_path` 可按部署默认值自动补齐：
+    - `PADDLEOCR_LOCAL_MODEL_PATH`
+    - `DOCTR_LOCAL_MODEL_PATH`
+    - `YOLO_LOCAL_MODEL_PATH`
+    - YOLO 同时兼容旧环境变量 `VISTRAL_YOLO_MODEL_PATH` / `REAL_YOLO_MODEL_PATH`
+  - 当 `.data/runtime-models/yolo11n.pt` 存在时，Runtime 设置/就绪度可直接把它视为默认本地 YOLO 权重路径，无需手工改 env
+  - Runtime 自动配置接口可探测候选端点（`VISTRAL_RUNTIME_AUTO_ENDPOINT_CANDIDATES_JSON` + 内置默认列表），并为每个 framework 写入首个可达 endpoint
+  - Runtime 自动配置接口也可在已知本地模型候选存在时，为空的 `local_model_path` 自动写入默认值
+  - 若 `controls.python_bin` 为路径型值且路径不存在，运行时应跳过该候选并继续尝试下一个解释器候选（`.data/runtime-python/.venv`，再到 PATH 的 `python3/python`），避免因陈旧路径导致本地命令直接失败
   - 对外接口仅返回 `has_api_key` 与 `api_key_masked`，不得返回明文 key
+  - 对外接口也只返回模型级密钥的掩码元信息（`model_api_keys_meta`），不得返回模型级明文 key
   - 保存时支持 `keep_existing_api_keys=true`，空 key 输入可保留已存密钥
+  - `model_api_keys` 键格式：
+    - `model:<model_id>`：模型级 key
+    - `model_version:<model_version_id>`：模型版本级 key
+  - 远程推理鉴权 key 解析顺序：`model_version` 绑定 > `model` 绑定 > framework 级 `api_key`
+  - 当配置了模型级策略时，若 key 已过期（`expires_at <= now`）或额度耗尽（`used_calls >= max_calls`），远程调用应在发起前直接失败
+  - 远程调用成功后应回写 `used_calls` 与 `last_used_at`
+  - 本地模式/本地命令执行不依赖 API key，应始终显式传递 `model_id`/`model_version_id`
 
 ### TrainingWorkerNode（补充）
 - `id`

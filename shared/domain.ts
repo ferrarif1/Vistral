@@ -544,6 +544,47 @@ export interface RuntimeConnectivityRecord {
   message: string;
 }
 
+export interface RuntimeReadinessIssue {
+  code: string;
+  level: 'error' | 'warning';
+  message: string;
+  remediation?: string;
+  remediation_command?: string;
+}
+
+export interface RuntimeReadinessFrameworkSnapshot {
+  framework: ModelFramework;
+  endpoint_configured: boolean;
+  endpoint_reachable: boolean;
+  local_train_command_configured: boolean;
+  local_predict_command_configured: boolean;
+  effective_mode: 'endpoint' | 'local_command' | 'bundled_local_runner';
+}
+
+export interface RuntimeBootstrapAssetExpectedFile {
+  name: string;
+  present: boolean;
+  byte_size: number | null;
+}
+
+export interface RuntimeBootstrapAssetSnapshot {
+  framework: ModelFramework;
+  preseed_dir: string | null;
+  expected_files: RuntimeBootstrapAssetExpectedFile[];
+  missing_files: string[];
+}
+
+export interface RuntimeReadinessReport {
+  checked_at: string;
+  status: 'ready' | 'degraded' | 'not_ready';
+  python_bin_requested: string | null;
+  python_bin_resolved: string | null;
+  strict_controls: RuntimeControlSettings;
+  frameworks: RuntimeReadinessFrameworkSnapshot[];
+  bootstrap_assets: RuntimeBootstrapAssetSnapshot[];
+  issues: RuntimeReadinessIssue[];
+}
+
 export interface RuntimeMetricsRetentionItem {
   training_job_id: string;
   rows: number;
@@ -731,12 +772,41 @@ export interface LlmConfigView {
 export interface RuntimeFrameworkConfig {
   endpoint: string;
   api_key: string;
+  default_model_id: string;
+  default_model_version_id: string;
+  model_api_keys: Record<string, string>;
+  model_api_key_policies: Record<string, RuntimeApiKeyPolicy>;
+  local_model_path: string;
   local_train_command: string;
   local_predict_command: string;
 }
 
+export interface RuntimeApiKeyPolicy {
+  api_key: string;
+  expires_at: string | null;
+  max_calls: number | null;
+  used_calls: number;
+  last_used_at: string | null;
+}
+
+export interface RuntimeApiKeyMetaView {
+  has_api_key: boolean;
+  api_key_masked: string;
+  expires_at: string | null;
+  expires_status: 'none' | 'healthy' | 'within_7_days' | 'within_3_days' | 'expired';
+  expires_in_days: number | null;
+  max_calls: number | null;
+  used_calls: number;
+  remaining_calls: number | null;
+  is_expired: boolean;
+}
+
 export interface RuntimeFrameworkConfigView {
   endpoint: string;
+  default_model_id: string;
+  default_model_version_id: string;
+  model_api_keys_meta: Record<string, RuntimeApiKeyMetaView>;
+  local_model_path: string;
   local_train_command: string;
   local_predict_command: string;
   has_api_key: boolean;

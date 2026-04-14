@@ -53,6 +53,11 @@ def write_json(path: str, payload: dict) -> None:
         json.dump(payload, fp, ensure_ascii=False)
 
 
+def should_try_real() -> bool:
+    normalized = os.getenv('VISTRAL_RUNNER_ENABLE_REAL', 'auto').strip().lower()
+    return normalized not in {'0', 'false', 'no', 'off', 'disabled'}
+
+
 def infer_image_shape(path: str) -> tuple:
     if not path or not os.path.exists(path):
         return 0, 0
@@ -173,7 +178,7 @@ def build_template_payload(args, fallback_reason: str = '') -> dict:
 
 
 def try_real_predict(args):
-    if os.getenv('VISTRAL_RUNNER_ENABLE_REAL', '0') != '1':
+    if not should_try_real():
         return None, ''
 
     if not args.input_path or not os.path.exists(args.input_path):

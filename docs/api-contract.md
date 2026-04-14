@@ -31,6 +31,9 @@ This document defines the executable API contract for Vistral's prototype and th
 }
 ```
 
+Validation baseline:
+- malformed JSON syntax (for example truncated body) returns `400 VALIDATION_ERROR`, not `500 INTERNAL_ERROR`
+
 ## 4. Shared Enums
 
 ### 4.1 Roles
@@ -97,6 +100,7 @@ Request:
 
 Rules:
 - disabled accounts return an explicit account-disabled error instead of opening a new authenticated session
+- request payload must be a JSON object with non-empty `username` and `password`; invalid payload returns `400 VALIDATION_ERROR`
 
 ### POST /auth/logout
 Logout current session.
@@ -131,6 +135,7 @@ Rules:
 - all authenticated users can access this endpoint
 - `current_password` must match the existing password
 - `new_password` must satisfy the same minimum password policy used by account creation
+- request payload must be a JSON object with non-empty `current_password` and `new_password`; invalid payload returns `400 VALIDATION_ERROR`
 
 ## 6.1 Admin User Management
 
@@ -159,6 +164,7 @@ Rules:
 - `role` must be `user` or `admin`
 - server assigns default capabilities based on role
 - duplicate usernames are rejected
+- request payload must be a JSON object with non-empty `username` and `password`; invalid payload returns `400 VALIDATION_ERROR`
 
 ### POST /admin/users/{id}/password-reset
 Reset another user's password from an admin surface.
@@ -174,6 +180,7 @@ Rules:
 - admin only
 - target user must exist
 - `new_password` must satisfy the minimum password policy
+- request payload must be a JSON object with non-empty `new_password`; invalid payload returns `400 VALIDATION_ERROR`
 
 ### POST /admin/users/{id}/status
 Disable or reactivate an account.
@@ -195,6 +202,7 @@ Rules:
 - system must reject disabling the last active admin account
 - disabled users cannot create new authenticated sessions and should be blocked from further protected actions until reactivated
 - disabling a user immediately terminates that user's existing authenticated sessions; those sessions should subsequently behave as logged-out (`401`) rather than staying half-authenticated
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
 
 ## 7. Conversation Endpoints
 
@@ -215,6 +223,8 @@ Request:
 
 Notes:
 - `attachment_ids` order is preserved as the message attachment context order.
+- `attachment_ids` is optional; when omitted or invalid, backend normalizes it to `[]` (empty context) instead of failing the request.
+- `model_id` and `initial_message` are required non-empty strings; invalid payload returns `400 VALIDATION_ERROR`.
 - returned message records may include optional `metadata.conversation_action` for assistant-side operational execution state
 
 ### POST /conversations/message
@@ -222,11 +232,14 @@ Send message to an existing conversation.
 
 Notes:
 - `attachment_ids` order is preserved as provided by client selection context.
+- `attachment_ids` is optional; when omitted or invalid, backend normalizes it to `[]`.
+- `conversation_id` and `content` are required non-empty strings; invalid payload returns `400 VALIDATION_ERROR`.
 - assistant may resolve operational intents in-thread:
   - `create_dataset`
   - `create_model_draft`
   - `create_training_job`
   - `run_model_inference` (attachment + inference intent keywords => auto run inference using conversation model's latest registered version)
+- when `run_model_inference` returns non-real source markers (`*fallback*` / `*template*` / `*mock*` / `base_empty`), assistant summary must explicitly label it as fallback/template output (not real inference), and may include direct `action_links` to runtime/inference settings pages for remediation.
 - assistant can post-process latest OCR inference for extraction intents (plate/serial/number keywords) and return extracted candidate content
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
 - `metadata.conversation_action` may include optional `action_links` (`[{label, href}]`) so clients can render direct navigation cards for complex follow-up input collection (for example annotation/training/inference workspaces)
@@ -237,12 +250,15 @@ Notes:
 - when execution fails or user cancels, assistant returns `failed` / `cancelled`
 - advanced console bridge (LLM/tool-like call): message can use `/ops {json}` to invoke selected console APIs directly in conversation
   - natural-language route is also supported for common intents (for example: “查看训练任务”, “导出 d-12 的 OCR 标注”, “取消训练任务 tj-101”); server maps intent to bridge API automatically
+  - `/ops {json}` payload is validated before execution; when bridge-required params are missing, server returns `requires_input` with explicit `missing_fields` so users can continue by only补充缺失参数 in follow-up turns
   - when natural-language intent is recognized but required IDs/params are missing, assistant returns structured `requires_input` with explicit `missing_fields`
   - user can reply with only the missing value(s) in follow-up turn; server merges them into pending bridge payload and continues execution flow (including high-risk confirmation gate)
+  - for `run_dataset_pre_annotations`, bridge params use `dataset_id` + `model_version_id` (legacy `source_model_version_id` is accepted for compatibility and normalized internally)
   - supported `api`:
     - read: `list_datasets`, `list_models`, `list_model_versions`, `list_training_jobs`, `list_inference_runs`, `list_dataset_annotations`
     - execute: `run_inference`, `create_dataset_version`, `export_dataset_annotations`
-    - mutating/high-risk: `create_dataset`, `create_model_draft`, `create_training_job`, `register_model_version`, `submit_approval_request`, `send_inference_feedback`, `cancel_training_job`, `retry_training_job`, `upsert_dataset_annotation`, `review_dataset_annotation`, `import_dataset_annotations`, `run_dataset_pre_annotations`, `activate_runtime_profile`
+    - mutating/high-risk: `create_dataset`, `create_model_draft`, `create_training_job`, `register_model_version`, `submit_approval_request`, `send_inference_feedback`, `cancel_training_job`, `retry_training_job`, `upsert_dataset_annotation`, `review_dataset_annotation`, `import_dataset_annotations`, `run_dataset_pre_annotations`, `activate_runtime_profile`, `auto_configure_runtime_settings`
+      - `auto_configure_runtime_settings` params: optional `overwrite_endpoint` (boolean, default `false`)
   - high-risk bridge APIs (all mutating actions above) require explicit confirmation before execution
 
 ### GET /conversations/{id}
@@ -284,6 +300,16 @@ Request:
 Rules:
 - title is required after trim
 - title length must be 1-120 characters
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+
+### DELETE /conversations/{id}
+Delete one conversation (owner/admin only).
+
+Rules:
+- conversation must exist and be visible to current user
+- server deletes the conversation record plus all messages under that conversation id
+- server also removes conversation-scoped attachments bound to that conversation id
+- response shape: `{ "success": true, "data": { "deleted": true } }`
 
 ## 7.1 LLM Settings Endpoints
 
@@ -312,8 +338,11 @@ Request:
 ```
 
 Notes:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `llm_config` object is required
 - when `keep_existing_api_key=true` and `llm_config.api_key` is blank, server keeps the encrypted saved key
 - response remains the masked config view
+- `keep_existing_api_key` must be boolean when provided
 
 ### DELETE /settings/llm
 Clear the current user's saved LLM configuration.
@@ -337,8 +366,11 @@ Request:
 ```
 
 Notes:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `llm_config` object is required
 - when `use_stored_api_key=true` and `llm_config.api_key` is blank, server reuses the current user's saved encrypted key for this test
 - response returns a short preview string from the provider
+- `use_stored_api_key` must be boolean when provided
 
 ## 7.2 Runtime Settings Endpoints
 
@@ -348,7 +380,21 @@ Get saved runtime adapter settings view.
 Notes:
 - admin scope only
 - API keys are masked in response (`has_api_key`, `api_key_masked`)
-- local train/predict command templates are returned as plain text fields for editing
+- model-level API keys are also masked in response via `model_api_keys_meta`
+- `model_api_keys_meta` includes policy/accounting fields for each binding key:
+  - `expires_at`
+  - `expires_status` (`none` | `healthy` | `within_7_days` | `within_3_days` | `expired`)
+  - `expires_in_days` (number or `null`)
+  - `max_calls`
+  - `used_calls`
+  - `remaining_calls`
+  - `is_expired`
+- each framework also returns `local_model_path`, plus local train/predict command templates as plain text fields for editing
+- each framework can also return optional model defaults (`default_model_id`, `default_model_version_id`)
+- `controls.python_bin` defaults to platform command when env is unset (`python3` on POSIX, `python` on Windows)
+- when `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS` is not set (default `true`), blank local command fields are auto-filled with bundled runner templates (`{{python_bin}} .../scripts/local-runners/*`)
+- blank `local_model_path` values may be auto-populated from deployment defaults when a known local model candidate exists (for example `.data/runtime-models/yolo11n.pt`)
+- set `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS=0` to keep blank local command fields unchanged
 - response includes `active_profile_id` + `available_profiles` for one-click runtime profile activation
 
 Response:
@@ -365,24 +411,59 @@ Response:
       "frameworks": {
         "paddleocr": {
           "endpoint": "http://127.0.0.1:9393/predict",
+          "default_model_id": "m-foundation-paddleocr",
+          "default_model_version_id": "mv-paddleocr-v4",
+          "local_model_path": "",
           "local_train_command": "python3 .../paddleocr_train_runner.py ...",
           "local_predict_command": "python3 .../paddleocr_predict_runner.py ...",
           "has_api_key": true,
-          "api_key_masked": "sk-a...9f2b"
+          "api_key_masked": "sk-a...9f2b",
+          "model_api_keys_meta": {
+            "model:m-foundation-paddleocr": {
+              "has_api_key": true,
+              "api_key_masked": "sk-m...10af",
+              "expires_at": "2026-12-31T23:59:59.000Z",
+              "expires_status": "healthy",
+              "expires_in_days": 263,
+              "max_calls": 5000,
+              "used_calls": 120,
+              "remaining_calls": 4880,
+              "is_expired": false
+            },
+            "model_version:mv-paddleocr-v4": {
+              "has_api_key": true,
+              "api_key_masked": "sk-v...2c81",
+              "expires_at": null,
+              "expires_status": "none",
+              "expires_in_days": null,
+              "max_calls": null,
+              "used_calls": 0,
+              "remaining_calls": null,
+              "is_expired": false
+            }
+          }
         },
         "doctr": {
           "endpoint": "",
+          "default_model_id": "",
+          "default_model_version_id": "",
+          "local_model_path": "",
           "local_train_command": "",
           "local_predict_command": "",
           "has_api_key": false,
-          "api_key_masked": "Not set"
+          "api_key_masked": "Not set",
+          "model_api_keys_meta": {}
         },
         "yolo": {
           "endpoint": "http://127.0.0.1:9394/predict",
+          "default_model_id": "m-foundation-yolo",
+          "default_model_version_id": "mv-yolo11n",
+          "local_model_path": "/opt/vistral/runtime-models/yolo11n.pt",
           "local_train_command": "python3 .../yolo_train_runner.py ...",
           "local_predict_command": "python3 .../yolo_predict_runner.py ...",
           "has_api_key": false,
-          "api_key_masked": "Not set"
+          "api_key_masked": "Not set",
+          "model_api_keys_meta": {}
         }
       },
       "controls": {
@@ -395,24 +476,59 @@ Response:
   "frameworks": {
     "paddleocr": {
       "endpoint": "http://127.0.0.1:9393/predict",
+      "default_model_id": "m-foundation-paddleocr",
+      "default_model_version_id": "mv-paddleocr-v4",
+      "local_model_path": "",
       "local_train_command": "python3 .../paddleocr_train_runner.py ...",
       "local_predict_command": "python3 .../paddleocr_predict_runner.py ...",
       "has_api_key": true,
-      "api_key_masked": "sk-a...9f2b"
+      "api_key_masked": "sk-a...9f2b",
+      "model_api_keys_meta": {
+        "model:m-foundation-paddleocr": {
+          "has_api_key": true,
+          "api_key_masked": "sk-m...10af",
+          "expires_at": "2026-12-31T23:59:59.000Z",
+          "expires_status": "healthy",
+          "expires_in_days": 263,
+          "max_calls": 5000,
+          "used_calls": 120,
+          "remaining_calls": 4880,
+          "is_expired": false
+        },
+        "model_version:mv-paddleocr-v4": {
+          "has_api_key": true,
+          "api_key_masked": "sk-v...2c81",
+          "expires_at": null,
+          "expires_status": "none",
+          "expires_in_days": null,
+          "max_calls": null,
+          "used_calls": 0,
+          "remaining_calls": null,
+          "is_expired": false
+        }
+      }
     },
     "doctr": {
       "endpoint": "",
+      "default_model_id": "",
+      "default_model_version_id": "",
+      "local_model_path": "",
       "local_train_command": "",
       "local_predict_command": "",
       "has_api_key": false,
-      "api_key_masked": "Not set"
+      "api_key_masked": "Not set",
+      "model_api_keys_meta": {}
     },
     "yolo": {
       "endpoint": "http://127.0.0.1:9394/predict",
+      "default_model_id": "m-foundation-yolo",
+      "default_model_version_id": "mv-yolo11n",
+      "local_model_path": "/opt/vistral/runtime-models/yolo11n.pt",
       "local_train_command": "python3 .../yolo_train_runner.py ...",
       "local_predict_command": "python3 .../yolo_predict_runner.py ...",
       "has_api_key": false,
-      "api_key_masked": "Not set"
+      "api_key_masked": "Not set",
+      "model_api_keys_meta": {}
     }
   },
   "controls": {
@@ -433,18 +549,51 @@ Request:
     "paddleocr": {
       "endpoint": "http://127.0.0.1:9393/predict",
       "api_key": "",
+      "default_model_id": "m-foundation-paddleocr",
+      "default_model_version_id": "mv-paddleocr-v4",
+      "model_api_keys": {
+        "model:m-foundation-paddleocr": "",
+        "model_version:mv-paddleocr-v4": ""
+      },
+      "model_api_key_policies": {
+        "model:m-foundation-paddleocr": {
+          "api_key": "",
+          "expires_at": "2026-12-31T23:59:59Z",
+          "max_calls": 5000,
+          "used_calls": 0,
+          "last_used_at": null
+        },
+        "model_version:mv-paddleocr-v4": {
+          "api_key": "",
+          "expires_at": null,
+          "max_calls": null,
+          "used_calls": 0,
+          "last_used_at": null
+        }
+      },
+      "local_model_path": "",
       "local_train_command": "python3 .../paddleocr_train_runner.py ...",
       "local_predict_command": "python3 .../paddleocr_predict_runner.py ..."
     },
     "doctr": {
       "endpoint": "",
       "api_key": "",
+      "default_model_id": "",
+      "default_model_version_id": "",
+      "model_api_keys": {},
+      "model_api_key_policies": {},
+      "local_model_path": "",
       "local_train_command": "",
       "local_predict_command": ""
     },
     "yolo": {
       "endpoint": "http://127.0.0.1:9394/predict",
       "api_key": "",
+      "default_model_id": "m-foundation-yolo",
+      "default_model_version_id": "mv-yolo11n",
+      "model_api_keys": {},
+      "model_api_key_policies": {},
+      "local_model_path": "/opt/vistral/runtime-models/yolo11n.pt",
       "local_train_command": "python3 .../yolo_train_runner.py ...",
       "local_predict_command": "python3 .../yolo_predict_runner.py ..."
     }
@@ -461,11 +610,49 @@ Request:
 Notes:
 - admin scope only
 - when `keep_existing_api_keys=true`, blank `api_key` fields keep previously saved secret values
+- when `keep_existing_api_keys=true`, blank entries in `model_api_keys` also keep previously saved model-level secret values
+- when `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS` is enabled (default), blank `local_train_command` / `local_predict_command` inputs are auto-filled with bundled runner templates
+- `runtime_config.<framework>.local_model_path` is optional and can store a local weight/model asset path for real local execution (for example YOLO base weights)
+- `runtime_config.<framework>.default_model_id` / `default_model_version_id` are optional model defaults used by runtime setup UX
+- `runtime_config.<framework>.model_api_keys` is optional object map for model-aware endpoint auth routing:
+  - `model:<model_id>` for model-level key
+  - `model_version:<model_version_id>` for version-level key
+- `runtime_config.<framework>.model_api_key_policies` is optional object map keyed by the same binding keys (`model:*` / `model_version:*`) with:
+  - `api_key` (string)
+  - `expires_at` (ISO string or `null`)
+  - `max_calls` (number or `null`)
+  - `used_calls` (number, non-negative)
+  - `last_used_at` (ISO string or `null`)
+- remote runtime auth resolution order: `model_version` key -> `model` key -> framework-level `api_key`
+- when resolved binding has policy limits:
+  - expired key (`expires_at <= now`) fails before dispatch
+  - exhausted key (`used_calls >= max_calls`) fails before dispatch
+- `model_api_keys_meta.expires_status` and `expires_in_days` are server-computed for UI warning tiers:
+  - `none`: no expiration configured
+  - `healthy`: expiration is more than 7 days away
+  - `within_7_days`: expiration is in 4-7 days
+  - `within_3_days`: expiration is in 1-3 days
+  - `expired`: expiration time has passed
+- on successful remote inference with model/model-version binding, runtime increments that binding's `used_calls` and updates `last_used_at`
+- local mode/local command does not require API key and always uses explicit `model_id` / `model_version_id` from runtime payload
 - `runtime_controls.python_bin` can override bundled runner python executable (`{{python_bin}}` placeholder)
+- when `runtime_controls.python_bin` points to a missing local path, adapter should auto-fallback to a usable interpreter candidate (`.data/runtime-python/.venv` then PATH `python3/python`) instead of hard-failing with ENOENT
 - `runtime_controls.disable_simulated_train_fallback=true` forces train to fail fast when local runner is unavailable
 - `runtime_controls.disable_inference_fallback=true` forces inference to fail fast instead of returning template/fallback outputs
 - response is the same masked settings view as `GET /settings/runtime`
 - save operation sets `active_profile_id` to `saved`
+- request payload must keep strong field typing:
+  - `runtime_config` and `runtime_controls` must be JSON objects when provided
+  - `keep_existing_api_keys` must be boolean when provided
+  - `runtime_config.<framework>.model_api_keys` must be JSON object of string values when provided
+  - `runtime_config.<framework>.model_api_key_policies` must be JSON object when provided
+  - `runtime_config.<framework>.model_api_key_policies.<binding>.api_key` must be string when provided
+  - `runtime_config.<framework>.model_api_key_policies.<binding>.expires_at` must be string or `null` when provided
+  - `runtime_config.<framework>.model_api_key_policies.<binding>.max_calls` must be number or `null` when provided
+  - `runtime_config.<framework>.model_api_key_policies.<binding>.used_calls` must be number when provided
+  - `runtime_config.<framework>.model_api_key_policies.<binding>.last_used_at` must be string or `null` when provided
+  - `runtime_controls.python_bin` must be string when provided
+  - `runtime_controls.disable_simulated_train_fallback` and `runtime_controls.disable_inference_fallback` must be boolean when provided
 
 ### POST /settings/runtime/activate-profile
 Activate one runtime profile in one click.
@@ -478,10 +665,132 @@ Request:
 ```
 
 Notes:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `profile_id` must be a non-empty string
 - admin scope only
 - profile source can be `saved` or deployment env profiles from `VISTRAL_RUNTIME_PROFILES_JSON`
 - activating a profile copies both framework settings and runtime controls (`python_bin`, fallback guards) into effective runtime settings
 - response is the same masked settings view as `GET /settings/runtime`
+
+### POST /settings/runtime/auto-configure
+Auto-fill runtime settings with deployment-friendly defaults and endpoint probing.
+
+Request:
+```json
+{
+  "overwrite_endpoint": false
+}
+```
+
+Notes:
+- admin scope only
+- request payload must be a JSON object when provided
+- `overwrite_endpoint` must be boolean when provided
+- auto-config always fills blank local command fields with bundled templates when `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS` is enabled
+- auto-config also fills blank `local_model_path` values when known local model candidates exist on disk or in env defaults
+- endpoint probing checks candidate endpoint lists per framework and writes the first reachable endpoint
+- by default (`overwrite_endpoint=false`), only blank endpoint fields are probed/filled
+- when `overwrite_endpoint=true`, existing endpoint fields can be replaced by newly discovered reachable endpoints
+- response is the same masked settings view as `GET /settings/runtime`
+
+### POST /settings/runtime/generate-api-key
+Generate a runtime API key token for endpoint/model/model-version auth bindings.
+
+Request:
+```json
+{}
+```
+
+Response:
+```json
+{
+  "api_key": "vsk_uH2x8n6a..."
+}
+```
+
+Notes:
+- admin scope only
+- request body is optional; when provided, it must be a JSON object
+- generated token is returned once and should be copied into the corresponding runtime field immediately
+- this endpoint only generates credentials; remote runtime must be configured to validate the same key before auth takes effect
+
+### POST /settings/runtime/revoke-api-key
+Revoke one saved runtime API key binding (framework-level or model/model-version binding).
+
+Request:
+```json
+{
+  "framework": "yolo",
+  "binding_key": "model_version:mv-yolo11n"
+}
+```
+
+Framework-level key revoke:
+```json
+{
+  "framework": "yolo",
+  "binding_key": "framework"
+}
+```
+
+Notes:
+- admin scope only
+- request body must be a JSON object
+- `framework` is required and must be one of `paddleocr|doctr|yolo`
+- `binding_key` is optional:
+  - omitted/empty/`framework` => revoke framework-level `api_key`
+  - `model:<model_id>` => revoke model-level key
+  - `model_version:<model_version_id>` => revoke model-version-level key
+- for model/model-version revoke, server removes both:
+  - `runtime_config.<framework>.model_api_keys[binding_key]`
+  - `runtime_config.<framework>.model_api_key_policies[binding_key]`
+- response is the same masked runtime settings view as `GET /settings/runtime`
+
+### POST /settings/runtime/rotate-api-key
+Rotate one runtime API key and persist immediately (admin helper for key lifecycle operations).
+
+Request:
+```json
+{
+  "framework": "yolo",
+  "binding_key": "model_version:mv-yolo11n"
+}
+```
+
+Framework-level rotate:
+```json
+{
+  "framework": "yolo",
+  "binding_key": "framework"
+}
+```
+
+Response:
+```json
+{
+  "api_key": "vsk_...",
+  "settings": {
+    "updated_at": "2026-04-13T10:00:00.000Z"
+  }
+}
+```
+
+Notes:
+- admin scope only
+- request body must be a JSON object
+- `framework` is required and must be one of `paddleocr|doctr|yolo`
+- `binding_key` is optional:
+  - omitted/empty/`framework` => rotate framework-level `api_key`
+  - `model:<model_id>` => rotate model-level key
+  - `model_version:<model_version_id>` => rotate model-version-level key
+- rotating model/model-version bindings updates both:
+  - `runtime_config.<framework>.model_api_keys[binding_key]`
+  - `runtime_config.<framework>.model_api_key_policies[binding_key]`
+- model/model-version rotate resets usage counters:
+  - `used_calls=0`
+  - `last_used_at=null`
+- existing `expires_at` / `max_calls` policy values on that binding are preserved
+- generated key is returned once and should be copied into remote runtime auth config immediately
 
 ### DELETE /settings/runtime
 Clear UI-saved runtime settings and return to env-default fallback mode.
@@ -510,6 +819,9 @@ Request:
 }
 ```
 
+Rule:
+- JSON filename mode payload must be a JSON object with non-empty `filename`; invalid payload returns `400 VALIDATION_ERROR`
+
 2. `multipart/form-data` mode (preferred):
 - field name: `file`
 - server persists uploaded binary under `UPLOAD_STORAGE_ROOT` (subdir by target type)
@@ -535,6 +847,7 @@ Supported request formats:
 
 Notes:
 - keep each file under about `120 MB` to avoid proxy/body-size rejection (`413`)
+- JSON filename mode payload must be a JSON object with non-empty `filename`; invalid payload returns `400 VALIDATION_ERROR`
 
 ### GET /files/dataset/{datasetId}
 List dataset-scoped attachments.
@@ -548,6 +861,7 @@ Supported request formats:
 
 Notes:
 - keep each file under about `120 MB` to avoid proxy/body-size rejection (`413`)
+- JSON filename mode payload must be a JSON object with non-empty `filename`; invalid payload returns `400 VALIDATION_ERROR`
 
 ### GET /files/inference
 List inference-input attachments for current user.
@@ -563,6 +877,7 @@ Notes:
 - uploaded attachment target is `attached_to_type=InferenceRun` and `attached_to_id=null` before run execution.
 - `InferenceValidationPage` should use this endpoint instead of conversation attachment endpoints.
 - keep each file under about `120 MB` to avoid proxy/body-size rejection (`413`)
+- JSON filename mode payload must be a JSON object with non-empty `filename`; invalid payload returns `400 VALIDATION_ERROR`
 
 ### GET /files/{id}/content
 Fetch binary content for a ready attachment in readable resource scope.
@@ -600,6 +915,12 @@ List owned/authorized models.
 ### POST /models/draft
 Create model draft.
 
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `name` must be a non-empty string
+- `model_type` must be one of `ocr|detection|classification|segmentation|obb`
+- `visibility` must be one of `private|workspace|public`
+
 ### DELETE /admin/models/{id}
 Delete a model from the catalog (admin only).
 
@@ -624,14 +945,33 @@ Response:
 ### POST /approvals/submit
 Submit model approval request.
 
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `model_id` must be a non-empty string
+- `parameter_snapshot` can be omitted; backend normalizes it to `{}` when absent/invalid
+- `review_notes` must be a string when provided
+- `review_notes: null` is treated as invalid type and returns `400 VALIDATION_ERROR`
+
 ### GET /approvals
 List approval requests (admin gets global list, user gets own).
 
 ### POST /approvals/{id}/approve
 Approve request (admin only).
 
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `notes` is optional and trimmed when provided
+- when provided, `notes` must be a string
+- `notes: null` is treated as invalid type and returns `400 VALIDATION_ERROR`
+
 ### POST /approvals/{id}/reject
 Reject request (admin only).
+
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `reason` must be a non-empty string
+- when provided, `notes` must be a string
+- `notes: null` is treated as invalid type and returns `400 VALIDATION_ERROR`
 
 ### GET /audit/logs
 Audit logs (admin only).
@@ -706,6 +1046,12 @@ Request:
 }
 ```
 
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `name` must be a non-empty string
+- `task_type` must be one of `ocr|detection|classification|segmentation|obb`
+- `label_schema.classes` is normalized to a string array when omitted/invalid
+
 ### GET /datasets/{id}
 Get dataset detail.
 
@@ -732,6 +1078,8 @@ Behavior:
 - `attachment_id` is optional.
 - when `attachment_id` is absent, server resolves existing dataset attachment by `filename`; if none exists, server creates a dataset-scoped reference attachment and then creates item metadata.
 - when an item already exists for the chosen attachment, server returns the existing item (idempotent for same attachment).
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- at least one of `attachment_id` or `filename` is required
 
 ### PATCH /datasets/{id}/items/{item_id}
 Update an existing dataset item.
@@ -752,6 +1100,7 @@ Behavior:
 - any field is optional; omitted fields keep previous value.
 - when `metadata` is provided, it replaces current metadata object.
 - item must belong to the target dataset.
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
 
 ### POST /datasets/{id}/split
 Save split strategy and assign `train/val/test`.
@@ -770,12 +1119,18 @@ Rules:
 - split assignment targets trainable visual samples only (ready image attachments).
 - non-visual helper files (for example import `.txt/.json` payload attachments) are excluded from split assignment.
 - when `train_ratio > 0` and trainable sample count is non-zero, server guarantees at least one `train` sample.
+- request payload must be a JSON object with finite number values for `train_ratio`, `val_ratio`, `test_ratio`, and `seed`; invalid payload returns `400 VALIDATION_ERROR`
 
 ### GET /datasets/{id}/versions
 List dataset versions.
 
 ### POST /datasets/{id}/versions
 Create dataset version snapshot.
+
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `version_name` is optional and trimmed when provided
+- when provided, `version_name` must be a string
 
 ### POST /datasets/{id}/import
 Import annotations into dataset items.
@@ -787,6 +1142,9 @@ Current behavior:
 - updates existing non-approved annotations; approved annotations stay immutable
 - when import record filename has no matched ready item, server creates a metadata item record first (using existing attachment by filename when available, otherwise creating a reference attachment)
 - returns import summary (`imported`, `updated`, `created_items`)
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `format` must be one of `yolo|coco|labelme|ocr`
+- `attachment_id` must be a non-empty string
 
 Minimum import file specifications:
 - `yolo`:
@@ -820,6 +1178,8 @@ Current behavior:
 - format/task_type constraints align with import:
   - `yolo|coco|labelme` require detection/obb/segmentation dataset task type
   - `ocr` requires `dataset.task_type=ocr`
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `format` must be one of `yolo|coco|labelme|ocr`
 - output structure follows selected `format`:
   - `yolo`: JSON object with `dataset_id`, `format`, `exported_at`, `items[]` (`filename`, `boxes[]`)
   - `ocr`: JSON object with `dataset_id`, `format`, `exported_at`, `items[]` (`filename`, `lines[]`)
@@ -858,6 +1218,8 @@ Rules:
 - once a record is in `in_review`, it becomes read-only in this endpoint; reviewer decisions must use `/review`
 - a `rejected` record must first move back to `in_progress` before further edits are accepted
 - `approved` records are read-only in this endpoint
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- required fields: non-empty `dataset_item_id`, valid `task_type`, valid `source`, valid `status`, and object `payload`
 
 ### POST /datasets/{datasetId}/annotations/{annotationId}/submit-review
 Move annotation to `in_review`.
@@ -880,6 +1242,9 @@ Rules:
 - allowed codes: `box_mismatch`, `label_error`, `text_error`, `missing_object`, `polygon_issue`, `other`
 - `review_reason_code` must be omitted or `null` when `status=approved`
 - list/detail responses that embed `latest_review` include `review_reason_code` so the client can show persistent rework context
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `status` must be `approved` or `rejected`
+- when provided, `quality_score` must be finite number or `null`
 
 ### POST /datasets/{datasetId}/pre-annotations
 Run model-based pre-annotation on dataset ready items.
@@ -897,6 +1262,8 @@ Behavior (current):
 - for each ready dataset item, server runs framework `predict()` and converts output into annotation payload
 - writes `source=pre_annotation`, `status=in_progress`
 - skips approved annotations and items without prediction signal
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- when provided, `model_version_id` must be a string
 
 ## 12. Requirement Draft Endpoint
 
@@ -926,6 +1293,8 @@ Response:
 ```
 
 Notes:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `description` must be a non-empty string
 - first implementation is rule-based by default
 - if user has enabled LLM config with valid key, server attempts LLM-enhanced draft and falls back to rule result on failure
 - `annotation_type` is kept as backward-compatible alias of `recommended_annotation_type`
@@ -969,11 +1338,16 @@ Request:
 ```
 
 Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `name`, `dataset_id`, `dataset_version_id`, and `base_model` must be non-empty strings
+- `task_type` must be one of `ocr|detection|classification|segmentation|obb`
+- `framework` must be one of `paddleocr|doctr|yolo`
 - `dataset_version_id` is required for new training jobs
 - `dataset_version_id` must belong to the selected `dataset_id`
 - selected dataset must already be launch-ready for training (`status=ready`)
 - selected dataset version must include at least one `train` item in `split_summary`
 - selected dataset version must have positive annotation coverage (`annotation_coverage > 0`)
+- `config` is optional; non-string primitive values are normalized to string form by backend before persistence
 
 Server behavior (current):
 - create in `draft`, then queue into local single-node executor
@@ -992,7 +1366,7 @@ Server behavior (current):
 - on API restart, unfinished jobs in `queued/preparing/running/evaluating` are automatically re-queued
 - executor now defaults to bundled local runner templates (`scripts/local-runners/*_train_runner.py`) and prefers runner-generated metrics from `{{metrics_path}}` when available
 - if `<FRAMEWORK>_LOCAL_TRAIN_COMMAND` is configured (for example `YOLO_LOCAL_TRAIN_COMMAND`), it overrides bundled runner template
-- when `VISTRAL_RUNNER_ENABLE_REAL=1`, bundled local runner templates attempt dependency-backed real framework execution; otherwise they stay in template mode
+- when `VISTRAL_RUNNER_ENABLE_REAL` is not explicitly disabled (`0/false/no/off/disabled`; deployment default may stay `auto`), bundled local runner templates attempt dependency-backed real framework execution; otherwise they stay in template mode
 - if bundled runner command invocation fails (for example dependency missing), training falls back to simulated lifecycle and logs fallback reason
 - for OCR frameworks, bundled `paddleocr/doctr` train runners can perform dependency-backed OCR probe execution (sampled manifest inference for metric bootstrap) when dependencies are available; when unavailable, artifact manifest keeps `mode=template` and `fallback_reason`
 - OCR local runners may also emit additional OCR-shaped metric keys in `metrics.json` / artifact summary (for example `norm_edit_distance`, `word_accuracy`) alongside the canonical visible metrics, without changing the job detail response envelope
@@ -1082,6 +1456,8 @@ Request:
 ```
 
 Current rule:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `model_id`, `training_job_id`, and `version_name` must be non-empty strings
 - only completed jobs can register
 - registration is blocked when `training_jobs.execution_mode` is `simulated` or `unknown`
 - registration is also blocked when local-command artifact summary indicates non-real execution evidence (`mode=template`, explicit `fallback_reason`, or `training_performed=false`) unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
@@ -1109,17 +1485,25 @@ Request:
 ```
 
 Rule:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `model_version_id` and `input_attachment_id` must be non-empty strings
+- `task_type` must be one of `ocr|detection|classification|segmentation|obb`
 - `input_attachment_id` should reference a ready attachment uploaded via `/files/inference/upload`.
 - conversation attachment ids are still accepted for backward compatibility with existing scripts.
 
 Response includes both raw and normalized outputs.
-Response also includes explicit `execution_source` (mirrors normalized source marker).
+Response also includes explicit `execution_source` (truthfulness-normalized execution marker for UI and audit display).
 
 Current execution preference:
 1. framework runtime endpoint, if configured and reachable
 2. version-bound local artifact path, if available to the selected model version
 3. explicit local predict command / bundled local runner (bundled templates are used by default when explicit command is not configured)
 4. explicit fallback result with traceable reason fields
+
+Runtime endpoint auth resolution:
+1. `runtime_config.<framework>.model_api_keys["model_version:<model_version_id>"]`
+2. `runtime_config.<framework>.model_api_keys["model:<model_id>"]`
+3. `runtime_config.<framework>.api_key`
 
 `normalized_output.source` semantics:
 - `<framework>_runtime`: runtime endpoint call succeeded
@@ -1136,6 +1520,11 @@ Template-mode marker rule:
 - when bundled local runner returns `raw_output.meta.mode=template`, frontend should treat the run as non-real output even if source is `<framework>_local_command`.
 - for template-mode local command runs, backend also mirrors `meta.fallback_reason` into `raw_output.local_command_fallback_reason` so API consumers can read one canonical fallback-reason field.
 
+`execution_source` normalization rule:
+- base marker comes from stored source / `normalized_output.source`.
+- if fallback evidence exists but the base marker is not already explicit fallback/template/mock/base-empty, backend appends `_fallback` to `execution_source` (for example `yolo_local_command_fallback`, `paddleocr_runtime_fallback`).
+- fallback evidence includes (not limited to): explicit fallback reason fields and template mode markers (`raw_output.meta.mode=template`).
+
 OCR fallback safety rule:
 - if local OCR predict command fails, fallback must return empty OCR arrays (`ocr.lines=[]`, `ocr.words=[]`) and must not inject business-looking sample text.
 
@@ -1144,6 +1533,7 @@ Generic fallback safety rule:
 
 Local command execution rule:
 - local command execution should prefer direct Python invocation when command template resolves to Python script execution.
+- when resolved `python_bin` is a path-like value but does not exist, backend should skip that candidate and fallback to the next interpreter candidate (`.data/runtime-python/.venv` then PATH commands) before applying explicit fallback output.
 - shell fallback must be cross-platform:
   - Windows: `ComSpec`/`cmd.exe`
   - POSIX: `${SHELL}` or `/bin/sh`
@@ -1165,6 +1555,9 @@ Request:
 ```
 
 Behavior:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `dataset_id` must be a non-empty string
+- `reason` is optional; when omitted/blank, backend normalizes it to `feedback`
 - server sets `inference_runs.feedback_dataset_id` to target dataset id.
 - target dataset `task_type` must match the inference run `task_type`; otherwise request fails with validation error.
 - if run input attachment is already dataset-scoped on the target dataset, server reuses it.
@@ -1209,6 +1602,80 @@ Response item:
 - `http_status`
 - `invalid_payload`
 - `unknown`
+
+### GET /runtime/readiness
+Get runtime readiness summary for production-like execution.
+
+Behavior:
+- admin scope only
+- returns a compact readiness report for runtime settings + connectivity + local python executor probing
+- when endpoint is unavailable and framework falls back to bundled local runner, backend probes framework Python dependencies (`paddleocr`, `doctr`, `ultralytics`) and reports missing modules as readiness issues
+- when a framework has `local_model_path` configured, readiness verifies that the referenced file exists and reports missing paths as issues
+- when YOLO has no reachable endpoint and no resolvable local model path, readiness reports a warning so operators know real local training/inference may still fall back
+- when endpoint is unavailable and framework uses custom local command overrides, backend probes command executable tokens:
+  - checks whether executable path/command is resolvable
+  - validates `{{python_bin}}` placeholder can be resolved
+  - emits framework-specific readiness issues when train/predict command probes fail
+- readiness issues can include optional `remediation` text so UI can present copy-ready fix guidance
+- readiness issues can include optional `remediation_command` for copy-ready shell commands
+- used by Runtime Settings UI to surface actionable blockers after deployment
+- response includes `bootstrap_assets` snapshots so UI can show local bootstrap artifact status (for example docTR preseed directory + missing files)
+- `bootstrap_assets[*].expected_files` item shape:
+  - `name`: artifact filename
+  - `present`: whether file exists with usable size
+  - `byte_size`: file bytes (null when missing)
+- `bootstrap_assets[*].missing_files` is a copy-ready list for guided remediation
+- no API keys or secret values are returned
+
+Response:
+```json
+{
+  "checked_at": "2026-04-12T04:35:11.000Z",
+  "status": "degraded",
+  "python_bin_requested": "/custom/python3",
+  "python_bin_resolved": "python3",
+  "strict_controls": {
+    "python_bin": "/custom/python3",
+    "disable_simulated_train_fallback": true,
+    "disable_inference_fallback": true
+  },
+  "frameworks": [
+    {
+      "framework": "yolo",
+      "endpoint_configured": true,
+      "endpoint_reachable": false,
+      "local_train_command_configured": false,
+      "local_predict_command_configured": false,
+      "effective_mode": "endpoint"
+    }
+  ],
+  "bootstrap_assets": [
+    {
+      "framework": "doctr",
+      "preseed_dir": "/app/runtime-preseed/doctr",
+      "expected_files": [
+        { "name": "db_resnet50-79bd7d70.pt", "present": false, "byte_size": null },
+        { "name": "vgg16_bn_r-d108c19c.pt", "present": true, "byte_size": 36700160 }
+      ],
+      "missing_files": ["db_resnet50-79bd7d70.pt"]
+    }
+  ],
+  "issues": [
+    {
+      "code": "runtime_endpoint_unreachable_yolo",
+      "level": "warning",
+      "message": "yolo endpoint configured but connectivity probe failed (network).",
+      "remediation": "Verify yolo runtime endpoint health/network/auth settings, or clear endpoint to use validated local fallback path.",
+      "remediation_command": "curl -i http://127.0.0.1:9393/predict"
+    }
+  ]
+}
+```
+
+Status semantics:
+- `ready`: no current readiness issues detected
+- `degraded`: non-blocking warnings detected
+- `not_ready`: blocking issues detected (for example no usable Python fallback + no endpoint path)
 
 ### GET /runtime/metrics-retention
 Get current training metrics retention usage summary (scoped to jobs visible to current user).
@@ -1331,6 +1798,8 @@ Rules:
 - `worker_bind_port` is optional and defaults to `9090`
 - control plane returns copyable startup templates plus a short-lived pairing token
 - bootstrap-created workers now prefer a dedicated per-worker auth token behind the pairing exchange; operators should not need to manually paste the long-lived control-plane shared token
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `control_plane_base_url` must be a non-empty string
 
 ### GET /admin/training-workers/bootstrap-sessions/{id}/bundle
 Download a worker bootstrap bundle script for operator handoff.
@@ -1359,6 +1828,16 @@ Request:
 }
 ```
 
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `name` is required
+- optional `status` must be one of `online|offline|draining`
+- optional `max_concurrency` must be finite number
+- optional `endpoint` must be string or `null`
+- optional `enabled` must be boolean
+- optional `capabilities` must be string array
+- optional `metadata` must be JSON object
+
 ### PATCH /admin/training-workers/{id}
 Update worker mutable fields.
 
@@ -1370,6 +1849,15 @@ Supported fields:
 - `max_concurrency`
 - `capabilities`
 - `metadata`
+
+Request rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- optional `status` must be one of `online|offline|draining`
+- optional `max_concurrency` must be finite number
+- optional `endpoint` must be string or `null`
+- optional `enabled` must be boolean
+- optional `capabilities` must be string array
+- optional `metadata` must be JSON object
 
 ### DELETE /admin/training-workers/{id}
 Remove worker node from scheduling pool.
@@ -1537,6 +2025,14 @@ Behavior:
 - heartbeat stale timeout uses `TRAINING_WORKER_HEARTBEAT_TTL_MS`
 - scheduler treats stale worker as unavailable
 - when heartbeat matches an active bootstrap session `worker_id`, control plane should run callback validation against worker health endpoint before advancing session/worker to `online`
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `name` is required
+- optional `status` must be one of `online|offline|draining`
+- optional `max_concurrency` / `reported_load` must be finite number (or `null` for `reported_load`)
+- optional `endpoint` must be string or `null`
+- optional `enabled` must be boolean
+- optional `capabilities` must be string array
+- optional `metadata` must be JSON object
 
 ### GET /runtime/training-workers/dataset-packages/{package_id}
 Internal control-plane endpoint for worker dataset package download.

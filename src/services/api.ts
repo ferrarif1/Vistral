@@ -27,6 +27,7 @@ import type {
   ResetUserPasswordInput,
   ReviewAnnotationInput,
   RuntimeConnectivityRecord,
+  RuntimeReadinessReport,
   RuntimeMetricsRetentionSummary,
   SubmitApprovalInput,
   TrainingArtifactSummary,
@@ -66,6 +67,11 @@ type ApiEnvelope<T> =
         message: string;
       };
     };
+
+type RotateRuntimeApiKeyResponse = {
+  api_key: string;
+  settings: RuntimeSettingsView;
+};
 
 let csrfToken: string | null = null;
 
@@ -485,6 +491,11 @@ export const api = {
       body: JSON.stringify({ title })
     }),
 
+  deleteConversation: (conversationId: string) =>
+    request<{ deleted: boolean }>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+      method: 'DELETE'
+    }),
+
   sendConversationMessage: (input: {
     conversation_id: string;
     content: string;
@@ -764,6 +775,7 @@ export const api = {
         framework ? `?framework=${encodeURIComponent(framework)}` : ''
       }`
     ),
+  getRuntimeReadiness: () => request<RuntimeReadinessReport>('/api/runtime/readiness'),
 
   getRuntimeMetricsRetentionSummary: () =>
     request<RuntimeMetricsRetentionSummary>('/api/runtime/metrics-retention'),
@@ -853,6 +865,44 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({
         profile_id: profileId
+      })
+    }),
+
+  autoConfigureRuntimeSettings: (overwriteEndpoint = false) =>
+    request<RuntimeSettingsView>('/api/settings/runtime/auto-configure', {
+      method: 'POST',
+      body: JSON.stringify({
+        overwrite_endpoint: overwriteEndpoint
+      })
+    }),
+
+  generateRuntimeApiKey: () =>
+    request<{ api_key: string }>('/api/settings/runtime/generate-api-key', {
+      method: 'POST',
+      body: JSON.stringify({})
+    }),
+
+  revokeRuntimeApiKey: (
+    framework: 'paddleocr' | 'doctr' | 'yolo',
+    bindingKey?: string
+  ) =>
+    request<RuntimeSettingsView>('/api/settings/runtime/revoke-api-key', {
+      method: 'POST',
+      body: JSON.stringify({
+        framework,
+        binding_key: bindingKey ?? 'framework'
+      })
+    }),
+
+  rotateRuntimeApiKey: (
+    framework: 'paddleocr' | 'doctr' | 'yolo',
+    bindingKey?: string
+  ) =>
+    request<RotateRuntimeApiKeyResponse>('/api/settings/runtime/rotate-api-key', {
+      method: 'POST',
+      body: JSON.stringify({
+        framework,
+        binding_key: bindingKey ?? 'framework'
       })
     })
 };

@@ -1,7 +1,8 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { hashPassword } from './auth';
+import { applyBundledLocalCommandDefaults, resolveBundledLocalModelPath } from './runtimeDefaults';
 import {
   isCuratedFoundationModelName,
   isFixtureAttachmentFilename,
@@ -93,8 +94,34 @@ const parseRuntimeBoolean = (value: string | undefined, fallback = false): boole
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 };
 
+const runtimeDefaultPythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
+const runtimeDefaultPythonCandidates =
+  process.platform === 'win32'
+    ? ['C:\\opt\\vistral-venv\\Scripts\\python.exe', 'python']
+    : ['/opt/vistral-venv/bin/python', '/opt/vistral-venv/bin/python3', 'python3', 'python'];
+
+const resolveRuntimeDefaultPythonBin = (): string => {
+  const fromEnv = normalizeRuntimeSettingField(process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN);
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  const pathCandidate = runtimeDefaultPythonCandidates.find((candidate) => candidate.includes('/') || candidate.includes('\\'));
+  const existingPathCandidate = runtimeDefaultPythonCandidates.find(
+    (candidate) => (candidate.includes('/') || candidate.includes('\\')) && existsSync(candidate)
+  );
+  if (existingPathCandidate) {
+    return existingPathCandidate;
+  }
+  if (pathCandidate) {
+    return pathCandidate;
+  }
+
+  return runtimeDefaultPythonExecutable;
+};
+
 const buildDefaultRuntimeControlSettingsFromEnv = (): RuntimeSettingsRecord['controls'] => ({
-  python_bin: normalizeRuntimeSettingField(process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN),
+  python_bin: resolveRuntimeDefaultPythonBin(),
   disable_simulated_train_fallback: parseRuntimeBoolean(
     process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
     false
@@ -106,24 +133,45 @@ const buildDefaultRuntimeSettingsFromEnv = (): RuntimeSettingsRecord => ({
   updated_at: null,
   active_profile_id: null,
   frameworks: {
-    paddleocr: {
+    paddleocr: applyBundledLocalCommandDefaults('paddleocr', {
       endpoint: normalizeRuntimeSettingField(process.env.PADDLEOCR_RUNTIME_ENDPOINT),
       api_key: normalizeRuntimeSettingField(process.env.PADDLEOCR_RUNTIME_API_KEY),
+      default_model_id: '',
+      default_model_version_id: '',
+      model_api_keys: {},
+      model_api_key_policies: {},
+      local_model_path:
+        normalizeRuntimeSettingField(process.env.PADDLEOCR_LOCAL_MODEL_PATH) ||
+        resolveBundledLocalModelPath('paddleocr'),
       local_train_command: normalizeRuntimeSettingField(process.env.PADDLEOCR_LOCAL_TRAIN_COMMAND),
       local_predict_command: normalizeRuntimeSettingField(process.env.PADDLEOCR_LOCAL_PREDICT_COMMAND)
-    },
-    doctr: {
+    }),
+    doctr: applyBundledLocalCommandDefaults('doctr', {
       endpoint: normalizeRuntimeSettingField(process.env.DOCTR_RUNTIME_ENDPOINT),
       api_key: normalizeRuntimeSettingField(process.env.DOCTR_RUNTIME_API_KEY),
+      default_model_id: '',
+      default_model_version_id: '',
+      model_api_keys: {},
+      model_api_key_policies: {},
+      local_model_path:
+        normalizeRuntimeSettingField(process.env.DOCTR_LOCAL_MODEL_PATH) ||
+        resolveBundledLocalModelPath('doctr'),
       local_train_command: normalizeRuntimeSettingField(process.env.DOCTR_LOCAL_TRAIN_COMMAND),
       local_predict_command: normalizeRuntimeSettingField(process.env.DOCTR_LOCAL_PREDICT_COMMAND)
-    },
-    yolo: {
+    }),
+    yolo: applyBundledLocalCommandDefaults('yolo', {
       endpoint: normalizeRuntimeSettingField(process.env.YOLO_RUNTIME_ENDPOINT),
       api_key: normalizeRuntimeSettingField(process.env.YOLO_RUNTIME_API_KEY),
+      default_model_id: '',
+      default_model_version_id: '',
+      model_api_keys: {},
+      model_api_key_policies: {},
+      local_model_path:
+        normalizeRuntimeSettingField(process.env.YOLO_LOCAL_MODEL_PATH) ||
+        resolveBundledLocalModelPath('yolo'),
       local_train_command: normalizeRuntimeSettingField(process.env.YOLO_LOCAL_TRAIN_COMMAND),
       local_predict_command: normalizeRuntimeSettingField(process.env.YOLO_LOCAL_PREDICT_COMMAND)
-    }
+    })
   },
   controls: buildDefaultRuntimeControlSettingsFromEnv()
 });
@@ -1015,16 +1063,72 @@ const normalizeTrainingWorkerBootstrapSession = (
   };
 };
 
-const normalizeInferenceRun = (entry: InferenceRunRecord): InferenceRunRecord => ({
-  ...entry,
-  execution_source:
+const sourceHasFallbackMarker = (value: string): boolean => /(fallback|template|mock|base_empty)/i.test(value);
+
+const parseBooleanLikeRuntimeFlag = (value: unknown): boolean => {
+  if (value === true) {
+    return true;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0;
+  }
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+};
+
+const hasInferenceFallbackEvidence = (rawOutput: Record<string, unknown>): boolean => {
+  const directCandidates = [rawOutput.runtime_fallback_reason, rawOutput.local_command_fallback_reason];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return true;
+    }
+  }
+
+  const rawMeta =
+    rawOutput.meta && typeof rawOutput.meta === 'object' && !Array.isArray(rawOutput.meta)
+      ? (rawOutput.meta as Record<string, unknown>)
+      : null;
+  if (typeof rawMeta?.fallback_reason === 'string' && rawMeta.fallback_reason.trim()) {
+    return true;
+  }
+  if (typeof rawMeta?.mode === 'string' && rawMeta.mode.trim().toLowerCase() === 'template') {
+    return true;
+  }
+  return parseBooleanLikeRuntimeFlag(rawOutput.local_command_template_mode);
+};
+
+const normalizeInferenceRun = (entry: InferenceRunRecord): InferenceRunRecord => {
+  const executionSource =
     typeof entry.execution_source === 'string' && entry.execution_source.trim()
-      ? entry.execution_source
-      : typeof entry.normalized_output?.normalized_output?.source === 'string' &&
-          entry.normalized_output.normalized_output.source.trim()
-        ? entry.normalized_output.normalized_output.source
-        : 'unknown'
-});
+      ? entry.execution_source.trim()
+      : '';
+  const normalizedSource =
+    typeof entry.normalized_output?.normalized_output?.source === 'string' &&
+    entry.normalized_output.normalized_output.source.trim()
+      ? entry.normalized_output.normalized_output.source.trim()
+      : '';
+  const baseSource = executionSource || normalizedSource || 'unknown';
+  const rawOutput =
+    entry.raw_output && typeof entry.raw_output === 'object' && !Array.isArray(entry.raw_output)
+      ? (entry.raw_output as Record<string, unknown>)
+      : {};
+  const nextSource =
+    !sourceHasFallbackMarker(baseSource) && hasInferenceFallbackEvidence(rawOutput)
+      ? baseSource === 'unknown'
+        ? 'explicit_fallback_detected'
+        : `${baseSource}_fallback`
+      : baseSource;
+  return {
+    ...entry,
+    execution_source: nextSource
+  };
+};
 
 const normalizeAnnotationReview = (entry: AnnotationReviewRecord): AnnotationReviewRecord => ({
   ...entry,
@@ -1501,19 +1605,144 @@ export const loadPersistedLlmConfigs = async (): Promise<void> => {
 };
 
 const normalizeRuntimeFrameworkConfig = (
+  framework: 'paddleocr' | 'doctr' | 'yolo',
   raw: unknown,
   fallback: RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']]
 ): RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']] => {
+  const normalizeIsoDate = (value: unknown): string | null => {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Date.parse(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return new Date(parsed).toISOString();
+  };
+
+  const normalizeModelApiKeys = (value: unknown): Record<string, string> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { ...fallback.model_api_keys };
+    }
+    const result: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      const normalizedKey = key.trim();
+      if (!normalizedKey || typeof entry !== 'string') {
+        continue;
+      }
+      result[normalizedKey] = entry.trim();
+    }
+    return result;
+  };
+
+  const normalizeModelApiKeyPolicies = (
+    value: unknown,
+    legacyKeys: Record<string, string>
+  ): RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']]['model_api_key_policies'] => {
+    const fallbackPolicies = fallback.model_api_key_policies ?? {};
+    const rawPolicies =
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+    const mergedKeys = new Set<string>([
+      ...Object.keys(fallbackPolicies),
+      ...Object.keys(legacyKeys),
+      ...Object.keys(rawPolicies)
+    ]);
+
+    const result: RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']]['model_api_key_policies'] =
+      {};
+
+    for (const rawKey of mergedKeys) {
+      const key = rawKey.trim();
+      if (!key) {
+        continue;
+      }
+      const fallbackPolicy = fallbackPolicies[key];
+      const rawEntry = rawPolicies[key];
+      const entry =
+        rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)
+          ? (rawEntry as Record<string, unknown>)
+          : null;
+      const legacyApiKey = (legacyKeys[key] ?? '').trim();
+      const normalizedApiKey =
+        typeof entry?.api_key === 'string'
+          ? entry.api_key.trim()
+          : legacyApiKey || (fallbackPolicy?.api_key ?? '').trim();
+      const normalizedMaxCalls =
+        typeof entry?.max_calls === 'number' && Number.isFinite(entry.max_calls)
+          ? Math.max(0, Math.floor(entry.max_calls))
+          : typeof fallbackPolicy?.max_calls === 'number'
+            ? Math.max(0, Math.floor(fallbackPolicy.max_calls))
+            : null;
+      const normalizedUsedCalls =
+        typeof entry?.used_calls === 'number' && Number.isFinite(entry.used_calls)
+          ? Math.max(0, Math.floor(entry.used_calls))
+          : typeof fallbackPolicy?.used_calls === 'number' && Number.isFinite(fallbackPolicy.used_calls)
+            ? Math.max(0, Math.floor(fallbackPolicy.used_calls))
+            : 0;
+      const cappedUsedCalls =
+        typeof normalizedMaxCalls === 'number'
+          ? Math.min(normalizedUsedCalls, normalizedMaxCalls)
+          : normalizedUsedCalls;
+
+      result[key] = {
+        api_key: normalizedApiKey,
+        expires_at:
+          normalizeIsoDate(entry?.expires_at) ??
+          normalizeIsoDate(fallbackPolicy?.expires_at) ??
+          null,
+        max_calls: normalizedMaxCalls,
+        used_calls: cappedUsedCalls,
+        last_used_at:
+          normalizeIsoDate(entry?.last_used_at) ??
+          normalizeIsoDate(fallbackPolicy?.last_used_at) ??
+          null
+      };
+    }
+
+    return result;
+  };
+
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { ...fallback };
+    return applyBundledLocalCommandDefaults(framework, { ...fallback });
   }
 
   const entry = raw as Partial<RuntimeSettingsRecord['frameworks'][keyof RuntimeSettingsRecord['frameworks']]>;
-  return {
+  const normalizedLegacyModelApiKeys = normalizeModelApiKeys(entry.model_api_keys);
+  const normalizedModelApiKeyPolicies = normalizeModelApiKeyPolicies(
+    entry.model_api_key_policies,
+    normalizedLegacyModelApiKeys
+  );
+  const normalizedModelApiKeys = Object.fromEntries(
+    Object.entries(normalizedModelApiKeyPolicies)
+      .map(([key, policy]) => [key, (policy.api_key ?? '').trim()])
+      .filter(([, apiKey]) => Boolean(apiKey))
+  );
+
+  return applyBundledLocalCommandDefaults(framework, {
     endpoint:
       typeof entry.endpoint === 'string' ? entry.endpoint.trim() : fallback.endpoint,
     api_key:
       typeof entry.api_key === 'string' ? entry.api_key.trim() : fallback.api_key,
+    default_model_id:
+      typeof entry.default_model_id === 'string'
+        ? entry.default_model_id.trim()
+        : fallback.default_model_id,
+    default_model_version_id:
+      typeof entry.default_model_version_id === 'string'
+        ? entry.default_model_version_id.trim()
+        : fallback.default_model_version_id,
+    model_api_keys: normalizedModelApiKeys,
+    model_api_key_policies: normalizedModelApiKeyPolicies,
+    local_model_path:
+      typeof entry.local_model_path === 'string'
+        ? entry.local_model_path.trim()
+        : fallback.local_model_path,
     local_train_command:
       typeof entry.local_train_command === 'string'
         ? entry.local_train_command.trim()
@@ -1522,7 +1751,7 @@ const normalizeRuntimeFrameworkConfig = (
       typeof entry.local_predict_command === 'string'
         ? entry.local_predict_command.trim()
         : fallback.local_predict_command
-  };
+  });
 };
 
 const normalizeRuntimeControlSettings = (
@@ -1534,9 +1763,16 @@ const normalizeRuntimeControlSettings = (
   }
 
   const entry = raw as Partial<RuntimeSettingsRecord['controls']>;
+  const requestedPythonBin = typeof entry.python_bin === 'string' ? entry.python_bin.trim() : '';
+  const preferredPythonBin = resolveRuntimeDefaultPythonBin();
+  const shouldPromotePreferredPythonBin =
+    Boolean(preferredPythonBin) &&
+    preferredPythonBin !== requestedPythonBin &&
+    ['/usr/bin/python3', 'python3', 'python', ''].includes(requestedPythonBin);
   return {
-    python_bin:
-      typeof entry.python_bin === 'string' ? entry.python_bin.trim() : fallback.python_bin,
+    python_bin: shouldPromotePreferredPythonBin
+      ? preferredPythonBin
+      : requestedPythonBin || fallback.python_bin,
     disable_simulated_train_fallback:
       typeof entry.disable_simulated_train_fallback === 'boolean'
         ? entry.disable_simulated_train_fallback
@@ -1561,14 +1797,17 @@ export const loadPersistedRuntimeSettings = async (): Promise<void> => {
         : {};
 
     runtimeSettings.frameworks.paddleocr = normalizeRuntimeFrameworkConfig(
+      'paddleocr',
       frameworks.paddleocr,
       defaults.frameworks.paddleocr
     );
     runtimeSettings.frameworks.doctr = normalizeRuntimeFrameworkConfig(
+      'doctr',
       frameworks.doctr,
       defaults.frameworks.doctr
     );
     runtimeSettings.frameworks.yolo = normalizeRuntimeFrameworkConfig(
+      'yolo',
       frameworks.yolo,
       defaults.frameworks.yolo
     );

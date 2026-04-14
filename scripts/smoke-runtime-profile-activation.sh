@@ -21,13 +21,16 @@ RUNTIME_PROFILES_JSON='[
     "frameworks": {
       "paddleocr": {
         "endpoint": "http://127.0.0.1:9901/predict",
-        "api_key": "edge-lab-key"
+        "api_key": "edge-lab-key",
+        "local_model_path": "/opt/edge-lab/paddleocr-model"
       },
       "doctr": {
-        "endpoint": "http://127.0.0.1:9902/predict"
+        "endpoint": "http://127.0.0.1:9902/predict",
+        "local_model_path": "/opt/edge-lab/doctr-model"
       },
       "yolo": {
-        "endpoint": "http://127.0.0.1:9903/predict"
+        "endpoint": "http://127.0.0.1:9903/predict",
+        "local_model_path": "/opt/edge-lab/yolo11n.pt"
       }
     },
     "controls": {
@@ -40,6 +43,10 @@ RUNTIME_PROFILES_JSON='[
 
 COOKIE_FILE="$(mktemp)"
 API_LOG="$(mktemp)"
+APP_DATA_DIR="$(mktemp -d)"
+RUNTIME_SETTINGS_FILE="${ROOT_DIR}/.data/runtime-settings.enc.json"
+RUNTIME_SETTINGS_BACKUP="$(mktemp)"
+RUNTIME_SETTINGS_EXISTED=false
 API_PID=""
 
 cleanup() {
@@ -47,11 +54,32 @@ cleanup() {
     kill "$API_PID" >/dev/null 2>&1 || true
     wait "$API_PID" >/dev/null 2>&1 || true
   fi
-  rm -f "$COOKIE_FILE" "$API_LOG"
+
+  if [[ "${RUNTIME_SETTINGS_EXISTED}" == "true" ]]; then
+    mkdir -p "$(dirname "${RUNTIME_SETTINGS_FILE}")"
+    cp "${RUNTIME_SETTINGS_BACKUP}" "${RUNTIME_SETTINGS_FILE}"
+  else
+    rm -f "${RUNTIME_SETTINGS_FILE}"
+  fi
+
+  rm -f "$COOKIE_FILE" "$API_LOG" "${RUNTIME_SETTINGS_BACKUP}"
+  rm -rf "${APP_DATA_DIR}"
 }
 trap cleanup EXIT
 
-VISTRAL_RUNTIME_PROFILES_JSON="$RUNTIME_PROFILES_JSON" API_PORT="$API_PORT" npm run dev:api >"$API_LOG" 2>&1 &
+if [[ -f "${RUNTIME_SETTINGS_FILE}" ]]; then
+  RUNTIME_SETTINGS_EXISTED=true
+  cp "${RUNTIME_SETTINGS_FILE}" "${RUNTIME_SETTINGS_BACKUP}"
+fi
+rm -f "${RUNTIME_SETTINGS_FILE}"
+
+APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
+UPLOAD_STORAGE_ROOT="${APP_DATA_DIR}/uploads" \
+TRAINING_WORKDIR_ROOT="${APP_DATA_DIR}/training" \
+LLM_CONFIG_SECRET="smoke-runtime-profile-activation-${API_PORT}" \
+VISTRAL_RUNTIME_PROFILES_JSON="$RUNTIME_PROFILES_JSON" \
+API_PORT="$API_PORT" \
+npm run dev:api >"$API_LOG" 2>&1 &
 API_PID=$!
 
 for _ in $(seq 1 80); do
@@ -113,6 +141,7 @@ activate_payload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
 active_profile="$(echo "$activate_payload" | jq -r '.data.active_profile_id // empty')"
 active_endpoint="$(echo "$activate_payload" | jq -r '.data.frameworks.paddleocr.endpoint // empty')"
 active_has_key="$(echo "$activate_payload" | jq -r '.data.frameworks.paddleocr.has_api_key // false')"
+active_yolo_local_model_path="$(echo "$activate_payload" | jq -r '.data.frameworks.yolo.local_model_path // empty')"
 active_python_bin="$(echo "$activate_payload" | jq -r '.data.controls.python_bin // empty')"
 active_disable_simulated_fallback="$(echo "$activate_payload" | jq -r '.data.controls.disable_simulated_train_fallback // false')"
 active_disable_inference_fallback="$(echo "$activate_payload" | jq -r '.data.controls.disable_inference_fallback // false')"
@@ -123,6 +152,11 @@ if [[ "$active_profile" != "edge-lab" ]]; then
 fi
 if [[ "$active_endpoint" != "http://127.0.0.1:9901/predict" || "$active_has_key" != "true" ]]; then
   echo "[smoke-runtime-profile-activation] expected activated profile configs reflected in runtime view"
+  echo "$activate_payload"
+  exit 1
+fi
+if [[ "$active_yolo_local_model_path" != "/opt/edge-lab/yolo11n.pt" ]]; then
+  echo "[smoke-runtime-profile-activation] expected activated local model path reflected in runtime view"
   echo "$activate_payload"
   exit 1
 fi

@@ -51,6 +51,7 @@ APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
 UPLOAD_STORAGE_ROOT="${APP_DATA_DIR}/uploads" \
 TRAINING_WORKDIR_ROOT="${APP_DATA_DIR}/training" \
 VISTRAL_RUNNER_ENABLE_REAL=1 \
+YOLO_LOCAL_MODEL_PATH="${APP_DATA_DIR}/models/not-exists-yolo.pt" \
 VISTRAL_YOLO_MODEL_PATH="${APP_DATA_DIR}/models/not-exists-yolo.pt" \
 YOLO_LOCAL_PREDICT_COMMAND='python3 {{repo_root}}/scripts/local-runners/yolo_predict_runner.py --model-id {{model_id}} --model-version-id {{model_version_id}} --task-type {{task_type}} --input-path {{input_path}} --filename {{filename}} --output-path {{output_path}}' \
 API_HOST="${API_HOST}" \
@@ -140,8 +141,8 @@ yolo_rotated_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.rot
 yolo_polygon_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.polygons // []) | if type=="array" then length else -1 end')"
 yolo_mask_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.masks // []) | if type=="array" then length else -1 end')"
 yolo_label_count="$(echo "${infer_resp}" | jq -r '(.data.normalized_output.labels // []) | if type=="array" then length else -1 end')"
-if [[ "${execution_source}" != "yolo_local_command" ]]; then
-  echo "[smoke-runner-real-upload] expected execution_source=yolo_local_command, got ${execution_source}."
+if [[ "${execution_source}" != "yolo_local_command_fallback" && "${execution_source}" != "yolo_local_command" ]]; then
+  echo "[smoke-runner-real-upload] expected execution_source=yolo_local_command(_fallback), got ${execution_source}."
   echo "${infer_resp}"
   exit 1
 fi

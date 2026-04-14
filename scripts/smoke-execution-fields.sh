@@ -238,7 +238,8 @@ if [[ "${paddle_mode}" != "local_command" ]]; then
   exit 1
 fi
 
-# 3) Inference run should persist explicit execution_source and match normalized source.
+# 3) Inference run should persist explicit execution_source.
+#    When fallback/template evidence exists, execution_source may be normalized_source + "_fallback".
 infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
@@ -253,10 +254,23 @@ if [[ -z "${execution_source}" || -z "${normalized_source}" ]]; then
   exit 1
 fi
 
+fallback_evidence="$(echo "${infer_resp}" | jq -r '
+  (
+    (.data.raw_output.runtime_fallback_reason // "") != "" or
+    (.data.raw_output.local_command_fallback_reason // "") != "" or
+    (.data.raw_output.meta.fallback_reason // "") != "" or
+    ((.data.raw_output.meta.mode // "") == "template") or
+    ((.data.raw_output.local_command_template_mode // false) == true)
+  ) | tostring
+')"
 if [[ "${execution_source}" != "${normalized_source}" ]]; then
-  echo "[smoke-execution-fields] execution_source mismatch: ${execution_source} != ${normalized_source}."
-  echo "${infer_resp}"
-  exit 1
+  if [[ "${fallback_evidence}" == "true" && "${execution_source}" == "${normalized_source}_fallback" ]]; then
+    :
+  else
+    echo "[smoke-execution-fields] unexpected execution_source mismatch: ${execution_source} vs ${normalized_source} (fallback_evidence=${fallback_evidence})."
+    echo "${infer_resp}"
+    exit 1
+  fi
 fi
 
 echo "[smoke-execution-fields] PASS"

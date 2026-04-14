@@ -68,6 +68,8 @@ cd "${ROOT_DIR}"
 APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
 UPLOAD_STORAGE_ROOT="${APP_DATA_DIR}/uploads" \
 TRAINING_WORKDIR_ROOT="${APP_DATA_DIR}/training" \
+LLM_CONFIG_SECRET="smoke-local-command-${API_PORT}" \
+VISTRAL_PYTHON_BIN='/opt/edge-lab/python' \
 YOLO_LOCAL_TRAIN_COMMAND='python3 {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}' \
 PADDLEOCR_LOCAL_TRAIN_COMMAND='python3 {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}' \
 DOCTR_LOCAL_TRAIN_COMMAND='python3 {{repo_root}}/scripts/local-runners/doctr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}' \

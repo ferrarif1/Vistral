@@ -8,15 +8,17 @@ import type {
   RuntimeConnectivityRecord
 } from '../../shared/domain';
 import AttachmentUploader from '../components/AttachmentUploader';
+import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
+import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import { InlineAlert, KPIStatRow, PageHeader } from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
-import { Card, Panel } from '../components/ui/Surface';
+import { Card } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -25,9 +27,12 @@ import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
+import { detectInferenceRunReality, resolveInferenceRunSource } from '../utils/inferenceSource';
+import { bucketRuntimeFallbackReason, runtimeFallbackReasonLabelKey } from '../utils/runtimeFallbackReason';
 
 const backgroundRefreshIntervalMs = 5000;
 const PredictionVisualizer = lazy(() => import('../components/PredictionVisualizer'));
+const inferenceValidationOnboardingDismissedStorageKey = 'vistral-inference-validation-onboarding-dismissed';
 
 type LoadMode = 'initial' | 'manual' | 'background';
 
@@ -43,16 +48,6 @@ const buildInferenceWorkspaceSignature = (payload: {
     attachments: [...payload.attachments].sort((left, right) => left.id.localeCompare(right.id)),
     runs: [...payload.runs].sort((left, right) => left.id.localeCompare(right.id))
   });
-
-const buildScopedDatasetDetailPath = (datasetId: string, versionId?: string): string => {
-  if (!versionId?.trim()) {
-    return `/datasets/${datasetId}`;
-  }
-
-  const searchParams = new URLSearchParams();
-  searchParams.set('version', versionId.trim());
-  return `/datasets/${datasetId}?${searchParams.toString()}`;
-};
 
 const buildScopedAnnotationPath = (
   datasetId: string,
@@ -77,17 +72,12 @@ const buildScopedAnnotationPath = (
   return query ? `/datasets/${datasetId}/annotate?${query}` : `/datasets/${datasetId}/annotate`;
 };
 
-const buildScopedTrainingJobsPath = (datasetId: string, versionId?: string): string => {
-  const searchParams = new URLSearchParams();
-  searchParams.set('dataset', datasetId);
-  if (versionId?.trim()) {
-    searchParams.set('version', versionId.trim());
-  }
-  return `/training/jobs?${searchParams.toString()}`;
-};
-
 export default function InferenceValidationPage() {
   const { t } = useI18n();
+  const formatFallbackReasonLabel = useCallback(
+    (reason: string | null | undefined): string => t(runtimeFallbackReasonLabelKey(bucketRuntimeFallbackReason(reason))),
+    [t]
+  );
   const [searchParams] = useSearchParams();
   const steps = useMemo(() => [t('Input'), t('Run'), t('Feedback')], [t]);
   const [versions, setVersions] = useState<ModelVersionRecord[]>([]);
@@ -118,6 +108,10 @@ export default function InferenceValidationPage() {
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
   const preferredContextAppliedRef = useRef(false);
   const resourcesSignatureRef = useRef('');
+  const validationControlsRef = useRef<HTMLDivElement | null>(null);
+  const inputUploaderRef = useRef<HTMLDivElement | null>(null);
+  const latestOutputRef = useRef<HTMLDivElement | null>(null);
+  const feedbackPanelRef = useRef<HTMLDivElement | null>(null);
 
   const loadAll = useCallback(async (mode: LoadMode) => {
     if (mode === 'initial') {
@@ -250,12 +244,6 @@ export default function InferenceValidationPage() {
   );
   const scopedDatasetId = selectedDataset?.id ?? preferredDatasetId;
   const scopedVersionId = selectedVersion?.id ?? preferredVersionId;
-  const scopedTrainingJobsPath = scopedDatasetId
-    ? buildScopedTrainingJobsPath(scopedDatasetId, scopedVersionId)
-    : '/training/jobs';
-  const scopedDatasetDetailPath = scopedDatasetId
-    ? buildScopedDatasetDetailPath(scopedDatasetId, scopedVersionId)
-    : '/datasets';
   const scopedAnnotationQueue = useMemo<'all' | 'needs_work' | 'in_review' | 'rejected' | 'approved'>(() => {
     if (!selectedRun) {
       return 'needs_work';
@@ -286,20 +274,18 @@ export default function InferenceValidationPage() {
       return null;
     }
 
-    const normalizedMeta = selectedRun.normalized_output.normalized_output as Record<string, unknown>;
+    const inferredSource = resolveInferenceRunSource(selectedRun);
+    const inferredReality = detectInferenceRunReality(selectedRun);
     const rawMeta =
       selectedRun.raw_output.meta && typeof selectedRun.raw_output.meta === 'object' && !Array.isArray(selectedRun.raw_output.meta)
         ? (selectedRun.raw_output.meta as Record<string, unknown>)
         : null;
-    const source =
-      typeof normalizedMeta.source === 'string' && normalizedMeta.source.trim()
-        ? normalizedMeta.source
-        : 'base_empty';
+    const source = inferredSource;
     const runnerMode =
       rawMeta && typeof rawMeta.mode === 'string' && rawMeta.mode.trim() ? rawMeta.mode.trim() : '';
 
     const fallbackReason =
-      (rawMeta && typeof rawMeta.fallback_reason === 'string' ? rawMeta.fallback_reason : '') ||
+      inferredReality.reason ||
       (typeof selectedRun.raw_output.runtime_fallback_reason === 'string'
         ? selectedRun.raw_output.runtime_fallback_reason
         : '') ||
@@ -312,15 +298,17 @@ export default function InferenceValidationPage() {
         : selectedRun.framework;
     const normalizedSource = source.toLowerCase();
     const sourceKind =
-      normalizedSource.includes('fallback') || normalizedSource.includes('mock')
+      normalizedSource.includes('template')
+        ? 'template'
+        : normalizedSource.endsWith('_runtime') && !inferredReality.fallback
+          ? 'runtime'
+          : normalizedSource.endsWith('_local_command') && !inferredReality.fallback
+            ? 'local_command'
+            : normalizedSource.includes('fallback') || normalizedSource.includes('mock') || normalizedSource.includes('base_empty')
         ? 'fallback'
-        : normalizedSource.includes('template')
-          ? 'template'
-          : normalizedSource.endsWith('_runtime')
-            ? 'runtime'
-            : normalizedSource.endsWith('_local_command')
-              ? 'local_command'
-                : 'unknown';
+            : inferredReality.fallback
+              ? 'fallback'
+              : 'unknown';
 
     const title =
       sourceKind === 'runtime'
@@ -328,8 +316,8 @@ export default function InferenceValidationPage() {
         : sourceKind === 'local_command' && runnerMode === 'real'
           ? t('Local Runner Active')
           : sourceKind === 'local_command'
-            ? t('Template Runner Fallback')
-              : t('Runtime Fallback Active');
+            ? t('Local runner degraded mode')
+              : t('Degraded output active');
     const description =
       sourceKind === 'runtime'
         ? t('Prediction output is coming from configured runtime endpoint.')
@@ -337,15 +325,15 @@ export default function InferenceValidationPage() {
           ? t('Prediction output is coming from local framework runner and version-bound artifact when available.')
           : sourceKind === 'local_command'
             ? fallbackReason
-              ? t('Prediction output is coming from bundled template runner because real framework execution is unavailable: {reason}', {
-                  reason: fallbackReason
+              ? t('Prediction output is coming from built-in degraded runner because real framework execution is unavailable: {reason}', {
+                  reason: formatFallbackReasonLabel(fallbackReason)
                 })
-              : t('Prediction output is coming from bundled template runner because real framework execution is unavailable.')
+              : t('Prediction output is coming from built-in degraded runner because real framework execution is unavailable.')
               : fallbackReason
-                ? t('Using explicit fallback because runtime or local command failed: {reason}', {
-                    reason: fallbackReason
+                ? t('Using degraded output because runtime or local execution failed: {reason}', {
+                    reason: formatFallbackReasonLabel(fallbackReason)
                   })
-                : t('Using explicit fallback because runtime endpoint is unavailable.');
+                : t('Using degraded output because runtime endpoint is unavailable.');
     const variant: 'success' | 'error' | 'empty' =
       sourceKind === 'runtime' || (sourceKind === 'local_command' && runnerMode === 'real')
         ? 'success'
@@ -355,6 +343,7 @@ export default function InferenceValidationPage() {
 
     return {
       source,
+      displaySourceLabel: inferredReality.fallback ? t('Degraded mode') : t('Real execution'),
       runtimeFramework,
       fallbackReason,
       runnerMode,
@@ -363,7 +352,7 @@ export default function InferenceValidationPage() {
       description,
       variant
     };
-  }, [selectedRun, t]);
+  }, [selectedRun, formatFallbackReasonLabel, t]);
 
   const selectedRunFallbackWarning = useMemo(() => {
     if (!selectedRun) {
@@ -411,11 +400,6 @@ export default function InferenceValidationPage() {
     return (selectedRun.normalized_output.ocr?.lines ?? []).length === 0;
   }, [selectedRun]);
 
-  const runtimeByFramework = useMemo(
-    () => new Map(runtimeChecks.map((item) => [item.framework, item])),
-    [runtimeChecks]
-  );
-
   const step = useMemo(() => {
     if (!selectedRun) {
       return 0;
@@ -459,6 +443,159 @@ export default function InferenceValidationPage() {
   const reachableRuntimeCount = useMemo(
     () => runtimeChecks.filter((item) => item.source === 'reachable').length,
     [runtimeChecks]
+  );
+  const unreachableRuntimeCount = useMemo(
+    () => runtimeChecks.filter((item) => item.source === 'unreachable').length,
+    [runtimeChecks]
+  );
+  const notConfiguredRuntimeCount = useMemo(
+    () => runtimeChecks.filter((item) => item.source === 'not_configured').length,
+    [runtimeChecks]
+  );
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'runtime',
+        label: t('Confirm runtime and model version'),
+        detail: t('Start by checking runtime connectivity and selecting one model version for this validation round.'),
+        done: Boolean(selectedVersion) && reachableRuntimeCount > 0,
+        to: '/settings/runtime',
+        cta: t('Open Runtime Settings')
+      },
+      {
+        key: 'run',
+        label: t('Upload input and run validation'),
+        detail: t('Keep at least one ready input attachment, then run inference and inspect normalized output.'),
+        done: readyAttachmentCount > 0 && Boolean(selectedRun),
+        to: '/inference/validate',
+        cta: t('Run Inference')
+      },
+      {
+        key: 'feedback',
+        label: t('Route failure sample back to dataset'),
+        detail: t('Send low-quality predictions back into dataset queues so annotation and retraining can continue.'),
+        done: feedbackRunCount > 0,
+        to: scopedAnnotationPath,
+        cta: t('Open scoped annotation')
+      }
+    ],
+    [
+      feedbackRunCount,
+      readyAttachmentCount,
+      reachableRuntimeCount,
+      scopedAnnotationPath,
+      selectedRun,
+      selectedVersion,
+      t
+    ]
+  );
+  const nextOnboardingStep = useMemo(
+    () => onboardingSteps.find((stepItem) => !stepItem.done) ?? null,
+    [onboardingSteps]
+  );
+  const nextOnboardingStepIndex = useMemo(
+    () => (nextOnboardingStep ? onboardingSteps.findIndex((stepItem) => stepItem.key === nextOnboardingStep.key) + 1 : 0),
+    [nextOnboardingStep, onboardingSteps]
+  );
+
+  const focusValidationControls = useCallback(() => {
+    validationControlsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusInputUploader = useCallback(() => {
+    inputUploaderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusLatestOutput = useCallback(() => {
+    latestOutputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusFeedbackPanel = useCallback(() => {
+    feedbackPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const renderValidationNextAction = useCallback(
+    (
+      stepItem: (typeof onboardingSteps)[number],
+      options?: {
+        variant?: 'secondary' | 'ghost';
+      }
+    ) => {
+      const variant = options?.variant ?? 'secondary';
+
+      if (stepItem.key === 'runtime') {
+        if (versions.length === 0) {
+          return (
+            <ButtonLink to="/models/versions" variant={variant} size="sm">
+              {t('Open Model Versions')}
+            </ButtonLink>
+          );
+        }
+
+        if (reachableRuntimeCount === 0) {
+          return (
+            <ButtonLink to="/settings/runtime" variant={variant} size="sm">
+              {t('Open Runtime Settings')}
+            </ButtonLink>
+          );
+        }
+
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={focusValidationControls}>
+            {t('Open validation controls')}
+          </Button>
+        );
+      }
+
+      if (stepItem.key === 'run') {
+        if (readyAttachmentCount === 0) {
+          return (
+            <Button type="button" variant={variant} size="sm" onClick={focusInputUploader}>
+              {t('Open inference inputs')}
+            </Button>
+          );
+        }
+
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={focusValidationControls}>
+            {t('Open validation controls')}
+          </Button>
+        );
+      }
+
+      if (stepItem.key === 'feedback') {
+        if (selectedRun) {
+          return (
+            <Button type="button" variant={variant} size="sm" onClick={focusFeedbackPanel}>
+              {t('Open feedback routing')}
+            </Button>
+          );
+        }
+
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={focusLatestOutput}>
+            {t('Open latest output')}
+          </Button>
+        );
+      }
+
+      return (
+        <ButtonLink to={stepItem.to} variant={variant} size="sm">
+          {stepItem.cta}
+        </ButtonLink>
+      );
+    },
+    [
+      focusFeedbackPanel,
+      focusInputUploader,
+      focusLatestOutput,
+      focusValidationControls,
+      readyAttachmentCount,
+      reachableRuntimeCount,
+      selectedRun,
+      t,
+      versions.length
+    ]
   );
 
   const loadRuntimeConnectivity = useCallback(async () => {
@@ -651,39 +788,23 @@ export default function InferenceValidationPage() {
     }
   };
 
-  const heroSection = (
-    <WorkspaceHero
-      eyebrow={t('Validation Lane')}
-      title={t('Inference Validation')}
-      description={t('Run validation, inspect normalized output, and route failure samples back into dataset workflows.')}
-      actions={
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={() => {
-            loadAll('manual').catch((error) => {
-              setFeedback({ variant: 'error', text: (error as Error).message });
-            });
-          }}
-          disabled={busy || refreshing}
-        >
-          {refreshing ? t('Refreshing...') : t('Refresh')}
-        </Button>
-      }
-      stats={[
-        { label: t('Ready inputs'), value: readyAttachmentCount },
-        { label: t('Model versions'), value: versions.length },
-        { label: t('Recorded runs'), value: runs.length },
-        { label: t('Feedback sent'), value: feedbackRunCount }
-      ]}
-    />
-  );
-
   if (loading) {
     return (
       <WorkspacePage>
-        {heroSection}
+        <PageHeader
+          eyebrow={t('Validation Lane')}
+          title={t('Inference Validation')}
+          description={t('Run validation, inspect normalized output, and route failure samples back into dataset workflows.')}
+          primaryAction={{
+            label: refreshing ? t('Refreshing...') : t('Refresh'),
+            onClick: () => {
+              loadAll('manual').catch((error) => {
+                setFeedback({ variant: 'error', text: (error as Error).message });
+              });
+            },
+            disabled: busy || refreshing
+          }}
+        />
         <StepIndicator steps={steps} current={step} />
         <StateBlock variant="loading" title={t('Loading Validation Workspace')} description={t('Preparing resources.')} />
       </WorkspacePage>
@@ -692,48 +813,69 @@ export default function InferenceValidationPage() {
 
   return (
     <WorkspacePage>
-      {heroSection}
+      <PageHeader
+        eyebrow={t('Validation Lane')}
+        title={t('Inference Validation')}
+        description={t('Run validation, inspect normalized output, and route failure samples back into dataset workflows.')}
+        meta={
+          <div className="row gap wrap align-center">
+            <Badge tone="neutral">{t('Ready inputs')}: {readyAttachmentCount}</Badge>
+            <Badge tone="neutral">{t('Model versions')}: {versions.length}</Badge>
+            <Badge tone="info">{t('Recorded runs')}: {runs.length}</Badge>
+            <Badge tone="neutral">{t('Feedback sent')}: {feedbackRunCount}</Badge>
+          </div>
+        }
+        primaryAction={{
+          label: refreshing ? t('Refreshing...') : t('Refresh'),
+          onClick: () => {
+            loadAll('manual').catch((error) => {
+              setFeedback({ variant: 'error', text: (error as Error).message });
+            });
+          },
+          disabled: busy || refreshing
+        }}
+      />
       <StepIndicator steps={steps} current={step} />
 
       {feedback ? (
-        <StateBlock
-          variant={feedback.variant}
+        <InlineAlert
+          tone={feedback.variant === 'success' ? 'success' : 'danger'}
           title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
       ) : null}
       {!runtimeSettingsLoading ? (
         runtimeSettingsError ? (
-          <StateBlock
-            variant="empty"
-            title={t('Runtime strict mode status unavailable')}
+          <InlineAlert
+            tone="warning"
+            title={t('Runtime safety status unavailable')}
             description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
-            extra={
+            actions={
               <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                 {t('Open Runtime Settings')}
               </ButtonLink>
             }
           />
         ) : runtimeDisableInferenceFallback ? (
-          <StateBlock
-            variant="success"
-            title={t('Inference strict fallback guard is active')}
+          <InlineAlert
+            tone="success"
+            title={t('Inference safety guard is active')}
             description={t(
-              'Inference fallback/template outputs are blocked. Bundled runner python: {pythonBin}.',
+              'Degraded inference output is blocked. Built-in runner Python: {pythonBin}.',
               { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
             )}
           />
         ) : (
-          <StateBlock
-            variant="error"
-            title={t('Inference strict fallback guard is off')}
+          <InlineAlert
+            tone="danger"
+            title={t('Inference safety guard is off')}
             description={t(
-              'Inference may still return fallback/template outputs when runtime or local command fails. Enable strict guard in Runtime settings before production validation.'
+              'Inference may still return degraded output when runtime or local execution fails. Enable the safety guard in Runtime settings before production validation.'
             )}
-            extra={
+            actions={
               <div className="row gap wrap">
                 <Badge tone={runtimeDisableSimulatedTrainFallback ? 'success' : 'warning'}>
-                  {t('Train strict')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
+                  {t('Training safety guard')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
                 </Badge>
                 <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                   {t('Open Runtime Settings')}
@@ -744,63 +886,67 @@ export default function InferenceValidationPage() {
         )
       ) : null}
       {selectedRunFallbackWarning ? (
-        <StateBlock
-          variant="error"
-          title={t('当前结果为回退/模板结果，不是真实 OCR 识别')}
+        <InlineAlert
+          tone="danger"
+          title={t('Current output is degraded and not from real OCR recognition')}
           description={
             selectedRunFallbackWarning.reason
-              ? selectedRunFallbackWarning.reason
-              : t('请先修复 runtime 或本地预测命令配置，再使用该结果做业务判断。')
+              ? `${t('Degradation reason')}: ${formatFallbackReasonLabel(selectedRunFallbackWarning.reason)}`
+              : t('Fix runtime or local prediction command configuration before using this result for business decisions.')
           }
         />
       ) : null}
       {selectedRunHasEmptyOcrResult ? (
-        <StateBlock
-          variant="empty"
-          title={t('未识别到文本 / 本次运行未产生真实 OCR 结果')}
-          description={t('请检查 runtime 或本地命令配置后重试。')}
+        <InlineAlert
+          tone="warning"
+          title={t('No text recognized or this run produced no real OCR output')}
+          description={t('Check runtime or local command configuration and retry.')}
         />
       ) : null}
 
-      <WorkspaceMetricGrid
+      <KPIStatRow
         items={[
           {
-            title: t('Ready inputs'),
-            description: t('Attachments that can be selected immediately for validation runs.'),
-            value: readyAttachmentCount
+            label: t('Ready inputs'),
+            value: readyAttachmentCount,
+            tone: readyAttachmentCount > 0 ? 'success' : 'neutral',
+            hint: t('Attachments that can be selected immediately for validation runs.')
           },
           {
-            title: t('Model versions'),
-            description: t('Registered versions available for validation in the current workspace.'),
-            value: versions.length
+            label: t('Model versions'),
+            value: versions.length,
+            tone: versions.length > 0 ? 'info' : 'warning',
+            hint: t('Registered versions available for validation in the current workspace.')
           },
           {
-            title: t('Datasets'),
-            description: t('Target datasets available for failure-sample feedback routing.'),
-            value: datasets.length
+            label: t('Datasets'),
+            value: datasets.length,
+            tone: datasets.length > 0 ? 'neutral' : 'warning',
+            hint: t('Target datasets available for failure-sample feedback routing.')
           },
           {
-            title: t('Reachable runtimes'),
-            description: t('Framework bridges currently reachable from the validation workspace.'),
+            label: t('Reachable runtimes'),
             value: runtimeChecks.length === 0 && runtimeLoading ? t('Checking...') : reachableRuntimeCount,
-            tone: reachableRuntimeCount === 0 ? 'attention' : 'default'
+            tone: reachableRuntimeCount === 0 ? 'warning' : 'success',
+            hint: t('Framework bridges currently reachable from the validation workspace.')
           },
           {
-            title: t('Context prefill'),
-            description: t('Dataset/version context provided from dataset detail actions.'),
-            value: hasPrefilledContext ? t('Ready') : t('N/A')
+            label: t('Context prefill'),
+            value: hasPrefilledContext ? t('Ready') : t('N/A'),
+            tone: hasPrefilledContext ? 'info' : 'neutral',
+            hint: t('Dataset/version context provided from dataset detail actions.')
           }
         ]}
       />
 
       {hasPrefilledContext ? (
-        <StateBlock
-          variant="success"
+        <InlineAlert
+          tone="success"
           title={t('Validation context preselected')}
           description={selectedDataset
             ? t('Dataset context is prefilled from dataset detail. You can run and feed back quickly in the same lane.')
             : t('Dataset context was requested from dataset detail.')}
-          extra={
+          actions={
             <div className="row gap wrap">
               {selectedDataset ? <Badge tone="info">{selectedDataset.name}</Badge> : null}
               {selectedVersion ? <Badge tone="info">{selectedVersion.version_name}</Badge> : null}
@@ -811,6 +957,7 @@ export default function InferenceValidationPage() {
 
       <WorkspaceWorkbench
         toolbar={
+          <div ref={validationControlsRef}>
           <Card as="section" className="workspace-toolbar-card">
             <div className="workspace-toolbar-head">
               <div className="workspace-toolbar-copy">
@@ -820,16 +967,7 @@ export default function InferenceValidationPage() {
                 </small>
               </div>
               <div className="workspace-toolbar-actions">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={loadRuntimeConnectivity}
-                  disabled={runtimeLoading || busy}
-                >
-                  {runtimeLoading ? t('Checking...') : t('Refresh Runtime Status')}
-                </Button>
-                <Button
+              <Button
                   type="button"
                   variant="secondary"
                   size="sm"
@@ -853,12 +991,36 @@ export default function InferenceValidationPage() {
                 variant="empty"
                 title={t('No Model Versions Yet')}
                 description={t('Register or train a model version before running validation.')}
+                extra={
+                  nextOnboardingStep ? (
+                    <WorkspaceFollowUpHint
+                      actions={renderValidationNextAction(nextOnboardingStep)}
+                      detail={nextOnboardingStep.detail}
+                    />
+                  ) : (
+                    <ButtonLink to="/models/versions" variant="secondary" size="sm">
+                      {t('Open Model Versions')}
+                    </ButtonLink>
+                  )
+                }
               />
             ) : readyAttachmentCount === 0 ? (
               <StateBlock
                 variant="empty"
                 title={t('No Ready Inputs Yet')}
                 description={t('Upload at least one ready input attachment before running inference.')}
+                extra={
+                  nextOnboardingStep ? (
+                    <WorkspaceFollowUpHint
+                      actions={renderValidationNextAction(nextOnboardingStep)}
+                      detail={nextOnboardingStep.detail}
+                    />
+                  ) : (
+                    <small className="muted">
+                      {t('Use the Inference Inputs uploader below to add an image or document, then rerun validation from this same page.')}
+                    </small>
+                  )
+                }
               />
             ) : (
               <div className="workspace-filter-grid">
@@ -922,9 +1084,80 @@ export default function InferenceValidationPage() {
               </div>
             </div>
           </Card>
+          </div>
         }
         main={
           <div className="workspace-main-stack">
+            <WorkspaceOnboardingCard
+              title={t('Validation first-run guide')}
+              description={t('This page closes the loop: validate output quality, then feed bad samples back for the next training cycle.')}
+              summary={t('Guide status is computed from runtime checks, run records, and feedback history.')}
+              storageKey={inferenceValidationOnboardingDismissedStorageKey}
+              steps={onboardingSteps.map((stepItem) => ({
+                key: stepItem.key,
+                label: stepItem.label,
+                detail: stepItem.detail,
+                done: stepItem.done,
+                primaryAction: {
+                  to:
+                    stepItem.key === 'runtime'
+                      ? versions.length === 0
+                        ? '/models/versions'
+                        : reachableRuntimeCount === 0
+                          ? '/settings/runtime'
+                          : undefined
+                      : undefined,
+                  label:
+                    stepItem.key === 'runtime'
+                      ? versions.length === 0
+                        ? t('Open Model Versions')
+                        : reachableRuntimeCount === 0
+                          ? t('Open Runtime Settings')
+                          : t('Open validation controls')
+                      : stepItem.key === 'run'
+                        ? readyAttachmentCount === 0
+                          ? t('Open inference inputs')
+                          : t('Open validation controls')
+                        : stepItem.key === 'feedback'
+                          ? selectedRun
+                            ? t('Open feedback routing')
+                            : t('Open latest output')
+                          : stepItem.cta,
+                  onClick:
+                    stepItem.key === 'runtime'
+                      ? versions.length === 0
+                        ? undefined
+                        : reachableRuntimeCount === 0
+                          ? undefined
+                          : focusValidationControls
+                      : stepItem.key === 'run'
+                        ? readyAttachmentCount === 0
+                          ? focusInputUploader
+                          : focusValidationControls
+                        : stepItem.key === 'feedback'
+                          ? selectedRun
+                            ? focusFeedbackPanel
+                            : focusLatestOutput
+                          : undefined
+                }
+              }))}
+	            />
+
+	            {nextOnboardingStep ? (
+	              <WorkspaceNextStepCard
+	                title={t('Next validation step')}
+	                description={t('Finish one clear validation action here before switching datasets or sending feedback.')}
+	                stepLabel={nextOnboardingStep.label}
+	                stepDetail={nextOnboardingStep.detail}
+	                current={nextOnboardingStepIndex}
+	                total={onboardingSteps.length}
+	                actions={
+	                  renderValidationNextAction(nextOnboardingStep)
+	                }
+	              />
+	            ) : null}
+
+            <div ref={inputUploaderRef}>
             <AttachmentUploader
               title={t('Inference Inputs')}
               items={attachments}
@@ -936,11 +1169,13 @@ export default function InferenceValidationPage() {
               uploadButtonLabel={t('Upload Inference Input')}
               disabled={busy}
             />
+            </div>
 
+            <div ref={latestOutputRef}>
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Latest Inference Output')}
-                description={t('Review runtime source, preview image, normalized output, and raw payload from the selected run.')}
+                description={t('Review execution status, preview image, normalized output, and detailed diagnostics from the selected run.')}
                 actions={
                   selectedRun ? (
                     <Button
@@ -957,7 +1192,23 @@ export default function InferenceValidationPage() {
               />
 
               {!selectedRun ? (
-                <StateBlock variant="empty" title={t('No Runs Yet')} description={t('Run inference to inspect outputs.')} />
+                <StateBlock
+                  variant="empty"
+                  title={t('No Runs Yet')}
+                description={t('Run inference once to inspect normalized output, execution status, and feedback routing options.')}
+                extra={
+                  nextOnboardingStep ? (
+                    <WorkspaceFollowUpHint
+                      actions={renderValidationNextAction(nextOnboardingStep)}
+                      detail={nextOnboardingStep.detail}
+                    />
+                  ) : (
+                    <small className="muted">
+                      {t('Choose a model version and a ready input above, then click Run Inference.')}
+                      </small>
+                    )
+                  }
+                />
               ) : (
                 <>
                   {selectedRunError ? (
@@ -975,13 +1226,10 @@ export default function InferenceValidationPage() {
                   </small>
                   <div className="row gap wrap">
                     <Badge tone="neutral">
-                      {t('runtime source')}: {runtimeInsight?.source ? t(runtimeInsight.source) : t('unknown')}
+                      {t('Execution Status')}: {runtimeInsight?.displaySourceLabel ?? t('Unknown execution')}
                     </Badge>
                     <Badge tone="info">
                       {t('runtime framework')}: {runtimeInsight?.runtimeFramework ? t(runtimeInsight.runtimeFramework) : t('unknown')}
-                    </Badge>
-                    <Badge tone="neutral">
-                      {t('runner mode')}: {runtimeInsight?.runnerMode ? t(runtimeInsight.runnerMode) : t('n/a')}
                     </Badge>
                     {attachmentById.get(selectedRun.input_attachment_id) ? (
                       <Badge tone="info">
@@ -998,8 +1246,8 @@ export default function InferenceValidationPage() {
                   </div>
                   <StateBlock
                     variant={runtimeInsight?.variant ?? 'empty'}
-                    title={runtimeInsight?.title ?? t('Runtime Fallback Active')}
-                    description={runtimeInsight?.description ?? t('Using explicit fallback because runtime endpoint is unavailable.')}
+                    title={runtimeInsight?.title ?? t('Degraded output active')}
+                    description={runtimeInsight?.description ?? t('Using degraded output because runtime endpoint is unavailable.')}
                   />
                   <Suspense
                     fallback={
@@ -1026,6 +1274,7 @@ export default function InferenceValidationPage() {
                 </>
               )}
             </Card>
+            </div>
           </div>
         }
         side={
@@ -1062,59 +1311,42 @@ export default function InferenceValidationPage() {
             </Card>
 
             <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Runtime Connectivity')}
-                description={t('Refresh framework diagnostics on demand without interrupting the validation lane.')}
-                actions={
-                  <Button type="button" variant="secondary" size="sm" onClick={loadRuntimeConnectivity} disabled={runtimeLoading || busy}>
-                    {runtimeLoading ? t('Checking...') : t('Refresh Runtime Status')}
-                  </Button>
-                }
-              />
-              {runtimeError ? (
-                <StateBlock variant="error" title={t('Runtime Check Failed')} description={runtimeError} />
-              ) : null}
-              <ul className="workspace-record-list compact">
-                {(['paddleocr', 'doctr', 'yolo'] as const).map((framework) => {
-                  const item = runtimeByFramework.get(framework);
-                  const source = item?.source ?? 'not_configured';
-                  const tone = source === 'reachable' ? 'success' : source === 'unreachable' ? 'warning' : 'neutral';
-                  const sourceLabel =
-                    source === 'reachable'
-                      ? t('reachable')
-                      : source === 'unreachable'
-                        ? t('unreachable')
-                        : t('not configured');
-                  const sourceDescription =
-                    source === 'reachable'
-                      ? t('Runtime endpoint is healthy and can serve prediction calls.')
-                      : source === 'unreachable'
-                        ? t('Runtime endpoint is configured but currently unreachable. Inference falls back until recovered.')
-                        : t('Runtime endpoint is not configured. Inference uses fallback mode by default.');
-
-                  return (
-                    <Panel key={framework} as="li" className="workspace-record-item compact" tone="soft">
-                      <div className="row between gap wrap">
-                        <strong>{t(framework)}</strong>
-                        <Badge tone={tone}>{sourceLabel}</Badge>
-                      </div>
-                      <div className="row gap wrap">
-                        <Badge tone="neutral">{t('endpoint')}: {item?.endpoint ?? t('not set')}</Badge>
-                        <Badge tone={item?.error_kind ? 'warning' : 'neutral'}>
-                          {t('error kind')}: {item?.error_kind ? t(item.error_kind) : t('none')}
-                        </Badge>
-                      </div>
-                      <small className="muted">
-                        {t('checked at')}: {formatCompactTimestamp(item?.checked_at ?? null, t('n/a'))}
-                      </small>
-                      <small className="muted">{item?.message ?? t('No check data yet.')}</small>
-                      <small className="muted">{sourceDescription}</small>
-                    </Panel>
-                  );
-                })}
-              </ul>
+                <WorkspaceSectionHeader
+                  title={t('Runtime summary')}
+                  description={t('Show only current runtime readiness in this lane. Open Runtime settings for full diagnostics and configuration.')}
+                  actions={
+                    <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
+                      {t('Open Runtime Settings')}
+                    </ButtonLink>
+                  }
+                />
+                {runtimeError ? (
+                  <InlineAlert
+                    tone="warning"
+                    title={t('Runtime Check Failed')}
+                    description={runtimeError}
+                  />
+                ) : null}
+                <div className="workspace-keyline-list">
+                  <div className="workspace-keyline-item">
+                    <span>{t('reachable')}</span>
+                    <strong>{reachableRuntimeCount}</strong>
+                  </div>
+                  <div className="workspace-keyline-item">
+                    <span>{t('unreachable')}</span>
+                    <strong>{unreachableRuntimeCount}</strong>
+                  </div>
+                  <div className="workspace-keyline-item">
+                    <span>{t('not configured')}</span>
+                    <strong>{notConfiguredRuntimeCount}</strong>
+                  </div>
+                </div>
+                <small className="muted">
+                  {t('Use Runtime settings for endpoint details, error kinds, and advanced diagnostics.')}
+                </small>
             </Card>
 
+            <div ref={feedbackPanelRef}>
             <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
                 title={t('Feedback to Dataset')}
@@ -1179,14 +1411,8 @@ export default function InferenceValidationPage() {
                 <Button onClick={sendFeedback} disabled={busy || !selectedRun || !selectedDatasetId}>
                   {t('Send to Dataset')}
                 </Button>
-                <ButtonLink to={scopedDatasetDetailPath} variant="ghost" size="sm" block>
-                  {t('Open scoped dataset')}
-                </ButtonLink>
-                <ButtonLink to={scopedAnnotationPath} variant="ghost" size="sm" block>
+                <ButtonLink to={scopedAnnotationPath} variant="ghost" size="sm">
                   {t('Open scoped annotation')}
-                </ButtonLink>
-                <ButtonLink to={scopedTrainingJobsPath} variant="ghost" size="sm" block>
-                  {t('Open scoped jobs')}
                 </ButtonLink>
               </div>
               {selectedRun ? (
@@ -1197,6 +1423,7 @@ export default function InferenceValidationPage() {
                 </small>
               ) : null}
             </Card>
+            </div>
           </div>
         }
       />

@@ -155,8 +155,8 @@ yolo_rotated_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.rota
 yolo_polygon_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.polygons // []) | if type=="array" then length else -1 end')"
 yolo_mask_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.masks // []) | if type=="array" then length else -1 end')"
 yolo_label_count="$(echo "${yolo_resp}" | jq -r '(.data.normalized_output.labels // []) | if type=="array" then length else -1 end')"
-if [[ "${yolo_source}" != "yolo_local_command" ]]; then
-  echo "[smoke-runner-real-fallback] expected yolo_local_command source, got ${yolo_source}."
+if [[ "${yolo_source}" != "yolo_local_command_fallback" && "${yolo_source}" != "yolo_local_command" ]]; then
+  echo "[smoke-runner-real-fallback] expected yolo_local_command(_fallback) source, got ${yolo_source}."
   echo "${yolo_resp}"
   exit 1
 fi
@@ -190,8 +190,8 @@ paddle_source="$(echo "${paddle_resp}" | jq -r '.data.execution_source // empty'
 paddle_mode="$(echo "${paddle_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 paddle_reason="$(echo "${paddle_resp}" | jq -r '.data.raw_output.meta.fallback_reason // empty')"
 paddle_reason_unified="$(echo "${paddle_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
-if [[ "${paddle_source}" != "paddleocr_local_command" ]]; then
-  echo "[smoke-runner-real-fallback] expected paddleocr_local_command source, got ${paddle_source}."
+if [[ "${paddle_source}" != "paddleocr_local_command_fallback" && "${paddle_source}" != "paddleocr_local_command" ]]; then
+  echo "[smoke-runner-real-fallback] expected paddleocr_local_command(_fallback) source, got ${paddle_source}."
   echo "${paddle_resp}"
   exit 1
 fi

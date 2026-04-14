@@ -1,5 +1,5 @@
 import { Badge } from '../ui/Badge';
-import { Button, ButtonLink } from '../ui/Button';
+import { Button } from '../ui/Button';
 import { Checkbox, Input } from '../ui/Field';
 import { Card, Panel } from '../ui/Surface';
 
@@ -14,6 +14,39 @@ export interface PredictionCandidateView {
   text?: string;
   regionId?: string | null;
 }
+
+const formatPredictionExtra = (candidate: PredictionCandidateView, t: TranslateFn): string => {
+  const rawExtra = candidate.extra.trim();
+  if (candidate.kind === 'ocr_line') {
+    if (candidate.regionId && candidate.regionId.trim()) {
+      return t('Linked region {id}', { id: candidate.regionId.trim() });
+    }
+    return t('No linked region');
+  }
+  if (candidate.kind === 'box') {
+    return rawExtra || t('Bounding box');
+  }
+  if (candidate.kind === 'rotated_box') {
+    if (rawExtra === 'obb') {
+      return t('Rotated box');
+    }
+    if (rawExtra.startsWith('angle ')) {
+      return t('Angle {value}', { value: rawExtra.slice('angle '.length) });
+    }
+    return rawExtra || t('Rotated box');
+  }
+  if (candidate.kind === 'polygon') {
+    const pointsMatch = rawExtra.match(/^(\d+)\s+pts$/);
+    if (pointsMatch) {
+      return t('{count} points', { count: Number(pointsMatch[1]) });
+    }
+    return rawExtra || t('Polygon');
+  }
+  if (candidate.kind === 'label') {
+    return t('Classification label');
+  }
+  return rawExtra || t('n/a');
+};
 
 interface PredictionOverlayControlsProps {
   t: TranslateFn;
@@ -32,10 +65,8 @@ interface PredictionOverlayControlsProps {
   canUsePredictionInOcrEditor: boolean;
   nextLowConfidenceQueueItemId: string;
   hasSelectedItem: boolean;
-  scopedInferenceValidationPath: string;
   onShowAnnotationOverlayChange: (value: boolean) => void;
   onShowPredictionOverlayChange: (value: boolean) => void;
-  onOnlyLowConfidenceChange: (value: boolean) => void;
   onPredictionConfidenceThresholdChange: (value: string) => void;
   onUsePredictionCandidate: (candidate: PredictionCandidateView) => void;
   onFocusNextLowConfidence: () => void;
@@ -59,10 +90,8 @@ export default function PredictionOverlayControls({
   canUsePredictionInOcrEditor,
   nextLowConfidenceQueueItemId,
   hasSelectedItem,
-  scopedInferenceValidationPath,
   onShowAnnotationOverlayChange,
   onShowPredictionOverlayChange,
-  onOnlyLowConfidenceChange,
   onPredictionConfidenceThresholdChange,
   onUsePredictionCandidate,
   onFocusNextLowConfidence,
@@ -71,9 +100,16 @@ export default function PredictionOverlayControls({
   return (
     <Card as="section" className={className}>
       <div className="row between gap wrap align-center">
-        <h3>{t('Prediction Compare')}</h3>
+        <div className="stack tight">
+          <h3>{t('Prediction Compare')}</h3>
+          <small className="muted">
+            {hasPredictionOverlay
+              ? t('Use this panel to compare pre-annotation output with your current annotation.')
+              : t('Prediction compare becomes available after pre-annotation or prediction feedback is attached to this sample.')}
+          </small>
+        </div>
         <Badge tone={hasPredictionOverlay ? 'info' : 'neutral'}>
-          {hasPredictionOverlay ? t('pre_annotation source') : t('No prediction source')}
+          {hasPredictionOverlay ? t('Prediction source ready') : t('No prediction source')}
         </Badge>
       </div>
       <div className="stack tight">
@@ -92,13 +128,6 @@ export default function PredictionOverlayControls({
           />
           <span>{t('Show prediction overlay')}</span>
         </label>
-        <label className="row gap wrap align-center">
-          <Checkbox
-            checked={onlyLowConfidenceCandidates}
-            onChange={(event) => onOnlyLowConfidenceChange(event.target.checked)}
-          />
-          <span>{t('Only low-confidence pre-annotation candidates')}</span>
-        </label>
       </div>
       <label>
         {t('Prediction confidence threshold')}
@@ -115,16 +144,16 @@ export default function PredictionOverlayControls({
         <Badge tone={lowConfidencePredictionCount > 0 ? 'warning' : 'neutral'}>
           {t('Low-confidence candidates')}: {lowConfidencePredictionCount}
         </Badge>
-        {selectedItemHasLowConfidenceTag ? <Badge tone="info">#low_confidence</Badge> : null}
+        {selectedItemHasLowConfidenceTag ? <Badge tone="info">{t('Low-confidence tag')}</Badge> : null}
       </div>
       {onlyLowConfidenceCandidates ? (
         <small className="muted">
-          {t('Queue is narrowed to pre-annotation samples with confidence below threshold.')}
+          {t('Queue is currently filtered to low-confidence samples only.')}
         </small>
       ) : null}
       {showPredictionOverlay && predictionCandidates.length > 0 ? (
         <ul className="workspace-record-list compact prediction-candidate-list">
-          {predictionCandidates.slice(0, 6).map((candidate) => {
+          {predictionCandidates.slice(0, 4).map((candidate) => {
             const isLowConfidence =
               candidate.confidence !== null &&
               candidate.confidence < numericPredictionConfidenceThreshold;
@@ -146,7 +175,7 @@ export default function PredictionOverlayControls({
                   )}
                 </div>
                 <small className="muted">
-                  {candidate.extra}
+                  {formatPredictionExtra(candidate, t)}
                   {isLowConfidence ? ` · ${t('below threshold')}` : ''}
                 </small>
                 {canUsePredictionInOcrEditor && candidate.kind === 'ocr_line' ? (
@@ -165,9 +194,9 @@ export default function PredictionOverlayControls({
           })}
         </ul>
       ) : null}
-      {showPredictionOverlay && predictionCandidates.length > 6 ? (
+      {showPredictionOverlay && predictionCandidates.length > 4 ? (
         <small className="muted">
-          {t('Showing first {count} prediction candidates.', { count: 6 })}
+          {t('Showing first {count} prediction candidates.', { count: 4 })}
         </small>
       ) : null}
       <div className="workspace-button-stack">
@@ -194,12 +223,9 @@ export default function PredictionOverlayControls({
       </div>
       <small className="muted">
         {hasPredictionOverlay
-          ? t('Current item has pre-annotation source and can be compared in this workbench.')
-          : t('Run pre-annotation or open an item generated from prediction to enable richer comparison.')}
+          ? t('Current sample already carries pre-annotation output and can be reviewed here.')
+          : t('Run pre-annotation first if you want prediction overlay and low-confidence triage here.')}
       </small>
-      <ButtonLink to={scopedInferenceValidationPath} variant="ghost" size="sm">
-        {t('Open Inference Validation')}
-      </ButtonLink>
     </Card>
   );
 }

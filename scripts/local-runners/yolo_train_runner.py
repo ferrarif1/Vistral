@@ -52,10 +52,16 @@ def write_json(path: str, payload: dict) -> None:
         json.dump(payload, fp, ensure_ascii=False, indent=2)
 
 
+def should_try_real() -> bool:
+    normalized = os.getenv('VISTRAL_RUNNER_ENABLE_REAL', 'auto').strip().lower()
+    return normalized not in {'0', 'false', 'no', 'off', 'disabled'}
+
+
 def resolve_base_model(base_model: str) -> str:
     candidate = (base_model or '').strip()
     configured_model_path = (
-        os.getenv('VISTRAL_YOLO_MODEL_PATH', '').strip()
+        os.getenv('YOLO_LOCAL_MODEL_PATH', '').strip()
+        or os.getenv('VISTRAL_YOLO_MODEL_PATH', '').strip()
         or os.getenv('REAL_YOLO_MODEL_PATH', '').strip()
     )
 
@@ -227,7 +233,7 @@ def build_metrics_from_results_dict(results_dict: dict) -> dict:
 
 
 def try_real_train(args, config: dict, summary: dict):
-    if os.getenv('VISTRAL_RUNNER_ENABLE_REAL', '0') != '1':
+    if not should_try_real():
         return None, ''
 
     if args.task_type != 'detection':

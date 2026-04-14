@@ -76,6 +76,32 @@ wait_dataset_attachment_ready() {
   exit 1
 }
 
+wait_conversation_attachment_ready() {
+  local attachment_id="$1"
+  local list_resp=""
+  local attachment_status=""
+
+  for _ in $(seq 1 120); do
+    list_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/files/conversation")"
+    attachment_status="$(echo "${list_resp}" | jq -r --arg id "${attachment_id}" '.data[] | select(.id==$id) | .status // empty')"
+
+    if [[ "${attachment_status}" == "ready" ]]; then
+      return 0
+    fi
+    if [[ "${attachment_status}" == "error" ]]; then
+      echo "[smoke-conversation-actions] conversation attachment entered error state"
+      echo "${list_resp}"
+      exit 1
+    fi
+
+    sleep 0.2
+  done
+
+  echo "[smoke-conversation-actions] conversation attachment not ready in time"
+  echo "${list_resp}"
+  exit 1
+}
+
 prepare_trainable_detection_target() {
   local create_dataset_resp=""
   local dataset_id=""
@@ -283,9 +309,22 @@ dataset_started="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -d "{\"model_id\":\"${model_id}\",\"initial_message\":\"帮我创建一个检测数据集，名字叫${dataset_name}\",\"attachment_ids\":[]}" \
   "${BASE_URL}/api/conversations/start")"
 
+dataset_conversation_id="$(echo "$dataset_started" | jq -r '.data.conversation.id // empty')"
 dataset_action="$(echo "$dataset_started" | jq -r '.data.messages[1].metadata.conversation_action.action // empty')"
 dataset_status="$(echo "$dataset_started" | jq -r '.data.messages[1].metadata.conversation_action.status // empty')"
 dataset_id="$(echo "$dataset_started" | jq -r '.data.messages[1].metadata.conversation_action.created_entity_id // empty')"
+
+if [[ "$dataset_action" == "create_dataset" && "$dataset_status" == "requires_input" ]]; then
+  dataset_confirmation_phrase="$(echo "$dataset_started" | jq -r '.data.messages[1].metadata.conversation_action.confirmation_phrase // "确认执行"')"
+  dataset_confirmed="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -d "{\"conversation_id\":\"${dataset_conversation_id}\",\"content\":\"${dataset_confirmation_phrase}\",\"attachment_ids\":[]}" \
+    "${BASE_URL}/api/conversations/message")"
+  dataset_action="$(echo "$dataset_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.action // empty')"
+  dataset_status="$(echo "$dataset_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+  dataset_id="$(echo "$dataset_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.created_entity_id // empty')"
+fi
 
 if [[ "$dataset_action" != "create_dataset" || "$dataset_status" != "completed" || -z "$dataset_id" ]]; then
   echo "[smoke-conversation-actions] Dataset conversation action failed"
@@ -300,9 +339,22 @@ model_started="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -d "{\"model_id\":\"${model_id}\",\"initial_message\":\"帮我创建一个OCR模型草稿，名字叫${model_name}\",\"attachment_ids\":[]}" \
   "${BASE_URL}/api/conversations/start")"
 
+model_conversation_id="$(echo "$model_started" | jq -r '.data.conversation.id // empty')"
 model_action="$(echo "$model_started" | jq -r '.data.messages[1].metadata.conversation_action.action // empty')"
 model_status="$(echo "$model_started" | jq -r '.data.messages[1].metadata.conversation_action.status // empty')"
 model_draft_id="$(echo "$model_started" | jq -r '.data.messages[1].metadata.conversation_action.created_entity_id // empty')"
+
+if [[ "$model_action" == "create_model_draft" && "$model_status" == "requires_input" ]]; then
+  model_confirmation_phrase="$(echo "$model_started" | jq -r '.data.messages[1].metadata.conversation_action.confirmation_phrase // "确认执行"')"
+  model_confirmed="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -d "{\"conversation_id\":\"${model_conversation_id}\",\"content\":\"${model_confirmation_phrase}\",\"attachment_ids\":[]}" \
+    "${BASE_URL}/api/conversations/message")"
+  model_action="$(echo "$model_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.action // empty')"
+  model_status="$(echo "$model_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+  model_draft_id="$(echo "$model_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.created_entity_id // empty')"
+fi
 
 if [[ "$model_action" != "create_model_draft" || "$model_status" != "completed" || -z "$model_draft_id" ]]; then
   echo "[smoke-conversation-actions] Model-draft conversation action failed"
@@ -325,6 +377,35 @@ training_missing_dataset="$(echo "$training_started" | jq -r '.data.messages[1].
 if [[ "$training_action" != "create_training_job" || "$training_status" != "requires_input" || "$training_missing_dataset" != "dataset_id" ]]; then
   echo "[smoke-conversation-actions] Training conversation action did not request dataset input"
   echo "$training_started"
+  exit 1
+fi
+
+training_extraction_conflict_upload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"filename":"conversation-training-intent-ocr.bmp"}' \
+  "${BASE_URL}/api/files/conversation/upload")"
+training_extraction_conflict_attachment_id="$(echo "$training_extraction_conflict_upload" | jq -r '.data.id // empty')"
+if [[ -z "$training_extraction_conflict_attachment_id" ]]; then
+  echo "[smoke-conversation-actions] failed to upload attachment for extraction-conflict training intent check"
+  echo "$training_extraction_conflict_upload"
+  exit 1
+fi
+wait_conversation_attachment_ready "${training_extraction_conflict_attachment_id}"
+
+training_extraction_conflict_started="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"model_id\":\"${model_id}\",\"initial_message\":\"帮我训练一个识别图片上车号等文字的模型\",\"attachment_ids\":[\"${training_extraction_conflict_attachment_id}\"]}" \
+  "${BASE_URL}/api/conversations/start")"
+
+training_extraction_conflict_action="$(echo "$training_extraction_conflict_started" | jq -r '.data.messages[1].metadata.conversation_action.action // empty')"
+training_extraction_conflict_status="$(echo "$training_extraction_conflict_started" | jq -r '.data.messages[1].metadata.conversation_action.status // empty')"
+training_extraction_conflict_missing_dataset="$(echo "$training_extraction_conflict_started" | jq -r '.data.messages[1].metadata.conversation_action.missing_fields[]? | select(.=="dataset_id")')"
+
+if [[ "$training_extraction_conflict_action" != "create_training_job" || "$training_extraction_conflict_status" != "requires_input" || "$training_extraction_conflict_missing_dataset" != "dataset_id" ]]; then
+  echo "[smoke-conversation-actions] Training intent with extraction keywords was hijacked unexpectedly"
+  echo "$training_extraction_conflict_started"
   exit 1
 fi
 
@@ -353,6 +434,22 @@ training_final_status="$(echo "$training_final" | jq -r '.data.messages[-1].meta
 training_job_id="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.created_entity_id // empty')"
 training_dataset_id="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.collected_fields.dataset_id // empty')"
 training_dataset_version_id="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.collected_fields.dataset_version_id // empty')"
+
+if [[ "$training_final_status" == "requires_input" ]]; then
+  training_missing_confirmation="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields[]? | select(.=="confirmation")')"
+  if [[ "$training_missing_confirmation" == "confirmation" ]]; then
+    training_confirmation_phrase="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.confirmation_phrase // "确认执行"')"
+    training_confirmed="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+      -H 'Content-Type: application/json' \
+      -H "x-csrf-token: $csrf_token" \
+      -d "{\"conversation_id\":\"${training_conversation_id}\",\"content\":\"${training_confirmation_phrase}\",\"attachment_ids\":[]}" \
+      "${BASE_URL}/api/conversations/message")"
+    training_final_status="$(echo "$training_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+    training_job_id="$(echo "$training_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.created_entity_id // empty')"
+    training_dataset_id="$(echo "$training_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.collected_fields.dataset_id // empty')"
+    training_dataset_version_id="$(echo "$training_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.collected_fields.dataset_version_id // empty')"
+  fi
+fi
 
 if [[ "$training_final_status" != "completed" || -z "$training_job_id" || "$training_dataset_id" != "$selected_training_dataset_id" || "$training_dataset_version_id" != "$selected_training_dataset_version_id" ]]; then
   echo "[smoke-conversation-actions] Training conversation completion failed"

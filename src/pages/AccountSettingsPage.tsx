@@ -1,14 +1,17 @@
-import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { CreateUserInput, User } from '../../shared/domain';
+import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import SettingsTabs from '../components/settings/SettingsTabs';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import { FilterToolbar, InlineAlert, KPIStatRow, PageHeader } from '../components/ui/ConsolePage';
+import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
 import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -18,6 +21,18 @@ import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
 
 const accountDirectoryBatchSize = 40;
+const accountOnboardingDismissedStorageKey = 'vistral-account-onboarding-dismissed';
+
+type AccountOnboardingStep = {
+  key: 'identity' | 'password' | 'directory' | 'next';
+  label: string;
+  detail: string;
+  done: boolean;
+  primaryTo: string;
+  primaryLabel: string;
+  secondaryTo?: string;
+  secondaryLabel?: string;
+};
 
 export default function AccountSettingsPage() {
   const { t, roleLabel } = useI18n();
@@ -62,6 +77,9 @@ export default function AccountSettingsPage() {
   const [visibleDirectoryCount, setVisibleDirectoryCount] = useState(accountDirectoryBatchSize);
   const [resettingUserId, setResettingUserId] = useState<string | null>(null);
   const [statusUpdatingUserId, setStatusUpdatingUserId] = useState<string | null>(null);
+  const currentAccountRef = useRef<HTMLDivElement | null>(null);
+  const passwordCardRef = useRef<HTMLDivElement | null>(null);
+  const directoryCardRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = async () => {
     const me = await api.me();
@@ -176,8 +194,119 @@ export default function AccountSettingsPage() {
   const canSubmitPasswordReset = passwordResetValue.trim().length >= 8 && !resettingUserId;
   const canSubmitDisableReason =
     disableReasonValue.trim().length > 0 && statusUpdatingUserId === null;
+  const accountOnboardingSteps = useMemo(
+    () => {
+      const baseSteps: AccountOnboardingStep[] = [
+        {
+          key: 'identity',
+          label: t('Confirm signed-in identity'),
+          detail: t('Check current username, role, and last-login context before changing settings.'),
+          done: Boolean(currentUser),
+          primaryTo: '/settings/account',
+          primaryLabel: t('Review current account')
+        },
+        {
+          key: 'password',
+          label: t('Rotate password'),
+          detail: t('Change password once so this account is ready for continued daily usage.'),
+          done: passwordStatus?.variant === 'success',
+          primaryTo: '/settings/account',
+          primaryLabel: t('Update Password')
+        }
+      ];
 
+      if (currentUser?.role === 'admin') {
+        baseSteps.push({
+          key: 'directory',
+          label: t('Review account directory'),
+          detail: t('Admins should confirm account list, status safety rules, and provisioning path.'),
+          done: users.length > 0,
+          primaryTo: '/settings/account',
+          primaryLabel: t('Open account directory')
+        });
+      }
+
+      baseSteps.push({
+        key: 'next',
+        label: t('Continue to next settings tab'),
+        detail: t('After account basics are ready, continue with LLM or Runtime setup.'),
+        done: false,
+        primaryTo: '/settings/llm',
+        primaryLabel: t('Open LLM Settings'),
+        secondaryTo: '/settings/runtime',
+        secondaryLabel: t('Open Runtime Settings')
+      });
+
+      return baseSteps;
+    },
+    [currentUser, passwordStatus?.variant, t, users.length]
+  );
+  const nextOnboardingStep = useMemo(
+    () => accountOnboardingSteps.find((stepItem) => !stepItem.done) ?? null,
+    [accountOnboardingSteps]
+  );
+  const nextOnboardingStepIndex = useMemo(
+    () =>
+      nextOnboardingStep
+        ? accountOnboardingSteps.findIndex((stepItem) => stepItem.key === nextOnboardingStep.key) + 1
+        : 0,
+    [accountOnboardingSteps, nextOnboardingStep]
+  );
   const roleTone = (role: User['role']) => (role === 'admin' ? 'info' : 'neutral');
+
+  const focusCurrentAccount = useCallback(() => {
+    currentAccountRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusPasswordCard = useCallback(() => {
+    passwordCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusDirectoryCard = useCallback(() => {
+    directoryCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const renderAccountNextAction = useCallback(
+    (
+      stepItem: AccountOnboardingStep,
+      options?: {
+        variant?: 'secondary' | 'ghost';
+      }
+    ) => {
+      const variant = options?.variant ?? 'secondary';
+
+      if (stepItem.key === 'identity') {
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={focusCurrentAccount}>
+            {stepItem.primaryLabel}
+          </Button>
+        );
+      }
+
+      if (stepItem.key === 'password') {
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={focusPasswordCard}>
+            {stepItem.primaryLabel}
+          </Button>
+        );
+      }
+
+      if (stepItem.key === 'directory' && currentUser?.role === 'admin') {
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={focusDirectoryCard}>
+            {stepItem.primaryLabel}
+          </Button>
+        );
+      }
+
+      return (
+        <ButtonLink to={stepItem.primaryTo} variant={variant} size="sm">
+          {stepItem.primaryLabel}
+        </ButtonLink>
+      );
+    },
+    [currentUser?.role, focusCurrentAccount, focusDirectoryCard, focusPasswordCard]
+  );
 
   const applyUserUpdate = (nextUser: User) => {
     setUsers((previous) => previous.map((user) => (user.id === nextUser.id ? nextUser : user)));
@@ -337,54 +466,56 @@ export default function AccountSettingsPage() {
     <WorkspacePage>
       <SettingsTabs />
 
-      <WorkspaceHero
+      <PageHeader
         eyebrow={t('Account')}
         title={t('Account Settings')}
         description={t('Manage password access and admin-only account provisioning from one place.')}
-        stats={[
+        primaryAction={{
+          label: loading || refreshing ? t('Refreshing...') : t('Refresh'),
+          onClick: () => {
+            reload().catch(() => {
+              // handled in helper
+            });
+          },
+          disabled: loading || refreshing || passwordSaving || creatingUser
+        }}
+      />
+
+      <KPIStatRow
+        items={[
           {
             label: t('Current user'),
-            value: currentUser?.username ?? t('guest')
+            value: currentUser?.username ?? t('guest'),
+            tone: 'info',
+            hint: t('Current signed-in account.')
           },
           {
             label: t('Role'),
-            value: currentUser ? roleLabel(currentUser.role) : t('User')
+            value: currentUser ? roleLabel(currentUser.role) : t('User'),
+            tone: 'neutral',
+            hint: t('Role controls available account operations.')
           },
           {
             label: t('Managed accounts'),
-            value: managedAccountCount
-          }
-        ]}
-      />
-
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Managed accounts'),
-            description: t('Accounts visible in this settings surface under the current role scope.'),
-            value: managedAccountCount
+            value: managedAccountCount,
+            tone: currentUser?.role === 'admin' ? 'info' : 'neutral',
+            hint: t('Admin sees full directory, users see self-service lane.')
           },
-          {
-            title: t('Admin accounts'),
-            description: t('Provisioned admins currently visible to governance tools.'),
-            value: directorySummary.admins
-          },
-          {
-            title: t('Active accounts'),
-            description: t('Accounts that can still open authenticated sessions.'),
-            value: directorySummary.activeAccounts
-          },
-          {
-            title: t('Disabled accounts'),
-            description: t('Accounts with access paused and retained reason history.'),
-            value: directorySummary.disabledAccounts,
-            tone: directorySummary.disabledAccounts > 0 ? 'attention' : 'default'
-          }
+          ...(currentUser?.role === 'admin'
+            ? [
+                {
+                  label: t('Disabled accounts'),
+                  value: directorySummary.disabledAccounts,
+                  tone: directorySummary.disabledAccounts > 0 ? ('warning' as const) : ('neutral' as const),
+                  hint: t('Accounts currently blocked from login.')
+                }
+              ]
+            : [])
         ]}
       />
 
       {loadError && !authRequired ? (
-        <StateBlock variant="error" title={t('Load Failed')} description={loadError} />
+        <InlineAlert tone="danger" title={t('Load Failed')} description={loadError} />
       ) : null}
 
       {authRequired ? (
@@ -405,82 +536,66 @@ export default function AccountSettingsPage() {
       {!authRequired ? (
         <WorkspaceWorkbench
           toolbar={
-            <Card as="section" className="workspace-toolbar-card">
-              <div className="workspace-toolbar-head">
-                <div className="workspace-toolbar-copy">
-                  <h3>{t('Account Controls')}</h3>
+            <FilterToolbar
+              filters={
+                currentUser?.role === 'admin' ? (
+                  <>
+                    <label className="stack tight">
+                      <small className="muted">{t('Search accounts')}</small>
+                      <Input
+                        value={directoryQuery}
+                        onChange={(event) => setDirectoryQuery(event.target.value)}
+                        placeholder={t('Search by username')}
+                      />
+                    </label>
+                    <label className="stack tight">
+                      <small className="muted">{t('Role')}</small>
+                      <Select
+                        value={directoryRoleFilter}
+                        onChange={(event) =>
+                          setDirectoryRoleFilter(event.target.value as 'all' | User['role'])
+                        }
+                      >
+                        <option value="all">{t('All roles')}</option>
+                        <option value="admin">{t('Admin')}</option>
+                        <option value="user">{t('User')}</option>
+                      </Select>
+                    </label>
+                    <label className="stack tight">
+                      <small className="muted">{t('Status')}</small>
+                      <Select
+                        value={directoryStatusFilter}
+                        onChange={(event) =>
+                          setDirectoryStatusFilter(event.target.value as 'all' | User['status'])
+                        }
+                      >
+                        <option value="all">{t('All statuses')}</option>
+                        <option value="active">{t('active')}</option>
+                        <option value="disabled">{t('disabled')}</option>
+                      </Select>
+                    </label>
+                  </>
+                ) : (
                   <small className="muted">
-                    {t('Keep password rotation, account governance, and directory filtering in one steady control strip.')}
+                    {t('Self-service mode: password and profile controls only.')}
                   </small>
-                </div>
-                <div className="workspace-toolbar-actions">
-                  {currentUser?.role === 'admin' && hasDirectoryFilters ? (
-                    <Button type="button" variant="ghost" size="sm" onClick={resetDirectoryFilters}>
-                      {t('Clear filters')}
-                    </Button>
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      reload().catch(() => {
-                        // handled in helper
-                      });
-                    }}
-                    disabled={loading || refreshing || passwordSaving || creatingUser}
-                  >
-                    {loading || refreshing ? t('Refreshing...') : t('Refresh')}
+                )
+              }
+              actions={
+                currentUser?.role === 'admin' && hasDirectoryFilters ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={resetDirectoryFilters}>
+                    {t('Clear filters')}
                   </Button>
-                </div>
-              </div>
-              {currentUser?.role === 'admin' ? (
-                <div className="workspace-filter-grid">
-                  <label className="stack tight">
-                    <small className="muted">{t('Search accounts')}</small>
-                    <Input
-                      value={directoryQuery}
-                      onChange={(event) => setDirectoryQuery(event.target.value)}
-                      placeholder={t('Search by username')}
-                    />
-                  </label>
-                  <label className="stack tight">
-                    <small className="muted">{t('Role')}</small>
-                    <Select
-                      value={directoryRoleFilter}
-                      onChange={(event) =>
-                        setDirectoryRoleFilter(event.target.value as 'all' | User['role'])
-                      }
-                    >
-                      <option value="all">{t('All roles')}</option>
-                      <option value="admin">{t('Admin')}</option>
-                      <option value="user">{t('User')}</option>
-                    </Select>
-                  </label>
-                  <label className="stack tight">
-                    <small className="muted">{t('Status')}</small>
-                    <Select
-                      value={directoryStatusFilter}
-                      onChange={(event) =>
-                        setDirectoryStatusFilter(event.target.value as 'all' | User['status'])
-                      }
-                    >
-                      <option value="all">{t('All statuses')}</option>
-                      <option value="active">{t('active')}</option>
-                      <option value="disabled">{t('disabled')}</option>
-                    </Select>
-                  </label>
-                  <div className="stack tight">
-                    <small className="muted">{t('Directory scope')}</small>
-                    <div className="row gap wrap">
+                ) : undefined
+              }
+              summary={
+                <div className="row gap wrap">
+                  {currentUser?.role === 'admin' ? (
+                    <>
                       <Badge tone="info">{t('Matched')}: {filteredUsers.length}</Badge>
                       <Badge tone="neutral">{t('Total')}: {sortedUsers.length}</Badge>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              <div className="workspace-toolbar-meta">
-                <div className="workspace-segmented-actions">
+                    </>
+                  ) : null}
                   <Badge tone="neutral">
                     {t('Current user')}: {currentUser?.username ?? t('guest')}
                   </Badge>
@@ -488,25 +603,80 @@ export default function AccountSettingsPage() {
                     {t('Role')}: {currentUser ? roleLabel(currentUser.role) : t('User')}
                   </Badge>
                   <Badge tone="info">{t('Managed accounts')}: {managedAccountCount}</Badge>
-                  {currentUser?.role === 'admin' ? (
-                    <Badge tone={directorySummary.disabledAccounts > 0 ? 'warning' : 'neutral'}>
-                      {t('Disabled accounts')}: {directorySummary.disabledAccounts}
-                    </Badge>
-                  ) : null}
                 </div>
-              </div>
-            </Card>
+              }
+            />
           }
-          main={
+        main={
             <div className="workspace-main-stack">
-              <Card>
+              <WorkspaceOnboardingCard
+                title={t('Account first-run guide')}
+                description={t('Use this page to secure access first, then continue to the next setup tabs.')}
+                summary={
+                  currentUser
+                    ? t('Guide changes by role so new users only see the steps that matter now.')
+                    : t('Sign in first so account identity and next-step guidance can load correctly.')
+                }
+                storageKey={accountOnboardingDismissedStorageKey}
+                steps={accountOnboardingSteps.map((stepItem) => ({
+                  key: stepItem.key,
+                  label: stepItem.label,
+                  detail: stepItem.detail,
+                  done: stepItem.done,
+                  primaryAction: {
+                    to:
+                      stepItem.key === 'identity' ||
+                      stepItem.key === 'password' ||
+                      (stepItem.key === 'directory' && currentUser?.role === 'admin')
+                        ? undefined
+                        : stepItem.primaryTo,
+                    label: stepItem.primaryLabel,
+                    onClick:
+                      stepItem.key === 'identity'
+                        ? focusCurrentAccount
+                        : stepItem.key === 'password'
+                          ? focusPasswordCard
+                          : stepItem.key === 'directory' && currentUser?.role === 'admin'
+                            ? focusDirectoryCard
+                            : undefined
+                  },
+                  secondaryAction:
+                    stepItem.secondaryTo && stepItem.secondaryLabel
+                      ? {
+                          to: stepItem.secondaryTo,
+                          label: stepItem.secondaryLabel
+                        }
+                      : undefined
+                }))}
+              />
+
+              {nextOnboardingStep ? (
+                <WorkspaceNextStepCard
+                  title={t('Next account step')}
+                  description={t('Finish one clear account setup action here before moving to the next settings tab.')}
+                  stepLabel={nextOnboardingStep.label}
+                  stepDetail={nextOnboardingStep.detail}
+                  current={nextOnboardingStepIndex}
+                  total={accountOnboardingSteps.length}
+                  actions={
+                    <div className="row gap wrap">
+                      {renderAccountNextAction(nextOnboardingStep)}
+                      {nextOnboardingStep.secondaryTo && nextOnboardingStep.secondaryLabel ? (
+                        <ButtonLink to={nextOnboardingStep.secondaryTo} variant="ghost" size="sm">
+                          {nextOnboardingStep.secondaryLabel}
+                        </ButtonLink>
+                      ) : null}
+                    </div>
+                  }
+                />
+              ) : null}
+
+              <div ref={passwordCardRef}>
+                <Card>
                 <WorkspaceSectionHeader
                   title={t('Change Password')}
                   description={t('All authenticated users can update their own password from this tab.')}
                 />
-                <small className="muted">
-                  {t('Use this workbench to update your own password and manage account provisioning in one place.')}
-                </small>
 
                 {loading ? (
                   <StateBlock
@@ -557,9 +727,6 @@ export default function AccountSettingsPage() {
                         />
                       </label>
                     </div>
-                    <small className="muted">
-                      {t('Password updates require your current password plus a confirmed new password.')}
-                    </small>
                     {!passwordConfirmationMatches ? (
                       <small className="muted">{t('New password confirmation does not match.')}</small>
                     ) : null}
@@ -581,8 +748,10 @@ export default function AccountSettingsPage() {
                   />
                 ) : null}
               </Card>
+              </div>
 
               {currentUser?.role === 'admin' ? (
+                <div ref={directoryCardRef}>
                 <Card>
                   <WorkspaceSectionHeader
                     title={t('Account Directory')}
@@ -593,13 +762,6 @@ export default function AccountSettingsPage() {
                       </Badge>
                     }
                   />
-                  <small className="muted">
-                    {t('Filter and review provisioned accounts before password reset or status changes.')} {t('Matched')}:{' '}
-                    {filteredUsers.length} · {t('Total')}: {sortedUsers.length}
-                  </small>
-                  <small className="muted">
-                    {t('Disabling an account signs out its active sessions immediately. Reactivated users must log in again.')}
-                  </small>
 
                   {adminActionStatus ? (
                     <StateBlock
@@ -624,12 +786,54 @@ export default function AccountSettingsPage() {
                       variant="empty"
                       title={t('No accounts yet.')}
                       description={t('Provisioned accounts will appear here after an administrator creates them.')}
+                      extra={
+                        nextOnboardingStep ? (
+                          <WorkspaceFollowUpHint
+                            actions={
+                              <>
+                                {renderAccountNextAction(nextOnboardingStep)}
+                                {nextOnboardingStep.secondaryTo && nextOnboardingStep.secondaryLabel ? (
+                                  <ButtonLink to={nextOnboardingStep.secondaryTo} variant="ghost" size="sm">
+                                    {nextOnboardingStep.secondaryLabel}
+                                  </ButtonLink>
+                                ) : null}
+                              </>
+                            }
+                            detail={nextOnboardingStep.detail}
+                          />
+                        ) : (
+                          <small className="muted">
+                            {t('Use the create-account form above to provision the first teammate without leaving this page.')}
+                          </small>
+                        )
+                      }
                     />
                   ) : filteredUsers.length === 0 ? (
                     <StateBlock
                       variant="empty"
                       title={t('No accounts match current filters.')}
-                      description={t('Try another keyword or reset the role filter.')}
+                      description={t('Try another keyword or reset the role/status filters.')}
+                      extra={
+                        nextOnboardingStep ? (
+                          <WorkspaceFollowUpHint
+                            actions={
+                              <>
+                                {renderAccountNextAction(nextOnboardingStep)}
+                                {hasDirectoryFilters ? (
+                                  <Button type="button" variant="ghost" size="sm" onClick={resetDirectoryFilters}>
+                                    {t('Clear filters')}
+                                  </Button>
+                                ) : null}
+                              </>
+                            }
+                            detail={nextOnboardingStep.detail}
+                          />
+                        ) : (
+                          <small className="muted">
+                            {t('Clear search and filter chips to restore the full directory view.')}
+                          </small>
+                        )
+                      }
                     />
                   ) : (
                     <ul className="workspace-record-list">
@@ -822,16 +1026,17 @@ export default function AccountSettingsPage() {
                     </div>
                   ) : null}
                 </Card>
+                </div>
               ) : null}
             </div>
           }
           side={
             <div className="workspace-inspector-rail">
-              <Card className="workspace-inspector-card">
-                <WorkspaceSectionHeader
-                  title={t('Current account')}
-                  description={t('Use this surface for password rotation and session-safe account operations.')}
-                />
+              <div ref={currentAccountRef}>
+              <WorkspaceActionPanel
+                title={t('Current account')}
+                description={t('Use this surface for password rotation and session-safe account operations.')}
+              >
                 <Panel as="section" className="stack tight" tone="soft">
                   <div className="row between gap wrap">
                     <strong>{currentUser?.username ?? t('guest')}</strong>
@@ -856,17 +1061,17 @@ export default function AccountSettingsPage() {
                     </small>
                   ) : null}
                 </Panel>
-              </Card>
+              </WorkspaceActionPanel>
+              </div>
 
-              <Card className="workspace-inspector-card">
-                <WorkspaceSectionHeader
-                  title={t('Account Provisioning')}
-                  description={
-                    currentUser?.role === 'admin'
-                      ? t('Administrators can create user or admin accounts from this tab.')
-                      : t('Ask an administrator to provision your account before first login.')
-                  }
-                />
+              <WorkspaceActionPanel
+                title={t('Account Provisioning')}
+                description={
+                  currentUser?.role === 'admin'
+                    ? t('Administrators can create user or admin accounts from this tab.')
+                    : t('Ask an administrator to provision your account before first login.')
+                }
+              >
 
                 {currentUser?.role !== 'admin' ? (
                   <StateBlock
@@ -934,14 +1139,13 @@ export default function AccountSettingsPage() {
                     description={createStatus.text}
                   />
                 ) : null}
-              </Card>
+              </WorkspaceActionPanel>
 
               {currentUser?.role === 'admin' ? (
-                <Card className="workspace-inspector-card">
-                  <WorkspaceSectionHeader
-                    title={t('Directory Summary')}
-                    description={t('Quick account mix and current filter visibility in one panel.')}
-                  />
+                <WorkspaceActionPanel
+                  title={t('Directory Summary')}
+                  description={t('Quick account mix and current filter visibility in one panel.')}
+                >
                   <div className="workspace-keyline-list">
                     <div className="workspace-keyline-item">
                       <span>{t('Admin accounts')}</span>
@@ -964,7 +1168,7 @@ export default function AccountSettingsPage() {
                       <strong>{filteredUsers.length}</strong>
                     </div>
                   </div>
-                </Card>
+                </WorkspaceActionPanel>
               ) : null}
             </div>
           }

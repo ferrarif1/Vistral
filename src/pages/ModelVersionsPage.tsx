@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, RuntimeSettingsView } from '../../shared/domain';
+import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
+import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
+import WorkspaceStarterPanel from '../components/onboarding/WorkspaceStarterPanel';
 import StateBlock from '../components/StateBlock';
 import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import { FilterToolbar, InlineAlert, KPIStatRow, PageHeader } from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -18,11 +21,13 @@ import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
+import { bucketRuntimeFallbackReason, runtimeFallbackReasonLabelKey } from '../utils/runtimeFallbackReason';
 
 const versionsVirtualizationThreshold = 14;
 const versionsVirtualRowHeight = 214;
 const versionsVirtualViewportHeight = 640;
 const backgroundRefreshIntervalMs = 6000;
+const modelVersionsOnboardingDismissedStorageKey = 'vistral-model-versions-onboarding-dismissed';
 type LoadMode = 'initial' | 'manual' | 'background';
 
 const buildVersionSignature = (items: ModelVersionRecord[]): string =>
@@ -140,6 +145,8 @@ export default function ModelVersionsPage() {
   const versionsSignatureRef = useRef('');
   const modelsSignatureRef = useRef('');
   const jobsSignatureRef = useRef('');
+  const versionInventoryRef = useRef<HTMLDivElement | null>(null);
+  const registrationLaneRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async (mode: LoadMode = 'initial') => {
     if (mode === 'initial') {
@@ -499,6 +506,120 @@ export default function ModelVersionsPage() {
     ? jobsById.get(selectedVersion.training_job_id) ?? null
     : null;
   const selectedVersionJobInsight = selectedVersionJob ? jobExecutionInsights[selectedVersionJob.id] ?? null : null;
+  const selectedVersionTrainingJobDetailPath = selectedVersion?.training_job_id
+    ? buildScopedTrainingJobDetailPath(
+        selectedVersion.training_job_id,
+        jobsById.get(selectedVersion.training_job_id) ?? null
+      )
+    : '/training/jobs';
+  const selectedVersionScopedInferencePath = buildScopedInferenceValidationPath(selectedVersionJob);
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'evidence',
+        label: t('Prepare authenticity-verified completed jobs'),
+        detail: t('Only local-command completed jobs with real execution evidence are eligible for registration.'),
+        done: registerableJobs.length > 0,
+        to: '/training/jobs',
+        cta: t('Open Training Jobs')
+      },
+      {
+        key: 'register',
+        label: t('Register at least one model version'),
+        detail: t('Bind model + completed run and create a traceable version record.'),
+        done: summary.registered > 0,
+        to: '/models/versions',
+        cta: t('Open version inventory')
+      },
+      {
+        key: 'inspect',
+        label: t('Inspect selected version lineage'),
+        detail: t('Open one version and verify linked model, job, artifact, and authenticity signals.'),
+        done: Boolean(selectedVersion) && (Boolean(selectedVersionJob) || Boolean(selectedVersion?.artifact_attachment_id)),
+        to: selectedVersionTrainingJobDetailPath,
+        cta: t('Open Job Detail')
+      },
+      {
+        key: 'next',
+        label: t('Continue to validation lane'),
+        detail: t('Run scoped inference validation from selected version context.'),
+        done: selectedVersion?.status === 'registered',
+        to: selectedVersionScopedInferencePath,
+        cta: t('Validate Inference')
+      }
+    ],
+    [
+      registerableJobs.length,
+      selectedVersion,
+      selectedVersionJob,
+      selectedVersionScopedInferencePath,
+      selectedVersionTrainingJobDetailPath,
+      summary.registered,
+      t
+    ]
+  );
+  const nextOnboardingStep = useMemo(
+    () => onboardingSteps.find((stepItem) => !stepItem.done) ?? null,
+    [onboardingSteps]
+  );
+  const nextOnboardingStepIndex = useMemo(
+    () => (nextOnboardingStep ? onboardingSteps.findIndex((stepItem) => stepItem.key === nextOnboardingStep.key) + 1 : 0),
+    [nextOnboardingStep, onboardingSteps]
+  );
+
+  const focusVersionInventory = useCallback(() => {
+    versionInventoryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusRegistrationLane = useCallback(() => {
+    registrationLaneRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const selectStarterVersion = useCallback(() => {
+    if (!filteredVersions.length) {
+      focusVersionInventory();
+      return;
+    }
+
+    setSelectedVersionId(filteredVersions[0].id);
+    window.requestAnimationFrame(() => {
+      versionInventoryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [filteredVersions, focusVersionInventory]);
+
+  const renderVersionNextAction = useCallback(
+    (
+      stepItem: (typeof onboardingSteps)[number],
+      options?: {
+        variant?: 'secondary' | 'ghost';
+      }
+    ) => {
+      const variant = options?.variant ?? 'secondary';
+
+      if (stepItem.key === 'register') {
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={focusRegistrationLane}>
+            {t('Open registration lane')}
+          </Button>
+        );
+      }
+
+      if (stepItem.key === 'inspect' && filteredVersions.length > 0) {
+        return (
+          <Button type="button" variant={variant} size="sm" onClick={selectStarterVersion}>
+            {t('Select first version')}
+          </Button>
+        );
+      }
+
+      return (
+        <ButtonLink to={stepItem.to} variant={variant} size="sm">
+          {stepItem.cta}
+        </ButtonLink>
+      );
+    },
+    [filteredVersions.length, focusRegistrationLane, selectStarterVersion, t]
+  );
 
   const describeJobExecutionReality = (job?: TrainingJobRecord | null, insight?: TrainingExecutionInsight | null) => {
     if (!job) {
@@ -514,13 +635,15 @@ export default function ModelVersionsPage() {
       return t('Real');
     }
     if (insight.reality === 'template') {
-      return t('Template/Fallback');
+      return t('Degraded output');
     }
     if (insight.reality === 'simulated') {
-      return t('Simulated');
+      return t('Degraded output');
     }
-    return t('Unknown');
+    return t('Needs verification');
   };
+  const formatFallbackReasonLabel = (reason: string | null | undefined): string =>
+    t(runtimeFallbackReasonLabelKey(bucketRuntimeFallbackReason(reason)));
 
   const toggleCompareVersion = (versionId: string) => {
     setCompareError('');
@@ -661,57 +784,104 @@ export default function ModelVersionsPage() {
 
   return (
     <WorkspacePage>
-      <WorkspaceHero
+      <PageHeader
         eyebrow={t('Version Registry')}
         title={t('Model Versions')}
         description={t('Keep version lineage, metrics, and registration actions in one workbench.')}
-        stats={[
-          { label: t('Total'), value: summary.total },
-          { label: t('Filtered'), value: summary.filtered },
-          { label: t('Artifacts linked'), value: summary.linkedArtifacts }
-        ]}
+        primaryAction={{
+          label: loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh'),
+          onClick: () => {
+            load('manual').catch(() => {
+              // no-op
+            });
+          },
+          disabled: loading || refreshing
+        }}
       />
 
-      {error ? <StateBlock variant="error" title={t('Action Failed')} description={error} /> : null}
-      {success ? <StateBlock variant="success" title={t('Action Completed')} description={success} /> : null}
-
-      <WorkspaceMetricGrid
+      <KPIStatRow
         items={[
           {
-            title: t('Registered versions'),
-            description: t('Versions already available for inference or deployment follow-up.'),
-            value: summary.registered
+            label: t('Registered versions'),
+            value: summary.registered,
+            tone: summary.registered > 0 ? 'success' : 'neutral',
+            hint: t('Versions already available for inference or deployment follow-up.')
           },
           {
-            title: t('Jobs ready to register'),
-            description: t('Completed training jobs that can be turned into model versions.'),
-            value: summary.registerableJobs
+            label: t('Jobs ready to register'),
+            value: summary.registerableJobs,
+            tone: summary.registerableJobs > 0 ? 'info' : 'warning',
+            hint: t('Completed training jobs that can be turned into model versions.')
           },
           {
-            title: t('Artifacts linked'),
-            description: t('Versions with stored artifact attachment references.'),
-            value: summary.linkedArtifacts
+            label: t('Artifacts linked'),
+            value: summary.linkedArtifacts,
+            tone: 'neutral',
+            hint: t('Versions with stored artifact attachment references.')
           },
           {
-            title: t('Deprecated count'),
-            description: t('Versions marked deprecated but kept for traceability.'),
+            label: t('Deprecated count'),
             value: summary.deprecated,
-            tone: summary.deprecated > 0 ? 'attention' : 'default'
+            tone: summary.deprecated > 0 ? 'warning' : 'neutral',
+            hint: t('Versions marked deprecated but kept for traceability.')
           }
         ]}
       />
 
+      {error ? <InlineAlert tone="danger" title={t('Action Failed')} description={error} /> : null}
+      {success ? <InlineAlert tone="success" title={t('Action Completed')} description={success} /> : null}
+
       <WorkspaceWorkbench
         toolbar={
-          <Card as="section" className="workspace-toolbar-card">
-            <div className="workspace-toolbar-head">
-              <div className="workspace-toolbar-copy">
-                <h3>{t('Version Controls')}</h3>
-                <small className="muted">
-                  {t('Filter the registry, inspect lineage, and keep version comparisons close to registration actions.')}
-                </small>
-              </div>
-              <div className="workspace-toolbar-actions">
+          <FilterToolbar
+            filters={
+              <>
+                <label className="stack tight">
+                  <small className="muted">{t('Search')}</small>
+                  <Input
+                    value={searchText}
+                    onChange={(event) => setSearchText(event.target.value)}
+                    placeholder={t('Search by version name, id, or model')}
+                  />
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Task')}</small>
+                  <Select
+                    value={taskFilter}
+                    onChange={(event) =>
+                      setTaskFilter(
+                        event.target.value as
+                          | 'all'
+                          | 'ocr'
+                          | 'detection'
+                          | 'classification'
+                          | 'segmentation'
+                          | 'obb'
+                      )
+                    }
+                  >
+                    <option value="all">{t('all')}</option>
+                    <option value="ocr">{t('ocr')}</option>
+                    <option value="detection">{t('detection')}</option>
+                    <option value="classification">{t('classification')}</option>
+                    <option value="segmentation">{t('segmentation')}</option>
+                    <option value="obb">{t('obb')}</option>
+                  </Select>
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Framework')}</small>
+                  <Select
+                    value={frameworkFilter}
+                    onChange={(event) =>
+                      setFrameworkFilter(event.target.value as 'all' | 'yolo' | 'paddleocr' | 'doctr')
+                    }
+                  >
+                    <option value="all">{t('all')}</option>
+                    <option value="yolo">{t('yolo')}</option>
+                    <option value="paddleocr">{t('paddleocr')}</option>
+                    <option value="doctr">{t('doctr')}</option>
+                  </Select>
+                </label>
                 <label className="stack tight">
                   <small className="muted">{t('Status')}</small>
                   <Select
@@ -725,88 +895,68 @@ export default function ModelVersionsPage() {
                     <option value="deprecated">{t('deprecated')}</option>
                   </Select>
                 </label>
-                {hasActiveFilters ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
-                    {t('Clear filters')}
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    load('manual').catch(() => {
-                      // no-op
-                    });
-                  }}
-                  disabled={loading || refreshing}
-                >
-                  {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
+              </>
+            }
+            actions={
+              hasActiveFilters ? (
+                <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                  {t('Clear filters')}
                 </Button>
-              </div>
-            </div>
-
-            <div className="workspace-filter-grid">
-              <label className="stack tight">
-                <small className="muted">{t('Search')}</small>
-                <Input
-                  value={searchText}
-                  onChange={(event) => setSearchText(event.target.value)}
-                  placeholder={t('Search by version name, id, or model')}
-                />
-              </label>
-              <label className="stack tight">
-                <small className="muted">{t('Task')}</small>
-                <Select
-                  value={taskFilter}
-                  onChange={(event) =>
-                    setTaskFilter(
-                      event.target.value as
-                        | 'all'
-                        | 'ocr'
-                        | 'detection'
-                        | 'classification'
-                        | 'segmentation'
-                        | 'obb'
-                    )
-                  }
-                >
-                  <option value="all">{t('all')}</option>
-                  <option value="ocr">{t('ocr')}</option>
-                  <option value="detection">{t('detection')}</option>
-                  <option value="classification">{t('classification')}</option>
-                  <option value="segmentation">{t('segmentation')}</option>
-                  <option value="obb">{t('obb')}</option>
-                </Select>
-              </label>
-              <label className="stack tight">
-                <small className="muted">{t('Framework')}</small>
-                <Select
-                  value={frameworkFilter}
-                  onChange={(event) =>
-                    setFrameworkFilter(event.target.value as 'all' | 'yolo' | 'paddleocr' | 'doctr')
-                  }
-                >
-                  <option value="all">{t('all')}</option>
-                  <option value="yolo">{t('yolo')}</option>
-                  <option value="paddleocr">{t('paddleocr')}</option>
-                  <option value="doctr">{t('doctr')}</option>
-                </Select>
-              </label>
-            </div>
-
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
+              ) : undefined
+            }
+            summary={
+              <div className="row gap wrap">
                 <Badge tone="info">
                   {t('Showing {count} versions in the current registry view.', { count: filteredVersions.length })}
                 </Badge>
                 {compareIds.length > 0 ? <Badge tone="neutral">{t('Compared')}: {compareIds.length}/2</Badge> : null}
               </div>
-            </div>
-          </Card>
+            }
+          />
         }
         main={
           <div className="workspace-main-stack">
+            <WorkspaceOnboardingCard
+              title={t('Version first-run guide')}
+              description={t('Use this page to register real completed runs, inspect lineage, and hand off into validation.')}
+              summary={t('Guide status is computed from completed-job evidence, registered versions, and selected inspector state.')}
+              storageKey={modelVersionsOnboardingDismissedStorageKey}
+              steps={onboardingSteps.map((stepItem) => ({
+                key: stepItem.key,
+                label: stepItem.label,
+                detail: stepItem.detail,
+                done: stepItem.done,
+                primaryAction: {
+                  to: stepItem.key === 'register' || (stepItem.key === 'inspect' && filteredVersions.length > 0) ? undefined : stepItem.to,
+                  label:
+                    stepItem.key === 'register'
+                      ? t('Open registration lane')
+                      : stepItem.key === 'inspect' && filteredVersions.length > 0
+                        ? t('Select first version')
+                        : stepItem.cta,
+                  onClick:
+                    stepItem.key === 'register'
+                      ? focusRegistrationLane
+                      : stepItem.key === 'inspect' && filteredVersions.length > 0
+                        ? selectStarterVersion
+                        : undefined
+                }
+              }))}
+            />
+
+            {nextOnboardingStep ? (
+              <WorkspaceNextStepCard
+                title={t('Next version step')}
+                description={t('Finish one clear version action here before comparing outputs or switching to validation.')}
+                stepLabel={nextOnboardingStep.label}
+                stepDetail={nextOnboardingStep.detail}
+                current={nextOnboardingStepIndex}
+                total={onboardingSteps.length}
+                actions={renderVersionNextAction(nextOnboardingStep)}
+              />
+            ) : null}
+
+            <div ref={versionInventoryRef}>
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Version Inventory')}
@@ -822,7 +972,23 @@ export default function ModelVersionsPage() {
                   description={
                     hasActiveFilters
                       ? t('No versions match current filters.')
-                      : t('Latest registered versions will appear here after the first successful registration.')
+                      : t('Registered versions appear here after a completed training job passes authenticity checks and is recorded.')
+                  }
+                  extra={
+                    hasActiveFilters ? (
+                      <small className="muted">
+                        {t('Broaden search or filter conditions to restore matching versions.')}
+                      </small>
+                    ) : nextOnboardingStep ? (
+                      <WorkspaceFollowUpHint
+                        actions={renderVersionNextAction(nextOnboardingStep)}
+                        detail={nextOnboardingStep.detail}
+                      />
+                    ) : (
+                      <ButtonLink to="/training/jobs" variant="secondary" size="sm">
+                        {t('Open Training Jobs')}
+                      </ButtonLink>
+                    )
                   }
                 />
               ) : shouldVirtualizeVersions ? (
@@ -842,6 +1008,7 @@ export default function ModelVersionsPage() {
                 </ul>
               )}
             </Card>
+            </div>
           </div>
         }
         side={
@@ -852,35 +1019,44 @@ export default function ModelVersionsPage() {
                 description={t('Inspector panel for the selected version lineage and status.')}
               />
               {!selectedVersion ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('No selection')}
-                  description={t('Select one version from the inventory to inspect details.')}
-                />
+                nextOnboardingStep ? (
+                  <WorkspaceStarterPanel
+                    title={t('Version starter task')}
+                    label={nextOnboardingStep.label}
+                    detail={nextOnboardingStep.detail}
+                    actions={renderVersionNextAction(nextOnboardingStep)}
+                  />
+                ) : (
+                  <StateBlock
+                    variant="empty"
+                    title={t('No selection')}
+                    description={t('Select one version from the inventory to inspect details.')}
+                  />
+                )
               ) : (
                 <>
                   {!runtimeSettingsLoading ? (
                     runtimeSettingsError ? (
                       <StateBlock
                         variant="empty"
-                        title={t('Runtime strict mode status unavailable')}
+                        title={t('Runtime safety status unavailable')}
                         description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
                       />
                     ) : runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback ? (
                       <StateBlock
                         variant="success"
-                        title={t('Runtime strict mode is active')}
+                        title={t('Runtime safety guard is active')}
                         description={t(
-                          'Version authenticity checks are aligned with strict runtime controls. Bundled runner python: {pythonBin}.',
+                          'Version authenticity checks now use runtime safety guards. Built-in runner Python: {pythonBin}.',
                           { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
                         )}
                         extra={
                           <div className="row gap wrap">
                             <Badge tone={runtimeDisableSimulatedTrainFallback ? 'success' : 'warning'}>
-                              {t('Train strict')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
+                              {t('Training safety guard')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
                             </Badge>
                             <Badge tone={runtimeDisableInferenceFallback ? 'success' : 'warning'}>
-                              {t('Inference strict')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
+                              {t('Inference safety guard')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
                             </Badge>
                             <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                               {t('Open Runtime Settings')}
@@ -891,9 +1067,9 @@ export default function ModelVersionsPage() {
                     ) : (
                       <StateBlock
                         variant="error"
-                        title={t('Runtime strict mode is off')}
+                        title={t('Runtime safety guard is off')}
                         description={t(
-                          'This version page may still surface fallback-linked jobs. Enable strict guards in Runtime settings before registration.'
+                          'This page may still show jobs with degraded output. Enable runtime safety guards before registration.'
                         )}
                         extra={
                           <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
@@ -944,11 +1120,11 @@ export default function ModelVersionsPage() {
                       description={
                         selectedVersionJobInsight?.fallbackReason
                           ? t(
-                              'Linked training run contains template/fallback evidence. Review training job detail before production usage. Fallback reason: {reason}',
-                              { reason: selectedVersionJobInsight.fallbackReason }
+                              'Linked training run contains degraded-output evidence. Review training job detail before production usage. Reason: {reason}',
+                              { reason: formatFallbackReasonLabel(selectedVersionJobInsight.fallbackReason) }
                             )
                           : t(
-                              'Linked training run contains template/simulated/unknown evidence. Review training job detail before production usage.'
+                              'Linked training run contains non-real execution evidence. Review training job detail before production usage.'
                             )
                       }
                     />
@@ -967,14 +1143,6 @@ export default function ModelVersionsPage() {
                         {t('Open Training Job')}
                       </ButtonLink>
                     ) : null}
-                    <ButtonLink
-                      to={buildScopedInferenceValidationPath(selectedVersionJob)}
-                      variant="ghost"
-                      size="sm"
-                      block
-                    >
-                      {t('Validate Inference')}
-                    </ButtonLink>
                   </div>
                 </>
               )}
@@ -1037,6 +1205,7 @@ export default function ModelVersionsPage() {
               )}
             </Card>
 
+            <div ref={registrationLaneRef}>
             <Card as="article" className="workspace-inspector-card">
               <div className="stack tight">
                 <h3>{t('Registration Lane')}</h3>
@@ -1061,8 +1230,23 @@ export default function ModelVersionsPage() {
                       : completedJobs.length === 0
                       ? t('Complete a training job first, then return here to register a version.')
                       : t(
-                          'Only completed local_command jobs with real execution evidence can be registered as model versions.'
+                          'Only completed jobs with verified real execution can be registered as model versions.'
                         )
+                  }
+                  extra={
+                    models.length === 0 ? (
+                      <ButtonLink to="/models/create" variant="secondary" size="sm">
+                        {t('Create Model Draft')}
+                      </ButtonLink>
+                    ) : completedJobs.length === 0 ? (
+                      <ButtonLink to="/training/jobs/new" variant="secondary" size="sm">
+                        {t('Create Training Job')}
+                      </ButtonLink>
+                    ) : (
+                      <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                        {t('Open Runtime Settings')}
+                      </ButtonLink>
+                    )
                   }
                 />
               ) : (
@@ -1070,22 +1254,27 @@ export default function ModelVersionsPage() {
                   {blockedCompletedJobs.length > 0 ? (
                     <Badge tone="warning">
                       {t(
-                        '{count} completed jobs are hidden because execution_mode is not local_command.',
+                        '{count} completed jobs are hidden because they were not completed through local execution path.',
                         { count: blockedCompletedJobs.length }
                       )}
                     </Badge>
                   ) : null}
                   {jobInsightsLoading ? (
-                    <small className="muted">{t('Checking local-command job authenticity...')}</small>
+                    <small className="muted">{t('Checking training job authenticity...')}</small>
                   ) : null}
                   {blockedLocalCommandJobs.length > 0 ? (
                     <StateBlock
                       variant="empty"
-                      title={t('Template/fallback local-command jobs blocked')}
+                      title={t('Jobs with degraded output are blocked')}
                       description={t(
-                        '{count} completed local-command jobs are excluded because runner evidence is template/simulated/unknown.',
+                        '{count} completed jobs are excluded because execution evidence is degraded or incomplete.',
                         { count: blockedLocalCommandJobs.length }
                       )}
+                      extra={
+                        <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                          {t('Open Runtime Settings')}
+                        </ButtonLink>
+                      }
                     />
                   ) : null}
                   <div className="workspace-form-grid">
@@ -1121,7 +1310,7 @@ export default function ModelVersionsPage() {
 
                   <small className="muted">
                     {t(
-                      'Registration keeps strict authenticity checks. Template/fallback local-command artifacts are blocked by default.'
+                      'Registration keeps authenticity checks on. Jobs with degraded output are blocked by default.'
                     )}
                   </small>
 
@@ -1131,6 +1320,7 @@ export default function ModelVersionsPage() {
                 </>
               )}
             </Card>
+            </div>
           </div>
         }
       />

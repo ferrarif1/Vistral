@@ -37,6 +37,8 @@ Operational branch inside the same flow:
 6. system calls the corresponding backend API only after confirmation is received
 7. assistant returns a `completed` or `failed` action card with created entity summary and next-step guidance
 8. for power users / agentic bridge, user can use `/ops {json}`; for normal users, natural-language intents can also be mapped to the same bridge APIs automatically; high-risk calls still require confirmation before mutation
+8a. when `/ops {json}` or natural-language bridge intent has missing required parameters, assistant must return `requires_input` with explicit missing fields and allow the user to continue by supplying only those fields in follow-up turns
+8b. runtime setup operations can also run from bridge (`activate_runtime_profile`, `auto_configure_runtime_settings`); both remain behind explicit high-risk confirmation
 
 Attachment states:
 - `uploading`
@@ -73,8 +75,58 @@ Actor: `user` / `admin`
 9. administrators can reactivate an account directly from the directory; reactivation clears the stored disable reason
 10. disabling an account immediately terminates that account's active sessions, so the disabled user must log in again after reactivation
 11. safety guards block disabling the current admin session or the last active admin account
-12. switch between `Account`, `LLM`, and `Runtime` using internal sub-tabs instead of separate top-level navigation items
-13. optionally use `/settings/account`, `/settings/llm`, or `/settings/runtime` deep links to open a specific tab directly
+12. switch between `Account`, `LLM`, `Runtime`, `Runtime Templates`, and `Workers` using internal sub-tabs instead of separate top-level navigation items
+13. optionally use `/settings/account`, `/settings/llm`, `/settings/runtime`, `/settings/runtime/templates`, or `/settings/workers` deep links to open a specific tab directly
+14. in `Runtime`, admin can run one-click auto-config to fill blank local commands and probe candidate endpoints (safe mode fills blanks only; overwrite mode can replace existing endpoints)
+15. when `Runtime` has no saved settings yet, the page auto-triggers one safe auto-config pass on first load to reduce manual setup before operator actions
+16. runtime framework cards also support model-aware routing setup:
+   - choose default base/published model and optional default model version per framework
+   - bind optional model-level endpoint API keys (`model:<model_id>` / `model_version:<model_version_id>`) for remote routing
+   - local mode keeps API key hidden and executes local command with explicit `model_id` + `model_version_id` payload
+17. `Runtime Templates` becomes the dedicated runtime-snippet page:
+   - copyable environment variable names and endpoint examples
+   - health check curl samples plus request/response payload skeletons
+   - no runtime readiness state machine, worker lifecycle controls, or profile activation actions
+18. `Workers` becomes the dedicated worker-operations page:
+   - worker registry list/status/actions
+   - guided add-worker pairing and callback validation
+   - worker reconfigure / activation follow-up
+
+## 2.3 Flow A3: First-Run Onboarding (implementing)
+Actor: `new user` (zero prior product knowledge)
+
+1. user opens `/workspace/console` for the first time
+2. system shows a beginner onboarding card with a plain-language closed-loop path:
+   - `prepare data -> annotate/review -> train -> register version -> validate inference -> feedback`
+3. each step includes a direct workspace link and a completion signal derived from real workspace records
+4. user can dismiss onboarding and reopen later from the same entry surface
+4a. a persistent fixed help entry near the top-right of the page can reopen current-page hints at any time, even after the inline onboarding card is hidden
+4b. the fixed help entry should surface the current recommended next step (the first incomplete step) with a direct action link, so beginners do not need to infer the next click from the full checklist
+4c. on the first visit to a guided page, the fixed help entry may auto-open once with a lightweight page hint; after the user closes it, later visits should stay quiet unless reopened manually
+4d. on `/workspace/console`, the main workspace should mirror the same starter task in a dedicated card, so the home view always exposes one primary next action even when the rest of the dashboard is still sparse
+5. when no real record exists yet, onboarding cards and empty states should explicitly explain “why this step matters” and “what to click next”
+5a. page-level onboarding cards should also support hide/reopen controls from the same page, and hiding must not be ignored just because steps are incomplete
+5b. while visible, the inline onboarding card should default to a compact summary (`what this page is for` + `recommended next step`) and expose the full checklist only through on-demand expansion or the fixed help popover
+6. key operational pages also provide lightweight page-level onboarding cards, aligned with the same loop language:
+   - `/models/explore`: explain catalog scanning, readiness/risk recognition, and when to jump into owned models or version work
+   - `/models/my-models`: explain how drafts, pending approvals, and ready models move through the ownership lane
+   - `/models/create`: explain the model draft wizard (`metadata -> artifact -> parameters -> approval submission`)
+   - `/datasets`: explain data-prep purpose, surface one starter task in the main workspace, and when empty offer a direct jump into the inline create panel
+   - `/datasets/:datasetId`: explain upload/split/version progress, mirror the current next step in the main workspace, and show direct queue/version follow-up links
+   - `/datasets/:datasetId/annotate`: explain review queue operation, mirror one current next step in the main workspace/queue-empty state, and keep "back to dataset / validate" links visible
+   - `/training/jobs`: explain active-vs-terminal queue semantics, mirror one current next action in the main workspace, and keep clear entry points into create/detail/validate lanes
+   - `/training/jobs/new`: explain snapshot-based training and readiness gates, and mirror one current next setup action in the main workspace
+   - `/training/jobs/:jobId`: explain how to read current status, logs/metrics readiness, and follow-up links back to dataset/validation
+   - `/models/versions`: explain completed-training evidence, version registration, and validation follow-up, while mirroring the first incomplete versioning step in the main workspace and version empty/selection-empty states
+   - `/inference/validate`: explain validation + feedback routing as the loop close-out, while mirroring the first incomplete validation step in the main workspace and the key empty states (`No Model Versions Yet`, `No Ready Inputs Yet`, `No Runs Yet`)
+   - `/admin/models/pending`: explain admin review responsibility (`review -> decide -> audit trail`)
+   - `/admin/audit`: explain how to read governance records, distinguish user vs system events, and continue into adjacent admin lanes
+   - `/admin/verification-reports`: explain how deployment verification reports are filtered, reviewed, and exported for release governance
+   - `/settings/account`: explain first account setup (`identity -> password -> role-aware governance -> next settings tab`), and mirror the first incomplete setup step in the main workspace plus directory empty/filter-empty states when relevant
+   - `/settings/llm`: explain first LLM setup (`preset -> key -> enable -> test -> chat`), and mirror the first incomplete setup step in the main workspace plus key blocked states
+   - `/settings/runtime`: explain runtime first-run setup (`configure -> activate profile -> readiness -> validate`), and mirror the first incomplete setup step in the main workspace plus readiness/configuration empty states
+   - `/settings/runtime/templates`: explain where to copy runtime env/curl/request/response templates, while keeping this page snippet-only and linking back to Runtime settings for real configuration
+   - `/settings/workers`: explain worker onboarding and scheduling capacity checks (`register/pair -> validate callback -> activate -> monitor`) with one clear next action
 
 ## 3. Flow B: Model Draft -> Approval Submission (implemented)
 Actor: `user` with capability
@@ -177,7 +229,7 @@ Actor: `user`
 5. view logs and metrics in `/training/jobs/:jobId`
 6. from job detail, operators can jump to scoped inference validation and scoped jobs list with the same dataset/version context
 7. when opening job detail from a scoped jobs list, query scope should stay preserved across navigation (`dataset`, `version`)
-6. training detail also exposes scheduler decision history (latest snapshot plus prior reschedule/failover/fallback entries) for auditability
+8. training detail also exposes scheduler decision history (latest snapshot plus prior reschedule/failover/fallback entries) for auditability
 
 ## 7. Flow F: Model Version Registration
 Actor: `user`
@@ -191,7 +243,7 @@ Actor: `user`
 Actor: `user`
 
 1. open `/inference/validate`
-2. run runtime connectivity check (PaddleOCR/docTR/YOLO) and confirm framework status
+2. review runtime summary (reachable/unreachable/not-configured) and jump to `/settings/runtime` when readiness/configuration issues need fixing
 3. upload inference image
 4. select model version
 5. run inference
@@ -200,8 +252,12 @@ Actor: `user`
 6b. when OCR run returns empty lines in fallback mode, UI must show explicit empty-result guidance instead of business-like default text
 7. if failure sample, click feedback action to send sample to a dataset with matching task type
 8. system records `feedback_dataset_id`, ensures a dataset-scoped attachment exists in target dataset, and upserts a traceable dataset item for next-round annotation/training
-9. validation side actions can jump directly to scoped dataset detail, annotation queue, and training jobs while preserving dataset/version context
+9. validation side actions should keep one scoped annotation queue jump while preserving dataset/version context
 10. annotation quick link additionally carries `meta=inference_run_id=<run_id>` so annotation workspace can prefilter feedback samples for the selected inference run
+11. runtime auth resolution for remote inference follows:
+    - `model_version` bound key first (`model_version:<model_version_id>`)
+    - then `model` bound key (`model:<model_id>`)
+    - then framework-level fallback key (`<framework>.api_key`)
 
 ## 9. Closed Business Loop 1: OCR Fine-tune
 1. create OCR dataset
@@ -264,7 +320,7 @@ Actor: `admin` (control plane operator), `worker` (training node agent)
 ## 12.1 Flow I1: Worker GUI Onboarding (implementing)
 Actor: `admin` (control plane operator), `worker operator`
 
-1. admin opens `Runtime > Add Worker`
+1. admin opens `/settings/workers` and starts `Add Worker`
 2. admin selects deployment mode (`Docker` recommended or script fallback), worker profile, optional worker public host/IP, optional bind port, and generates a short-lived pairing token
 3. system shows a copyable startup command or downloadable worker bundle with a prebuilt `/setup` URL when host/port were provided
 4. worker operator starts the worker node with one command
@@ -281,7 +337,7 @@ Actor: `admin` (control plane operator), `worker operator`
 10. worker saves config locally and runs validation
 11. worker heartbeat is accepted by control plane and triggers callback validation from control plane to worker endpoint
 12. if callback validation and hard-compatibility checks pass, session and worker advance to `online`; otherwise session stays `validation_failed` and worker remains unschedulable until retry succeeds
-13. worker local `/setup` page can poll control-plane bootstrap status so the operator sees the latest onboarding state without switching back to admin runtime settings
+13. worker local `/setup` page can poll control-plane bootstrap status so the operator sees the latest onboarding state without switching back to admin worker settings
 14. worker enters normal heartbeat and training-accept mode
 15. for an already-registered worker, admin can trigger `POST /admin/training-workers/{id}/reconfigure-session` to start a guided upgrade/reconfigure pass without deleting the existing worker record
 

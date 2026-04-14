@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { ModelRecord } from '../../../shared/domain';
 import { isCuratedFoundationModelName } from '../../../shared/catalogFixtures';
 import StateBlock from '../StateBlock';
@@ -25,6 +25,7 @@ interface ModelInventoryProps {
   loadingDescription: string;
   emptyTitle: string;
   emptyDescription: string;
+  emptyExtra?: ReactNode;
   models: ModelRecord[];
   loading: boolean;
   refreshing: boolean;
@@ -113,6 +114,7 @@ export default function ModelInventory({
   loadingDescription,
   emptyTitle,
   emptyDescription,
+  emptyExtra,
   models,
   loading,
   refreshing,
@@ -158,7 +160,12 @@ export default function ModelInventory({
         {loading ? (
           <StateBlock variant="loading" title={t('Loading Models')} description={loadingDescription} />
         ) : models.length === 0 ? (
-          <StateBlock variant="empty" title={emptyTitle} description={emptyDescription} />
+          <StateBlock
+            variant="empty"
+            title={emptyTitle}
+            description={emptyDescription}
+            extra={emptyExtra}
+          />
         ) : shouldVirtualize ? (
           <VirtualList
             items={models}

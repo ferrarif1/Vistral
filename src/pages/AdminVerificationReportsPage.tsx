@@ -1,9 +1,11 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import type { User, VerificationReportRecord, VerificationReportStatus } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
+import { Button, ButtonLink } from '../components/ui/Button';
+import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
 import { Checkbox, Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
@@ -20,6 +22,8 @@ import { formatCompactTimestamp } from '../utils/formatting';
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 type ReportSortMode = 'latest' | 'oldest' | 'failed_first';
 type DateQuickRange = 'all' | '7d' | '30d';
+const adminVerificationReportsOnboardingDismissedStorageKey =
+  'vistral-admin-verification-reports-onboarding-dismissed';
 
 const getReportTimestamp = (item: VerificationReportRecord): number => {
   const raw = item.finished_at_utc || item.started_at_utc;
@@ -196,6 +200,37 @@ export default function AdminVerificationReportsPage() {
     }),
     [baseUrlOptions.length, items]
   );
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'load_reports',
+        label: t('Load deployment evidence'),
+        detail: t('Start by confirming deployment verification reports are present so release review is grounded in recorded evidence.'),
+        done: items.length > 0,
+        to: '/admin/verification-reports',
+        cta: t('Review reports')
+      },
+      {
+        key: 'filter_scope',
+        label: t('Filter failed or scoped results'),
+        detail: t('Use keyword, status, base URL, and date controls to narrow evidence down to the release slice you actually need.'),
+        done: hasActivePrimaryFilters || filteredItems.length > 0,
+        to: '/admin/verification-reports',
+        cta: t('Filter reports')
+      },
+      {
+        key: 'export',
+        label: t('Export governance evidence'),
+        detail: t('Once the current slice is correct, export the filtered JSON or continue into audit logs for broader governance follow-up.'),
+        done: filteredItems.length > 0,
+        to: '/admin/verification-reports',
+        cta: t('Export evidence'),
+        secondaryTo: '/admin/audit',
+        secondaryLabel: t('Open audit logs')
+      }
+    ],
+    [filteredItems.length, hasActivePrimaryFilters, items.length, t]
+  );
 
   const exportFilteredReports = useCallback(() => {
     const payload = {
@@ -322,11 +357,46 @@ export default function AdminVerificationReportsPage() {
     return (
       <WorkspacePage>
         {heroSection}
-        <StateBlock
-          variant="empty"
-          title={t('No Reports Yet')}
-          description={t('Run docker verification scripts to generate reports.')}
-        />
+        <div className="workspace-main-stack">
+          <WorkspaceOnboardingCard
+            title={t('Verification reports first-run guide')}
+            description={t('Use this page to filter deployment evidence, focus failed checks, and export the exact report slice needed for release governance.')}
+            summary={t('Guide status is computed from loaded reports, active filters, and export-ready evidence on the current page.')}
+            storageKey={adminVerificationReportsOnboardingDismissedStorageKey}
+            steps={onboardingSteps.map((stepItem) => ({
+              key: stepItem.key,
+              label: stepItem.label,
+              detail: stepItem.detail,
+              done: stepItem.done,
+              primaryAction: {
+                to: stepItem.to,
+                label: stepItem.cta
+              },
+              secondaryAction: stepItem.secondaryTo
+                ? {
+                    to: stepItem.secondaryTo,
+                    label: stepItem.secondaryLabel ?? ''
+                  }
+                : undefined
+            }))}
+          />
+
+          <StateBlock
+            variant="empty"
+            title={t('No Reports Yet')}
+            description={t('Run docker verification scripts to generate reports.')}
+            extra={
+              <div className="row gap wrap">
+                <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                  {t('Open Runtime Settings')}
+                </ButtonLink>
+                <ButtonLink to="/admin/audit" variant="ghost" size="sm">
+                  {t('Open Audit Logs')}
+                </ButtonLink>
+              </div>
+            }
+          />
+        </div>
       </WorkspacePage>
     );
   }
@@ -460,6 +530,29 @@ export default function AdminVerificationReportsPage() {
         }
         main={
           <div className="workspace-main-stack">
+            <WorkspaceOnboardingCard
+              title={t('Verification reports first-run guide')}
+              description={t('Use this page to filter deployment evidence, focus failed checks, and export the exact report slice needed for release governance.')}
+              summary={t('Guide status is computed from loaded reports, active filters, and export-ready evidence on the current page.')}
+              storageKey={adminVerificationReportsOnboardingDismissedStorageKey}
+              steps={onboardingSteps.map((stepItem) => ({
+                key: stepItem.key,
+                label: stepItem.label,
+                detail: stepItem.detail,
+                done: stepItem.done,
+                primaryAction: {
+                  to: stepItem.to,
+                  label: stepItem.cta
+                },
+                secondaryAction: stepItem.secondaryTo
+                  ? {
+                      to: stepItem.secondaryTo,
+                      label: stepItem.secondaryLabel ?? ''
+                    }
+                  : undefined
+              }))}
+            />
+
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Advanced report filters')}
@@ -638,11 +731,10 @@ export default function AdminVerificationReportsPage() {
         }
         side={
           <div className="workspace-inspector-rail">
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Current scope')}
-                description={t('Keep the active triage context visible while scrolling through report evidence.')}
-              />
+            <WorkspaceActionPanel
+              title={t('Current scope')}
+              description={t('Keep the active triage context visible while scrolling through report evidence.')}
+            >
               <div className="workspace-keyline-list">
                 <div className="workspace-keyline-item">
                   <span>{t('Search')}</span>
@@ -673,13 +765,32 @@ export default function AdminVerificationReportsPage() {
                 </Badge>
                 <Badge tone="neutral">{t('Quick range')}: {quickRange === 'all' ? t('none') : quickRange}</Badge>
               </div>
-            </Card>
+            </WorkspaceActionPanel>
 
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Pagination')}
-                description={t('Move between pages without resetting the current verification lens.')}
-              />
+            <WorkspaceActionPanel
+              title={t('Pagination')}
+              description={t('Move between pages without resetting the current verification lens.')}
+              actions={
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                    disabled={safePage <= 1}
+                  >
+                    {t('Prev Page')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                    disabled={safePage >= totalPages}
+                  >
+                    {t('Next Page')}
+                  </Button>
+                </>
+              }
+            >
               <div className="row gap wrap">
                 <Badge tone="neutral">{t('total')}: {items.length}</Badge>
                 <Badge tone="info">{t('matched')}: {filteredItems.length}</Badge>
@@ -687,25 +798,7 @@ export default function AdminVerificationReportsPage() {
                   {t('page')}: {safePage}/{totalPages}
                 </Badge>
               </div>
-              <div className="workspace-button-stack">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                  disabled={safePage <= 1}
-                >
-                  {t('Prev Page')}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                  disabled={safePage >= totalPages}
-                >
-                  {t('Next Page')}
-                </Button>
-              </div>
-            </Card>
+            </WorkspaceActionPanel>
           </div>
         }
       />

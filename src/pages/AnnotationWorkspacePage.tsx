@@ -12,17 +12,19 @@ import PredictionOverlayControls from '../components/annotation/PredictionOverla
 import SampleReviewWorkbench from '../components/annotation/SampleReviewWorkbench';
 import type { AnnotationBox } from '../components/AnnotationCanvas';
 import type { PolygonAnnotation } from '../components/PolygonCanvas';
+import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import StatusBadge from '../components/StatusBadge';
 import StepIndicator from '../components/StepIndicator';
 import VirtualList from '../components/VirtualList';
-import { Badge, StatusTag } from '../components/ui/Badge';
+import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import WorkspaceActionStack from '../components/ui/WorkspaceActionStack';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
   WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -49,6 +51,38 @@ interface OcrLine {
   region_id: string | null;
 }
 
+interface ReviewActionEntry {
+  id: string;
+  itemId: string;
+  filename: string;
+  status: 'approved' | 'rejected';
+  reasonCode: AnnotationReviewReasonCode | null;
+  queueAtAction: AnnotationQueueFilter;
+  queueSearchText: string;
+  queueSplitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
+  queueItemStatusFilter: 'all' | 'uploading' | 'processing' | 'ready' | 'error';
+  queueMetadataFilter: string;
+  onlyLowConfidenceCandidates: boolean;
+  predictionConfidenceThreshold: string;
+  timestamp: number;
+}
+
+interface WorkspaceReturnPoint {
+  id: string;
+  savedAt: number;
+  label: string;
+  locked: boolean;
+  selectedItemId: string;
+  selectedFilename: string;
+  queueFilter: AnnotationQueueFilter;
+  queueSearchText: string;
+  queueSplitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
+  queueItemStatusFilter: 'all' | 'uploading' | 'processing' | 'ready' | 'error';
+  queueMetadataFilter: string;
+  onlyLowConfidenceCandidates: boolean;
+  predictionConfidenceThreshold: string;
+}
+
 interface PredictionCandidate {
   id: string;
   kind: 'ocr_line' | 'box' | 'rotated_box' | 'polygon' | 'label';
@@ -60,6 +94,8 @@ interface PredictionCandidate {
 }
 
 const nextLineId = (): string => `line-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const nextReturnPointId = (): string => `rp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const annotationWorkspaceOnboardingDismissedStorageKey = 'vistral-annotation-onboarding-dismissed';
 
 const toNumber = (value: unknown, fallback: number): number => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -215,6 +251,28 @@ const reviewReasonOptions: AnnotationReviewReasonCode[] = [
   'polygon_issue',
   'other'
 ];
+const reviewReasonShortcutMap: Record<string, AnnotationReviewReasonCode> = {
+  Digit1: 'box_mismatch',
+  Digit2: 'label_error',
+  Digit3: 'text_error',
+  Digit4: 'missing_object',
+  Digit5: 'polygon_issue',
+  Digit6: 'other'
+};
+const queueShortcutFilters: AnnotationQueueFilter[] = [
+  'all',
+  'needs_work',
+  'in_review',
+  'rejected',
+  'approved'
+];
+const shortcutAutoAdvanceStorageKey = 'vistral.annotation.shortcutAutoAdvance';
+const followupAutoSwitchStorageKey = 'vistral.annotation.followupAutoSwitch';
+const workspaceReturnPointsStorageKeyLegacy = 'vistral.annotation.workspaceReturnPoints';
+const workspaceReturnPointsStorageKeyPrefix = 'vistral.annotation.workspaceReturnPoints';
+const reviewSessionStorageKeyPrefix = 'vistral.annotation.reviewSession';
+const workspaceReturnPointMaxSlots = 3;
+const reviewSessionHistoryMaxEntries = 120;
 
 const normalizeQueueSplitFilter = (
   value: string | null
@@ -242,6 +300,201 @@ const normalizeBinaryParam = (value: string | null, fallback: boolean): boolean 
   }
 
   return value === '1' || value === 'true';
+};
+
+const parseWorkspaceReturnPoints = (raw: string | null): WorkspaceReturnPoint[] => {
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((entry, index) => {
+        if (!entry || typeof entry !== 'object') {
+          return null;
+        }
+
+        const record = entry as Record<string, unknown>;
+        const selectedItemId = typeof record.selectedItemId === 'string' ? record.selectedItemId.trim() : '';
+        const selectedFilename = typeof record.selectedFilename === 'string' ? record.selectedFilename.trim() : '';
+        if (!selectedItemId) {
+          return null;
+        }
+
+        return {
+          id: typeof record.id === 'string' && record.id.trim() ? record.id : `rp-restored-${index}-${Date.now()}`,
+          savedAt: typeof record.savedAt === 'number' && Number.isFinite(record.savedAt) ? record.savedAt : Date.now(),
+          label:
+            typeof record.label === 'string' && record.label.trim()
+              ? record.label.trim()
+              : selectedFilename,
+          locked: record.locked === true,
+          selectedItemId,
+          selectedFilename,
+          queueFilter: normalizeAnnotationQueueFilter(
+            typeof record.queueFilter === 'string' ? record.queueFilter : 'all'
+          ),
+          queueSearchText: typeof record.queueSearchText === 'string' ? record.queueSearchText : '',
+          queueSplitFilter: normalizeQueueSplitFilter(
+            typeof record.queueSplitFilter === 'string' ? record.queueSplitFilter : null
+          ),
+          queueItemStatusFilter: normalizeQueueItemStatusFilter(
+            typeof record.queueItemStatusFilter === 'string' ? record.queueItemStatusFilter : null
+          ),
+          queueMetadataFilter: typeof record.queueMetadataFilter === 'string' ? record.queueMetadataFilter : '',
+          onlyLowConfidenceCandidates: record.onlyLowConfidenceCandidates === true,
+          predictionConfidenceThreshold:
+            typeof record.predictionConfidenceThreshold === 'string' && record.predictionConfidenceThreshold.trim()
+              ? record.predictionConfidenceThreshold
+              : '0.50'
+        } satisfies WorkspaceReturnPoint;
+      })
+      .filter((entry): entry is WorkspaceReturnPoint => entry !== null)
+      .slice(0, workspaceReturnPointMaxSlots);
+  } catch {
+    return [];
+  }
+};
+
+const parseReviewActionHistory = (value: unknown): ReviewActionEntry[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry, index) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const itemId = typeof record.itemId === 'string' ? record.itemId.trim() : '';
+      if (!itemId) {
+        return null;
+      }
+
+      const status = record.status === 'rejected' ? 'rejected' : record.status === 'approved' ? 'approved' : null;
+      if (!status) {
+        return null;
+      }
+
+      const reasonCodeValue = record.reasonCode;
+      const reasonCode: AnnotationReviewReasonCode | null =
+        reasonCodeValue === 'box_mismatch' ||
+        reasonCodeValue === 'label_error' ||
+        reasonCodeValue === 'text_error' ||
+        reasonCodeValue === 'missing_object' ||
+        reasonCodeValue === 'polygon_issue' ||
+        reasonCodeValue === 'other'
+          ? reasonCodeValue
+          : null;
+
+      return {
+        id:
+          typeof record.id === 'string' && record.id.trim()
+            ? record.id
+            : `history-restored-${index}-${Date.now()}`,
+        itemId,
+        filename:
+          typeof record.filename === 'string' && record.filename.trim()
+            ? record.filename
+            : itemId,
+        status,
+        reasonCode,
+        queueAtAction: normalizeAnnotationQueueFilter(
+          typeof record.queueAtAction === 'string' ? record.queueAtAction : 'all'
+        ),
+        queueSearchText: typeof record.queueSearchText === 'string' ? record.queueSearchText : '',
+        queueSplitFilter: normalizeQueueSplitFilter(
+          typeof record.queueSplitFilter === 'string' ? record.queueSplitFilter : null
+        ),
+        queueItemStatusFilter: normalizeQueueItemStatusFilter(
+          typeof record.queueItemStatusFilter === 'string' ? record.queueItemStatusFilter : null
+        ),
+        queueMetadataFilter: typeof record.queueMetadataFilter === 'string' ? record.queueMetadataFilter : '',
+        onlyLowConfidenceCandidates: record.onlyLowConfidenceCandidates === true,
+        predictionConfidenceThreshold:
+          typeof record.predictionConfidenceThreshold === 'string' && record.predictionConfidenceThreshold.trim()
+            ? record.predictionConfidenceThreshold
+            : '0.50',
+        timestamp:
+          typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)
+            ? record.timestamp
+            : Date.now()
+      } satisfies ReviewActionEntry;
+    })
+    .filter((entry): entry is ReviewActionEntry => entry !== null)
+    .slice(0, reviewSessionHistoryMaxEntries);
+};
+
+const parseReviewSessionSnapshot = (
+  raw: string | null
+): {
+  stats: { total: number; approved: number; rejected: number };
+  startedAt: number | null;
+  lastActionAt: number | null;
+  history: ReviewActionEntry[];
+  historyFilter: 'all' | 'rejected';
+  historyCursor: number;
+  restoreContextOnReopen: boolean;
+} => {
+  if (!raw) {
+    return {
+      stats: { total: 0, approved: 0, rejected: 0 },
+      startedAt: null,
+      lastActionAt: null,
+      history: [],
+      historyFilter: 'all',
+      historyCursor: 0,
+      restoreContextOnReopen: false
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('invalid review session payload');
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const history = parseReviewActionHistory(record.history);
+    const total = Math.max(0, Math.floor(toNumber(record.total, history.length)));
+    const approved = Math.max(0, Math.floor(toNumber(record.approved, 0)));
+    const rejected = Math.max(0, Math.floor(toNumber(record.rejected, 0)));
+    return {
+      stats: {
+        total,
+        approved: Math.min(approved, total),
+        rejected: Math.min(rejected, total)
+      },
+      startedAt:
+        typeof record.startedAt === 'number' && Number.isFinite(record.startedAt)
+          ? record.startedAt
+          : null,
+      lastActionAt:
+        typeof record.lastActionAt === 'number' && Number.isFinite(record.lastActionAt)
+          ? record.lastActionAt
+          : null,
+      history,
+      historyFilter: record.historyFilter === 'rejected' ? 'rejected' : 'all',
+      historyCursor: Math.max(0, Math.floor(toNumber(record.historyCursor, 0))),
+      restoreContextOnReopen: record.restoreContextOnReopen === true
+    };
+  } catch {
+    return {
+      stats: { total: 0, approved: 0, rejected: 0 },
+      startedAt: null,
+      lastActionAt: null,
+      history: [],
+      historyFilter: 'all',
+      historyCursor: 0,
+      restoreContextOnReopen: false
+    };
+  }
 };
 
 const buildAnnotationWorkspaceSignature = (payload: {
@@ -278,6 +531,22 @@ const buildScopedInferenceValidationPath = (datasetId: string, versionId?: strin
   return `/inference/validate?${search.toString()}`;
 };
 
+const formatSessionClock = (timestamp: number | null, fallback: string): string => {
+  if (!timestamp) {
+    return fallback;
+  }
+
+  try {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  } catch {
+    return fallback;
+  }
+};
+
 export default function AnnotationWorkspacePage() {
   const { t } = useI18n();
   const steps = useMemo(() => [t('Select Item'), t('Annotate'), t('Review')], [t]);
@@ -302,6 +571,34 @@ export default function AnnotationWorkspacePage() {
   const [showPredictionOverlay, setShowPredictionOverlay] = useState(true);
   const [predictionConfidenceThreshold, setPredictionConfidenceThreshold] = useState('0.50');
   const [onlyLowConfidenceCandidates, setOnlyLowConfidenceCandidates] = useState(false);
+  const [shortcutAutoAdvance, setShortcutAutoAdvance] = useState(() => {
+    if (typeof window === 'undefined') {
+      return true;
+    }
+
+    const persisted = window.localStorage.getItem(shortcutAutoAdvanceStorageKey);
+    if (!persisted) {
+      return true;
+    }
+
+    return persisted === '1';
+  });
+  const [autoSwitchAfterInReviewClear, setAutoSwitchAfterInReviewClear] = useState(() => {
+    if (typeof window === 'undefined') {
+      return true;
+    }
+
+    const persisted = window.localStorage.getItem(followupAutoSwitchStorageKey);
+    if (!persisted) {
+      return true;
+    }
+
+    return persisted === '1';
+  });
+  const [showShortcutGuide, setShowShortcutGuide] = useState(false);
+  const [showWorkspaceUtilities, setShowWorkspaceUtilities] = useState(false);
+  const [showAdvancedQueueFilters, setShowAdvancedQueueFilters] = useState(false);
+  const [showOcrAdvancedFields, setShowOcrAdvancedFields] = useState(false);
   const [boxes, setBoxes] = useState<AnnotationBox[]>([]);
   const [ocrLines, setOcrLines] = useState<OcrLine[]>([]);
   const [polygons, setPolygons] = useState<PolygonAnnotation[]>([]);
@@ -316,7 +613,58 @@ export default function AnnotationWorkspacePage() {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [queueToast, setQueueToast] = useState<{ variant: 'success' | 'info'; text: string } | null>(null);
+  const [pendingFollowupQueueSwitch, setPendingFollowupQueueSwitch] = useState(false);
+  const [reviewSessionStats, setReviewSessionStats] = useState<{
+    total: number;
+    approved: number;
+    rejected: number;
+  }>({
+    total: 0,
+    approved: 0,
+    rejected: 0
+  });
+  const [reviewSessionStartedAt, setReviewSessionStartedAt] = useState<number | null>(null);
+  const [reviewSessionLastActionAt, setReviewSessionLastActionAt] = useState<number | null>(null);
+  const [reviewActionHistory, setReviewActionHistory] = useState<ReviewActionEntry[]>([]);
+  const [reviewHistoryFilter, setReviewHistoryFilter] = useState<'all' | 'rejected'>('all');
+  const [reviewHistoryCursor, setReviewHistoryCursor] = useState(0);
+  const [historyRestoreContextOnReopen, setHistoryRestoreContextOnReopen] = useState(false);
+  const [reviewSessionHydrated, setReviewSessionHydrated] = useState(false);
+  const [reviewSessionHydratedKey, setReviewSessionHydratedKey] = useState('');
+  const [workspaceReturnPoints, setWorkspaceReturnPoints] = useState<WorkspaceReturnPoint[]>([]);
+  const [workspaceReturnPointsHydrated, setWorkspaceReturnPointsHydrated] = useState(false);
+  const [workspaceReturnPointsHydratedKey, setWorkspaceReturnPointsHydratedKey] = useState('');
+  const [editingReturnPointId, setEditingReturnPointId] = useState<string | null>(null);
+  const [editingReturnPointLabel, setEditingReturnPointLabel] = useState('');
   const workspaceSignatureRef = useRef('');
+  const queueSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const queueMetadataInputRef = useRef<HTMLInputElement | null>(null);
+  const reviewReasonSelectRef = useRef<HTMLSelectElement | null>(null);
+  const queueSectionRef = useRef<HTMLDivElement | null>(null);
+  const canvasSectionRef = useRef<HTMLDivElement | null>(null);
+  const actionSectionRef = useRef<HTMLDivElement | null>(null);
+  const reviewSessionStorageKey = useMemo(
+    () =>
+      datasetId
+        ? scopedDatasetVersionId
+          ? `${reviewSessionStorageKeyPrefix}.${datasetId}.${scopedDatasetVersionId}`
+          : `${reviewSessionStorageKeyPrefix}.${datasetId}`
+        : '',
+    [datasetId, scopedDatasetVersionId]
+  );
+  const reviewSessionStorageLegacyKey = useMemo(
+    () => (datasetId ? `${reviewSessionStorageKeyPrefix}.${datasetId}` : ''),
+    [datasetId]
+  );
+  const workspaceReturnPointsStorageKey = useMemo(() => {
+    if (!datasetId) {
+      return '';
+    }
+
+    return scopedDatasetVersionId
+      ? `${workspaceReturnPointsStorageKeyPrefix}.${datasetId}.${scopedDatasetVersionId}`
+      : `${workspaceReturnPointsStorageKeyPrefix}.${datasetId}`;
+  }, [datasetId, scopedDatasetVersionId]);
   const scopedInferenceValidationPath = useMemo(
     () =>
       datasetId
@@ -391,6 +739,178 @@ export default function AnnotationWorkspacePage() {
   }, [datasetId, load]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(shortcutAutoAdvanceStorageKey, shortcutAutoAdvance ? '1' : '0');
+  }, [shortcutAutoAdvance]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(followupAutoSwitchStorageKey, autoSwitchAfterInReviewClear ? '1' : '0');
+  }, [autoSwitchAfterInReviewClear]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (!workspaceReturnPointsStorageKey) {
+      setWorkspaceReturnPoints([]);
+      setWorkspaceReturnPointsHydrated(false);
+      setWorkspaceReturnPointsHydratedKey('');
+      return;
+    }
+
+    const scopedRaw = window.localStorage.getItem(workspaceReturnPointsStorageKey);
+    if (scopedRaw !== null) {
+      setWorkspaceReturnPoints(parseWorkspaceReturnPoints(scopedRaw));
+      setWorkspaceReturnPointsHydrated(true);
+      setWorkspaceReturnPointsHydratedKey(workspaceReturnPointsStorageKey);
+      return;
+    }
+
+    const legacyRaw = window.localStorage.getItem(workspaceReturnPointsStorageKeyLegacy);
+    setWorkspaceReturnPoints(parseWorkspaceReturnPoints(legacyRaw));
+    setWorkspaceReturnPointsHydrated(true);
+    setWorkspaceReturnPointsHydratedKey(workspaceReturnPointsStorageKey);
+  }, [workspaceReturnPointsStorageKey]);
+
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      !workspaceReturnPointsStorageKey ||
+      !workspaceReturnPointsHydrated ||
+      workspaceReturnPointsHydratedKey !== workspaceReturnPointsStorageKey
+    ) {
+      return;
+    }
+
+    if (workspaceReturnPoints.length === 0) {
+      window.localStorage.removeItem(workspaceReturnPointsStorageKey);
+      return;
+    }
+
+    window.localStorage.setItem(
+      workspaceReturnPointsStorageKey,
+      JSON.stringify(workspaceReturnPoints.slice(0, workspaceReturnPointMaxSlots))
+    );
+    window.localStorage.removeItem(workspaceReturnPointsStorageKeyLegacy);
+  }, [
+    workspaceReturnPoints,
+    workspaceReturnPointsHydrated,
+    workspaceReturnPointsHydratedKey,
+    workspaceReturnPointsStorageKey
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (!reviewSessionStorageKey) {
+      setReviewSessionHydrated(false);
+      setReviewSessionHydratedKey('');
+      return;
+    }
+
+    const scopedRaw = window.localStorage.getItem(reviewSessionStorageKey);
+    const fallbackRaw =
+      scopedRaw !== null
+        ? scopedRaw
+        : reviewSessionStorageLegacyKey &&
+            reviewSessionStorageLegacyKey !== reviewSessionStorageKey
+          ? window.localStorage.getItem(reviewSessionStorageLegacyKey)
+          : null;
+    const snapshot = parseReviewSessionSnapshot(fallbackRaw);
+    setReviewSessionStats(snapshot.stats);
+    setReviewSessionStartedAt(snapshot.startedAt);
+    setReviewSessionLastActionAt(snapshot.lastActionAt);
+    setReviewActionHistory(snapshot.history);
+    setReviewHistoryFilter(snapshot.historyFilter);
+    setReviewHistoryCursor(snapshot.historyCursor);
+    setHistoryRestoreContextOnReopen(snapshot.restoreContextOnReopen);
+    setReviewSessionHydrated(true);
+    setReviewSessionHydratedKey(reviewSessionStorageKey);
+  }, [reviewSessionStorageKey, reviewSessionStorageLegacyKey]);
+
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      !reviewSessionStorageKey ||
+      !reviewSessionHydrated ||
+      reviewSessionHydratedKey !== reviewSessionStorageKey
+    ) {
+      return;
+    }
+
+    const hasSessionData =
+      reviewSessionStats.total > 0 ||
+      reviewSessionStats.approved > 0 ||
+      reviewSessionStats.rejected > 0 ||
+      reviewSessionStartedAt !== null ||
+      reviewSessionLastActionAt !== null ||
+      reviewActionHistory.length > 0 ||
+      reviewHistoryFilter !== 'all' ||
+      reviewHistoryCursor !== 0 ||
+      historyRestoreContextOnReopen;
+
+    if (!hasSessionData) {
+      window.localStorage.removeItem(reviewSessionStorageKey);
+      if (reviewSessionStorageLegacyKey && reviewSessionStorageLegacyKey !== reviewSessionStorageKey) {
+        window.localStorage.removeItem(reviewSessionStorageLegacyKey);
+      }
+      return;
+    }
+
+    window.localStorage.setItem(
+      reviewSessionStorageKey,
+      JSON.stringify({
+        total: reviewSessionStats.total,
+        approved: reviewSessionStats.approved,
+        rejected: reviewSessionStats.rejected,
+        startedAt: reviewSessionStartedAt,
+        lastActionAt: reviewSessionLastActionAt,
+        history: reviewActionHistory.slice(0, reviewSessionHistoryMaxEntries),
+        historyFilter: reviewHistoryFilter,
+        historyCursor: reviewHistoryCursor,
+        restoreContextOnReopen: historyRestoreContextOnReopen
+      })
+    );
+    if (reviewSessionStorageLegacyKey && reviewSessionStorageLegacyKey !== reviewSessionStorageKey) {
+      window.localStorage.removeItem(reviewSessionStorageLegacyKey);
+    }
+  }, [
+    historyRestoreContextOnReopen,
+    reviewActionHistory,
+    reviewHistoryCursor,
+    reviewHistoryFilter,
+    reviewSessionHydrated,
+    reviewSessionHydratedKey,
+    reviewSessionLastActionAt,
+    reviewSessionStartedAt,
+    reviewSessionStats,
+    reviewSessionStorageKey,
+    reviewSessionStorageLegacyKey
+  ]);
+
+  useEffect(() => {
+    if (!editingReturnPointId) {
+      return;
+    }
+
+    const exists = workspaceReturnPoints.some((point) => point.id === editingReturnPointId);
+    if (!exists) {
+      setEditingReturnPointId(null);
+      setEditingReturnPointLabel('');
+    }
+  }, [editingReturnPointId, workspaceReturnPoints]);
+
+  useEffect(() => {
     const requestedQueueFilter = normalizeAnnotationQueueFilter(searchParams.get('queue'));
     setQueueFilter((current) => (current === requestedQueueFilter ? current : requestedQueueFilter));
     const requestedQueueSearchText = searchParams.get('q') ?? '';
@@ -438,6 +958,7 @@ export default function AnnotationWorkspacePage() {
     () => items.find((item) => item.id === selectedItemId) ?? null,
     [items, selectedItemId]
   );
+  const itemIdSet = useMemo(() => new Set(items.map((item) => item.id)), [items]);
 
   const attachmentById = useMemo(
     () => new Map(attachments.map((attachment) => [attachment.id, attachment])),
@@ -496,6 +1017,29 @@ export default function AnnotationWorkspacePage() {
     return buckets;
   }, [annotationByItemId, sortedQueueItems]);
   const queueItems = queueItemsByFilter[queueFilter];
+  const hasActiveQueueRefinements = useMemo(
+    () =>
+      queueSearchText.trim().length > 0 ||
+      queueSplitFilter !== 'all' ||
+      queueItemStatusFilter !== 'all' ||
+      queueMetadataFilter.trim().length > 0 ||
+      onlyLowConfidenceCandidates,
+    [
+      onlyLowConfidenceCandidates,
+      queueItemStatusFilter,
+      queueMetadataFilter,
+      queueSearchText,
+      queueSplitFilter
+    ]
+  );
+  const hasAdvancedQueueRefinements = useMemo(
+    () => queueItemStatusFilter !== 'all' || queueMetadataFilter.trim().length > 0,
+    [queueItemStatusFilter, queueMetadataFilter]
+  );
+  const advancedQueueFilterCount = useMemo(
+    () => Number(queueItemStatusFilter !== 'all') + Number(queueMetadataFilter.trim().length > 0),
+    [queueItemStatusFilter, queueMetadataFilter]
+  );
   const numericPredictionConfidenceThreshold = useMemo(() => {
     const parsed = Number(predictionConfidenceThreshold);
     if (Number.isNaN(parsed)) {
@@ -622,12 +1166,23 @@ export default function AnnotationWorkspacePage() {
     setQueueMetadataFilter('');
     setOnlyLowConfidenceCandidates(false);
     setPredictionConfidenceThreshold('0.50');
+    setShowAdvancedQueueFilters(false);
   }, []);
   const shouldVirtualizeQueueList = filteredItems.length > 10;
   const selectedQueueIndex = useMemo(
     () => filteredItems.findIndex((item) => item.id === selectedItemId),
     [filteredItems, selectedItemId]
   );
+  const queueProgressContext = useMemo(() => {
+    const total = filteredItems.length;
+    const current = selectedQueueIndex >= 0 ? selectedQueueIndex + 1 : 0;
+    const remaining = current > 0 ? Math.max(total - current, 0) : total;
+    return {
+      current,
+      total,
+      remaining
+    };
+  }, [filteredItems.length, selectedQueueIndex]);
   const canMoveToPreviousQueueItem = selectedQueueIndex > 0;
   const canMoveToNextQueueItem =
     selectedQueueIndex >= 0
@@ -703,15 +1258,25 @@ export default function AnnotationWorkspacePage() {
       return null;
     }
 
-    const total = filteredItems.length;
-    const current = selectedQueueIndex >= 0 ? selectedQueueIndex + 1 : 0;
-    const remaining = current > 0 ? Math.max(total - current, 0) : total;
-    return {
-      current,
-      total,
-      remaining
-    };
-  }, [filteredItems.length, queueFilter, selectedQueueIndex]);
+    return queueProgressContext;
+  }, [queueFilter, queueProgressContext]);
+  const reviewSessionAverageSeconds = useMemo(() => {
+    if (!reviewSessionStartedAt || !reviewSessionLastActionAt || reviewSessionStats.total <= 0) {
+      return null;
+    }
+
+    const elapsedSeconds = Math.max((reviewSessionLastActionAt - reviewSessionStartedAt) / 1000, 0);
+    return elapsedSeconds / reviewSessionStats.total;
+  }, [reviewSessionLastActionAt, reviewSessionStartedAt, reviewSessionStats.total]);
+  const filteredReviewActionHistory = useMemo(
+    () =>
+      reviewHistoryFilter === 'rejected'
+        ? reviewActionHistory.filter((entry) => entry.status === 'rejected')
+        : reviewActionHistory,
+    [reviewActionHistory, reviewHistoryFilter]
+  );
+  const latestReviewAction = filteredReviewActionHistory[0] ?? null;
+  const primaryWorkspaceReturnPoint = workspaceReturnPoints[0] ?? null;
   const reviewFollowupQueues = useMemo(
     () => [
       {
@@ -736,6 +1301,30 @@ export default function AnnotationWorkspacePage() {
     () => reviewFollowupQueues.filter((queue) => queue.count > 0),
     [reviewFollowupQueues]
   );
+
+  useEffect(() => {
+    if (filteredReviewActionHistory.length === 0) {
+      if (reviewHistoryCursor !== 0) {
+        setReviewHistoryCursor(0);
+      }
+      return;
+    }
+
+    if (reviewHistoryCursor >= filteredReviewActionHistory.length) {
+      setReviewHistoryCursor(filteredReviewActionHistory.length - 1);
+    }
+  }, [filteredReviewActionHistory.length, reviewHistoryCursor]);
+
+  useEffect(() => {
+    setWorkspaceReturnPoints((current) => {
+      const next = current.filter((point) => itemIdSet.has(point.selectedItemId));
+      return next.length === current.length ? current : next;
+    });
+    setReviewActionHistory((current) => {
+      const next = current.filter((entry) => itemIdSet.has(entry.itemId));
+      return next.length === current.length ? current : next;
+    });
+  }, [itemIdSet]);
 
   useBackgroundPolling(
     () => {
@@ -790,6 +1379,94 @@ export default function AnnotationWorkspacePage() {
   const selectedItemOperationalMetadataEntries = useMemo(
     () => selectedItemMetadataEntries.filter(([key]) => !key.startsWith('tag:')),
     [selectedItemMetadataEntries]
+  );
+  const queueLabel = useCallback(
+    (value: AnnotationQueueFilter) => {
+      if (value === 'all') {
+        return t('All items');
+      }
+      if (value === 'needs_work') {
+        return t('Needs Work');
+      }
+      return t(value);
+    },
+    [t]
+  );
+  const queuePositionSummary = useMemo(() => {
+    if (queueProgressContext.current > 0) {
+      return t('Queue position {current} / {total}', {
+        current: queueProgressContext.current,
+        total: queueProgressContext.total
+      });
+    }
+
+    if (filteredItems.length > 0) {
+      return t('No item selected in current queue.');
+    }
+
+    return t('Visible items {visible} / {total}', {
+      visible: filteredItems.length,
+      total: items.length
+    });
+  }, [filteredItems.length, items.length, queueProgressContext, t]);
+  const renderQueueRecord = useCallback(
+    (item: DatasetItemRecord, options?: { virtualized?: boolean }) => {
+      const itemAnnotation = annotationByItemId.get(item.id) ?? null;
+      const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
+      const lowConfidenceCount = lowConfidenceCountByItemId.get(item.id) ?? 0;
+      const annotationState = itemAnnotation ? t(itemAnnotation.status) : t('unannotated');
+      const showItemStatus = item.status !== 'ready';
+      const summaryText = itemAnnotation?.latest_review?.review_comment
+        ? itemAnnotation.latest_review.review_comment
+        : itemAnnotation?.latest_review?.review_reason_code
+          ? t('Review reason: {reason}', { reason: t(itemAnnotation.latest_review.review_reason_code) })
+          : lowConfidenceCount > 0
+            ? t('Contains {count} low-confidence prediction signals.', { count: lowConfidenceCount })
+            : t('Open this sample to continue annotation or review.');
+
+      return (
+        <Panel
+          key={item.id}
+          as={options?.virtualized ? 'div' : 'li'}
+          className={`workspace-record-item${options?.virtualized ? ' virtualized' : ''}${selectedItemId === item.id ? ' selected' : ''}`}
+          tone="soft"
+        >
+          <label className="row gap wrap align-center annotation-item-select">
+            <Checkbox
+              type="radio"
+              name="selected_item"
+              checked={selectedItemId === item.id}
+              onChange={() => {
+                setQueueFilter(queueFilter);
+                setSelectedItemId(item.id);
+              }}
+            />
+            <div className="stack tight annotation-item-copy">
+              <strong>{itemFilename}</strong>
+              <small className="muted line-clamp-2">{summaryText}</small>
+            </div>
+            <Badge tone="neutral">{t(item.split)}</Badge>
+            {showItemStatus ? <StatusBadge status={item.status} /> : null}
+            <Badge tone={itemAnnotation ? 'info' : 'warning'}>
+              {t('Annotation')}: {annotationState}
+            </Badge>
+            {lowConfidenceCount > 0 ? (
+              <Badge tone="warning">{t('Low conf')}: {lowConfidenceCount}</Badge>
+            ) : null}
+          </label>
+        </Panel>
+      );
+    },
+    [
+      annotationByItemId,
+      attachmentById,
+      lowConfidenceCountByItemId,
+      queueFilter,
+      selectedItemId,
+      setQueueFilter,
+      setSelectedItemId,
+      t
+    ]
   );
   const hasPredictionOverlay = selectedAnnotation?.source === 'pre_annotation';
   const predictionCandidates = useMemo(() => {
@@ -858,7 +1535,72 @@ export default function AnnotationWorkspacePage() {
 
     return 1;
   }, [selectedAnnotation, selectedItemId]);
+  const annotationWorkspaceEntryPath = useMemo(() => {
+    if (!datasetId) {
+      return '/datasets';
+    }
 
+    if (!scopedDatasetVersionId) {
+      return `/datasets/${datasetId}/annotate`;
+    }
+
+    const search = new URLSearchParams();
+    search.set('version', scopedDatasetVersionId);
+    return `/datasets/${datasetId}/annotate?${search.toString()}`;
+  }, [datasetId, scopedDatasetVersionId]);
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'select',
+        label: t('Select queue sample'),
+        detail: t('Pick one sample from queue filters so edits and review actions stay focused.'),
+        done: Boolean(selectedItem),
+        to: items.length === 0 && datasetId ? `/datasets/${datasetId}` : annotationWorkspaceEntryPath,
+        cta: items.length === 0 ? t('Open Dataset Detail') : t('Focus queue')
+      },
+      {
+        key: 'annotate',
+        label: t('Create annotation payload'),
+        detail: t('Add boxes/OCR lines/polygons and save at least one annotation state for this item.'),
+        done: Boolean(selectedAnnotation),
+        to: annotationWorkspaceEntryPath,
+        cta: t('Open annotation canvas')
+      },
+      {
+        key: 'review',
+        label: t('Submit into review flow'),
+        detail: t('Move annotations from editing states into in_review/approved/rejected lifecycle.'),
+        done: Boolean(
+          selectedAnnotation && ['in_review', 'approved', 'rejected'].includes(selectedAnnotation.status)
+        ),
+        to: annotationWorkspaceEntryPath,
+        cta: t('Open annotation actions')
+      },
+      {
+        key: 'loop',
+        label: t('Continue to next loop lane'),
+        detail: t('After review signals exist, continue with scoped validation follow-up.'),
+        done: reviewSessionStats.total > 0 || annotationSummary.approved > 0,
+        to: scopedInferenceValidationPath,
+        cta: t('Validate Inference')
+      }
+    ],
+    [
+      annotationSummary.approved,
+      annotationWorkspaceEntryPath,
+      datasetId,
+      items.length,
+      reviewSessionStats.total,
+      scopedInferenceValidationPath,
+      selectedAnnotation,
+      selectedItem,
+      t
+    ]
+  );
+  const nextOnboardingStep = useMemo(
+    () => onboardingSteps.find((stepItem) => !stepItem.done) ?? null,
+    [onboardingSteps]
+  );
   useEffect(() => {
     if (items.length === 0) {
       if (selectedItemId) {
@@ -870,7 +1612,7 @@ export default function AnnotationWorkspacePage() {
     const requestedItemId = searchParams.get('item')?.trim() ?? '';
     const requestedItemVisible = requestedItemId && filteredItems.some((item) => item.id === requestedItemId);
     const currentItemVisible = selectedItemId && filteredItems.some((item) => item.id === selectedItemId);
-    const fallbackItemId = queueFilter === 'all' ? items[0]?.id ?? '' : '';
+    const fallbackItemId = queueFilter === 'all' && !hasActiveQueueRefinements ? items[0]?.id ?? '' : '';
     const nextSelectedItemId =
       (requestedItemVisible ? requestedItemId : '') ||
       (currentItemVisible ? selectedItemId : '') ||
@@ -881,7 +1623,7 @@ export default function AnnotationWorkspacePage() {
     if (nextSelectedItemId !== selectedItemId) {
       setSelectedItemId(nextSelectedItemId);
     }
-  }, [filteredItems, items, queueFilter, searchParams, selectedItemId]);
+  }, [filteredItems, hasActiveQueueRefinements, items, queueFilter, searchParams, selectedItemId]);
 
   useEffect(() => {
     if (!selectedAnnotation) {
@@ -993,6 +1735,12 @@ export default function AnnotationWorkspacePage() {
   }, [boxes, lineRegionId]);
 
   useEffect(() => {
+    if (lineRegionId || lineConfidence.trim() !== '0.9') {
+      setShowOcrAdvancedFields(true);
+    }
+  }, [lineConfidence, lineRegionId]);
+
+  useEffect(() => {
     if (selectedAnnotation?.latest_review?.review_reason_code) {
       setReviewReasonCode(selectedAnnotation.latest_review.review_reason_code);
       return;
@@ -1038,6 +1786,12 @@ export default function AnnotationWorkspacePage() {
 
     return () => window.clearTimeout(timer);
   }, [queueToast]);
+
+  useEffect(() => {
+    if (hasAdvancedQueueRefinements) {
+      setShowAdvancedQueueFilters(true);
+    }
+  }, [hasAdvancedQueueRefinements]);
 
   useEffect(() => {
     const nextParams = new URLSearchParams(searchParams);
@@ -1133,6 +1887,288 @@ export default function AnnotationWorkspacePage() {
     },
     [focusWorkspaceItem, queueItemsByFilter]
   );
+  const focusQueueSection = useCallback(() => {
+    queueSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (filteredItems.length > 0) {
+      focusWorkspaceItem(queueFilter, selectedItemId || filteredItems[0].id);
+      return;
+    }
+    queueSearchInputRef.current?.focus();
+  }, [filteredItems, focusWorkspaceItem, queueFilter, selectedItemId]);
+  const focusAnnotationCanvas = useCallback(() => {
+    canvasSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+  const focusAnnotationActions = useCallback(() => {
+    actionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+  const createWorkspaceReturnPoint = useCallback(
+    (): WorkspaceReturnPoint => ({
+      id: nextReturnPointId(),
+      savedAt: Date.now(),
+      label: selectedFilename,
+      locked: false,
+      selectedItemId,
+      selectedFilename,
+      queueFilter,
+      queueSearchText,
+      queueSplitFilter,
+      queueItemStatusFilter,
+      queueMetadataFilter,
+      onlyLowConfidenceCandidates,
+      predictionConfidenceThreshold
+    }),
+    [
+      onlyLowConfidenceCandidates,
+      predictionConfidenceThreshold,
+      queueFilter,
+      queueItemStatusFilter,
+      queueMetadataFilter,
+      queueSearchText,
+      queueSplitFilter,
+      selectedFilename,
+      selectedItemId
+    ]
+  );
+  const saveWorkspaceReturnPoint = useCallback(
+    (point: WorkspaceReturnPoint): 'saved' | 'updated' | 'blocked_locked' => {
+      let outcome: 'saved' | 'updated' | 'blocked_locked' = 'saved';
+      setWorkspaceReturnPoints((current) => {
+        const existingIndex = current.findIndex(
+          (entry) =>
+            entry.selectedItemId === point.selectedItemId &&
+            entry.queueFilter === point.queueFilter &&
+            entry.queueSearchText === point.queueSearchText &&
+            entry.queueSplitFilter === point.queueSplitFilter &&
+            entry.queueItemStatusFilter === point.queueItemStatusFilter &&
+            entry.queueMetadataFilter === point.queueMetadataFilter &&
+            entry.onlyLowConfidenceCandidates === point.onlyLowConfidenceCandidates &&
+            entry.predictionConfidenceThreshold === point.predictionConfidenceThreshold
+        );
+        if (existingIndex >= 0) {
+          const existing = current[existingIndex];
+          const updated: WorkspaceReturnPoint = {
+            ...point,
+            id: existing.id,
+            label: existing.label,
+            locked: existing.locked
+          };
+          outcome = 'updated';
+          return [updated, ...current.filter((entry) => entry.id !== existing.id)].slice(0, workspaceReturnPointMaxSlots);
+        }
+
+        if (current.length < workspaceReturnPointMaxSlots) {
+          outcome = 'saved';
+          return [point, ...current];
+        }
+
+        const evictIndex = [...current].reverse().findIndex((entry) => !entry.locked);
+        if (evictIndex < 0) {
+          outcome = 'blocked_locked';
+          return current;
+        }
+
+        const actualEvictIndex = current.length - 1 - evictIndex;
+        const next = current.filter((_, index) => index !== actualEvictIndex);
+        outcome = 'saved';
+        return [point, ...next];
+      });
+      return outcome;
+    },
+    []
+  );
+  const updateWorkspaceReturnPoint = useCallback(
+    (id: string, updates: Partial<Pick<WorkspaceReturnPoint, 'label' | 'locked'>>) => {
+      setWorkspaceReturnPoints((current) =>
+        current.map((point) => (point.id === id ? { ...point, ...updates } : point))
+      );
+    },
+    []
+  );
+  const removeWorkspaceReturnPoint = useCallback((id: string) => {
+    setWorkspaceReturnPoints((current) => current.filter((point) => point.id !== id));
+  }, []);
+  const beginEditReturnPoint = useCallback((point: WorkspaceReturnPoint) => {
+    setEditingReturnPointId(point.id);
+    setEditingReturnPointLabel((point.label || point.selectedFilename).trim());
+  }, []);
+  const cancelEditReturnPoint = useCallback(() => {
+    setEditingReturnPointId(null);
+    setEditingReturnPointLabel('');
+  }, []);
+  const commitEditReturnPoint = useCallback(() => {
+    if (!editingReturnPointId) {
+      return;
+    }
+
+    const trimmed = editingReturnPointLabel.trim();
+    if (!trimmed) {
+      setQueueToast({
+        variant: 'info',
+        text: t('Return point label cannot be empty.')
+      });
+      return;
+    }
+
+    updateWorkspaceReturnPoint(editingReturnPointId, { label: trimmed });
+    setEditingReturnPointId(null);
+    setEditingReturnPointLabel('');
+  }, [editingReturnPointId, editingReturnPointLabel, t, updateWorkspaceReturnPoint]);
+  const restoreWorkspaceReturnPoint = useCallback(
+    (point: WorkspaceReturnPoint) => {
+      if (!point.selectedItemId) {
+        setQueueToast({
+          variant: 'info',
+          text: t('Saved workspace point has no selectable item.')
+        });
+        return;
+      }
+      if (!itemIdSet.has(point.selectedItemId)) {
+        setQueueToast({
+          variant: 'info',
+          text: t('Saved workspace point item is no longer available.')
+        });
+        return;
+      }
+      setQueueSearchText(point.queueSearchText);
+      setQueueSplitFilter(point.queueSplitFilter);
+      setQueueItemStatusFilter(point.queueItemStatusFilter);
+      setQueueMetadataFilter(point.queueMetadataFilter);
+      setOnlyLowConfidenceCandidates(point.onlyLowConfidenceCandidates);
+      setPredictionConfidenceThreshold(point.predictionConfidenceThreshold || '0.50');
+      focusWorkspaceItem(point.queueFilter, point.selectedItemId);
+      setQueueToast({
+        variant: 'info',
+        text: t('Returned to saved workspace point: {file}', { file: point.selectedFilename })
+      });
+    },
+    [focusWorkspaceItem, itemIdSet, t]
+  );
+  const restoreWorkspaceReturnPointByIndex = useCallback(
+    (index: number) => {
+      const point = workspaceReturnPoints[index];
+      if (!point) {
+        setQueueToast({
+          variant: 'info',
+          text: t('No saved workspace point in slot {slot}.', { slot: index + 1 })
+        });
+        return;
+      }
+      restoreWorkspaceReturnPoint(point);
+    },
+    [restoreWorkspaceReturnPoint, t, workspaceReturnPoints]
+  );
+  const saveCurrentWorkspaceReturnPoint = useCallback(() => {
+    if (!selectedItemId) {
+      setQueueToast({
+        variant: 'info',
+        text: t('Select a sample before saving workspace return point.')
+      });
+      return;
+    }
+
+    const outcome = saveWorkspaceReturnPoint(createWorkspaceReturnPoint());
+    if (outcome === 'blocked_locked') {
+      setQueueToast({
+        variant: 'info',
+        text: t('All return point slots are locked. Unlock one before saving a new point.')
+      });
+      return;
+    }
+
+    setQueueToast({
+      variant: 'success',
+      text:
+        outcome === 'updated'
+          ? t('Workspace return point refreshed in slot 1.')
+          : t('Workspace return point saved to slot 1.')
+    });
+  }, [createWorkspaceReturnPoint, saveWorkspaceReturnPoint, selectedItemId, t]);
+  const switchQueueByShortcut = useCallback(
+    (targetFilter: AnnotationQueueFilter) => {
+      const targetItems = queueItemsByFilter[targetFilter];
+      const nextItemId = targetItems.some((item) => item.id === selectedItemId)
+        ? selectedItemId
+        : targetItems[0]?.id ?? '';
+      focusWorkspaceItem(targetFilter, nextItemId);
+      setQueueToast({
+        variant: 'info',
+        text: t('Switched to {queue} queue.', {
+          queue: t(targetFilter === 'needs_work' ? 'Needs Work' : targetFilter === 'all' ? 'All items' : targetFilter)
+        })
+      });
+    },
+    [focusWorkspaceItem, queueItemsByFilter, selectedItemId, t]
+  );
+  const focusReviewedItem = useCallback(
+    (entry: ReviewActionEntry, options?: { restoreQueueContext?: boolean }) => {
+      if (!itemIdSet.has(entry.itemId)) {
+        setQueueToast({
+          variant: 'info',
+          text: t('Reviewed sample is no longer available in current dataset.')
+        });
+        return;
+      }
+      const restoreQueueContext =
+        options?.restoreQueueContext === true || historyRestoreContextOnReopen;
+      const fallbackQueue: AnnotationQueueFilter =
+        entry.status === 'approved' ? 'approved' : 'rejected';
+      const targetQueue = restoreQueueContext ? entry.queueAtAction : fallbackQueue;
+      if (restoreQueueContext) {
+        setQueueSearchText(entry.queueSearchText);
+        setQueueSplitFilter(entry.queueSplitFilter);
+        setQueueItemStatusFilter(entry.queueItemStatusFilter);
+        setQueueMetadataFilter(entry.queueMetadataFilter);
+        setOnlyLowConfidenceCandidates(entry.onlyLowConfidenceCandidates);
+        setPredictionConfidenceThreshold(entry.predictionConfidenceThreshold || '0.50');
+      } else {
+        setQueueSearchText('');
+        setQueueSplitFilter('all');
+        setQueueItemStatusFilter('all');
+        setQueueMetadataFilter('');
+        setOnlyLowConfidenceCandidates(false);
+        setPredictionConfidenceThreshold('0.50');
+      }
+      focusWorkspaceItem(targetQueue, entry.itemId);
+      setQueueToast({
+        variant: 'info',
+        text: restoreQueueContext
+          ? t('Reopened reviewed sample with saved queue context: {file}', { file: entry.filename })
+          : t('Reopened reviewed sample: {file}', { file: entry.filename })
+      });
+    },
+    [focusWorkspaceItem, historyRestoreContextOnReopen, itemIdSet, t]
+  );
+  const focusReviewHistoryByIndex = useCallback(
+    (index: number, options?: { restoreQueueContext?: boolean }) => {
+      if (filteredReviewActionHistory.length === 0) {
+        setQueueToast({
+          variant: 'info',
+          text: t('No reviewed sample in current session yet.')
+        });
+        return;
+      }
+
+      const boundedIndex = Math.max(0, Math.min(index, filteredReviewActionHistory.length - 1));
+      const entry = filteredReviewActionHistory[boundedIndex];
+      if (!entry) {
+        return;
+      }
+
+      if (selectedItemId) {
+        saveWorkspaceReturnPoint(createWorkspaceReturnPoint());
+      }
+      setReviewHistoryCursor(boundedIndex);
+      focusReviewedItem(entry, options);
+    },
+    [
+      createWorkspaceReturnPoint,
+      filteredReviewActionHistory,
+      focusReviewedItem,
+      saveWorkspaceReturnPoint,
+      selectedItemId,
+      t,
+    ]
+  );
 
   const focusAdjacentQueueItem = useCallback(
     (direction: -1 | 1) => {
@@ -1153,6 +2189,83 @@ export default function AnnotationWorkspacePage() {
       focusWorkspaceItem(queueFilter, filteredItems[nextIndex].id);
     },
     [filteredItems, focusWorkspaceItem, queueFilter, selectedQueueIndex]
+  );
+
+  useEffect(() => {
+    if (!pendingFollowupQueueSwitch) {
+      return;
+    }
+
+    if (!autoSwitchAfterInReviewClear) {
+      setPendingFollowupQueueSwitch(false);
+      return;
+    }
+
+    if (queueFilter !== 'in_review') {
+      setPendingFollowupQueueSwitch(false);
+      return;
+    }
+
+    if (filteredItems.length > 0) {
+      return;
+    }
+
+    const followupQueue = availableReviewFollowupQueues[0];
+    if (!followupQueue) {
+      setPendingFollowupQueueSwitch(false);
+      setQueueToast({
+        variant: 'info',
+        text: t('In-review queue cleared. No follow-up queues with pending items.')
+      });
+      return;
+    }
+
+    openQueueFilter(followupQueue.key);
+    setPendingFollowupQueueSwitch(false);
+    setQueueToast({
+      variant: 'info',
+      text: t('In-review queue cleared. Switched to {queue}.', {
+        queue: t(followupQueue.key === 'needs_work' ? 'Needs Work' : followupQueue.key)
+      })
+    });
+  }, [
+    availableReviewFollowupQueues,
+    autoSwitchAfterInReviewClear,
+    filteredItems.length,
+    openQueueFilter,
+    pendingFollowupQueueSwitch,
+    queueFilter,
+    t
+  ]);
+
+  const resolveNextQueueItemId = useCallback(
+    (currentItemId: string): string => {
+      if (!currentItemId || filteredItems.length === 0) {
+        return '';
+      }
+
+      const currentIndex = filteredItems.findIndex((item) => item.id === currentItemId);
+      if (currentIndex < 0) {
+        return filteredItems[0]?.id ?? '';
+      }
+
+      for (let index = currentIndex + 1; index < filteredItems.length; index += 1) {
+        const candidateId = filteredItems[index]?.id ?? '';
+        if (candidateId && candidateId !== currentItemId) {
+          return candidateId;
+        }
+      }
+
+      for (let index = 0; index < currentIndex; index += 1) {
+        const candidateId = filteredItems[index]?.id ?? '';
+        if (candidateId && candidateId !== currentItemId) {
+          return candidateId;
+        }
+      }
+
+      return '';
+    },
+    [filteredItems]
   );
   const focusNextLowConfidenceQueueItem = useCallback(() => {
     if (!nextLowConfidenceQueueItemId) {
@@ -1261,6 +2374,257 @@ export default function AnnotationWorkspacePage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [canMoveToNextQueueItem, canMoveToPreviousQueueItem, focusAdjacentQueueItem]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.ctrlKey ||
+        event.metaKey ||
+        !event.altKey ||
+        isTypingTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (event.code === 'Comma') {
+        event.preventDefault();
+        focusReviewHistoryByIndex(reviewHistoryCursor + 1);
+        return;
+      }
+
+      if (event.code === 'Period') {
+        event.preventDefault();
+        focusReviewHistoryByIndex(reviewHistoryCursor - 1);
+        return;
+      }
+
+      const key = event.key.trim().toLowerCase();
+      if (['1', '2', '3', '4', '5'].includes(key)) {
+        const targetFilter = queueShortcutFilters[Number(key) - 1];
+        if (!targetFilter) {
+          return;
+        }
+
+        event.preventDefault();
+        switchQueueByShortcut(targetFilter);
+        return;
+      }
+
+      if (key === 'l') {
+        event.preventDefault();
+        setOnlyLowConfidenceCandidates((current) => {
+          const next = !current;
+          setQueueToast({
+            variant: 'info',
+            text: next
+              ? t('Low-confidence-only filter enabled.')
+              : t('Low-confidence-only filter disabled.')
+          });
+          return next;
+        });
+        return;
+      }
+
+      if (key === 'n') {
+        event.preventDefault();
+        focusNextLowConfidenceQueueItem();
+        return;
+      }
+
+      if (key === 'c') {
+        event.preventDefault();
+        clearQueueFilters();
+        setQueueToast({
+          variant: 'info',
+          text: t('Queue filters cleared.')
+        });
+        return;
+      }
+
+      if (key === 'v') {
+        event.preventDefault();
+        setShortcutAutoAdvance((current) => {
+          const next = !current;
+          setQueueToast({
+            variant: 'info',
+            text: next
+              ? t('Shortcut auto-advance enabled.')
+              : t('Shortcut auto-advance disabled.')
+          });
+          return next;
+        });
+        return;
+      }
+
+      if (key === 'b') {
+        event.preventDefault();
+        setAutoSwitchAfterInReviewClear((current) => {
+          const next = !current;
+          setQueueToast({
+            variant: 'info',
+            text: next
+              ? t('Auto-switch after in_review clear enabled.')
+              : t('Auto-switch after in_review clear disabled.')
+          });
+          return next;
+        });
+        return;
+      }
+
+      if (key === 'r') {
+        event.preventDefault();
+        focusReviewHistoryByIndex(0, { restoreQueueContext: event.shiftKey });
+        return;
+      }
+
+      if (key === 'g') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          saveCurrentWorkspaceReturnPoint();
+          return;
+        }
+        if (!primaryWorkspaceReturnPoint) {
+          setQueueToast({
+            variant: 'info',
+            text: t('No saved workspace return point yet.')
+          });
+          return;
+        }
+        restoreWorkspaceReturnPoint(primaryWorkspaceReturnPoint);
+        return;
+      }
+
+      if (key === '0') {
+        event.preventDefault();
+        if (!primaryWorkspaceReturnPoint) {
+          setQueueToast({
+            variant: 'info',
+            text: t('No saved workspace return point to lock.')
+          });
+          return;
+        }
+        const nextLocked = !primaryWorkspaceReturnPoint.locked;
+        updateWorkspaceReturnPoint(primaryWorkspaceReturnPoint.id, { locked: nextLocked });
+        setQueueToast({
+          variant: 'info',
+          text: nextLocked
+            ? t('Workspace return point slot 1 locked.')
+            : t('Workspace return point slot 1 unlocked.')
+        });
+        return;
+      }
+
+      if (['7', '8', '9'].includes(key)) {
+        event.preventDefault();
+        restoreWorkspaceReturnPointByIndex(Number(key) - 7);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    clearQueueFilters,
+    focusNextLowConfidenceQueueItem,
+    focusReviewHistoryByIndex,
+    reviewHistoryCursor,
+    primaryWorkspaceReturnPoint,
+    saveCurrentWorkspaceReturnPoint,
+    restoreWorkspaceReturnPointByIndex,
+    restoreWorkspaceReturnPoint,
+    switchQueueByShortcut,
+    t,
+    updateWorkspaceReturnPoint
+  ]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        isTypingTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (event.key === '/') {
+        event.preventDefault();
+        queueSearchInputRef.current?.focus();
+        queueSearchInputRef.current?.select();
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'm') {
+        event.preventDefault();
+        queueMetadataInputRef.current?.focus();
+        queueMetadataInputRef.current?.select();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || isTypingTarget(event.target)) {
+        return;
+      }
+
+      if (event.key === '?') {
+        event.preventDefault();
+        setShowShortcutGuide((current) => !current);
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        setShowShortcutGuide(false);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        !event.shiftKey ||
+        isTypingTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (!selectedAnnotation || selectedAnnotation.status !== 'in_review') {
+        return;
+      }
+
+      const reasonCode = reviewReasonShortcutMap[event.code];
+      if (!reasonCode) {
+        return;
+      }
+
+      event.preventDefault();
+      setReviewReasonCode(reasonCode);
+      reviewReasonSelectRef.current?.focus();
+      setQueueToast({
+        variant: 'info',
+        text: t('Reject reason set to {reason}.', { reason: t(reasonCode) })
+      });
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedAnnotation, t]);
+
   const addOcrLine = () => {
     if (!lineText.trim()) {
       setFeedback({ variant: 'error', text: t('OCR line text cannot be empty.') });
@@ -1306,69 +2670,172 @@ export default function AnnotationWorkspacePage() {
     setBoxes((prev) => prev.slice(0, -1));
   };
 
-  const saveAnnotation = async (status: 'in_progress' | 'annotated') => {
-    if (!datasetId || !dataset || !selectedItem) {
-      return;
-    }
+  const saveAnnotation = useCallback(
+    async (status: 'in_progress' | 'annotated', options?: { continueInQueue?: boolean }) => {
+      if (!datasetId || !dataset || !selectedItem) {
+        return;
+      }
 
-    setBusy(true);
-    setFeedback(null);
+      const continueInQueue = options?.continueInQueue === true;
+      const nextQueueItemId = continueInQueue ? resolveNextQueueItemId(selectedItem.id) : '';
+      setBusy(true);
+      setFeedback(null);
 
-    try {
-      const payload =
-        dataset.task_type === 'ocr'
-          ? {
-              regions: boxes,
-              lines: ocrLines
-            }
-          : dataset.task_type === 'segmentation'
+      try {
+        const payload =
+          dataset.task_type === 'ocr'
             ? {
-                polygons,
-                boxes
+                regions: boxes,
+                lines: ocrLines
               }
-          : {
-              boxes
-            };
+            : dataset.task_type === 'segmentation'
+              ? {
+                  polygons,
+                  boxes
+                }
+              : {
+                  boxes
+                };
 
-      const upserted = await api.upsertDatasetAnnotation(datasetId, {
-        dataset_item_id: selectedItem.id,
-        task_type: dataset.task_type,
-        source: 'manual',
-        status,
-        payload
-      });
+        const upserted = await api.upsertDatasetAnnotation(datasetId, {
+          dataset_item_id: selectedItem.id,
+          task_type: dataset.task_type,
+          source: 'manual',
+          status,
+          payload
+        });
 
-      setFeedback({
-        variant: 'success',
-        text: t('Annotation saved as {status}.', { status: t(upserted.status) })
-      });
+        await load('manual');
+        if (continueInQueue) {
+          if (nextQueueItemId) {
+            focusWorkspaceItem(queueFilter, nextQueueItemId);
+            setQueueToast({
+              variant: 'success',
+              text: t('Annotation saved as {status}. Continued to next item.', {
+                status: t(upserted.status)
+              })
+            });
+          } else {
+            setQueueToast({
+              variant: 'info',
+              text: t('Annotation saved as {status}. No more items in current queue.', {
+                status: t(upserted.status)
+              })
+            });
+          }
+          setFeedback(null);
+        } else {
+          setFeedback({
+            variant: 'success',
+            text: t('Annotation saved as {status}.', { status: t(upserted.status) })
+          });
+        }
+      } catch (error) {
+        setFeedback({ variant: 'error', text: (error as Error).message });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      boxes,
+      dataset,
+      datasetId,
+      focusWorkspaceItem,
+      load,
+      ocrLines,
+      polygons,
+      queueFilter,
+      resolveNextQueueItemId,
+      selectedItem,
+      t
+    ]
+  );
 
-      await load('manual');
-    } catch (error) {
-      setFeedback({ variant: 'error', text: (error as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
+  const submitReview = useCallback(
+    async (options?: { continueInQueue?: boolean }) => {
+      if (!datasetId || !selectedAnnotation) {
+        return;
+      }
 
-  const submitReview = async () => {
-    if (!datasetId || !selectedAnnotation) {
-      return;
-    }
+      const continueInQueue = options?.continueInQueue === true;
+      const nextQueueItemId = continueInQueue
+        ? resolveNextQueueItemId(selectedAnnotation.dataset_item_id)
+        : '';
+      setBusy(true);
+      setFeedback(null);
 
-    setBusy(true);
-    setFeedback(null);
+      try {
+        await api.submitAnnotationForReview(datasetId, selectedAnnotation.id);
+        await load('manual');
+        if (continueInQueue) {
+          if (nextQueueItemId) {
+            focusWorkspaceItem(queueFilter, nextQueueItemId);
+            setQueueToast({
+              variant: 'success',
+              text: t('Annotation submitted for review. Continued to next item.')
+            });
+          } else {
+            setQueueToast({
+              variant: 'info',
+              text: t('Annotation submitted for review. No more items in current queue.')
+            });
+          }
+          setFeedback(null);
+        } else {
+          setFeedback({ variant: 'success', text: t('Annotation submitted for review.') });
+        }
+      } catch (error) {
+        setFeedback({ variant: 'error', text: (error as Error).message });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [datasetId, focusWorkspaceItem, load, queueFilter, resolveNextQueueItemId, selectedAnnotation, t]
+  );
 
-    try {
-      await api.submitAnnotationForReview(datasetId, selectedAnnotation.id);
-      setFeedback({ variant: 'success', text: t('Annotation submitted for review.') });
-      await load('manual');
-    } catch (error) {
-      setFeedback({ variant: 'error', text: (error as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.altKey ||
+        isTypingTarget(event.target)
+      ) {
+        return;
+      }
+
+      const withCommand = event.ctrlKey || event.metaKey;
+      if (!withCommand || busy || !selectedItem) {
+        return;
+      }
+
+      if (event.key.toLowerCase() === 's' && !event.shiftKey) {
+        event.preventDefault();
+        void saveAnnotation('in_progress', { continueInQueue: shortcutAutoAdvance });
+        return;
+      }
+
+      if (event.key === 'Enter' && event.shiftKey) {
+        if (!selectedAnnotation || selectedAnnotation.status !== 'annotated') {
+          return;
+        }
+        event.preventDefault();
+        void submitReview({ continueInQueue: shortcutAutoAdvance });
+        return;
+      }
+
+      if (event.key === 'Enter') {
+        if (isEditLocked) {
+          return;
+        }
+        event.preventDefault();
+        void saveAnnotation('annotated', { continueInQueue: shortcutAutoAdvance });
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [busy, isEditLocked, saveAnnotation, selectedAnnotation, selectedItem, shortcutAutoAdvance, submitReview]);
 
   const reviewAnnotation = useCallback(
     async (status: 'approved' | 'rejected', options?: { continueInQueue?: boolean }) => {
@@ -1419,26 +2886,57 @@ export default function AnnotationWorkspacePage() {
           quality_score: Number(reviewQuality),
           review_comment: reviewComment
         });
+        const reviewEventAt = Date.now();
+        setReviewSessionStats((current) => ({
+          total: current.total + 1,
+          approved: current.approved + (status === 'approved' ? 1 : 0),
+          rejected: current.rejected + (status === 'rejected' ? 1 : 0)
+        }));
+        setReviewSessionStartedAt((current) => current ?? reviewEventAt);
+        setReviewSessionLastActionAt(reviewEventAt);
+        if (selectedItem) {
+          const filename = attachmentById.get(selectedItem.attachment_id)?.filename ?? selectedFilename;
+          setReviewActionHistory((current) =>
+            [
+              {
+                id: `review-${selectedAnnotation.id}-${reviewEventAt}`,
+                itemId: selectedItem.id,
+                filename,
+                status,
+                reasonCode: status === 'rejected' ? reviewReasonCode : null,
+                queueAtAction: queueFilter,
+                queueSearchText,
+                queueSplitFilter,
+                queueItemStatusFilter,
+                queueMetadataFilter,
+                onlyLowConfidenceCandidates,
+                predictionConfidenceThreshold,
+                timestamp: reviewEventAt
+              },
+              ...current
+            ].slice(0, reviewSessionHistoryMaxEntries)
+          );
+          setReviewHistoryCursor(0);
+        }
 
         await load('manual');
         if (continueInQueue && queueFilter === 'in_review') {
           focusWorkspaceItem('in_review', nextInReviewItemId);
-          setFeedback({
-            variant: 'success',
-            text: nextInReviewItemId
-              ? t('Annotation {status}. Continued to next in-review item.', { status: t(status) })
-              : t('Annotation {status}. No more items in in_review queue.', { status: t(status) })
-          });
+          setFeedback(null);
           if (nextInReviewItemId) {
             setQueueToast({
               variant: 'success',
               text: t('Review saved. {count} items remain in in_review queue.', { count: remainingAfterCurrentReview })
             });
           } else {
-            setQueueToast({
-              variant: 'info',
-              text: t('In-review queue cleared. Great job.')
-            });
+            if (autoSwitchAfterInReviewClear) {
+              setPendingFollowupQueueSwitch(true);
+            } else {
+              setQueueToast({
+                variant: 'info',
+                text: t('In-review queue cleared. Great job.')
+              });
+            }
           }
         } else {
           setFeedback({
@@ -1461,7 +2959,16 @@ export default function AnnotationWorkspacePage() {
       reviewComment,
       reviewQuality,
       reviewReasonCode,
+      queueSearchText,
+      queueSplitFilter,
+      queueItemStatusFilter,
+      queueMetadataFilter,
+      onlyLowConfidenceCandidates,
+      predictionConfidenceThreshold,
+      attachmentById,
+      autoSwitchAfterInReviewClear,
       selectedAnnotation,
+      selectedFilename,
       selectedItem,
       t
     ]
@@ -1491,13 +2998,13 @@ export default function AnnotationWorkspacePage() {
 
       event.preventDefault();
       void reviewAnnotation(key === 'a' ? 'approved' : 'rejected', {
-        continueInQueue: queueFilter === 'in_review'
+        continueInQueue: queueFilter === 'in_review' && shortcutAutoAdvance
       });
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [busy, queueFilter, reviewAnnotation, selectedAnnotation]);
+  }, [busy, queueFilter, reviewAnnotation, selectedAnnotation, shortcutAutoAdvance]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1615,21 +3122,29 @@ export default function AnnotationWorkspacePage() {
   const heroSection = (
     <WorkspaceHero
       eyebrow={t('Annotation Lane')}
-      title={t('Annotation Workspace')}
+      title={dataset ? dataset.name : t('Annotation Workspace')}
       description={
         dataset
-          ? `${dataset.name} · ${t('task')} ${t(dataset.task_type)}`
+          ? scopedDatasetVersionId
+            ? t('Task {task} · Version {version}. Keep one sample in focus and move it through annotation and review.', {
+                task: t(dataset.task_type),
+                version: scopedDatasetVersionId
+              })
+            : t('Task {task}. Keep one sample in focus and move it through annotation and review.', {
+                task: t(dataset.task_type)
+              })
           : t('Review queue status, annotate items, and complete approvals in one flow.')
       }
-      stats={[
-        { label: t('Items'), value: items.length },
-        { label: t('Visible'), value: filteredItems.length },
-        { label: t('Models'), value: modelVersions.length },
-        {
-          label: t('Queue'),
-          value: queueFilter === 'all' ? t('All') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)
-        }
-      ]}
+      actions={
+        dataset ? (
+          <div className="row gap wrap align-center">
+            <Badge tone="neutral">{t(dataset.task_type)}</Badge>
+            <Badge tone="info">{queueLabel(queueFilter)}</Badge>
+            {scopedDatasetVersionId ? <Badge tone="neutral">{t('Version')}: {scopedDatasetVersionId}</Badge> : null}
+            {selectedItem ? <Badge tone="neutral">{t('Current sample')}: {selectedFilename}</Badge> : null}
+          </div>
+        ) : undefined
+      }
     />
   );
 
@@ -1678,57 +3193,32 @@ export default function AnnotationWorkspacePage() {
         />
       ) : null}
 
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Needs Work'),
-            description: t('Items still awaiting annotation or submit-review actions.'),
-            value: annotationSummary.needs_work
-          },
-          {
-            title: t('in_review'),
-            description: t('Items currently in reviewer lane.'),
-            value: annotationSummary.in_review,
-            tone: annotationSummary.in_review > 0 ? 'attention' : 'default'
-          },
-          {
-            title: t('rejected'),
-            description: t('Rejected items that should be moved back to rework flow.'),
-            value: annotationSummary.rejected,
-            tone: annotationSummary.rejected > 0 ? 'attention' : 'default'
-          },
-          {
-            title: t('approved'),
-            description: t('Approved items are ready for downstream versioning and training.'),
-            value: annotationSummary.approved
-          }
-        ]}
-      />
-
       <section className="annotation-studio-layout">
-      <div className="annotation-studio-queue">
+      <div className="annotation-studio-queue" ref={queueSectionRef}>
       <Card as="section">
         <WorkspaceSectionHeader
           title={t('Annotation Queue')}
-          description={t('Visible items {visible} / {total}', {
-            visible: filteredItems.length,
-            total: items.length
-          })}
+          description={queuePositionSummary}
         />
-        <div className="row gap wrap align-center">
-          <Badge tone="neutral">{t('Queue')}: {queueFilter === 'all' ? t('All items') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}</Badge>
-          <Badge tone="info">{t('Visible items')}: {filteredItems.length}</Badge>
-          <Badge tone="neutral">{t('Dataset')}: {dataset.name}</Badge>
-          {scopedDatasetVersionId ? (
-            <Badge tone="info">{t('Version')}: {scopedDatasetVersionId}</Badge>
-          ) : null}
-          {selectedItem ? (
-            <Badge tone="neutral">{t('Selected')}: {selectedFilename}</Badge>
-          ) : null}
+        <div className="annotation-queue-context">
+          <div className="stack tight">
+            <small className="muted">{t('Current sample')}</small>
+            <strong className="line-clamp-1">
+              {selectedItem ? selectedFilename : t('No dataset item selected')}
+            </strong>
+          </div>
+          <div className="row gap wrap align-center">
+            <Badge tone="neutral">{queueLabel(queueFilter)}</Badge>
+            <Badge tone="info">{t('Visible items')}: {filteredItems.length}</Badge>
+            {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
+            {selectedAnnotation ? (
+              <Badge tone="info">{t('Annotation')}: {t(selectedAnnotation.status)}</Badge>
+            ) : selectedItem ? (
+              <Badge tone="warning">{t('Annotation')}: {t('unannotated')}</Badge>
+            ) : null}
+            {selectedItemHasLowConfidenceTag ? <Badge tone="warning">{t('Low-confidence tag')}</Badge> : null}
+          </div>
         </div>
-        <small className="muted">
-          {t('Queue summary')}: {annotationSummary.needs_work} {t('needs_work')} / {annotationSummary.in_review} {t('in_review')} / {annotationSummary.approved} {t('approved')} / {annotationSummary.rejected} {t('rejected')}
-        </small>
         <div className="annotation-filter-row">
           {annotationQueueFilters.map((filter) => {
             const count =
@@ -1755,13 +3245,14 @@ export default function AnnotationWorkspacePage() {
                 }}
                 disabled={busy}
               >
-                {filter === 'all' ? t('All items') : filter === 'needs_work' ? t('Needs Work') : t(filter)}
+                {queueLabel(filter)}
               </Button>
             );
           })}
         </div>
-        <div className="annotation-queue-advanced-filters">
+        <div className="annotation-queue-primary-filters">
           <Input
+            ref={queueSearchInputRef}
             value={queueSearchText}
             onChange={(event) => setQueueSearchText(event.target.value)}
             placeholder={t('Search filename')}
@@ -1780,25 +3271,62 @@ export default function AnnotationWorkspacePage() {
             <option value="val">{t('val')}</option>
             <option value="test">{t('test')}</option>
           </Select>
-          <Select
-            value={queueItemStatusFilter}
-            onChange={(event) =>
-              setQueueItemStatusFilter(
-                event.target.value as 'all' | 'uploading' | 'processing' | 'ready' | 'error'
-              )
-            }
+        </div>
+        <div className="annotation-queue-more-filters">
+          <Button
+            type="button"
+            variant={showAdvancedQueueFilters ? 'secondary' : 'ghost'}
+            size="sm"
+            trailing={advancedQueueFilterCount > 0 ? <Badge tone="info">{advancedQueueFilterCount}</Badge> : undefined}
+            onClick={() => setShowAdvancedQueueFilters((current) => !current)}
           >
-            <option value="all">{t('All statuses')}</option>
-            <option value="ready">{t('ready')}</option>
-            <option value="processing">{t('processing')}</option>
-            <option value="uploading">{t('uploading')}</option>
-            <option value="error">{t('error')}</option>
-          </Select>
-                <Input
-                  value={queueMetadataFilter}
-                  onChange={(event) => setQueueMetadataFilter(event.target.value)}
-                  placeholder={t('Filter metadata/tag (supports key=value)')}
-                />
+            {showAdvancedQueueFilters ? t('Hide extra filters') : t('More filters')}
+          </Button>
+          {showAdvancedQueueFilters ? (
+            <div className="annotation-queue-advanced-filters">
+              <Select
+                value={queueItemStatusFilter}
+                onChange={(event) =>
+                  setQueueItemStatusFilter(
+                    event.target.value as 'all' | 'uploading' | 'processing' | 'ready' | 'error'
+                  )
+                }
+              >
+                <option value="all">{t('All statuses')}</option>
+                <option value="ready">{t('ready')}</option>
+                <option value="processing">{t('processing')}</option>
+                <option value="uploading">{t('uploading')}</option>
+                <option value="error">{t('error')}</option>
+              </Select>
+              <Input
+                ref={queueMetadataInputRef}
+                value={queueMetadataFilter}
+                onChange={(event) => setQueueMetadataFilter(event.target.value)}
+                placeholder={t('Filter metadata/tag (supports key=value)')}
+              />
+              {queueMetadataQuickFilters.length > 0 ? (
+                <div className="annotation-queue-quick-filter-row">
+                  <small className="muted">{t('Metadata quick filters')}:</small>
+                  <div className="row gap wrap">
+                    {queueMetadataQuickFilters.map((preset) => (
+                      <Button
+                        key={preset.key}
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        trailing={<Badge tone="info">{preset.count}</Badge>}
+                        onClick={() => {
+                          setQueueMetadataFilter(preset.value);
+                        }}
+                      >
+                        {preset.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="annotation-queue-filter-summary">
           <div className="row gap wrap">
@@ -1822,28 +3350,7 @@ export default function AnnotationWorkspacePage() {
             {t('Clear filters')}
           </Button>
         </div>
-        {queueMetadataQuickFilters.length > 0 ? (
-          <div className="annotation-queue-filter-summary">
-            <div className="row gap wrap align-center">
-              <small className="muted">{t('Metadata quick filters')}:</small>
-              {queueMetadataQuickFilters.map((preset) => (
-                <Button
-                  key={preset.key}
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  trailing={<Badge tone="info">{preset.count}</Badge>}
-                  onClick={() => {
-                    setQueueMetadataFilter(preset.value);
-                  }}
-                >
-                  {preset.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        <div className="annotation-queue-lowconf-row">
+        <div className="annotation-queue-footer">
           <div className="row gap wrap align-center">
             <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
               {t('Low-confidence samples')}: {lowConfidenceQueueRadarItems.length}
@@ -1851,34 +3358,21 @@ export default function AnnotationWorkspacePage() {
             <Badge tone={totalLowConfidenceQueueSignals > 0 ? 'warning' : 'neutral'}>
               {t('Low-confidence signals')}: {totalLowConfidenceQueueSignals}
             </Badge>
+            {queueProgressContext.total > 0 ? (
+              <Badge tone="neutral">
+                {t('Remaining')}: {queueProgressContext.remaining}
+              </Badge>
+            ) : null}
           </div>
-          <Button
-            type="button"
-            variant={onlyLowConfidenceCandidates ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={() => setOnlyLowConfidenceCandidates((current) => !current)}
-          >
-            {onlyLowConfidenceCandidates
-              ? t('Show full queue')
-              : t('Only low-confidence')}
-          </Button>
-        </div>
-        <div className="annotation-queue-nav">
-          <small className="muted">
-            {selectedQueueIndex >= 0
-              ? t('Queue position {current} / {total}', {
-                  current: selectedQueueIndex + 1,
-                  total: filteredItems.length
-                })
-              : filteredItems.length > 0
-                ? t('No item selected in current queue.')
-                : t('Visible items {visible} / {total}', {
-                    visible: filteredItems.length,
-                    total: items.length
-                  })}
-          </small>
-          <div className="annotation-queue-nav-actions">
-            <small className="muted annotation-queue-shortcuts">{t('Queue shortcuts: J next · K previous')}</small>
+          <div className="annotation-queue-footer-actions">
+            <Button
+              type="button"
+              variant={onlyLowConfidenceCandidates ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setOnlyLowConfidenceCandidates((current) => !current)}
+            >
+              {onlyLowConfidenceCandidates ? t('Show full queue') : t('Only low-confidence')}
+            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -1904,10 +3398,39 @@ export default function AnnotationWorkspacePage() {
             variant="empty"
             title={t('No Matching Model Version')}
             description={t('Register a model version with same task type before pre-annotation.')}
+            extra={
+              <div className="row gap wrap review-empty-followup">
+                <ButtonLink to="/models/versions" variant="secondary" size="sm">
+                  {t('Open Model Versions')}
+                </ButtonLink>
+              </div>
+            }
           />
         ) : null}
         {items.length === 0 ? (
-          <StateBlock variant="empty" title={t('No Items')} description={t('Upload dataset files first.')} />
+          <StateBlock
+            variant="empty"
+            title={t('No Items')}
+            description={
+              nextOnboardingStep
+                ? t('No queue items yet. Finish the recommended review step below to continue.')
+                : t('Upload sample files first, then come back here to annotate and review them.')
+            }
+            extra={
+              <div className="row gap wrap review-empty-followup">
+                {nextOnboardingStep ? (
+                  <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
+                    {nextOnboardingStep.cta}
+                  </ButtonLink>
+                ) : (
+                  <ButtonLink to={`/datasets/${datasetId}`} variant="secondary" size="sm">
+                    {t('Open Dataset Detail')}
+                  </ButtonLink>
+                )}
+                {nextOnboardingStep ? <small className="muted">{nextOnboardingStep.detail}</small> : null}
+              </div>
+            }
+          />
         ) : filteredItems.length === 0 ? (
           <StateBlock
             variant="empty"
@@ -1915,7 +3438,9 @@ export default function AnnotationWorkspacePage() {
             description={
               queueFilter === 'in_review'
                 ? t('All submitted items are now processed. Switch queue filters for follow-up.')
-                : t('Switch queue filters or run pre-annotation to continue.')
+                : nextOnboardingStep
+                  ? t('No queue items yet. Finish the recommended review step below to continue.')
+                  : t('Try another queue or run pre-annotation to bring more samples into this lane.')
             }
             extra={
               queueFilter === 'in_review' ? (
@@ -1943,6 +3468,31 @@ export default function AnnotationWorkspacePage() {
                     <small className="muted">{t('No follow-up queues with pending items.')}</small>
                   )}
                 </div>
+              ) : nextOnboardingStep ? (
+                <WorkspaceFollowUpHint
+                  layout="inline"
+                  className="review-empty-followup"
+                  actions={
+                    nextOnboardingStep.key === 'select' && items.length > 0 ? (
+                      <Button type="button" variant="secondary" size="sm" onClick={focusQueueSection}>
+                        {t('Focus queue')}
+                      </Button>
+                    ) : nextOnboardingStep.key === 'annotate' ? (
+                      <Button type="button" variant="secondary" size="sm" onClick={focusAnnotationCanvas}>
+                        {t('Open annotation canvas')}
+                      </Button>
+                    ) : nextOnboardingStep.key === 'review' ? (
+                      <Button type="button" variant="secondary" size="sm" onClick={focusAnnotationActions}>
+                        {t('Open annotation actions')}
+                      </Button>
+                    ) : (
+                      <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
+                        {nextOnboardingStep.cta}
+                      </ButtonLink>
+                    )
+                  }
+                  detail={nextOnboardingStep.detail}
+                />
               ) : null
             }
           />
@@ -1951,87 +3501,15 @@ export default function AnnotationWorkspacePage() {
               items={filteredItems}
               itemHeight={112}
               height={440}
+              scrollToIndex={selectedQueueIndex >= 0 ? selectedQueueIndex : null}
               ariaLabel={t('Annotation Queue')}
               listClassName="workspace-record-list"
               itemKey={(item) => item.id}
-              renderItem={(item) => {
-                const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
-                const lowConfidenceCount = lowConfidenceCountByItemId.get(item.id) ?? 0;
-                return (
-                  <div className={`workspace-record-item virtualized${selectedItemId === item.id ? ' selected' : ''}`}>
-                    <label className="row gap wrap align-center annotation-item-select">
-                      <Checkbox
-                        type="radio"
-                        name="selected_item"
-                        checked={selectedItemId === item.id}
-                        onChange={() => {
-                          focusWorkspaceItem(queueFilter, item.id);
-                        }}
-                      />
-                      <div className="stack tight annotation-item-copy">
-                        <strong>{itemFilename}</strong>
-                      </div>
-                      <Badge tone="neutral">{t(item.split)}</Badge>
-                      <StatusBadge status={item.status} />
-                      {itemAnnotation ? <Badge tone="info">{t('Annotation')}: {t(itemAnnotation.status)}</Badge> : null}
-                      {!itemAnnotation ? <Badge tone="warning">{t('Annotation')}: {t('unannotated')}</Badge> : null}
-                      {lowConfidenceCount > 0 ? (
-                        <Badge tone="warning">{t('Low conf')}: {lowConfidenceCount}</Badge>
-                      ) : null}
-                      {itemAnnotation?.latest_review?.review_reason_code ? (
-                        <Badge tone="warning">{t(itemAnnotation.latest_review.review_reason_code)}</Badge>
-                      ) : null}
-                    </label>
-                    {itemAnnotation?.latest_review?.review_comment ? (
-                      <small className="muted line-clamp-2">{itemAnnotation.latest_review.review_comment}</small>
-                    ) : null}
-                  </div>
-                );
-              }}
+              renderItem={(item) => renderQueueRecord(item, { virtualized: true })}
             />
           ) : (
             <ul className="workspace-record-list">
-              {filteredItems.map((item) => {
-                const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                const itemFilename = attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
-                const lowConfidenceCount = lowConfidenceCountByItemId.get(item.id) ?? 0;
-                return (
-                  <Panel
-                    key={item.id}
-                    as="li"
-                    className={`workspace-record-item${selectedItemId === item.id ? ' selected' : ''}`}
-                    tone="soft"
-                  >
-                    <label className="row gap wrap align-center annotation-item-select">
-                      <Checkbox
-                        type="radio"
-                        name="selected_item"
-                        checked={selectedItemId === item.id}
-                        onChange={() => {
-                          focusWorkspaceItem(queueFilter, item.id);
-                        }}
-                      />
-                      <div className="stack tight annotation-item-copy">
-                        <strong>{itemFilename}</strong>
-                      </div>
-                      <Badge tone="neutral">{t(item.split)}</Badge>
-                      <StatusBadge status={item.status} />
-                      {itemAnnotation ? <Badge tone="info">{t('Annotation')}: {t(itemAnnotation.status)}</Badge> : null}
-                      {!itemAnnotation ? <Badge tone="warning">{t('Annotation')}: {t('unannotated')}</Badge> : null}
-                      {lowConfidenceCount > 0 ? (
-                        <Badge tone="warning">{t('Low conf')}: {lowConfidenceCount}</Badge>
-                      ) : null}
-                      {itemAnnotation?.latest_review?.review_reason_code ? (
-                        <Badge tone="warning">{t(itemAnnotation.latest_review.review_reason_code)}</Badge>
-                      ) : null}
-                    </label>
-                    {itemAnnotation?.latest_review?.review_comment ? (
-                      <small className="muted line-clamp-2">{itemAnnotation.latest_review.review_comment}</small>
-                    ) : null}
-                  </Panel>
-                );
-              })}
+              {filteredItems.map((item) => renderQueueRecord(item))}
             </ul>
           )
         }
@@ -2042,15 +3520,13 @@ export default function AnnotationWorkspacePage() {
         className="annotation-studio-workbench"
         toolbar={
           <Card as="section" className="workspace-toolbar-card">
-            <div className="workspace-toolbar-head">
-              <div className="workspace-toolbar-copy">
-                <h3>{t('Annotation Controls')}</h3>
-                <small className="muted">
-                  {t('Keep queue prep, pre-annotation, and workspace navigation together before entering the review lane.')}
-                </small>
-              </div>
-              <div className="workspace-toolbar-actions">
-                <label className="stack tight">
+            <div className="stack">
+              <WorkspaceSectionHeader
+                title={t('Workspace actions')}
+                description={t('Run pre-annotation and refresh this annotation lane when needed.')}
+              />
+              <div className="annotation-workspace-action-bar">
+                <label className="stack tight annotation-workspace-model-select">
                   <small className="muted">{t('Model Version')}</small>
                   <Select
                     value={selectedModelVersionId}
@@ -2084,34 +3560,384 @@ export default function AnnotationWorkspacePage() {
                 >
                   {refreshing ? t('Refreshing...') : t('Refresh')}
                 </Button>
+                <Button
+                  type="button"
+                  variant={showWorkspaceUtilities ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => setShowWorkspaceUtilities((current) => !current)}
+                >
+                  {showWorkspaceUtilities ? t('Hide workspace tools') : t('Open workspace tools')}
+                </Button>
                 <ButtonLink size="sm" variant="ghost" to={`/datasets/${dataset.id}`}>
                   {t('Back to Dataset')}
                 </ButtonLink>
-                <ButtonLink size="sm" variant="ghost" to={scopedInferenceValidationPath}>
-                  {t('Validate Inference')}
-                </ButtonLink>
               </div>
-            </div>
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
-                <Badge tone="neutral">
-                  {t('Queue')}: {queueFilter === 'all' ? t('All items') : queueFilter === 'needs_work' ? t('Needs Work') : t(queueFilter)}
-                </Badge>
-                <Badge tone="info">{t('Visible items')}: {filteredItems.length}</Badge>
-                <Badge tone="neutral">{t('Dataset')}: {dataset.name}</Badge>
-                {scopedDatasetVersionId ? (
-                  <Badge tone="info">{t('Version')}: {scopedDatasetVersionId}</Badge>
-                ) : null}
-                {selectedItem ? (
-                  <Badge tone="neutral">{t('Selected')}: {selectedFilename}</Badge>
-                ) : null}
-              </div>
+              {showWorkspaceUtilities ? (
+                <Panel as="section" className="annotation-utility-panel" tone="soft">
+                  <div className="workspace-section-header">
+                    <div className="stack tight">
+                      <h3>{t('Workspace tools')}</h3>
+                      <small className="muted">
+                        {t('Advanced shortcuts, review-session tracking, and return points stay here so the main workbench can stay focused.')}
+                      </small>
+                    </div>
+                  </div>
+                  <details className="workspace-disclosure">
+                    <summary>
+                      <span>{t('Workspace preferences')}</span>
+                    </summary>
+                    <div className="workspace-disclosure-content">
+                      <div className="row gap wrap align-center">
+                        <label className="row gap align-center">
+                          <Checkbox
+                            checked={shortcutAutoAdvance}
+                            onChange={(event) => setShortcutAutoAdvance(event.target.checked)}
+                          />
+                          <small className="muted">{t('Shortcut actions auto-advance to next sample')}</small>
+                        </label>
+                        <label className="row gap align-center">
+                          <Checkbox
+                            checked={autoSwitchAfterInReviewClear}
+                            onChange={(event) => setAutoSwitchAfterInReviewClear(event.target.checked)}
+                          />
+                          <small className="muted">{t('Auto-switch to follow-up queue when review queue is empty')}</small>
+                        </label>
+                      </div>
+                    </div>
+                  </details>
+                  {showShortcutGuide ? (
+                    <Panel as="section" className="workspace-keyline-list" tone="soft">
+                      <div className="row between gap wrap align-center">
+                        <strong>{t('Annotation Shortcut Guide')}</strong>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setShowShortcutGuide(false)}
+                        >
+                          {t('Close')}
+                        </Button>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">J / K</Badge>
+                        <small className="muted">{t('Move to next/previous sample in current queue')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + 1..5</Badge>
+                        <small className="muted">{t('Switch queue (all / needs_work / in_review / rejected / approved)')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + L</Badge>
+                        <small className="muted">{t('Toggle low-confidence-only filter')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + N</Badge>
+                        <small className="muted">{t('Jump to next low-confidence sample in current queue')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + C</Badge>
+                        <small className="muted">{t('Clear queue filters')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + V</Badge>
+                        <small className="muted">{t('Toggle shortcut auto-advance')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + B</Badge>
+                        <small className="muted">{t('Toggle auto-switch after in_review queue clears')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + R</Badge>
+                        <small className="muted">{t('Reopen latest reviewed sample in session')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + Shift + R</Badge>
+                        <small className="muted">{t('Reopen latest reviewed sample with saved queue context')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + G</Badge>
+                        <small className="muted">{t('Return to saved workspace point')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + Shift + G</Badge>
+                        <small className="muted">{t('Save current workspace point to slot 1')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + 0</Badge>
+                        <small className="muted">{t('Lock/unlock workspace return point slot 1')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + 7..9</Badge>
+                        <small className="muted">{t('Return to workspace point slot 1/2/3')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Alt + , / .</Badge>
+                        <small className="muted">{t('Open previous/next reviewed sample in history')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">/</Badge>
+                        <small className="muted">{t('Focus queue search input')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">M</Badge>
+                        <small className="muted">{t('Focus metadata filter input')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t('Ctrl/Cmd')} + S</Badge>
+                        <small className="muted">{t('Save as in_progress')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t('Ctrl/Cmd')} + Enter</Badge>
+                        <small className="muted">{t('Mark as annotated')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t('Ctrl/Cmd')} + Shift + Enter</Badge>
+                        <small className="muted">{t('Submit review when status is annotated')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">A / R</Badge>
+                        <small className="muted">{t('Approve or reject while in_review')}</small>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">Shift + 1..6</Badge>
+                        <small className="muted">{t('Set reject reason quickly while in_review')}</small>
+                      </div>
+                      <small className="muted">{t('Press ? to toggle this panel, Esc to close it.')}</small>
+                    </Panel>
+                  ) : null}
+                  <div className="row gap wrap">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowShortcutGuide((current) => !current)}
+                    >
+                      {showShortcutGuide ? t('Hide shortcut guide') : t('Open shortcut guide')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={saveCurrentWorkspaceReturnPoint}
+                      disabled={!selectedItemId}
+                    >
+                      {t('Set Return Point')}
+                    </Button>
+                  </div>
+                  <details className="workspace-disclosure">
+                    <summary>
+                      <span>{t('Review session summary')}</span>
+                      <Badge tone="info">{reviewSessionStats.total}</Badge>
+                    </summary>
+                    <div className="workspace-disclosure-content">
+                      <div className="row gap wrap">
+                        <Badge tone="neutral">{t('Session reviewed')}: {reviewSessionStats.total}</Badge>
+                        <Badge tone="info">{t('Approved')}: {reviewSessionStats.approved}</Badge>
+                        <Badge tone="warning">{t('Rejected')}: {reviewSessionStats.rejected}</Badge>
+                      </div>
+                      <div className="row gap wrap">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setReviewSessionStats({
+                              total: 0,
+                              approved: 0,
+                              rejected: 0
+                            });
+                            setReviewSessionStartedAt(null);
+                            setReviewSessionLastActionAt(null);
+                            setReviewActionHistory([]);
+                            setReviewHistoryCursor(0);
+                          }}
+                          disabled={reviewSessionStats.total === 0}
+                        >
+                          {t('Reset Session Counter')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            focusReviewHistoryByIndex(0);
+                          }}
+                          disabled={!latestReviewAction}
+                        >
+                          {t('Reopen Last Reviewed')}
+                        </Button>
+                      </div>
+                      <small className="muted">
+                        {t('Session start')}: {formatSessionClock(reviewSessionStartedAt, t('n/a'))} · {t('Last review')}:{' '}
+                        {formatSessionClock(reviewSessionLastActionAt, t('n/a'))} · {t('Avg/review')}:{' '}
+                        {reviewSessionAverageSeconds === null ? t('n/a') : `${reviewSessionAverageSeconds.toFixed(1)}s`}
+                      </small>
+                    </div>
+                  </details>
+                  <details className="workspace-disclosure">
+                    <summary>
+                      <span>{t('Saved workspace points')}</span>
+                      <Badge tone="neutral">{workspaceReturnPoints.length}</Badge>
+                    </summary>
+                    <div className="workspace-disclosure-content">
+                      {primaryWorkspaceReturnPoint ? (
+                        <small className="muted">
+                          {t('Return point')}: {primaryWorkspaceReturnPoint.selectedFilename} ({t('slot')} 1/{workspaceReturnPoints.length})
+                        </small>
+                      ) : (
+                        <small className="muted">{t('No saved workspace return point yet.')}</small>
+                      )}
+                      <div className="row gap wrap">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            if (!primaryWorkspaceReturnPoint) {
+                              return;
+                            }
+                            restoreWorkspaceReturnPoint(primaryWorkspaceReturnPoint);
+                          }}
+                          disabled={!primaryWorkspaceReturnPoint}
+                        >
+                          {t('Return To Point')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setWorkspaceReturnPoints([])}
+                          disabled={!primaryWorkspaceReturnPoint}
+                        >
+                          {t('Clear Return Points')}
+                        </Button>
+                      </div>
+                      {workspaceReturnPoints.length > 0 ? (
+                        <div className="row gap wrap">
+                          {workspaceReturnPoints.map((point, index) => (
+                            <Panel
+                              key={`return-point-slot-${point.id}`}
+                              as="section"
+                              className="workspace-record-item compact stack tight annotation-return-point"
+                              tone="soft"
+                            >
+                              {editingReturnPointId === point.id ? (
+                                <div className="row gap wrap align-center">
+                                  <Input
+                                    value={editingReturnPointLabel}
+                                    onChange={(event) => setEditingReturnPointLabel(event.target.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter') {
+                                        event.preventDefault();
+                                        commitEditReturnPoint();
+                                      } else if (event.key === 'Escape') {
+                                        event.preventDefault();
+                                        cancelEditReturnPoint();
+                                      }
+                                    }}
+                                    autoFocus
+                                    placeholder={t('Return point label')}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={commitEditReturnPoint}
+                                    disabled={!editingReturnPointLabel.trim()}
+                                  >
+                                    {t('Save')}
+                                  </Button>
+                                  <Button type="button" variant="ghost" size="sm" onClick={cancelEditReturnPoint}>
+                                    {t('Cancel')}
+                                  </Button>
+                                </div>
+                              ) : null}
+                              <div className="row between gap wrap align-center">
+                                <strong className="line-clamp-1">
+                                  {t('Slot {slot}', { slot: index + 1 })}: {point.label}
+                                </strong>
+                                {point.locked ? <Badge tone="warning">{t('Locked')}</Badge> : <Badge tone="neutral">{t('Unlocked')}</Badge>}
+                              </div>
+                              <small className="muted">
+                                {point.selectedFilename} · {formatSessionClock(point.savedAt, t('n/a'))}
+                              </small>
+                              <div className="row gap wrap">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => restoreWorkspaceReturnPointByIndex(index)}
+                                >
+                                  {t('Return')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => beginEditReturnPoint(point)}
+                                  disabled={editingReturnPointId === point.id}
+                                >
+                                  {t('Rename')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => updateWorkspaceReturnPoint(point.id, { locked: !point.locked })}
+                                >
+                                  {point.locked ? t('Unlock') : t('Lock')}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => removeWorkspaceReturnPoint(point.id)}
+                                >
+                                  {t('Remove')}
+                                </Button>
+                              </div>
+                            </Panel>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
+                </Panel>
+              ) : null}
             </div>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
-          <section className="stack">
+            <WorkspaceOnboardingCard
+              as="section"
+              inlineMode="summary"
+              title={t('Annotation first-run guide')}
+              description={t('Use this page to move queue samples through annotation and review, then continue scoped validation lane.')}
+              summary={t('Guide status is computed from selected sample, annotation status, review actions, and approved queue count.')}
+              storageKey={`${annotationWorkspaceOnboardingDismissedStorageKey}:${datasetId ?? 'unknown'}`}
+              steps={onboardingSteps.map((stepItem) => ({
+                key: stepItem.key,
+                label: stepItem.label,
+                detail: stepItem.detail,
+                done: stepItem.done,
+                primaryAction: {
+                  to: stepItem.to,
+                  label: stepItem.cta,
+                  onClick:
+                    stepItem.key === 'select' && items.length > 0
+                      ? focusQueueSection
+                      : stepItem.key === 'annotate'
+                        ? focusAnnotationCanvas
+                        : stepItem.key === 'review'
+                          ? focusAnnotationActions
+                          : undefined
+                }
+              }))}
+	            />
+
+            <div ref={canvasSectionRef}>
+              <section className="stack">
             <Suspense
               fallback={
                 <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation canvas.')} />
@@ -2129,56 +3955,90 @@ export default function AnnotationWorkspacePage() {
 
             {dataset.task_type === 'ocr' ? (
               <Card as="section">
-                <h3>{t('OCR Text Lines')}</h3>
-                <div className="annotation-ocr-grid">
-                  <label>
+                <div className="stack tight">
+                  <div className="row between gap wrap align-center">
+                    <h3>{t('OCR Text Lines')}</h3>
+                    {ocrLines.length > 0 ? <Badge tone="info">{t('Saved lines')}: {ocrLines.length}</Badge> : null}
+                  </div>
+                  <small className="muted">{t('Type one line from the image, then add it to the current sample.')}</small>
+                </div>
+                <div className="annotation-ocr-entry-row">
+                  <label className="annotation-ocr-entry-main">
                     {t('Line Text')}
-                    <Input value={lineText} onChange={(event) => setLineText(event.target.value)} disabled={busy || isEditLocked} />
-                  </label>
-                  <label>
-                    {t('Confidence')}
                     <Input
-                      value={lineConfidence}
-                      onChange={(event) => setLineConfidence(event.target.value)}
-                      placeholder="0.90"
+                      value={lineText}
+                      onChange={(event) => setLineText(event.target.value)}
+                      placeholder={t('Enter text from the image')}
                       disabled={busy || isEditLocked}
                     />
                   </label>
-                  <label>
-                    {t('Region Binding')}
-                    <Select value={lineRegionId} onChange={(event) => setLineRegionId(event.target.value)} disabled={busy || isEditLocked}>
-                      <option value="">{t('unbound')}</option>
-                      {boxes.map((box) => (
-                        <option key={box.id} value={box.id}>
-                          {box.label}
-                        </option>
-                      ))}
-                    </Select>
-                  </label>
+                  <Button onClick={addOcrLine} variant="secondary" size="sm" disabled={busy || isEditLocked}>
+                    {t('Add OCR Line')}
+                  </Button>
                 </div>
-                <Button onClick={addOcrLine} variant="secondary" size="sm" disabled={busy || isEditLocked}>
-                  {t('Add OCR Line')}
-                </Button>
+                <details
+                  className="workspace-disclosure annotation-ocr-options"
+                  open={showOcrAdvancedFields}
+                  onToggle={(event) => setShowOcrAdvancedFields(event.currentTarget.open)}
+                >
+                  <summary>
+                    <span>{t('OCR optional fields')}</span>
+                    {lineRegionId || lineConfidence.trim() !== '0.9' ? <Badge tone="info">{t('Configured')}</Badge> : null}
+                  </summary>
+                  <div className="workspace-disclosure-content">
+                    <div className="annotation-ocr-grid">
+                      <label>
+                        {t('Confidence (optional)')}
+                        <Input
+                          value={lineConfidence}
+                          onChange={(event) => setLineConfidence(event.target.value)}
+                          placeholder="0.90"
+                          disabled={busy || isEditLocked}
+                        />
+                      </label>
+                      <label>
+                        {t('Link to region (optional)')}
+                        <Select
+                          value={lineRegionId}
+                          onChange={(event) => setLineRegionId(event.target.value)}
+                          disabled={busy || isEditLocked}
+                        >
+                          <option value="">{t('No linked region')}</option>
+                          {boxes.map((box) => (
+                            <option key={box.id} value={box.id}>
+                              {box.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                    </div>
+                  </div>
+                </details>
 
                 {ocrLines.length === 0 ? (
                   <StateBlock
                     variant="empty"
-                    title={t('No OCR Lines')}
-                    description={t('Add OCR text lines and optionally bind to regions.')}
+                    title={t('No OCR Lines Yet')}
+                    description={t('Add the first text line you want to keep from this image.')}
                   />
                 ) : (
                   <ul className="workspace-record-list compact">
                     {ocrLines.map((line) => (
-                      <Panel key={line.id} as="li" className="workspace-record-item compact row between gap wrap" tone="soft">
-                        <div className="stack tight">
-                          <strong>{line.text}</strong>
-                          <small className="muted">
-                            {t('confidence')} {line.confidence.toFixed(2)} · {t('region')} {line.region_id ?? t('unbound')}
-                          </small>
+                      <Panel key={line.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
+                        <div className="row between gap wrap align-center">
+                          <strong className="line-clamp-2">{line.text}</strong>
+                          <Button onClick={() => removeOcrLine(line.id)} variant="ghost" size="sm" disabled={busy || isEditLocked}>
+                            {t('Delete')}
+                          </Button>
                         </div>
-                        <Button onClick={() => removeOcrLine(line.id)} variant="ghost" size="sm" disabled={busy || isEditLocked}>
-                          {t('Delete')}
-                        </Button>
+                        <div className="row gap wrap">
+                          <Badge tone="neutral">{t('Confidence')}: {line.confidence.toFixed(2)}</Badge>
+                          {line.region_id ? (
+                            <Badge tone="neutral">{t('Linked region')}: {line.region_id}</Badge>
+                          ) : (
+                            <Badge tone="neutral">{t('No linked region')}</Badge>
+                          )}
+                        </div>
                       </Panel>
                     ))}
                   </ul>
@@ -2204,49 +4064,110 @@ export default function AnnotationWorkspacePage() {
             ) : null}
           </section>
 
-          <Card as="section">
-            <h3>{t('Annotation Actions')}</h3>
-            {selectedAnnotation ? (
-              <div className="row gap wrap align-center">
-                <Badge tone="info">{t('Status')}: {t(selectedAnnotation.status)}</Badge>
-                <Badge tone="neutral">{t('Source')}: {t(selectedAnnotation.source)}</Badge>
-                {selectedAnnotation.latest_review ? (
-                  <Badge tone="warning">{t('Latest Review')}: {t(selectedAnnotation.latest_review.status)}</Badge>
-                ) : null}
-              </div>
+          <div ref={actionSectionRef}>
+            <Card as="section">
+              <h3>{t('Annotation Actions')}</h3>
+              {selectedAnnotation ? (
+                <div className="row gap wrap align-center">
+                  <Badge tone="info">{t('Status')}: {t(selectedAnnotation.status)}</Badge>
+                  {selectedAnnotation.latest_review ? (
+                    <Badge tone="warning">{t('Latest Review')}: {t(selectedAnnotation.latest_review.status)}</Badge>
+                  ) : null}
+                  {queueProgressContext.total > 0 ? (
+                    <Badge tone="neutral">
+                      {t('Queue {current} / {total}', {
+                        current: queueProgressContext.current,
+                        total: queueProgressContext.total
+                      })}
+                    </Badge>
+                  ) : null}
+                  {queueProgressContext.total > 0 ? (
+                    <Badge tone="info">
+                      {t('Remaining')}: {queueProgressContext.remaining}
+                    </Badge>
+                  ) : null}
+                </div>
             ) : (
               <small className="muted">{t('No annotation yet for selected item.')}</small>
             )}
+            <small className="muted">{t('Suggested order: save progress -> mark annotated -> submit review.')}</small>
 
             {isEditLocked ? (
               <StateBlock variant="empty" title={t('Editing Locked')} description={editLockMessage} />
             ) : (
-              <div className="row gap wrap">
-                <Button
-                  onClick={undoLast}
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy || (!boxes.length && !ocrLines.length && !polygons.length)}
-                >
-                  {t('Undo Last Change')}
-                </Button>
-                <Button onClick={() => saveAnnotation('in_progress')} variant="secondary" size="sm" disabled={busy || !selectedItem}>
-                  {t('Save In Progress')}
-                </Button>
-                <Button onClick={() => saveAnnotation('annotated')} variant="secondary" size="sm" disabled={busy || !selectedItem}>
-                  {t('Mark Annotated')}
-                </Button>
-                <Button
-                  onClick={submitReview}
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy || !selectedAnnotation || selectedAnnotation.status !== 'annotated'}
-                >
-                  {t('Submit Review')}
-                </Button>
-              </div>
-            )}
-          </Card>
+              <div className="annotation-action-groups">
+                <Panel as="section" className="annotation-action-group" tone="soft">
+                  <div className="stack tight">
+                    <strong>{t('Keep editing')}</strong>
+                    <small className="muted">{t('Use these actions while you are still refining this sample.')}</small>
+                  </div>
+                  <div className="row gap wrap">
+                    <Button
+                      onClick={undoLast}
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy || (!boxes.length && !ocrLines.length && !polygons.length)}
+                    >
+                      {t('Undo Last Change')}
+                    </Button>
+                    <Button onClick={() => void saveAnnotation('in_progress')} variant="secondary" size="sm" disabled={busy || !selectedItem}>
+                      {t('Save In Progress')}
+                    </Button>
+                    <Button
+                      onClick={() => void saveAnnotation('in_progress', { continueInQueue: true })}
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy || !selectedItem || !canMoveToNextQueueItem}
+                    >
+                      {t('Save In Progress & Next')}
+                    </Button>
+                  </div>
+                </Panel>
+                <Panel as="section" className="annotation-action-group" tone="soft">
+                  <div className="stack tight">
+                    <strong>{t('Move forward')}</strong>
+                    <small className="muted">{t('When this sample is ready, move it into the next workflow stage.')}</small>
+                  </div>
+                  <div className="row gap wrap">
+                    <Button onClick={() => void saveAnnotation('annotated')} variant="secondary" size="sm" disabled={busy || !selectedItem}>
+                      {t('Mark Annotated')}
+                    </Button>
+                    <Button
+                      onClick={() => void saveAnnotation('annotated', { continueInQueue: true })}
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy || !selectedItem || !canMoveToNextQueueItem}
+                    >
+                      {t('Mark Annotated & Next')}
+                    </Button>
+                    <Button
+                      onClick={() => void submitReview()}
+                      variant="secondary"
+                      size="sm"
+                      disabled={busy || !selectedAnnotation || selectedAnnotation.status !== 'annotated'}
+                    >
+                      {t('Submit Review')}
+                    </Button>
+                    <Button
+                      onClick={() => void submitReview({ continueInQueue: true })}
+                      variant="ghost"
+                      size="sm"
+                      disabled={
+                        busy ||
+                        !selectedAnnotation ||
+                        selectedAnnotation.status !== 'annotated' ||
+                        !canMoveToNextQueueItem
+                      }
+                    >
+                      {t('Submit Review & Next')}
+                    </Button>
+                  </div>
+                </Panel>
+                </div>
+              )}
+            </Card>
+          </div>
+            </div>
           </div>
         }
         side={
@@ -2278,10 +4199,8 @@ export default function AnnotationWorkspacePage() {
               canUsePredictionInOcrEditor={canUsePredictionInOcrEditor}
               nextLowConfidenceQueueItemId={nextLowConfidenceQueueItemId}
               hasSelectedItem={Boolean(selectedItem)}
-              scopedInferenceValidationPath={scopedInferenceValidationPath}
               onShowAnnotationOverlayChange={setShowAnnotationOverlay}
               onShowPredictionOverlayChange={setShowPredictionOverlay}
-              onOnlyLowConfidenceChange={setOnlyLowConfidenceCandidates}
               onPredictionConfidenceThresholdChange={setPredictionConfidenceThreshold}
               onUsePredictionCandidate={applyPredictionCandidateToOcrEditor}
               onFocusNextLowConfidence={focusNextLowConfidenceQueueItem}
@@ -2290,196 +4209,98 @@ export default function AnnotationWorkspacePage() {
               }}
             />
 
-            <Card as="section" className="workspace-inspector-card">
-              <div className="stack tight">
-                <h3>{t('Queue Focus')}</h3>
-                <small className="muted">
-                  {selectedQueueIndex >= 0
-                    ? t('Queue position {current} / {total}', {
-                        current: selectedQueueIndex + 1,
-                        total: filteredItems.length
-                      })
-                    : t('No item selected in current queue.')}
-                </small>
-              </div>
-              <div className="row gap wrap">
-                <Badge tone="neutral">
-                  {t('queue')}:{' '}
-                  {queueFilter === 'all'
-                    ? t('All items')
-                    : queueFilter === 'needs_work'
-                      ? t('Needs Work')
-                      : t(queueFilter)}
-                </Badge>
-                {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
-                {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : null}
-              </div>
-              <small className="muted">{selectedFilename}</small>
-              <small className="muted">{t('Queue shortcuts: J next · K previous')}</small>
-              <div className="workspace-button-stack">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => focusAdjacentQueueItem(-1)}
-                  disabled={busy || !canMoveToPreviousQueueItem}
-                >
-                  {t('Previous Item')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => focusAdjacentQueueItem(1)}
-                  disabled={busy || !canMoveToNextQueueItem}
-                >
-                  {t('Next Item')}
-                </Button>
-              </div>
-            </Card>
-
           <Card as="section" className="workspace-inspector-card">
-            <div className="row between gap wrap align-center">
-              <h3>{t('Low-confidence Radar')}</h3>
-              <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
-                {lowConfidenceQueueRadarItems.length}
-              </Badge>
-            </div>
-            {lowConfidenceQueueRadarItems.length === 0 ? (
-              <small className="muted">
-                {t('No low-confidence prediction signals in the current filtered queue.')}
-              </small>
-            ) : (
-              <ul className="workspace-record-list compact">
-                {lowConfidenceQueueRadarItems.map(({ item, count }) => {
-                  const filename =
-                    attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
-                  const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                  return (
-                    <Panel key={`low-conf-radar-${item.id}`} as="li" className="workspace-record-item compact stack tight" tone="soft">
-                      <div className="row between gap wrap align-center">
-                        <strong className="line-clamp-1">{filename}</strong>
-                        <Badge tone="warning">{t('Low conf')}: {count}</Badge>
-                      </div>
-                      <div className="row gap wrap">
-                        <Badge tone="neutral">{t(item.split)}</Badge>
-                        {itemAnnotation ? (
-                          <Badge tone="info">{t(itemAnnotation.status)}</Badge>
-                        ) : (
-                          <Badge tone="warning">{t('unannotated')}</Badge>
-                        )}
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => focusWorkspaceItem(queueFilter, item.id)}
-                        disabled={busy}
-                      >
-                        {t('Open sample')}
-                      </Button>
-                    </Panel>
-                  );
-                })}
-              </ul>
-            )}
-          </Card>
-
-          {selectedAnnotation?.latest_review ? (
-            <Card as="section" className="workspace-inspector-card">
+            <div className="stack tight">
               <div className="row between gap wrap align-center">
-                <h3>{t('Latest Review Context')}</h3>
-                <StatusTag status={selectedAnnotation.latest_review.status}>
-                  {t(selectedAnnotation.latest_review.status)}
-                </StatusTag>
-              </div>
-              <div className="row gap wrap">
-                {selectedAnnotation.latest_review.review_reason_code ? (
-                  <Badge tone="warning">{t(selectedAnnotation.latest_review.review_reason_code)}</Badge>
+                <h3>{t('Review actions')}</h3>
+                {inReviewQueueContext ? (
+                  <div className="review-queue-hints">
+                    <Badge tone="info">
+                      {t('In-review queue {current} / {total}', {
+                        current: inReviewQueueContext.current,
+                        total: inReviewQueueContext.total
+                      })}
+                    </Badge>
+                    <Badge tone="neutral">
+                      {t('Remaining after current: {count}', { count: inReviewQueueContext.remaining })}
+                    </Badge>
+                  </div>
                 ) : null}
-                {selectedAnnotation.latest_review.quality_score !== null ? (
-                  <Badge tone="info">
-                    {t('Quality Score')}: {selectedAnnotation.latest_review.quality_score.toFixed(2)}
-                  </Badge>
-                ) : null}
               </div>
-              {selectedAnnotation.latest_review.review_comment ? (
-                <p className="workspace-record-summary">{selectedAnnotation.latest_review.review_comment}</p>
-              ) : (
-                <small className="muted">{t('No review comment yet.')}</small>
-              )}
-            </Card>
-          ) : null}
-
-          <Card as="section" className="workspace-inspector-card">
-            <div className="row between gap wrap align-center">
-              <h3>{t('Review')}</h3>
-              {inReviewQueueContext ? (
-                <div className="review-queue-hints">
-                  <Badge tone="info">
-                    {t('In-review queue {current} / {total}', {
-                      current: inReviewQueueContext.current,
-                      total: inReviewQueueContext.total
-                    })}
-                  </Badge>
-                  <Badge tone="neutral">
-                    {t('Remaining after current: {count}', { count: inReviewQueueContext.remaining })}
-                  </Badge>
-                </div>
-              ) : null}
+              <small className="muted">{t('Approve or reject only after the selected annotation enters review.')}</small>
             </div>
             {!selectedAnnotation ? (
-              <StateBlock variant="empty" title={t('No Annotation')} description={t('Create or update annotation first.')} />
+              <StateBlock
+                variant="empty"
+                title={t('No review-ready annotation')}
+                description={t('Create or update annotation first, then come back here to review it.')}
+              />
             ) : selectedAnnotation.status !== 'in_review' ? (
               <StateBlock
                 variant="empty"
-                title={t('Not In Review')}
-                description={t('Move annotation to in_review before approve/reject.')}
+                title={t('Waiting for review submission')}
+                description={t('Submit the current annotation for review before using these actions.')}
               />
             ) : (
               <>
-                <label>
-                  {t('Reject Reason')}
-                  <Select
-                    value={reviewReasonCode}
-                    onChange={(event) => setReviewReasonCode(event.target.value as AnnotationReviewReasonCode)}
-                  >
-                    {reviewReasonOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {t(option)}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <small className="muted">{t('Reject reason is required for reject actions.')}</small>
-                <small className="muted">
-                  {queueFilter === 'in_review'
-                    ? t('Review shortcuts: A approve-next · R reject-next')
-                    : t('Review shortcuts: A approve · R reject')}
-                </small>
-                <div className="row gap wrap review-action-row">
-                  <Button onClick={() => reviewAnnotation('approved')} variant="secondary" size="sm" disabled={busy}>
-                    {t('Approve')}
-                  </Button>
-                  {queueFilter === 'in_review' ? (
-                    <Button onClick={() => reviewAnnotation('approved', { continueInQueue: true })} variant="ghost" size="sm" disabled={busy}>
-                      {t('Approve & Next')}
-                    </Button>
-                  ) : null}
-                </div>
-                <div className="row gap wrap review-action-row">
-                  <Button onClick={() => reviewAnnotation('rejected')} variant="danger" size="sm" disabled={busy}>
-                    {t('Reject')}
-                  </Button>
-                  {queueFilter === 'in_review' ? (
-                    <Button onClick={() => reviewAnnotation('rejected', { continueInQueue: true })} variant="danger" size="sm" disabled={busy}>
-                      {t('Reject & Next')}
-                    </Button>
-                  ) : null}
+                <div className="annotation-action-groups">
+                  <Panel as="section" className="annotation-action-group" tone="soft">
+                    <div className="stack tight">
+                      <strong>{t('Approve sample')}</strong>
+                      <small className="muted">{t('Use this path when the current annotation is ready to pass review.')}</small>
+                    </div>
+                    <div className="row gap wrap review-action-row">
+                      <Button onClick={() => reviewAnnotation('approved')} variant="secondary" size="sm" disabled={busy}>
+                        {t('Approve')}
+                      </Button>
+                      {queueFilter === 'in_review' ? (
+                        <Button onClick={() => reviewAnnotation('approved', { continueInQueue: true })} variant="ghost" size="sm" disabled={busy}>
+                          {t('Approve & Next')}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </Panel>
+                  <Panel as="section" className="annotation-action-group" tone="soft">
+                    <div className="stack tight">
+                      <strong>{t('Send back for fixes')}</strong>
+                      <small className="muted">{t('Choose one reason before sending this sample back for another edit pass.')}</small>
+                    </div>
+                    <label>
+                      {t('Reject Reason')}
+                      <Select
+                        ref={reviewReasonSelectRef}
+                        value={reviewReasonCode}
+                        onChange={(event) => setReviewReasonCode(event.target.value as AnnotationReviewReasonCode)}
+                      >
+                        {reviewReasonOptions.map((option) => (
+                          <option key={option} value={option}>
+                            {t(option)}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <div className="row gap wrap review-action-row">
+                      <Button onClick={() => reviewAnnotation('rejected')} variant="danger" size="sm" disabled={busy}>
+                        {t('Reject')}
+                      </Button>
+                      {queueFilter === 'in_review' ? (
+                        <Button onClick={() => reviewAnnotation('rejected', { continueInQueue: true })} variant="danger" size="sm" disabled={busy}>
+                          {t('Reject & Next')}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </Panel>
                 </div>
                 <details className="review-optional-metadata">
-                  <summary>{t('Optional review metadata')}</summary>
+                  <summary>{t('Review shortcuts and optional notes')}</summary>
                   <div className="stack">
+                    <small className="muted">
+                      {queueFilter === 'in_review' && shortcutAutoAdvance
+                        ? t('Review shortcuts: A approve-next · R reject-next')
+                        : t('Review shortcuts: A approve · R reject')}
+                    </small>
+                    <small className="muted">{t('Reject reason shortcut: Shift+1..6')}</small>
+                    <small className="muted">{t('Reject reason is required for reject actions.')}</small>
                     <label>
                       {t('Quality Score')}
                       <Input
@@ -2507,6 +4328,263 @@ export default function AnnotationWorkspacePage() {
                 {t('Move Rejected Annotation Back to In Progress')}
               </Button>
             ) : null}
+          </Card>
+
+          <Card as="section" className="workspace-inspector-card">
+            <div className="stack tight">
+              <h3>{t('More review context')}</h3>
+              <small className="muted">
+                {t('Open queue position, review history, and low-confidence triage only when you need more context.')}
+              </small>
+            </div>
+            <div className="annotation-review-support-summary">
+              <Panel as="section" className="annotation-review-support-card" tone="soft">
+                <small className="muted">{t('Queue Focus')}</small>
+                <strong>{queuePositionSummary}</strong>
+              </Panel>
+              <Panel as="section" className="annotation-review-support-card" tone="soft">
+                <small className="muted">{t('Review Session History')}</small>
+                <strong>{t('{count} reviewed in this session', { count: filteredReviewActionHistory.length })}</strong>
+              </Panel>
+              <Panel as="section" className="annotation-review-support-card" tone="soft">
+                <small className="muted">{t('Low-confidence Radar')}</small>
+                <strong>{t('{count} samples need attention', { count: lowConfidenceQueueRadarItems.length })}</strong>
+              </Panel>
+            </div>
+            <details className="workspace-disclosure">
+              <summary>
+                <span>{t('Queue Focus')}</span>
+                {queueProgressContext.total > 0 ? (
+                  <Badge tone="neutral">
+                    {queueProgressContext.current}/{queueProgressContext.total}
+                  </Badge>
+                ) : null}
+              </summary>
+              <div className="workspace-disclosure-content">
+                <div className="row gap wrap">
+                  <Badge tone="neutral">{t('Queue')}: {queueLabel(queueFilter)}</Badge>
+                  {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
+                  {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : null}
+                </div>
+                <small className="muted">{queuePositionSummary}</small>
+                {queueProgressContext.total > 0 ? (
+                  <small className="muted">
+                    {t('Remaining')}: {queueProgressContext.remaining}
+                  </small>
+                ) : null}
+                <small className="muted">{selectedFilename}</small>
+                <WorkspaceActionStack>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => focusAdjacentQueueItem(-1)}
+                    disabled={busy || !canMoveToPreviousQueueItem}
+                  >
+                    {t('Previous Item')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => focusAdjacentQueueItem(1)}
+                    disabled={busy || !canMoveToNextQueueItem}
+                  >
+                    {t('Next Item')}
+                  </Button>
+                </WorkspaceActionStack>
+              </div>
+            </details>
+            <details className="workspace-disclosure">
+              <summary>
+                <span>{t('Review Session History')}</span>
+                <Badge tone="neutral">{filteredReviewActionHistory.length}</Badge>
+              </summary>
+              <div className="workspace-disclosure-content">
+                <small className="muted">{t('Session history is auto-saved per dataset/version on this browser.')}</small>
+                <div className="row gap wrap align-center">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={reviewHistoryFilter === 'all' ? 'secondary' : 'ghost'}
+                    onClick={() => {
+                      setReviewHistoryFilter('all');
+                      setReviewHistoryCursor(0);
+                    }}
+                  >
+                    {t('All items')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={reviewHistoryFilter === 'rejected' ? 'secondary' : 'ghost'}
+                    onClick={() => {
+                      setReviewHistoryFilter('rejected');
+                      setReviewHistoryCursor(0);
+                    }}
+                  >
+                    {t('Rejected')}
+                  </Button>
+                  <Badge tone="info">
+                    {filteredReviewActionHistory.length > 0
+                      ? t('History {current}/{total}', {
+                          current: reviewHistoryCursor + 1,
+                          total: filteredReviewActionHistory.length
+                        })
+                      : t('History 0/0')}
+                  </Badge>
+                </div>
+                <label className="row gap align-center">
+                  <Checkbox
+                    checked={historyRestoreContextOnReopen}
+                    onChange={(event) => setHistoryRestoreContextOnReopen(event.target.checked)}
+                  />
+                  <small className="muted">{t('Reopen with saved queue context')}</small>
+                </label>
+                {latestReviewAction ? (
+                  <div className="stack tight">
+                    <small className="muted">
+                      {t('Latest')}: {latestReviewAction.filename} · {t(latestReviewAction.status)} ·{' '}
+                      {formatSessionClock(latestReviewAction.timestamp, t('n/a'))}
+                    </small>
+                    <div className="row gap wrap">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => focusReviewHistoryByIndex(0)}
+                      >
+                        {t('Reopen Last Reviewed')}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => focusReviewHistoryByIndex(0, { restoreQueueContext: true })}
+                      >
+                        {t('Reopen + Context')}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => focusReviewHistoryByIndex(reviewHistoryCursor + 1)}
+                        disabled={filteredReviewActionHistory.length === 0}
+                      >
+                        {t('Previous Reviewed')}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => focusReviewHistoryByIndex(reviewHistoryCursor - 1)}
+                        disabled={filteredReviewActionHistory.length === 0}
+                      >
+                        {t('Next Reviewed')}
+                      </Button>
+                    </div>
+                    <small className="muted">{t('History shortcuts: Alt+, previous · Alt+. next')}</small>
+                  </div>
+                ) : (
+                  <small className="muted">{t('No reviewed samples in current session yet.')}</small>
+                )}
+                {filteredReviewActionHistory.length > 0 ? (
+                  <ul className="workspace-record-list compact">
+                    {filteredReviewActionHistory.slice(0, 6).map((entry, index) => (
+                      <Panel
+                        key={entry.id}
+                        as="li"
+                        className={`workspace-record-item compact stack tight${index === reviewHistoryCursor ? ' selected' : ''}`}
+                        tone="soft"
+                      >
+                        <div className="row between gap wrap align-center">
+                          <strong className="line-clamp-1">{entry.filename}</strong>
+                          <Badge tone={entry.status === 'approved' ? 'info' : 'warning'}>
+                            {t(entry.status)}
+                          </Badge>
+                        </div>
+                        <small className="muted">
+                          {formatSessionClock(entry.timestamp, t('n/a'))} · {t('from')} {queueLabel(entry.queueAtAction)}
+                          {entry.reasonCode ? ` · ${t(entry.reasonCode)}` : ''}
+                        </small>
+                        <div className="row gap wrap">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setReviewHistoryCursor(index);
+                              focusReviewedItem(entry);
+                            }}
+                          >
+                            {t('Reopen')}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setReviewHistoryCursor(index);
+                              focusReviewedItem(entry, { restoreQueueContext: true });
+                            }}
+                          >
+                            {t('Reopen + Context')}
+                          </Button>
+                        </div>
+                      </Panel>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            </details>
+            <details className="workspace-disclosure">
+              <summary>
+                <span>{t('Low-confidence Radar')}</span>
+                <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
+                  {lowConfidenceQueueRadarItems.length}
+                </Badge>
+              </summary>
+              <div className="workspace-disclosure-content">
+                {lowConfidenceQueueRadarItems.length === 0 ? (
+                  <small className="muted">
+                    {t('No low-confidence prediction signals in the current filtered queue.')}
+                  </small>
+                ) : (
+                  <ul className="workspace-record-list compact">
+                    {lowConfidenceQueueRadarItems.map(({ item, count }) => {
+                      const filename =
+                        attachmentById.get(item.attachment_id)?.filename ?? t('File unavailable');
+                      const itemAnnotation = annotationByItemId.get(item.id) ?? null;
+                      return (
+                        <Panel key={`low-conf-radar-${item.id}`} as="li" className="workspace-record-item compact stack tight" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <strong className="line-clamp-1">{filename}</strong>
+                            <Badge tone="warning">{t('Low-confidence item count')}: {count}</Badge>
+                          </div>
+                          <div className="row gap wrap">
+                            <Badge tone="neutral">{t(item.split)}</Badge>
+                            {itemAnnotation ? (
+                              <Badge tone="info">{t(itemAnnotation.status)}</Badge>
+                            ) : (
+                              <Badge tone="warning">{t('unannotated')}</Badge>
+                            )}
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => focusWorkspaceItem(queueFilter, item.id)}
+                            disabled={busy}
+                          >
+                            {t('Open sample')}
+                          </Button>
+                        </Panel>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </details>
           </Card>
           </div>
         }

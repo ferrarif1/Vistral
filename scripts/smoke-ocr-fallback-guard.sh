@@ -157,6 +157,7 @@ fi
 echo "[smoke-ocr-fallback-guard] starting API with forced OCR local-command failure"
 API_HOST="${API_HOST}" \
 API_PORT="${API_PORT}" \
+LLM_CONFIG_SECRET="smoke-ocr-fallback-guard-${API_PORT}" \
 PADDLEOCR_RUNTIME_ENDPOINT="" \
 PADDLEOCR_LOCAL_PREDICT_COMMAND="nonexistent_ocr_predict_command_for_guard" \
 YOLO_RUNTIME_ENDPOINT="" \
@@ -221,6 +222,12 @@ fi
 det_model_version_id="$(echo "$model_versions_resp" | jq -r '.data[] | select(.task_type=="detection" and .status=="registered") | .id' | head -n 1)"
 if [[ -z "$det_model_version_id" ]]; then
   echo "[smoke-ocr-fallback-guard] no detection model version found"
+  echo "$model_versions_resp"
+  exit 1
+fi
+det_model_id="$(echo "$model_versions_resp" | jq -r --arg id "${det_model_version_id}" '.data[] | select(.id==$id) | .model_id // empty')"
+if [[ -z "$det_model_id" ]]; then
+  echo "[smoke-ocr-fallback-guard] failed to resolve detection model id"
   echo "$model_versions_resp"
   exit 1
 fi
@@ -312,12 +319,38 @@ if [[ -z "$det_reason" ]]; then
   exit 1
 fi
 
+echo "[smoke-ocr-fallback-guard] verifying conversation fallback wording is not misleading"
+conversation_start_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"model_id\":\"${det_model_id}\",\"initial_message\":\"请帮我做目标检测推理并告诉我结果\",\"attachment_ids\":[\"${det_attachment_id}\"]}" \
+  "${BASE_URL}/api/conversations/start")"
+conversation_assistant_summary="$(echo "$conversation_start_resp" | jq -r '.data.messages[-1].content // empty')"
+if [[ -z "$conversation_assistant_summary" ]]; then
+  echo "[smoke-ocr-fallback-guard] conversation summary missing"
+  echo "$conversation_start_resp"
+  exit 1
+fi
+if [[ "$conversation_assistant_summary" == *"已完成目标检测推理"* ]]; then
+  echo "[smoke-ocr-fallback-guard] conversation summary should not claim real detection in fallback mode"
+  echo "$conversation_start_resp"
+  exit 1
+fi
+if [[ "$conversation_assistant_summary" != *"回退/模板结果"* \
+   && "$conversation_assistant_summary" != *"fallback/template output"* \
+   && "$conversation_assistant_summary" != *"降级输出"* \
+   && "$conversation_assistant_summary" != *"degraded output"* ]]; then
+  echo "[smoke-ocr-fallback-guard] conversation summary missing degraded warning wording"
+  echo "$conversation_start_resp"
+  exit 1
+fi
+
 echo "[smoke-ocr-fallback-guard] verifying frontend warning contract markers"
-if ! rg -n "当前结果为回退/模板结果，不是真实 OCR 识别" src/pages/InferenceValidationPage.tsx >/dev/null; then
+if ! rg -n "Current output is degraded and not from real OCR recognition|当前结果为(回退/模板结果|降级输出)，不是真实 OCR 识别" src/pages/InferenceValidationPage.tsx >/dev/null; then
   echo "[smoke-ocr-fallback-guard] missing fallback warning text in frontend"
   exit 1
 fi
-if ! rg -n "未识别到文本 / 本次运行未产生真实 OCR 结果" src/pages/InferenceValidationPage.tsx >/dev/null; then
+if ! rg -n "No text recognized or this run produced no real OCR output|未识别到文本 / 本次运行未产生真实 OCR 结果" src/pages/InferenceValidationPage.tsx >/dev/null; then
   echo "[smoke-ocr-fallback-guard] missing empty-ocr warning text in frontend"
   exit 1
 fi

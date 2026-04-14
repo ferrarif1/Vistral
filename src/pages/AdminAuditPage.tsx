@@ -1,19 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AuditLogRecord, User } from '../../shared/domain';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { Card, Panel } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
-  WorkspacePage,
-  WorkspaceSectionHeader,
-  WorkspaceWorkbench
+  DetailDrawer,
+  DetailList,
+  FilterToolbar,
+  InlineAlert,
+  KPIStatRow,
+  PageHeader,
+  SectionCard,
+  StatusTable,
+  type StatusTableColumn
+} from '../components/ui/ConsolePage';
+import { Card } from '../components/ui/Surface';
+import {
+  WorkspacePage
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
+
+const adminAuditOnboardingDismissedStorageKey = 'vistral-admin-audit-onboarding-dismissed';
 
 const humanizeAuditToken = (value: string) => {
   const normalized = value
@@ -39,6 +49,10 @@ export default function AdminAuditPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [searchText, setSearchText] = useState('');
+  const [triggerFilter, setTriggerFilter] = useState<'all' | 'user' | 'system'>('all');
+  const [entityFilter, setEntityFilter] = useState('all');
+  const [selectedLogId, setSelectedLogId] = useState('');
 
   const load = useCallback(async (mode: 'initial' | 'manual' = 'initial') => {
     if (mode === 'initial') {
@@ -100,6 +114,43 @@ export default function AdminAuditPage() {
     }),
     [sortedItems]
   );
+  const entityOptions = useMemo(
+    () =>
+      Array.from(new Set(sortedItems.map((item) => item.entity_type)))
+        .sort((left, right) => left.localeCompare(right)),
+    [sortedItems]
+  );
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'timeline',
+        label: t('Review governance timeline'),
+        detail: t('Start from the newest governance records so policy-sensitive actions are easy to trace.'),
+        done: sortedItems.length > 0,
+        to: '/admin/audit',
+        cta: t('Review timeline')
+      },
+      {
+        key: 'event_mix',
+        label: t('Separate user vs system actions'),
+        detail: t('Use event badges and counts to distinguish operator actions from background automation before deciding what to review next.'),
+        done: summary.userTriggered > 0 || summary.systemTriggered > 0,
+        to: '/admin/audit',
+        cta: t('Compare event types')
+      },
+      {
+        key: 'next_lane',
+        label: t('Continue into adjacent admin lanes'),
+        detail: t('Jump from audit logs into approvals or verification evidence when the timeline reveals the next governance action.'),
+        done: sortedItems.length > 0,
+        to: '/admin/models/pending',
+        cta: t('Open approval queue'),
+        secondaryTo: '/admin/verification-reports',
+        secondaryLabel: t('Open verification reports')
+      }
+    ],
+    [sortedItems.length, summary.systemTriggered, summary.userTriggered, t]
+  );
 
   const topEntityTypes = useMemo(() => {
     const counts = sortedItems.reduce<Record<string, number>>((result, item) => {
@@ -111,84 +162,210 @@ export default function AdminAuditPage() {
       .sort((left, right) => right[1] - left[1])
       .slice(0, 4);
   }, [sortedItems]);
+  const filteredItems = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    return sortedItems.filter((item) => {
+      if (triggerFilter === 'user' && !item.user_id) {
+        return false;
+      }
+      if (triggerFilter === 'system' && item.user_id) {
+        return false;
+      }
+      if (entityFilter !== 'all' && item.entity_type !== entityFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+
+      const actor = item.user_id ? userIndex.get(item.user_id) ?? null : null;
+      const haystack = [
+        item.id,
+        item.action,
+        item.entity_type,
+        item.entity_id ?? '',
+        actor?.username ?? '',
+        JSON.stringify(item.metadata ?? {})
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [entityFilter, searchText, sortedItems, triggerFilter, userIndex]);
+  const selectedItem = useMemo(
+    () => filteredItems.find((item) => item.id === selectedLogId) ?? null,
+    [filteredItems, selectedLogId]
+  );
+  const hasActiveFilters =
+    searchText.trim().length > 0 || triggerFilter !== 'all' || entityFilter !== 'all';
 
   const isDenied = currentUser !== null && currentUser.role !== 'admin';
-
-  const renderAuditRecord = (item: AuditLogRecord, as: 'div' | 'li' = 'div') => {
-    const actor = item.user_id ? userIndex.get(item.user_id) ?? null : null;
-    const actorLabel = actor
-      ? `${actor.username} · ${t(actor.role === 'admin' ? 'Admin' : 'User')}`
-      : t('Unknown account');
-    const metadataCount = Object.keys(item.metadata ?? {}).length;
-    const readableAction = humanizeAuditToken(item.action);
-    const readableEntityType = humanizeAuditToken(item.entity_type);
-
-    return (
-      <Panel as={as} className="workspace-record-item" tone="soft">
-        <div className="workspace-record-item-top">
-          <div className="workspace-record-summary stack tight">
-            <strong>{readableAction}</strong>
-            <small className="muted">{formatCompactTimestamp(item.timestamp, t('n/a'))}</small>
-          </div>
-          <div className="workspace-record-actions">
-            <Badge tone={item.user_id ? 'info' : 'neutral'}>
-              {item.user_id ? t('User event') : t('System event')}
-            </Badge>
-          </div>
-        </div>
-
-        <div className="row gap wrap">
-          <Badge tone="info">{readableEntityType}</Badge>
-          <Badge tone={item.entity_id ? 'success' : 'neutral'}>
-            {item.entity_id ? t('Target record attached') : t('No target record')}
-          </Badge>
-          <Badge tone={metadataCount > 0 ? 'warning' : 'neutral'}>
-            {metadataCount > 0
-              ? t('Metadata fields: {count}', { count: metadataCount })
-              : t('No metadata fields')}
-          </Badge>
-        </div>
-
-        <small className="muted">
-          {item.user_id
-            ? t('Actor: {actor}', { actor: actorLabel })
-            : t('Recorded by background automation.')}
-        </small>
-
-        <details className="workspace-details">
-          <summary>{t('View raw context')}</summary>
-          <div className="stack tight">
-            <small className="muted">{t('Action key: {value}', { value: item.action })}</small>
-            <small className="muted">{t('Target type: {value}', { value: item.entity_type })}</small>
-            <small className="muted">{t('Actor ID: {id}', { id: item.user_id ?? t('n/a') })}</small>
-            <small className="muted">{t('Target ID: {id}', { id: item.entity_id ?? t('n/a') })}</small>
-            <pre className="code-block">
-              {metadataCount > 0 ? JSON.stringify(item.metadata, null, 2) : '{}'}
-            </pre>
-          </div>
-        </details>
-      </Panel>
-    );
+  const resetFilters = () => {
+    setSearchText('');
+    setTriggerFilter('all');
+    setEntityFilter('all');
   };
-
-  const heroSection = (
-    <WorkspaceHero
-      eyebrow={t('Governance Trail')}
-      title={t('Admin Audit Logs')}
-      description={t('Review policy-sensitive events across model, dataset, and training workflows.')}
-      stats={[
-        { label: t('Total records'), value: summary.total },
-        { label: t('User triggered'), value: summary.userTriggered },
-        { label: t('Entity types'), value: summary.entityTypes }
-      ]}
-    />
+  const tableColumns = useMemo<StatusTableColumn<AuditLogRecord>[]>(
+    () => [
+      {
+        key: 'time',
+        header: t('Time'),
+        width: '16%',
+        cell: (item) => <small className="muted">{formatCompactTimestamp(item.timestamp, t('n/a'))}</small>
+      },
+      {
+        key: 'action',
+        header: t('Action'),
+        width: '20%',
+        cell: (item) => (
+          <div className="stack tight">
+            <strong>{humanizeAuditToken(item.action)}</strong>
+            <small className="muted">{item.id}</small>
+          </div>
+        )
+      },
+      {
+        key: 'entity',
+        header: t('Entity'),
+        width: '18%',
+        cell: (item) => (
+          <div className="stack tight">
+            <Badge tone="info">{humanizeAuditToken(item.entity_type)}</Badge>
+            <small className="muted">{item.entity_id ?? t('No target record')}</small>
+          </div>
+        )
+      },
+      {
+        key: 'actor',
+        header: t('Actor'),
+        width: '18%',
+        cell: (item) => {
+          const actor = item.user_id ? userIndex.get(item.user_id) ?? null : null;
+          return (
+            <small className="muted">
+              {item.user_id
+                ? actor
+                  ? `${actor.username} · ${t(actor.role === 'admin' ? 'Admin' : 'User')}`
+                  : t('Unknown account')
+                : t('Background automation')}
+            </small>
+          );
+        }
+      },
+      {
+        key: 'trigger',
+        header: t('Trigger'),
+        width: '12%',
+        cell: (item) => (
+          <Badge tone={item.user_id ? 'info' : 'neutral'}>
+            {item.user_id ? t('User event') : t('System event')}
+          </Badge>
+        )
+      },
+      {
+        key: 'metadata',
+        header: t('Details'),
+        width: '10%',
+        cell: (item) => {
+          const metadataCount = Object.keys(item.metadata ?? {}).length;
+          return (
+            <Badge tone={metadataCount > 0 ? 'warning' : 'neutral'}>
+              {metadataCount > 0
+                ? t('Detailed fields: {count}', { count: metadataCount })
+                : t('No detailed fields')}
+            </Badge>
+          );
+        }
+      },
+      {
+        key: 'actions',
+        header: t('Actions'),
+        width: '10%',
+        cell: (item) => (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={(event) => {
+              event.stopPropagation();
+              setSelectedLogId(item.id);
+            }}
+          >
+            {t('View')}
+          </Button>
+        )
+      }
+    ],
+    [t, userIndex]
   );
 
   return (
     <WorkspacePage>
-      {heroSection}
+      <PageHeader
+        eyebrow={t('Governance Trail')}
+        title={t('Admin Audit Logs')}
+        description={t('Use this page to read governance history, compare user vs system events, and continue into adjacent admin lanes without losing context.')}
+        meta={
+          <div className="row gap wrap align-center">
+            <Badge tone="neutral">{t('Total records')}: {summary.total}</Badge>
+            <Badge tone="info">{t('User triggered')}: {summary.userTriggered}</Badge>
+            <Badge tone="neutral">{t('System events')}: {summary.systemTriggered}</Badge>
+            <Badge tone="neutral">{t('Entity types')}: {summary.entityTypes}</Badge>
+          </div>
+        }
+        primaryAction={{
+          label: loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh'),
+          onClick: () => {
+            load('manual').catch(() => {
+              // handled by local state
+            });
+          },
+          disabled: loading || refreshing
+        }}
+        secondaryActions={
+          <>
+            <ButtonLink to="/admin/models/pending" variant="ghost" size="sm">
+              {t('Approval Queue')}
+            </ButtonLink>
+            <ButtonLink to="/admin/verification-reports" variant="ghost" size="sm">
+              {t('Verification Reports')}
+            </ButtonLink>
+          </>
+        }
+      />
 
-      {error ? <StateBlock variant="error" title={t('Load Failed')} description={error} /> : null}
+      <KPIStatRow
+        items={[
+          {
+            label: t('Total records'),
+            value: summary.total,
+            tone: summary.total > 0 ? 'info' : 'neutral',
+            hint: t('All governance events currently retained in the visible log window.')
+          },
+          {
+            label: t('User triggered'),
+            value: summary.userTriggered,
+            tone: summary.userTriggered > 0 ? 'info' : 'neutral',
+            hint: t('Events initiated by authenticated users instead of backend automation.')
+          },
+          {
+            label: t('System events'),
+            value: summary.systemTriggered,
+            tone: summary.systemTriggered > 0 ? 'warning' : 'neutral',
+            hint: t('Background jobs, policy hooks, and other platform-generated actions.')
+          },
+          {
+            label: t('Top entity'),
+            value: topEntityTypes[0] ? humanizeAuditToken(topEntityTypes[0][0]) : t('n/a'),
+            tone: topEntityTypes[0] ? 'neutral' : 'neutral',
+            hint: topEntityTypes[0]
+              ? t('Current leading entity count: {count}', { count: topEntityTypes[0][1] })
+              : t('Entity mix will appear after audit records are available.')
+          }
+        ]}
+      />
+
+      {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}
 
       {isDenied ? (
         <StateBlock
@@ -199,152 +376,198 @@ export default function AdminAuditPage() {
       ) : loading ? (
         <StateBlock variant="loading" title={t('Loading')} description={t('Fetching latest audit logs.')} />
       ) : sortedItems.length === 0 ? (
-        <StateBlock variant="empty" title={t('No Logs Yet')} description={t('No audit events recorded yet.')} />
+        <div className="workspace-main-stack">
+          <WorkspaceOnboardingCard
+            title={t('Audit log first-run guide')}
+            description={t('Use this page to read governance history, compare user vs system events, and continue into adjacent admin lanes without losing context.')}
+            summary={t('Guide status is computed from retained audit records and visible governance event mix.')}
+            storageKey={adminAuditOnboardingDismissedStorageKey}
+            steps={onboardingSteps.map((stepItem) => ({
+              key: stepItem.key,
+              label: stepItem.label,
+              detail: stepItem.detail,
+              done: stepItem.done,
+              primaryAction: {
+                to: stepItem.to,
+                label: stepItem.cta
+              },
+              secondaryAction: stepItem.secondaryTo
+                ? {
+                    to: stepItem.secondaryTo,
+                    label: stepItem.secondaryLabel ?? ''
+                  }
+                : undefined
+            }))}
+          />
+
+          <StateBlock
+            variant="empty"
+            title={t('No Logs Yet')}
+            description={t('Governance events will appear here after account, model, runtime, or training actions are executed.')}
+            extra={
+              <div className="row gap wrap">
+                <ButtonLink to="/settings/account" variant="secondary" size="sm">
+                  {t('Open Account Settings')}
+                </ButtonLink>
+                <ButtonLink to="/admin/models/pending" variant="ghost" size="sm">
+                  {t('Open Pending Approvals')}
+                </ButtonLink>
+              </div>
+            }
+          />
+        </div>
       ) : (
-        <>
-          <WorkspaceMetricGrid
-            items={[
-              {
-                title: t('Total records'),
-                description: t('All governance events currently retained in the visible log window.'),
-                value: summary.total
+        <div className="workspace-main-stack">
+          <WorkspaceOnboardingCard
+            title={t('Audit log first-run guide')}
+            description={t('Use this page to read governance history, compare user vs system events, and continue into adjacent admin lanes without losing context.')}
+            summary={t('Guide status is computed from retained audit records and visible governance event mix.')}
+            storageKey={adminAuditOnboardingDismissedStorageKey}
+            steps={onboardingSteps.map((stepItem) => ({
+              key: stepItem.key,
+              label: stepItem.label,
+              detail: stepItem.detail,
+              done: stepItem.done,
+              primaryAction: {
+                to: stepItem.to,
+                label: stepItem.cta
               },
-              {
-                title: t('User triggered'),
-                description: t('Events initiated by authenticated users instead of backend automation.'),
-                value: summary.userTriggered
-              },
-              {
-                title: t('System events'),
-                description: t('Background jobs, policy hooks, and other platform-generated actions.'),
-                value: summary.systemTriggered
-              },
-              {
-                title: t('Entity types'),
-                description: t('Distinct workflow resource types represented in the current audit sample.'),
-                value: summary.entityTypes
-              }
-            ]}
+              secondaryAction: stepItem.secondaryTo
+                ? {
+                    to: stepItem.secondaryTo,
+                    label: stepItem.secondaryLabel ?? ''
+                  }
+                : undefined
+            }))}
           />
 
-          <WorkspaceWorkbench
-            toolbar={
-              <Card as="section" className="workspace-toolbar-card">
-                <div className="workspace-toolbar-head">
-                  <div className="workspace-toolbar-copy">
-                    <h3>{t('Audit Controls')}</h3>
-                    <small className="muted">
-                      {t('Keep refresh and adjacent governance surfaces in one stable strip while reviewing the timeline.')}
-                    </small>
-                  </div>
-                  <div className="workspace-toolbar-actions">
-                    <ButtonLink to="/admin/models/pending" variant="ghost" size="sm">
-                      {t('Approval Queue')}
-                    </ButtonLink>
-                    <ButtonLink to="/admin/verification-reports" variant="ghost" size="sm">
-                      {t('Verification Reports')}
-                    </ButtonLink>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        load('manual').catch(() => {
-                          // handled by local state
-                        });
-                      }}
-                      disabled={loading || refreshing}
-                    >
-                      {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
-                    </Button>
-                  </div>
-                </div>
-                <div className="workspace-toolbar-meta">
-                  <div className="workspace-segmented-actions">
-                    <Badge tone="neutral">{t('Total records')}: {summary.total}</Badge>
-                    <Badge tone="info">{t('User triggered')}: {summary.userTriggered}</Badge>
-                    <Badge tone="neutral">{t('System events')}: {summary.systemTriggered}</Badge>
-                    <Badge tone="neutral">{t('Entity types')}: {summary.entityTypes}</Badge>
-                  </div>
-                </div>
-              </Card>
-            }
-            main={
-              <div className="workspace-main-stack">
-                <Card as="article">
-                  <WorkspaceSectionHeader
-                    title={t('Recent audit timeline')}
-                    description={t('Newest records first so governance follow-up stays easy to trace.')}
+          <FilterToolbar
+            filters={
+              <>
+                <label className="stack tight">
+                  <small className="muted">{t('Search')}</small>
+                  <input
+                    className="ui-input"
+                    value={searchText}
+                    onChange={(event) => setSearchText(event.target.value)}
+                    placeholder={t('Search by action, entity, actor, or detailed fields')}
                   />
-                  <small className="muted">
-                    {t('Audit timeline is ordered newest-first to support fast governance triage.')}
-                  </small>
-
-                  <ul className="workspace-record-list">
-                    {sortedItems.map((item) => renderAuditRecord(item, 'li'))}
-                  </ul>
-                </Card>
-              </div>
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Trigger')}</small>
+                  <select
+                    className="ui-select"
+                    value={triggerFilter}
+                    onChange={(event) => setTriggerFilter(event.target.value as 'all' | 'user' | 'system')}
+                  >
+                    <option value="all">{t('All events')}</option>
+                    <option value="user">{t('User event')}</option>
+                    <option value="system">{t('System event')}</option>
+                  </select>
+                </label>
+                <label className="stack tight">
+                  <small className="muted">{t('Entity')}</small>
+                  <select
+                    className="ui-select"
+                    value={entityFilter}
+                    onChange={(event) => setEntityFilter(event.target.value)}
+                  >
+                    <option value="all">{t('All entity types')}</option>
+                    {entityOptions.map((entityType) => (
+                      <option key={entityType} value={entityType}>
+                        {humanizeAuditToken(entityType)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
             }
-            side={
-              <div className="workspace-inspector-rail">
-                <Card as="article" className="workspace-inspector-card">
-                  <div className="stack tight">
-                    <h3>{t('Top entity types')}</h3>
-                    <small className="muted">
-                      {t('The most frequently touched resources in the current audit view.')}
-                    </small>
-                  </div>
-                  {topEntityTypes.length === 0 ? (
-                    <StateBlock
-                      variant="empty"
-                      title={t('No entities yet')}
-                      description={t('Entity mix will appear after audit records are available.')}
-                    />
-                  ) : (
-                    <ul className="workspace-record-list compact">
-                      {topEntityTypes.map(([entityType, count]) => (
-                        <Panel key={entityType} as="li" className="workspace-record-item compact" tone="soft">
-                          <div className="row between gap wrap">
-                            <strong>{humanizeAuditToken(entityType)}</strong>
-                            <Badge tone="info">{count}</Badge>
-                          </div>
-                          <small className="muted">{t('Records currently mapped to this entity type.')}</small>
-                        </Panel>
-                      ))}
-                    </ul>
-                    )}
-                  </Card>
-
-                <Card as="article" className="workspace-inspector-card">
-                  <WorkspaceSectionHeader
-                    title={t('Audit summary')}
-                    description={t('Compact timeline stats for governance review.')}
-                  />
-                  <div className="workspace-keyline-list">
-                    <div className="workspace-keyline-item">
-                      <span>{t('Total records')}</span>
-                      <strong>{summary.total}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('User triggered')}</span>
-                      <strong>{summary.userTriggered}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('System events')}</span>
-                      <strong>{summary.systemTriggered}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Entity types')}</span>
-                      <strong>{summary.entityTypes}</strong>
-                    </div>
-                  </div>
-                </Card>
+            actions={
+              hasActiveFilters ? (
+                <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                  {t('Clear filters')}
+                </Button>
+              ) : undefined
+            }
+            summary={
+              <div className="row gap wrap">
+                <Badge tone="info">{t('Showing {count} records.', { count: filteredItems.length })}</Badge>
+                {topEntityTypes.slice(0, 3).map(([entityType, count]) => (
+                  <Badge key={entityType} tone="neutral">
+                    {humanizeAuditToken(entityType)}: {count}
+                  </Badge>
+                ))}
               </div>
             }
           />
-        </>
+
+          <SectionCard
+            title={t('Recent audit timeline')}
+            description={t('Newest records first so governance follow-up stays easy to trace.')}
+          >
+            <StatusTable
+              columns={tableColumns}
+              rows={filteredItems}
+              getRowKey={(item) => item.id}
+              onRowClick={(item) => setSelectedLogId(item.id)}
+              rowClassName={(item) => (selectedLogId === item.id ? 'selected' : undefined)}
+              emptyTitle={t('No logs match current filters.')}
+              emptyDescription={t('Try clearing filters or broadening the audit query scope.')}
+            />
+          </SectionCard>
+        </div>
       )}
+
+      <DetailDrawer
+        open={Boolean(selectedItem)}
+        onClose={() => setSelectedLogId('')}
+        title={selectedItem ? humanizeAuditToken(selectedItem.action) : t('Audit detail')}
+        description={t('Open one governance record here when you need full context, actor identity, and detailed fields.')}
+      >
+        {selectedItem ? (
+          <>
+            <div className="row gap wrap">
+              <Badge tone={selectedItem.user_id ? 'info' : 'neutral'}>
+                {selectedItem.user_id ? t('User event') : t('System event')}
+              </Badge>
+              <Badge tone="info">{humanizeAuditToken(selectedItem.entity_type)}</Badge>
+              <Badge tone={selectedItem.entity_id ? 'success' : 'neutral'}>
+                {selectedItem.entity_id ? t('Target record attached') : t('No target record')}
+              </Badge>
+            </div>
+            <DetailList
+              items={[
+                { label: t('Time'), value: formatCompactTimestamp(selectedItem.timestamp, t('n/a')) },
+                { label: t('Action'), value: humanizeAuditToken(selectedItem.action) },
+                { label: t('Entity'), value: humanizeAuditToken(selectedItem.entity_type) },
+                {
+                  label: t('Actor'),
+                  value: selectedItem.user_id
+                    ? (() => {
+                        const actor = userIndex.get(selectedItem.user_id ?? '');
+                        return actor
+                          ? `${actor.username} · ${t(actor.role === 'admin' ? 'Admin' : 'User')}`
+                          : t('Unknown account');
+                      })()
+                    : t('Recorded by background automation.')
+                },
+                { label: t('Actor ID'), value: selectedItem.user_id ?? t('n/a') },
+                { label: t('Target ID'), value: selectedItem.entity_id ?? t('n/a') }
+              ]}
+            />
+            <Card as="section">
+              <div className="stack tight">
+                <strong>{t('Detailed fields (advanced)')}</strong>
+                <pre className="code-block">
+                  {Object.keys(selectedItem.metadata ?? {}).length > 0
+                    ? JSON.stringify(selectedItem.metadata, null, 2)
+                    : '{}'}
+                </pre>
+              </div>
+            </Card>
+          </>
+        ) : null}
+      </DetailDrawer>
     </WorkspacePage>
   );
 }

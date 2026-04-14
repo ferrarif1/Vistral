@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ApprovalRequest, ModelRecord, User } from '../../shared/domain';
+import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
+import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
+import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Card, Panel } from '../components/ui/Surface';
 import {
@@ -16,6 +19,7 @@ import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
 
 const approvalsBatchSize = 30;
+const adminApprovalsOnboardingDismissedStorageKey = 'vistral-admin-approvals-onboarding-dismissed';
 
 export default function AdminApprovalsPage() {
   const { t } = useI18n();
@@ -99,6 +103,35 @@ export default function AdminApprovalsPage() {
   );
   const oldestPendingRequestedAt = pendingItems[0]?.requested_at ?? null;
   const busy = actionLoading || refreshing || loading;
+  const onboardingSteps = useMemo(
+    () => [
+      {
+        key: 'review',
+        label: t('Open pending requests'),
+        detail: t('Start from the oldest request so model submissions are processed in a predictable order.'),
+        done: pendingItems.length > 0,
+        to: '/admin/models/pending',
+        cta: t('Review queue')
+      },
+      {
+        key: 'decide',
+        label: t('Approve or reject with traceability'),
+        detail: t('Every decision should move the request forward while keeping requester, model scope, and review note context visible.'),
+        done: items.some((item) => item.status !== 'pending'),
+        to: '/admin/models/pending',
+        cta: t('Make decision')
+      },
+      {
+        key: 'audit',
+        label: t('Cross-check audit trail'),
+        detail: t('Use audit logs after approval work to confirm governance events are recorded for later review.'),
+        done: items.some((item) => item.status === 'approved' || item.status === 'rejected'),
+        to: '/admin/audit',
+        cta: t('Open Audit Logs')
+      }
+    ],
+    [items, pendingItems.length, t]
+  );
 
   useEffect(() => {
     setVisiblePendingCount((previous) =>
@@ -259,6 +292,23 @@ export default function AdminApprovalsPage() {
         }
         main={
           <div className="workspace-main-stack">
+            <WorkspaceOnboardingCard
+              title={t('Approval queue first-run guide')}
+              description={t('Use this page to review model submissions, make governance decisions, and keep the audit trail intact.')}
+              summary={t('Guide status is computed from pending and reviewed approval requests in the current queue.')}
+              storageKey={adminApprovalsOnboardingDismissedStorageKey}
+              steps={onboardingSteps.map((stepItem) => ({
+                key: stepItem.key,
+                label: stepItem.label,
+                detail: stepItem.detail,
+                done: stepItem.done,
+                primaryAction: {
+                  to: stepItem.to,
+                  label: stepItem.cta
+                }
+              }))}
+            />
+
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Pending queue')}
@@ -270,6 +320,21 @@ export default function AdminApprovalsPage() {
                   variant="empty"
                   title={t('No Pending Requests')}
                   description={t('All model submissions have been processed.')}
+                  extra={
+                    <WorkspaceFollowUpHint
+                      layout="inline"
+                      actions={
+                        <>
+                          <ButtonLink to="/models/create" variant="secondary" size="sm">
+                            {t('Create Model Draft')}
+                          </ButtonLink>
+                          <ButtonLink to="/admin/audit" variant="ghost" size="sm">
+                            {t('Open Audit Logs')}
+                          </ButtonLink>
+                        </>
+                      }
+                    />
+                  }
                 />
               ) : (
                 <>
@@ -356,13 +421,10 @@ export default function AdminApprovalsPage() {
         }
         side={
           <div className="workspace-inspector-rail">
-            <Card as="article" className="workspace-inspector-card">
-              <div className="stack tight">
-                <h3>{t('Review guidance')}</h3>
-                <small className="muted">
-                  {t('Approvals should include clear notes and rejections should stay actionable for follow-up.')}
-                </small>
-              </div>
+            <WorkspaceActionPanel
+              title={t('Review guidance')}
+              description={t('Approvals should include clear notes and rejections should stay actionable for follow-up.')}
+            >
               <ul className="workspace-record-list compact">
                 <Panel as="li" className="workspace-record-item compact" tone="soft">
                   <strong>{t('Queue policy')}</strong>
@@ -377,13 +439,12 @@ export default function AdminApprovalsPage() {
                   </small>
                 </Panel>
               </ul>
-            </Card>
+            </WorkspaceActionPanel>
 
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Queue summary')}
-                description={t('A compact view of the current approval workload and reviewer context.')}
-              />
+            <WorkspaceActionPanel
+              title={t('Queue summary')}
+              description={t('A compact view of the current approval workload and reviewer context.')}
+            >
               <div className="workspace-keyline-list">
                 <div className="workspace-keyline-item">
                   <span>{t('Pending requests')}</span>
@@ -402,7 +463,7 @@ export default function AdminApprovalsPage() {
                   <small>{formatCompactTimestamp(oldestPendingRequestedAt, t('n/a'))}</small>
                 </div>
               </div>
-            </Card>
+            </WorkspaceActionPanel>
           </div>
         }
       />

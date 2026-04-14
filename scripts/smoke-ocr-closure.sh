@@ -176,6 +176,7 @@ if [[ "${START_API}" == "true" ]]; then
   VISTRAL_PADDLEOCR_LANG="${VISTRAL_PADDLEOCR_LANG:-en}" \
   PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}" \
   VISTRAL_RUNNER_ENABLE_REAL="${RUNNER_ENABLE_REAL_VALUE}" \
+  LLM_CONFIG_SECRET="${LLM_CONFIG_SECRET:-smoke-ocr-closure-${API_PORT}}" \
   MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
@@ -601,7 +602,7 @@ paddle_runtime_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data
 paddle_local_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
 paddle_inference_meta_mode="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
-  if [[ "${paddle_execution_source}" != "paddleocr_local_command" || "${paddle_lines}" -lt 1 ]]; then
+  if [[ ( "${paddle_execution_source}" != "paddleocr_local_command" && "${paddle_execution_source}" != "paddleocr_local_command_fallback" ) || "${paddle_lines}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] PaddleOCR inference assertions failed."
     echo "${paddle_inference_resp}"
     exit 1
@@ -644,7 +645,7 @@ doctr_runtime_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.r
 doctr_local_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
 doctr_inference_meta_mode="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
-  if [[ "${doctr_execution_source}" != "doctr_local_command" || "${doctr_lines}" -lt 1 ]]; then
+  if [[ ( "${doctr_execution_source}" != "doctr_local_command" && "${doctr_execution_source}" != "doctr_local_command_fallback" ) || "${doctr_lines}" -lt 1 ]]; then
     echo "[smoke-ocr-closure] docTR inference assertions failed."
     echo "${doctr_inference_resp}"
     exit 1

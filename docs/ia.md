@@ -46,6 +46,17 @@ Define executable route and page structure for the AI-native conversation worksp
 ### 3.4 Professional Console
 - `/workspace/console`
   - shared app shell route (global left navigation + top context header), not chat-immersive layout
+  - every engineering-console page must follow the `single primary job per page` rule:
+    - one page owns one core operator task only
+    - other task domains may appear only as summary context or navigation links
+    - do not embed a second full workflow module just because it is adjacent
+  - first-run onboarding card should explain the core loop in plain language (`prepare data -> annotate/review -> train -> register -> validate -> feedback`) with direct links
+  - onboarding card should show completion signals from real workspace state so zero-knowledge users can understand "what is done" and "what is next"
+  - inline onboarding cards should stay compact by default: keep the plain-language summary plus the single recommended next step visible, and move the full checklist behind on-demand expansion / the fixed help entry
+  - pages with onboarding guidance should also expose a persistent fixed help entry near the top-right of the viewport so users can reopen current-page hints at any time without scrolling back to the inline card
+  - the fixed help entry should highlight the first incomplete step as the recommended next action, so beginners always see one clear thing to do next
+  - on the first visit to a guided page, the fixed help entry may auto-open once as a lightweight hint, then remain quiet on later visits unless the user reopens it
+  - the console home main workspace should also mirror that beginner guidance with one explicit starter task card, so first-time users can act without reading the full dashboard
   - professional workbench pages use a stable three-zone structure:
     - top context toolbar (`WorkspaceContextBar`) for search/filter/batch actions
     - middle main work area for operational lists/canvas/tables
@@ -56,21 +67,32 @@ Define executable route and page structure for the AI-native conversation worksp
 ### 3.5 Model Domain
 - `/models/explore`
 - shared overview layout: hero summary, signal cards, main catalog list, side follow-up actions
+- page-level onboarding card should explain how to scan the shared catalog, recognize approved vs risky models, and continue into owned models or version work
 - normal catalog views hide internal smoke/verification/demo fixtures and keep only a minimal curated sample set when demo data is required
 - admin viewers can delete eligible non-foundation models inline from catalog inventories; curated foundation/base models show a protected badge instead of delete controls
 - `/models/my-models`
 - shared overview layout with ownership-focused status and next-step actions
+- page-level onboarding card should explain how drafts, pending approvals, and ready models move through the ownership lane
 - `/models/create` (stepper required)
+- page-level onboarding card should explain `metadata -> artifact -> parameters -> approval submission` so first-time users understand the model draft flow
   - model file upload step may refresh artifact statuses in background, but list updates should stay quiet and only apply when file data actually changes
 - `/models/versions`
 - shared overview layout with persistent version-registration actions and completed-job follow-up
+- page-level onboarding card should explain how to move from completed training evidence to version registration and inference validation follow-up
+- the main workspace and version-inventory empty/selection-empty states should also mirror the first incomplete versioning step with one explicit next-action card
 
 ### 3.6 Dataset Domain
 - `/datasets`
   - dataset list + create entry
+  - page-level onboarding card should explain this page is the "data preparation entry" and point to annotation/training next steps
+  - onboarding should surface minimal real-state completion signals (`has_dataset`, `has_ready_dataset`) and "what to click next"
+  - the main workspace and empty state should also mirror the first incomplete dataset-prep step with one explicit starter task, including a direct jump into the inline create panel when no dataset exists yet
 - `/datasets/:datasetId`
   - dataset detail
   - supports optional `?version=<dataset_version_id>` to preselect active snapshot context
+  - page-level onboarding card should explain how to move from upload/split/version into annotation and training actions
+  - onboarding should reflect real progress from attachments, annotation updates, and version snapshots
+  - the main workspace should also mirror the first incomplete detail-step with one explicit next-action card so operators can keep moving without re-reading the full page
   - top stepper for ingestion/split/version
   - dataset attachments always visible/deletable/status-aware
   - visual sample browser area supports grid/list switch, fast filters, and bulk item operations
@@ -79,6 +101,27 @@ Define executable route and page structure for the AI-native conversation worksp
 - `/datasets/:datasetId/annotate`
   - sample review workbench layout (sample + annotation + review context + metadata in one workspace)
   - supports optional `?version=<dataset_version_id>` so dataset-detail snapshot context can stay visible while reviewing queues
+  - page-level onboarding card should clarify the review workflow (`select -> annotate -> submit/review -> continue queue`)
+  - the main workspace and queue-empty states should mirror the first incomplete review step with one explicit next-action card
+  - onboarding should expose direct links back to dataset detail and forward to scoped inference lane
+  - inline onboarding on this page should stay compact by default; deeper guidance belongs in the persistent `Page tips` floating entry instead of occupying the main canvas lane
+  - default page structure should stay focused:
+    - left queue rail for item selection and filters
+    - center work surface for preview/canvas/editor + primary annotation actions
+    - right inspector for current-sample summary, prediction compare, and review actions
+  - queue filters should be layered:
+    - common filters (queue lane, search, split) stay visible
+    - lower-frequency filters (item status, metadata/tag expressions) should live behind a collapsed "more filters" control
+  - OCR editing should prioritize the simplest action first:
+    - line text input + add action stay visible
+    - optional controls such as confidence and region binding should be demoted behind a compact disclosure
+  - annotation actions should be grouped by intent instead of appearing as one flat button row:
+    - keep-editing actions (`undo`, `save in progress`)
+    - move-forward actions (`mark annotated`, `submit review`)
+  - the right-side support area should open with a compact review-context summary first, while full queue focus, session history, and radar detail remain expandable
+  - the current-sample summary should also absorb the latest review conclusion (status / reason / comment) so annotators do not need to compare two separate cards for the same sample
+  - secondary context (for example shortcut sheets, review-session history, low-confidence radar, and workspace return points) should be collapsed or demoted by default so first-time users are not forced to parse every tool at once
+  - user-facing copy in this workspace should avoid raw enum/status ids where a plain-language label is available
   - detection box + OCR text annotation
   - submit-review and approve/reject actions
   - filtered item queues plus persistent latest-review context for rework
@@ -87,22 +130,30 @@ Define executable route and page structure for the AI-native conversation worksp
 - `/training/jobs`
   - job list
   - supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) so dataset-detail snapshot actions can open a filtered operational view
+  - page-level onboarding card should explain queue semantics (`active` vs `terminal`) and next actions (`new run`, `detail`, `validate`)
+  - the main workspace and empty states should mirror the first incomplete training-control step with one explicit next-action card
   - initial page load may show blocking loading state, but background refresh must stay non-jumping and only update visible state when job data actually changes
   - manual refresh remains available for operators who want explicit control
 - `/training/jobs/new`
   - create training job wizard (stepper required, advanced params collapsed)
   - dataset step binds an explicit dataset-version snapshot, not an implicit latest dataset state
   - selected dataset-version readiness summary stays visible before launch (dataset status, split summary, annotation coverage, train-split availability)
+  - onboarding card should frame this page as "train from a reproducible snapshot" and provide direct links back to dataset preparation when readiness is not met
+  - the main workspace should also mirror the first incomplete training-setup step with one explicit next-action card, and blocked states should point back to dataset detail or runtime settings when relevant
 - `/training/jobs/:jobId`
-  - detail: status, logs, metrics, scheduler decision snapshot + history timeline
+  - detail: status, logs, metrics, and artifact readiness for one run
+  - scheduler history, raw fallback reasons, and technical identifiers should stay in advanced disclosure by default
+  - page-level onboarding card should explain how to interpret queue status, metrics/logs readiness, and follow-up links back to dataset/validation lanes
 
 ### 3.8 Inference Validation Domain
 - `/inference/validate`
-  - runtime connectivity diagnostics (PaddleOCR/docTR/YOLO)
-  - supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) from dataset-detail snapshot actions
-  - upload image
-  - choose model version
-  - run inference
+- runtime connectivity diagnostics (PaddleOCR/docTR/YOLO)
+- supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) from dataset-detail snapshot actions
+- onboarding card should explain the validation-to-feedback loop in plain language and keep follow-up links to scoped dataset/annotation lanes visible
+- the main workspace and key empty states (`No Model Versions Yet`, `No Ready Inputs Yet`, `No Runs Yet`) should mirror the first incomplete validation step with one explicit next-action card
+- upload image
+- choose model version
+- run inference
   - show raw + normalized output
   - feedback-to-dataset action (target dataset task type must match inference run task type)
 
@@ -113,17 +164,78 @@ Define executable route and page structure for the AI-native conversation worksp
     - `account`
     - `llm`
     - `runtime`
+    - `runtime_templates`
+    - `workers`
   - `/settings/account` is the default destination so password and account management stay easy to find
+  - `/settings/account` should include a first-run onboarding card that explains `confirm identity -> rotate password -> (admin) directory governance -> continue to LLM/runtime`
+  - the main workspace should also mirror the first incomplete account-setup step with one explicit next-action card, and admin directory empty/filter-empty states should reuse the same guidance where relevant
   - all authenticated users can change password in the `account` tab
   - administrators also see account provisioning controls, account directory, password reset actions, and disable/reactivate actions in the same `account` tab
   - disabling from the account directory requires an inline reason field before confirm, while reactivation stays lightweight
   - account rows expose at minimum role, status, created timestamp, last login timestamp, and stored disable reason when status is `disabled`
-  - `/settings/llm` and `/settings/runtime` remain valid deep links that open the matching tab
+  - `/settings/llm`, `/settings/runtime`, `/settings/runtime/templates`, and `/settings/workers` remain valid deep links that open the matching tab
+  - `/settings/llm` should include a first-run onboarding card that explains `preset -> key -> enable -> test -> continue to chat`
+  - the main workspace and key blocked states on `/settings/llm` should mirror the first incomplete LLM-setup step with one explicit next-action card
+- `/settings/runtime` should include a first-run onboarding card that explains "configure frameworks -> activate profile -> verify readiness -> continue to validation" with real status signals
+- the main workspace and readiness/configuration empty states on `/settings/runtime` should mirror the first incomplete runtime-setup step with one explicit next-action card
+- `/settings/runtime` must stay focused on runtime configuration + readiness checks only; connection snippets/examples should link out to `/settings/runtime/templates` instead of being embedded as another full module
+- `/settings/runtime` should act as the runtime operations sample page for the compact console pattern:
+  - compact page header with one primary action: `Run readiness check`
+  - compact KPI row limited to:
+    - reachable frameworks
+    - unconfigured frameworks
+    - active profile
+    - open issues
+  - onboarding / bootstrap / manual-confirmation guidance should merge into one checklist:
+    - expanded while setup is incomplete
+    - collapsed into one status strip after setup becomes healthy
+  - framework inventory should be table-first with columns:
+    - framework
+    - status
+    - endpoint
+    - API key
+    - last checked
+    - actions
+  - right inspector should keep only one compact "next runtime step" card by default; duplicated runtime/worker summary cards should be removed from first screen
+  - runtime readiness should default to a summary panel:
+    - errors
+    - warnings
+    - suggestions
+    - current runtime mode
+  - raw issue codes, remediation commands, callback payloads, and internal diagnostics should stay behind an advanced disclosure or drawer
+- `/settings/runtime` should make the two runtime connection paths explicit for beginners:
+  - `local mode`: run through local command / bundled runner on this machine, keep endpoint blank, and do not ask for API key unless user switches away from local mode
+  - `endpoint mode`: call a remote runtime endpoint, keep endpoint visible, and show API key only as optional endpoint auth
+- `/settings/runtime` should present the first-run setup as explicit path choices before exposing raw maintenance knobs:
+  - `local quick setup`: recommended single-machine path with the fewest required decisions
+  - `profile activation`: for environments where deployment/runtime profiles are already prepared
+  - `custom framework setup`: for operators who need to edit per-framework mode/endpoint/auth manually
+- `/settings/runtime` should expose a one-click "prepare local-only draft" action so new users can convert all frameworks to local-first configuration without manually clearing endpoint/auth fields
+- `/settings/runtime` should also expose a one-click "apply local quick setup" action that saves local-only draft + current runtime controls in one step before readiness checks
+- low-frequency runtime controls should be collapsed behind `AdvancedSection` by default, including:
+  - overwrite auto-config / clear settings maintenance actions
+  - strict fallback controls
+  - raw local command overrides
+  - model/model-version-specific endpoint auth routing
+- `/settings/runtime/templates` should be the single runtime connection-template page:
+  - purpose: copyable env vars, health-check curl, and request/response schema examples
+  - should not include runtime readiness state machine, worker lifecycle controls, or runtime profile activation
+  - runtime page can provide only navigation entry + brief summary to this page
+- `/settings/workers` should be the single worker-operations page:
+  - compact page header with one primary action: `Add Worker`
+  - compact KPI row focused on worker capacity (`online`, `draining`, `offline`, `pending pairing`)
+  - worker inventory should be table-first with row detail in a drawer
+  - add/edit/remove/enable/draining actions stay on worker page only
+  - worker pairing/bootstrap sessions (token, setup URL, callback validation, activation) stay on worker page only
+  - runtime page should keep only navigation entry to worker page (no embedded worker lifecycle module and no worker-capacity KPI in runtime KPI row)
 
 ### 3.10 Admin
 - `/admin/models/pending`
+- page-level onboarding card should explain approval responsibilities (`review request -> decide -> audit trail`) for first-time admins
 - `/admin/audit`
+- page-level onboarding card should explain how to read governance records, distinguish user vs system actions, and jump back to adjacent admin lanes
 - `/admin/verification-reports`
+- page-level onboarding card should explain how deployment verification evidence is filtered, reviewed, and exported for release governance
 
 ## 4. Shared UI Contracts
 - route-level page modules should be lazy-loaded by default so non-active workspaces do not block first paint
@@ -134,11 +246,42 @@ Define executable route and page structure for the AI-native conversation worksp
 - `AttachmentUploader`: visible + deletable + status list
 - `StepIndicator`: mandatory for multi-step flows
 - `AdvancedSection`: only low-frequency or advanced controls should collapse by default; compatibility-only fallback inputs should stay open when they are the primary available path
+- page-level onboarding cards should share the same hide/reopen behavior and persist local dismiss state per route
+- page-level onboarding cards should also feed a shared current-page help entry (fixed top-right button + lightweight hint panel) so inline guide dismissal never removes access to help
+- when inline onboarding remains visible, it should avoid repeating the full step checklist by default; operators can expand the checklist only when they need the detailed refresher
 - `DatasetItemBrowser`: shared sample browser block for dataset item grids/lists, filters, and batch actions
 - `BulkActionBar`: shared batch operation bar for item-level split/status/tag/metadata actions
 - `SampleReviewWorkbench`: unified item review layout used by annotation/review-heavy screens
+- engineering-console pages should converge on a compact page toolkit:
+  - `PageHeader`: compact title + one-sentence purpose + single primary action
+  - `KPIStatRow`: compact 3-5 stat row for current-page summary only
+  - `FilterToolbar`: search/filter/refresh strip with wrapped controls
+  - `StatusTable`: table-first inventory for jobs/models/datasets/audit/report/worker lists
+  - `HealthSummaryPanel`: compact readiness / warning / suggestion summary without raw diagnostics by default
+  - `SectionCard`: thin content section wrapper for non-tabular content
+  - `InlineAlert`: short in-flow success/warning/error notice without oversized state blocks
+  - `DetailDrawer`: row-selected secondary detail surface for lists and logs
+  - `ActionBar`: primary / secondary / tertiary action grouping
+  - `ConfirmDangerDialog`: explicit confirmation for delete / disable / clear / revoke flows
 - background refresh must be visibility-aware and should run only while transient states exist (for example `uploading`, `processing`, active jobs, active review queues)
 - dense operational inventories (for example dataset items and annotation queues) should prefer fixed-height internal scroll with windowed rendering instead of mounting every row at once
+
+## 4.1 Console Page Templates
+- list page:
+  - `PageHeader -> KPIStatRow -> FilterToolbar -> StatusTable -> optional DetailDrawer`
+  - avoid stacked record cards when rows need comparison, filtering, or sorting
+- detail page:
+  - `PageHeader -> context summary -> tabs -> compact side metadata`
+  - heavy follow-up workflows should be linked out, not embedded inline
+- settings page:
+  - `PageHeader -> HealthSummaryPanel -> config form -> advanced section`
+  - diagnostics and raw maintenance details stay collapsed or in drawer by default
+- audit/log page:
+  - `PageHeader -> FilterToolbar -> StatusTable -> raw-detail drawer`
+  - raw payloads and technical keys should be hidden until explicitly opened
+- validation/result page:
+  - `PageHeader -> input panel -> result panel -> feedback action area`
+  - runtime/data/training issues should surface as short summaries with links to the correct page
 
 ## 5. Page-Level Interaction Contracts
 
@@ -158,6 +301,8 @@ Define executable route and page structure for the AI-native conversation worksp
 - top stepper for `Select Item -> Annotate -> Review`
 - sample review workbench keeps sample preview, annotation payload, metadata, and latest review context aligned in one task surface
 - item rail supports focused queue filters (`all`, `needs_work`, `in_review`, `rejected`, `approved`) without losing the current selection when background data is unchanged
+- primary call-to-action areas should stay visible without requiring users to scan review-session analytics, shortcut references, or return-point controls first
+- review-session history, low-confidence triage helpers, and other power-user tools should stay available but remain secondary to the active sample/review task
 - latest review detail card stays visible for rejected/rework items so annotators can see why the previous review failed
 - when a rejected item is explicitly moved back to `in_progress`, the workspace should keep the same item selected and shift into `needs_work` so rework can continue without losing context
 - deep links from dataset detail can preselect queue filter, item id, and optional dataset-version context
@@ -175,7 +320,8 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 5.4 Inference Validation
 - reusable uploader and state blocks
-- runtime diagnostics panel with refresh action and per-framework status
+- runtime lane keeps a compact read-only summary only (reachable/unreachable/not-configured counts)
+- full runtime diagnostics/configuration actions must stay in `/settings/runtime` and be reached via explicit navigation
 - output panel displays:
   - model metadata
   - raw output
@@ -183,7 +329,6 @@ Define executable route and page structure for the AI-native conversation worksp
 - one-click send to dataset feedback
 - feedback target selector should only offer datasets with matching `task_type` for the selected run/version
 - initial page load may show blocking loading state, but background refresh must stay quiet and only update visible state when versions/datasets/attachments/runs actually change
-- runtime diagnostics refresh stays explicit/manual so connectivity cards do not keep jumping during normal validation work
 
 ### 5.5 Model Overview Pages
 - `/models/explore`, `/models/my-models`, and `/models/versions` use the shared overview layout (`hero -> signals -> main list + side actions`)
@@ -193,31 +338,52 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 5.6 Settings Surface
 - `/settings` acts as the single settings entry in the console sidebar
-- tab switch stays inside the page so operators can move between `LLM` and `Runtime` without scanning the global navigation again
+- tab switch stays inside the page so operators can move between `LLM`, `Runtime`, `Runtime Templates`, and `Workers` without scanning the global navigation again
 - tab state remains obvious in the page header, while deep links can still open a specific tab directly
+- `Account` tab should provide beginner guidance for both regular users and admins, with role-aware steps and direct links to the next setup tabs
+- settings entry card should surface a compact runtime quick-start snapshot (`progress`, `next action`, `local-only active or endpoint count`) so users can understand runtime setup status before opening the runtime tab
 
 ### 5.7 LLM Settings Tab
 - uses a shared overview layout with saved-config summary, editable form, and action/troubleshooting side panels
 - masked key state remains visible while editing so users can tell whether save/test will reuse the stored key
 - save, test, reload, clear, and preset actions stay close to the form without hiding connection advice
+- tab-level onboarding card should guide beginner setup order and compute completion from saved config + connection test status
 
 ### 5.8 Runtime Settings Tab
 - runtime connectivity checks for all frameworks and single framework
-- integration templates (env vars, request/response payload examples, health-check curl)
-- advanced template section collapsed by default
-- page keeps diagnostics, execution summary, and template guidance in one shared overview layout
+- this tab is for runtime configuration + readiness only; connection templates must be linked out to `/settings/runtime/templates`
+- page keeps diagnostics and runtime execution summary in one shared overview layout, without embedding full snippet/template modules
 - execution summary also surfaces the latest framework-specific metric keys sampled from recent completed training jobs without requiring a separate detail-page jump
-  - admin runtime tab also hosts training-worker control plane blocks:
-  - worker registry list (`online/offline/draining`, heartbeat freshness, load score, concurrency)
-  - worker scheduler score breakdown view (`scheduler_score`, load component, health penalty, capability bonus, recent dispatch failures/cooldown)
-  - guided `Add Worker` onboarding wizard with deployment mode selector (`Docker` recommended / script fallback)
-  - `Add Worker` wizard can optionally prefill worker public host / IP and bind port so generated startup commands and `/setup` URL hints are immediately usable on remote nodes
-  - pairing-token generation plus downloadable/copyable worker startup templates
-  - pending worker onboarding list with validation state (`bootstrap_created`, `pairing`, `validation_failed`, `awaiting_confirmation`, `online`)
-  - add/edit/remove worker actions
-  - scheduler policy hints (load-aware assignment and fallback conditions)
+- tab-level onboarding card should show beginner actions in order and read completion state from real runtime/profile/readiness records
+- each framework card should expose an explicit connection mode switch (`local` / `endpoint`) instead of mixing both mental models in a single undifferentiated form
+- each framework card should expose model-aware controls:
+  - default model + optional default model-version selectors should include both curated foundation baselines and eligible published/registered versions
+  - endpoint mode should support model-level auth key bindings (`model:*`, `model_version:*`) in addition to framework-level API key
+- when framework card is in `local` mode:
+  - endpoint input should be hidden or strongly de-emphasized
+  - API key input should stay hidden because it is not needed for local execution
+  - local command/model path guidance should become the primary visible explanation
+- when framework card is in `endpoint` mode:
+  - endpoint input stays primary
+  - API key input remains optional and is described only as remote endpoint auth
+- the tab should provide a compact single-machine quick-start path before advanced worker/distributed controls so zero-knowledge operators can reach a usable local setup first
+- that quick-start path should include explicit actions in order: `prepare local-only draft -> apply local quick setup -> run readiness checks`
+- onboarding completion logic should treat a saved local-only configuration as a valid "configured framework baseline" even when no external endpoint is configured
+- the quick-start block should display step-level progress/completion signals and only one recommended next action at a time, then offer direct jump to inference validation after completion
 
-### 5.9 Admin Verification Reports
+### 5.8.1 Runtime Templates Tab
+- dedicated snippet page for runtime endpoint integration
+- contains copyable env variable names, health-check curl samples, and request/response payload examples
+- does not include runtime profile activation, readiness state machine, or worker lifecycle operations
+- links back to Runtime Settings for actual runtime configuration and readiness checks
+
+### 5.9 Worker Settings Tab
+- worker inventory is table-first with row-level detail drawer
+- worker onboarding/pairing is handled here (not in runtime tab): setup URL, token, callback validation, activation
+- worker mutate actions stay here: add/edit/remove, enable/disable, draining/resume, reconfigure
+- this tab should keep one clear primary action (`Add Worker`) while other operations stay secondary/tertiary
+
+### 5.10 Admin Verification Reports
 - support filtering by status, base URL, and keyword
 - support date-range filtering and report ordering (latest/oldest/failed-first)
 - support quick date presets (last 7 days / last 30 days / clear)

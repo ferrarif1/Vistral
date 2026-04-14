@@ -5,6 +5,53 @@ import { formatCompactTimestamp } from '../../utils/formatting';
 
 type TranslateFn = (source: string, vars?: Record<string, string | number>) => string;
 
+const normalizeMetadataToken = (value: string): string =>
+  value
+    .replace(/[_:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const formatMetadataLabel = (key: string, t: TranslateFn): string => {
+  switch (key.trim().toLowerCase()) {
+    case 'inference_run_id':
+      return t('Inference run');
+    case 'feedback_reason':
+      return t('Feedback reason');
+    case 'source_attachment_id':
+      return t('Source attachment');
+    case 'import_source_attachment_id':
+      return t('Imported attachment');
+    case 'original_filename':
+      return t('Original filename');
+    case 'source':
+      return t('Source');
+    default:
+      return normalizeMetadataToken(key);
+  }
+};
+
+const formatMetadataValue = (key: string, value: string, t: TranslateFn): string => {
+  const normalizedKey = key.trim().toLowerCase();
+  const normalizedValue = value.trim();
+  if (!normalizedValue) {
+    return t('n/a');
+  }
+
+  if (normalizedValue === 'true') {
+    return t('Yes');
+  }
+
+  if (normalizedValue === 'false') {
+    return t('No');
+  }
+
+  if (normalizedKey === 'source' || normalizedKey === 'feedback_reason') {
+    return normalizeMetadataToken(normalizedValue);
+  }
+
+  return normalizedValue;
+};
+
 interface SampleReviewWorkbenchProps {
   t: TranslateFn;
   selectedFilename: string;
@@ -24,43 +71,80 @@ export default function SampleReviewWorkbench({
   selectedItemOperationalMetadataEntries,
   className
 }: SampleReviewWorkbenchProps) {
+  const metadataPreview = selectedItemOperationalMetadataEntries.slice(0, 2);
+  const tagPreview = selectedItemTagEntries.slice(0, 3);
+  const showItemStatus = selectedItem?.status && selectedItem.status !== 'ready';
+  const showAnnotationSource = selectedAnnotation?.source && selectedAnnotation.source !== 'manual';
+  const hasMetadataPreview = metadataPreview.length > 0;
+  const hasTagPreview = tagPreview.length > 0;
+  const latestReview = selectedAnnotation?.latest_review ?? null;
+  const hasVisibleSummary = hasTagPreview || hasMetadataPreview || Boolean(latestReview);
+
   return (
     <Card as="section" className={className}>
-      <div className="stack tight">
-        <h3>{t('Sample Review Workbench')}</h3>
-        <small className="muted">{selectedFilename}</small>
+      <div className="row between gap wrap align-center">
+        <div className="stack tight">
+          <h3>{t('Sample Review Workbench')}</h3>
+          <small className="muted">{selectedFilename}</small>
+        </div>
+        {selectedAnnotation ? (
+          <Badge tone="info">{t(selectedAnnotation.status)}</Badge>
+        ) : null}
       </div>
       <div className="row gap wrap">
         {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
-        {selectedItem ? <StatusTag status={selectedItem.status}>{t(selectedItem.status)}</StatusTag> : null}
-        {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : null}
-        {selectedAnnotation ? <Badge tone="neutral">{t(selectedAnnotation.source)}</Badge> : null}
+        {showItemStatus && selectedItem ? <StatusTag status={selectedItem.status}>{t(selectedItem.status)}</StatusTag> : null}
+        {showAnnotationSource && selectedAnnotation ? <Badge tone="neutral">{t(selectedAnnotation.source)}</Badge> : null}
       </div>
-      {selectedItemTagEntries.length > 0 ? (
+      {hasTagPreview ? (
         <div className="row gap wrap">
-          {selectedItemTagEntries.slice(0, 6).map((tag) => (
+          {tagPreview.map((tag) => (
             <Badge key={`sample-tag-${tag}`} tone="neutral">
               #{tag}
             </Badge>
           ))}
         </div>
-      ) : (
-        <small className="muted">{t('No tags')}</small>
-      )}
-      <div className="stack tight">
-        <small className="muted">{t('Metadata')}</small>
-        {selectedItemOperationalMetadataEntries.length > 0 ? (
+      ) : null}
+      {hasMetadataPreview ? (
+        <div className="stack tight">
+          <small className="muted">{t('Key sample fields')}</small>
           <ul className="annotation-review-metadata-list">
-            {selectedItemOperationalMetadataEntries.slice(0, 6).map(([key, value]) => (
+            {metadataPreview.map(([key, value]) => (
               <li key={`sample-metadata-${key}`}>
-                <strong>{key}</strong>: {String(value)}
+                <strong>{formatMetadataLabel(key, t)}</strong>: {formatMetadataValue(key, String(value), t)}
               </li>
             ))}
           </ul>
-        ) : (
-          <small className="muted">{t('No metadata')}</small>
-        )}
-      </div>
+        </div>
+      ) : null}
+      {latestReview ? (
+        <div className="annotation-review-inline-summary stack tight">
+          <small className="muted">{t('Latest review')}</small>
+          <div className="row gap wrap align-center">
+            <StatusTag status={latestReview.status}>{t(latestReview.status)}</StatusTag>
+            {latestReview.review_reason_code ? <Badge tone="warning">{t(latestReview.review_reason_code)}</Badge> : null}
+            {latestReview.quality_score !== null ? (
+              <Badge tone="info">
+                {t('Quality Score')}: {latestReview.quality_score.toFixed(2)}
+              </Badge>
+            ) : null}
+          </div>
+          {latestReview.review_comment ? (
+            <p className="workspace-record-summary">{latestReview.review_comment}</p>
+          ) : (
+            <small className="muted">{t('No review comment yet.')}</small>
+          )}
+          <small className="muted">
+            {t('Review time')}: {formatCompactTimestamp(latestReview.created_at, t('n/a'))}
+          </small>
+        </div>
+      ) : null}
+      {!hasVisibleSummary ? <small className="muted">{t('No extra sample fields')}</small> : null}
+      {selectedItemOperationalMetadataEntries.length > metadataPreview.length ? (
+        <small className="muted">
+          {t('Showing {count} metadata fields.', { count: metadataPreview.length })}
+        </small>
+      ) : null}
       {selectedAnnotation ? (
         <small className="muted">
           {t('Annotation updated')}: {formatCompactTimestamp(selectedAnnotation.updated_at, t('n/a'))}

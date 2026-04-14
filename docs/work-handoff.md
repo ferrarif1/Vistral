@@ -1315,3 +1315,145 @@ Rules:
   - `npm run smoke:training-worker-dispatch`
   - `npm run smoke:training-worker-package-reference`
   - `npm run docker:verify:full`
+
+## 2026-04-12 15:20 (Asia/Shanghai)
+- context: Runtime auto-configuration hardening + conversation ops bridge extension was in progress; interrupted by new request to shift focus to beginner-first product onboarding UX across the app.
+- done:
+  - Extended conversation console bridge to support runtime auto-config intent/action:
+    - natural language intent detection for runtime auto-config
+    - `/ops {"api":"auto_configure_runtime_settings","params":{"overwrite_endpoint":...}}` execution path
+    - high-risk confirmation gate applied
+    - runtime settings action-link surfaced in conversation action cards
+  - Synced bridge contract docs:
+    - `docs/api-contract.md`, `docs/api-contract.zh-CN.md`
+    - `docs/flows.md`, `docs/flows.zh-CN.md`
+  - Continued Runtime Settings UX simplification:
+    - explicit API key copy clarifying local-only mode does not require API key
+    - started/implemented a manual-required checks panel skeleton for production readiness items
+  - Updated smoke bridge coverage draft in `scripts/smoke-conversation-ops-bridge.sh` for `auto_configure_runtime_settings`.
+  - Validation completed so far: `npm run -s typecheck` passed.
+- next:
+  1. Finish beginner-first onboarding UX design and implementation plan (global IA + first-run guidance + progressive disclosure checkpoints).
+  2. Complete and polish Runtime Settings manual-required checks panel wording/interaction for zero-knowledge operators.
+  3. Run pending verification:
+     - `npm run -s lint`
+     - `npm run -s smoke:conversation-ops-bridge`
+     - `npm run -s smoke:runtime-profile-activation`
+     - optional: `npm run -s smoke:runtime-settings-persistence`
+- risks:
+  - Current worktree includes many concurrent modifications; final integration must avoid regressions from unrelated dirty-state files.
+  - New runtime bridge API path is high-risk mutation; confirmation behavior and multilingual phrasing continuity must be re-verified in smoke.
+  - Beginner onboarding UX spans IA/flows/frontend behavior; incomplete contract alignment may cause drift if coding starts before explicit staged plan.
+- verification:
+  - `npm run -s typecheck`
+  - pending: `npm run -s lint`
+  - pending: `npm run -s smoke:conversation-ops-bridge`
+  - pending: `npm run -s smoke:runtime-profile-activation`
+
+## 2026-04-12 17:19 (Asia/Shanghai)
+- context: Beginner-first onboarding UX refinement was in progress; interrupted by a new request to add a persistent top-right help entry that can reopen current-page guidance at any time.
+- done:
+  - Introduced shared onboarding infrastructure:
+    - `src/hooks/useDismissibleGuide.ts`
+    - `src/components/onboarding/WorkspaceOnboardingCard.tsx`
+  - Migrated page-level onboarding cards to the shared component across key workspace/settings pages:
+    - `ProfessionalConsolePage`
+    - `DatasetsPage`
+    - `DatasetDetailPage`
+    - `AnnotationWorkspacePage`
+    - `CreateTrainingJobPage`
+    - `TrainingJobsPage`
+    - `ModelVersionsPage`
+    - `InferenceValidationPage`
+    - `LlmSettingsPage`
+    - `RuntimeSettingsPage`
+    - `AccountSettingsPage`
+  - Synced IA/flows contract for page-level onboarding hide/reopen behavior and route-local dismiss persistence:
+    - `docs/ia.md`, `docs/ia.zh-CN.md`
+    - `docs/flows.md`, `docs/flows.zh-CN.md`
+  - Upgraded major operational empty states to include next-step guidance and direct actions:
+    - console, datasets, dataset detail, annotation, create training, training jobs, model versions, inference validation
+    - models explore / my models / create model
+    - training job detail
+    - admin approvals / audit / verification reports
+    - account directory
+  - Validation completed after each UX batch:
+    - `npm run -s typecheck`
+    - `npm run -s lint`
+- next:
+  1. Add a persistent top-right help button / current-page hint entry so users can reopen onboarding from anywhere on the page, even after hiding the inline card.
+  2. Update IA/flow docs for the new persistent help-entry behavior before implementation.
+  3. Reuse the existing onboarding step definitions rather than duplicating page hints in each page module.
+  4. Re-run `npm run -s typecheck` and `npm run -s lint` after the new help-entry implementation.
+- risks:
+  - Current onboarding state and step definitions live inside multiple pages; without a shared current-page help abstraction, a naive implementation could duplicate configuration or drift from inline onboarding cards.
+  - Some pages outside the shared `WorkspacePage` pattern may still need special handling if the new persistent button is intended to cover the entire app, including chat/auth surfaces.
+  - The worktree remains heavily modified; avoid reverting unrelated local changes while threading the new shared help entry through layout components.
+- verification:
+  - `npm run -s typecheck`
+  - `npm run -s lint`
+
+## 2026-04-13 11:28 (Asia/Shanghai)
+- date_time: 2026-04-13 11:28 (Asia/Shanghai)
+- context: Runtime settings beginner-first simplification was interrupted by an urgent annotation workspace usability/layout issue on `/datasets/:datasetId/annotate`.
+- done:
+  - Updated `docs/ia.md` and `docs/ia.zh-CN.md` so `/settings/runtime` now contracts around “path-first setup + expert controls collapsed by default”.
+  - Refactored `src/pages/RuntimeSettingsPage.tsx` partway toward that contract:
+    - top-level setup actions reduced to save/reload
+    - introduced a first-screen “choose runtime setup path” panel
+    - moved low-frequency maintenance and strict controls behind `AdvancedSection`
+    - started collapsing per-model auth and local override controls in framework cards
+  - Added corresponding beginner-first runtime copy in `src/i18n/I18nProvider.tsx`.
+  - Verification completed so far:
+    - `npm run -s typecheck`
+    - `npm run -s build`
+- next:
+  1. Fix the annotation workspace layout/readability issue requested by the user.
+  2. Return to `RuntimeSettingsPage.tsx` and finish runtime simplification polish.
+  3. Resolve current lint warnings by wrapping helper functions in `useCallback` or simplifying dependencies.
+  4. Re-run:
+     - `npm run -s lint`
+     - `npm run -s typecheck`
+     - `npm run -s build`
+     - `npm run -s docker:healthcheck`
+- risks:
+  - `src/pages/RuntimeSettingsPage.tsx` is mid-refactor; behavior is partially improved but not yet fully polished in browser.
+  - `npm run -s lint` currently reports hook dependency warnings in `src/pages/RuntimeSettingsPage.tsx`.
+  - Worktree remains heavily modified; avoid reverting unrelated local changes while fixing the annotation page.
+- verification:
+  - `npm run -s typecheck`
+  - `npm run -s build`
+  - `npm run -s lint` (warnings currently present in `src/pages/RuntimeSettingsPage.tsx`)
+
+## 2026-04-13 14:22 (Asia/Shanghai)
+- date_time: 2026-04-13 14:22 (Asia/Shanghai)
+- context: Console page IA unification (models/settings/admin pages) was interrupted by a higher-priority runtime infrastructure request: make PaddleOCR local execution reproducibly available inside `vistral-api` Docker runtime (no template/fallback, no manual pip in container).
+- done:
+  - Continued compact console shell rollout on model domain pages:
+    - `src/pages/ModelsExplorePage.tsx`
+    - `src/pages/MyModelsPage.tsx`
+    - `src/pages/ModelVersionsPage.tsx`
+  - Continued training detail cleanup:
+    - `src/pages/TrainingJobDetailPage.tsx` runtime strict status block aligned to inline alert pattern; duplicate side snapshot reduced.
+  - Started settings-page shell migration:
+    - `src/pages/AccountSettingsPage.tsx` (header/KPI/filter-toolbar migration in progress)
+    - `src/pages/LlmSettingsPage.tsx` (header/KPI/filter-toolbar migration in progress)
+  - Validation completed after this batch:
+    - `npm run -s typecheck`
+    - `npm run -s lint`
+    - `npm run -s build`
+- next:
+  1. Pause UI refactor and switch to runtime infra path immediately.
+  2. Audit `docker/Dockerfile.api`, `docker-compose.yml`, entrypoint/runtime defaults to confirm base image, Python version, and runner interpreter path.
+  3. Migrate API runtime image to stable glibc + pinned Python (3.10/3.11) with build-time venv and PaddleOCR install.
+  4. Wire runtime default python path (`/opt/vistral-venv/bin/python`) through runtime settings/defaults + local runner call chain.
+  5. Rebuild and verify in-container import + runtime readiness + inference no-template fallback.
+- risks:
+  - Runtime stack currently appears mixed between Node app image and local Python runner expectations; interpreter path drift can break fallback guards silently.
+  - PaddleOCR wheel compatibility depends on selected Python version and system libs; wrong base image can force source-build fallback and fail.
+  - Worktree is heavily modified; runtime-focused changes must avoid unintentionally reverting active UI refactor files.
+- verification:
+  - completed: `npm run -s typecheck`
+  - completed: `npm run -s lint`
+  - completed: `npm run -s build`
+  - pending (runtime task): docker image rebuild + in-container OCR import + runtime readiness + inference validation checks
