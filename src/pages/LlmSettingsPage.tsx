@@ -1,22 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { LlmConfig, LlmConfigView } from '../../shared/domain';
-import AdvancedSection from '../components/AdvancedSection';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
-import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
-import StateBlock from '../components/StateBlock';
 import SettingsTabs from '../components/settings/SettingsTabs';
-import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button, ButtonLink } from '../components/ui/Button';
-import { FilterToolbar, InlineAlert, KPIStatRow, PageHeader } from '../components/ui/ConsolePage';
-import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
-import WorkspaceActionStack from '../components/ui/WorkspaceActionStack';
-import { Checkbox, Input } from '../components/ui/Field';
-import { Card, Panel } from '../components/ui/Surface';
+import StateBlock from '../components/StateBlock';
+import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import {
-  WorkspacePage,
-  WorkspaceSectionHeader,
-  WorkspaceWorkbench
-} from '../components/ui/WorkspacePage';
+  ActionBar,
+  DetailList,
+  InlineAlert,
+  PageHeader,
+  SectionCard
+} from '../components/ui/ConsolePage';
+import { Checkbox, Input } from '../components/ui/Field';
+import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import {
@@ -26,34 +22,27 @@ import {
 } from '../services/llmConfig';
 
 const CHATANYWHERE_MODEL_PRESETS = ['gpt-4o-mini', 'gpt-4.1-mini'] as const;
-const llmOnboardingDismissedStorageKey = 'vistral-llm-onboarding-dismissed';
 
 const resolveConnectionAdvice = (
   message: string,
   t: (source: string, vars?: Record<string, string | number>) => string
 ): string => {
   const lower = message.toLowerCase();
-
   if (lower.includes('(401') || lower.includes('unauthorized') || lower.includes('invalid api key')) {
     return t('API key appears invalid or expired. Re-copy key and retry.');
   }
-
   if (lower.includes('(403') || lower.includes('forbidden')) {
     return t('Current key may not access this model. Try gpt-4o-mini first.');
   }
-
   if (lower.includes('(429') || lower.includes('rate limit') || lower.includes('quota')) {
     return t('Rate limit reached. Wait and retry, or switch to a lower-cost model.');
   }
-
   if (lower.includes('(404') || lower.includes('not found')) {
     return t('Endpoint or model not found. Check Base URL and model name.');
   }
-
   if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('etimedout')) {
     return t('Connection timed out. Retry later or use a more stable network.');
   }
-
   return t('Apply ChatAnywhere preset and test with gpt-4o-mini.');
 };
 
@@ -74,19 +63,17 @@ export default function LlmSettingsPage() {
   const [connectionAdvice, setConnectionAdvice] = useState('');
   const [testing, setTesting] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [apiKeyMasked, setApiKeyMasked] = useState('Not set');
   const [hasApiKey, setHasApiKey] = useState(false);
   const [connectionVerified, setConnectionVerified] = useState(false);
-  const configurationRef = useRef<HTMLDivElement | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     const current = await api.getLlmConfig();
     setSavedConfig(current);
     setForm(buildEditableForm(current));
     setApiKeyMasked(current.api_key_masked);
     setHasApiKey(current.has_api_key);
-  };
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -95,7 +82,7 @@ export default function LlmSettingsPage() {
         setStatus({ variant: 'error', text: (error as Error).message });
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [refresh]);
 
   const update = <K extends keyof LlmConfig>(key: K, value: LlmConfig[K]) => {
     setConnectionVerified(false);
@@ -104,19 +91,26 @@ export default function LlmSettingsPage() {
 
   const normalizedForm = useMemo(() => normalizeLlmConfig(form), [form]);
   const hasTypedApiKey = normalizedForm.api_key.trim().length > 0;
-  const busy = loading || refreshing || testing;
-  const hasUnsavedChanges =
-    !savedConfig ||
-    savedConfig.enabled !== normalizedForm.enabled ||
-    savedConfig.base_url !== normalizedForm.base_url ||
-    savedConfig.model !== normalizedForm.model ||
-    savedConfig.temperature !== normalizedForm.temperature ||
-    hasTypedApiKey;
-  const keyHandlingText = hasTypedApiKey
-    ? t('A newly entered key will be used for this test and saved if you click Save.')
-    : hasApiKey
-      ? t('Leave API Key blank to keep using the saved key.')
-      : t('No key saved yet. Add one once to finish setup.');
+  const busy = loading || testing;
+
+  const hasUnsavedChanges = useMemo(() => {
+    if (!savedConfig) {
+      return true;
+    }
+    return (
+      savedConfig.enabled !== normalizedForm.enabled ||
+      savedConfig.base_url !== normalizedForm.base_url ||
+      savedConfig.model !== normalizedForm.model ||
+      savedConfig.temperature !== normalizedForm.temperature ||
+      hasTypedApiKey
+    );
+  }, [hasTypedApiKey, normalizedForm, savedConfig]);
+
+  const requiresKeyWhenEnabled = normalizedForm.enabled && !hasTypedApiKey && !hasApiKey;
+  const hasBaseUrl = normalizedForm.base_url.trim().length > 0;
+  const hasModel = normalizedForm.model.trim().length > 0;
+  const canTest = (hasTypedApiKey || hasApiKey) && hasBaseUrl && hasModel && !busy;
+  const canSave = hasBaseUrl && hasModel && !busy && (!normalizedForm.enabled || hasTypedApiKey || hasApiKey);
 
   const applyChatAnywherePreset = () => {
     setConnectionVerified(false);
@@ -127,32 +121,38 @@ export default function LlmSettingsPage() {
       model: prev.model.trim() || 'gpt-4o-mini'
     }));
     setStatus({ variant: 'success', text: t('ChatAnywhere preset applied.') });
+    setConnectionAdvice('');
   };
 
   const applyRecommendedModel = (model: string) => {
     update('model', model);
     setStatus({ variant: 'success', text: t('Model preset applied: {model}', { model }) });
+    setConnectionAdvice('');
   };
 
   const discardTypedApiKey = () => {
     if (!hasTypedApiKey) {
       return;
     }
-
     setConnectionVerified(false);
     update('api_key', '');
     setStatus({ variant: 'success', text: t('Typed key removed. Saved key will be reused again.') });
     setConnectionAdvice('');
   };
 
-  const save = async () => {
-    if (!normalizedForm.base_url || !normalizedForm.model) {
+  const saveConfig = async (forceEnable: boolean) => {
+    const next = normalizeLlmConfig({
+      ...normalizedForm,
+      enabled: forceEnable ? true : normalizedForm.enabled
+    });
+
+    if (!next.base_url || !next.model) {
       setStatus({ variant: 'error', text: t('Base URL and model are required.') });
       setConnectionAdvice(t('Apply ChatAnywhere preset and test with gpt-4o-mini.'));
       return;
     }
 
-    if (normalizedForm.enabled && !normalizedForm.api_key && !hasApiKey) {
+    if (next.enabled && !next.api_key && !hasApiKey) {
       setStatus({
         variant: 'error',
         text: t('Enable mode requires an API key. Please input key at least once.')
@@ -162,23 +162,24 @@ export default function LlmSettingsPage() {
     }
 
     try {
-      const saved = await api.saveLlmConfig(normalizedForm, !normalizedForm.api_key && hasApiKey);
+      const saved = await api.saveLlmConfig(next, !next.api_key && hasApiKey);
       setSavedConfig(saved);
       setApiKeyMasked(saved.api_key_masked);
       setHasApiKey(saved.has_api_key);
       setForm(buildEditableForm(saved));
-      setStatus({
-        variant: 'success',
-        text: t('Settings saved. Stored key reminder: {key}.', {
-          key: saved.api_key_masked
-        })
-      });
       setConnectionVerified(false);
       setConnectionAdvice('');
+      setStatus({
+        variant: 'success',
+        text: saved.enabled
+          ? t('LLM configuration saved and enabled.')
+          : t('LLM configuration saved.')
+      });
       emitLlmConfigUpdated();
     } catch (error) {
-      setStatus({ variant: 'error', text: (error as Error).message });
-      setConnectionAdvice(resolveConnectionAdvice((error as Error).message, t));
+      const message = (error as Error).message;
+      setStatus({ variant: 'error', text: message });
+      setConnectionAdvice(resolveConnectionAdvice(message, t));
     }
   };
 
@@ -189,28 +190,14 @@ export default function LlmSettingsPage() {
       setForm(buildEditableForm(cleared));
       setApiKeyMasked(cleared.api_key_masked);
       setHasApiKey(cleared.has_api_key);
-      setStatus({ variant: 'success', text: t('Saved settings cleared.') });
       setConnectionVerified(false);
       setConnectionAdvice('');
+      setStatus({ variant: 'success', text: t('Saved settings cleared.') });
       emitLlmConfigUpdated();
     } catch (error) {
-      setStatus({ variant: 'error', text: (error as Error).message });
-      setConnectionAdvice(resolveConnectionAdvice((error as Error).message, t));
-    }
-  };
-
-  const reloadSavedConfig = async () => {
-    setRefreshing(true);
-    try {
-      await refresh();
-      setStatus({ variant: 'success', text: t('Saved settings reloaded.') });
-      setConnectionVerified(false);
-      setConnectionAdvice('');
-    } catch (error) {
-      setStatus({ variant: 'error', text: (error as Error).message });
-      setConnectionAdvice(resolveConnectionAdvice((error as Error).message, t));
-    } finally {
-      setRefreshing(false);
+      const message = (error as Error).message;
+      setStatus({ variant: 'error', text: message });
+      setConnectionAdvice(resolveConnectionAdvice(message, t));
     }
   };
 
@@ -233,7 +220,6 @@ export default function LlmSettingsPage() {
 
     setTesting(true);
     setStatus(null);
-
     try {
       const result = await api.testLlmConnection(configForTest, useStoredApiKey);
       setStatus({
@@ -261,250 +247,86 @@ export default function LlmSettingsPage() {
   const savedModel = savedConfig?.model ?? DEFAULT_LLM_CONFIG.model;
   const savedEnabled = savedConfig?.enabled ?? DEFAULT_LLM_CONFIG.enabled;
   const savedTemperature = savedConfig?.temperature ?? DEFAULT_LLM_CONFIG.temperature;
-  const statusVariant = savedEnabled ? 'ready' : 'draft';
-  const keyVariant = hasApiKey ? 'ready' : 'draft';
-  const unsavedVariant = hasUnsavedChanges ? 'error' : 'ready';
-  const llmOnboardingSteps = useMemo(
-    () => [
-      {
-        key: 'base',
-        label: t('Set provider endpoint and model'),
-        detail: t('Use preset or manual input to keep Base URL and model explicit.'),
-        done: savedBaseUrl.trim().length > 0 && savedModel.trim().length > 0,
-        to: '/settings/llm',
-        cta: t('Open LLM configuration')
-      },
-      {
-        key: 'key',
-        label: t('Save one API key'),
-        detail: t('Save key once so later edits can reuse masked key without retyping.'),
-        done: hasApiKey,
-        to: '/settings/llm',
-        cta: t('Save')
-      },
-      {
-        key: 'enable',
-        label: t('Enable custom LLM mode'),
-        detail: t('Turn on custom mode so chat workspace uses your saved provider settings.'),
-        done: savedEnabled && hasApiKey,
-        to: '/settings/llm',
-        cta: t('Enable custom LLM in conversation workspace')
-      },
-      {
-        key: 'test',
-        label: t('Run connection test and continue to chat'),
-        detail: t('Verify connection first, then return to conversation workspace for real usage.'),
-        done: connectionVerified,
-        to: connectionVerified ? '/workspace/chat' : '/settings/llm',
-        cta: connectionVerified ? t('Open Conversation Workspace') : t('Test Connection')
-      }
-    ],
-    [connectionVerified, hasApiKey, savedBaseUrl, savedEnabled, savedModel, t]
-  );
-  const nextOnboardingStep = useMemo(
-    () => llmOnboardingSteps.find((stepItem) => !stepItem.done) ?? null,
-    [llmOnboardingSteps]
-  );
-  const nextOnboardingStepIndex = useMemo(
-    () => (nextOnboardingStep ? llmOnboardingSteps.findIndex((stepItem) => stepItem.key === nextOnboardingStep.key) + 1 : 0),
-    [llmOnboardingSteps, nextOnboardingStep]
-  );
 
-  const focusConfiguration = useCallback(() => {
-    configurationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
-
-  const renderLlmNextAction = useCallback(
-    (
-      stepItem: (typeof llmOnboardingSteps)[number],
-      options?: {
-        variant?: 'secondary' | 'ghost';
-      }
-    ) => {
-      const variant = options?.variant ?? 'secondary';
-
-      if (stepItem.key === 'test' && connectionVerified) {
-        return (
-          <ButtonLink to={stepItem.to} variant={variant} size="sm">
-            {stepItem.cta}
-          </ButtonLink>
-        );
-      }
-
-      return (
-        <Button type="button" variant={variant} size="sm" onClick={focusConfiguration}>
-          {stepItem.key === 'test' ? t('Test Connection') : t('Open LLM configuration')}
-        </Button>
-      );
-    },
-    [connectionVerified, focusConfiguration, t]
-  );
+  if (loading) {
+    return (
+      <WorkspacePage>
+        <SettingsTabs />
+        <PageHeader
+          eyebrow={t('Settings')}
+          title={t('LLM Settings')}
+          description={t('Configure one provider in a clear four-step flow.')}
+        />
+        <StateBlock
+          variant="loading"
+          title={t('Loading Settings')}
+          description={t('Fetching current LLM settings.')}
+        />
+      </WorkspacePage>
+    );
+  }
 
   return (
     <WorkspacePage>
       <SettingsTabs />
-
       <PageHeader
         eyebrow={t('Settings')}
         title={t('LLM Settings')}
-        description={t('Connect one OpenAI-compatible provider for the chat workspace.')}
+        description={t('Complete one clear task: configure provider access for chat usage.')}
         primaryAction={{
-          label: refreshing ? t('Loading') : t('Reload saved settings'),
-          onClick: reloadSavedConfig,
-          disabled: refreshing || loading
+          label: t('Save and enable'),
+          onClick: () => {
+            void saveConfig(true);
+          },
+          disabled: !canSave
         }}
-        secondaryActions={
-          <ButtonLink to="/workspace/chat" variant="ghost" size="sm">
-            {t('Open Chat')}
-          </ButtonLink>
-        }
       />
-
-      <KPIStatRow
-        items={[
-          {
-            label: t('Mode'),
-            value: savedEnabled ? t('enabled') : t('disabled'),
-            tone: savedEnabled ? 'success' : 'neutral',
-            hint: t('Current saved enable state for conversation usage.')
-          },
-          {
-            label: t('Stored key'),
-            value: hasApiKey ? apiKeyMasked : t('not set'),
-            tone: hasApiKey ? 'success' : 'warning',
-            hint: t('Saved key state for provider authentication.')
-          },
-          {
-            label: t('Pending changes'),
-            value: hasUnsavedChanges ? t('Yes') : t('No'),
-            tone: hasUnsavedChanges ? 'warning' : 'neutral',
-            hint: t('Unsaved edits in current configuration form.')
-          }
-        ]}
-      />
-
-      {loading ? (
-        <StateBlock variant="loading" title={t('Loading Settings')} description={t('Fetching current LLM settings.')} />
-      ) : null}
 
       {status ? (
         <InlineAlert
           tone={status.variant === 'success' ? 'success' : 'danger'}
-          title={status.variant === 'success' ? t('Settings Updated') : t('Settings Error')}
+          title={status.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={status.text}
         />
       ) : null}
 
       <WorkspaceWorkbench
-        toolbar={
-          <FilterToolbar
-            filters={
-              <small className="muted">
-                {t('Keep presets and key-handling actions compact so configuration remains the single primary task.')}
-              </small>
-            }
-            actions={
-              <>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={reloadSavedConfig}
-                  disabled={refreshing || loading}
-                >
-                  {refreshing ? t('Loading') : t('Reload saved settings')}
-                </Button>
-                {hasTypedApiKey ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={discardTypedApiKey}
-                    disabled={busy}
-                  >
-                    {t('Discard typed key')}
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={applyChatAnywherePreset}
-                  disabled={busy}
-                >
-                  {t('Apply ChatAnywhere Preset')}
-                </Button>
-              </>
-            }
-            summary={
-              <div className="workspace-segmented-actions">
-                <Badge tone={savedEnabled ? 'success' : 'neutral'}>
-                  {t('Mode')}: {savedEnabled ? t('enabled') : t('disabled')}
-                </Badge>
-                <Badge tone={hasApiKey ? 'success' : 'warning'}>
-                  {t('Stored key')}: {hasApiKey ? t('Ready') : t('not set')}
-                </Badge>
-                <Badge tone={hasUnsavedChanges ? 'warning' : 'neutral'}>
-                  {t('Pending changes')}: {hasUnsavedChanges ? t('Yes') : t('No')}
-                </Badge>
-                {connectionAdvice ? (
-                  <Badge tone="info">{t('Troubleshooting')}: {t('available')}</Badge>
-                ) : null}
-              </div>
-            }
-          />
-        }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              title={t('LLM first-run guide')}
-              description={t('Use this page to finish provider setup before relying on chat responses.')}
-              summary={t('Guide status is computed from saved endpoint/model/key state plus latest connection test result.')}
-              storageKey={llmOnboardingDismissedStorageKey}
-              steps={llmOnboardingSteps.map((stepItem) => ({
-                key: stepItem.key,
-                label: stepItem.label,
-                detail: stepItem.detail,
-                done: stepItem.done,
-                primaryAction: {
-                  to: stepItem.key === 'test' && connectionVerified ? stepItem.to : undefined,
-                  label: stepItem.key === 'test' && connectionVerified ? stepItem.cta : stepItem.key === 'test' ? t('Test Connection') : t('Open LLM configuration'),
-                  onClick: stepItem.key === 'test' && connectionVerified ? undefined : focusConfiguration
+            <SectionCard
+              title={t('Configure provider')}
+              description={t('Start from the recommended preset, then fill Base URL, API Key, Model, and Temperature in one linear flow.')}
+              actions={
+                <div className="row gap wrap align-center">
+                  <Badge tone="info">{t('Provider')}: chatanywhere</Badge>
+                  <small className="muted">{t('OpenAI-compatible preset only.')}</small>
+                </div>
+              }
+            >
+              <ActionBar
+                primary={
+                  <Button type="button" onClick={applyChatAnywherePreset} disabled={busy}>
+                    {t('Apply ChatAnywhere preset')}
+                  </Button>
                 }
-              }))}
-            />
-
-            {nextOnboardingStep ? (
-              <WorkspaceNextStepCard
-                title={t('Next LLM step')}
-                description={t('Finish one clear LLM setup action here before testing chat usage.')}
-                stepLabel={nextOnboardingStep.label}
-                stepDetail={nextOnboardingStep.detail}
-                current={nextOnboardingStepIndex}
-                total={llmOnboardingSteps.length}
-                actions={
+                secondary={
                   <div className="row gap wrap">
-                    {renderLlmNextAction(nextOnboardingStep)}
-                    <ButtonLink to="/settings/account" variant="ghost" size="sm">
-                      {t('Account Settings')}
-                    </ButtonLink>
+                    {CHATANYWHERE_MODEL_PRESETS.map((model) => (
+                      <Button
+                        key={model}
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => applyRecommendedModel(model)}
+                        disabled={busy}
+                      >
+                        {t('Use {model}', { model })}
+                      </Button>
+                    ))}
                   </div>
                 }
               />
-            ) : null}
-
-            <div ref={configurationRef}>
-              <Card as="article" className="stack">
-              <WorkspaceSectionHeader
-                title={t('Configuration')}
-                description={t('Update endpoint, key, model, and temperature in one place.')}
-              />
-
               <div className="workspace-form-grid">
-                <label className="workspace-form-span-2">
-                  {t('Provider')}
-                  <Input value="chatanywhere (OpenAI compatible)" disabled />
-                </label>
                 <label className="workspace-form-span-2">
                   {t('Base URL')}
                   <Input
@@ -512,7 +334,9 @@ export default function LlmSettingsPage() {
                     onChange={(event) => update('base_url', event.target.value)}
                     placeholder="https://api.chatanywhere.tech/v1"
                   />
+                  {!hasBaseUrl ? <small className="muted">{t('Base URL is required.')}</small> : null}
                 </label>
+
                 <label className="workspace-form-span-2">
                   {t('API Key')}
                   <Input
@@ -521,7 +345,15 @@ export default function LlmSettingsPage() {
                     onChange={(event) => update('api_key', event.target.value)}
                     placeholder="sk-..."
                   />
+                  <small className="muted">
+                    {hasTypedApiKey
+                      ? t('Typed key will be used for test/save.')
+                      : hasApiKey
+                        ? t('Leave blank to reuse the saved key.')
+                        : t('Enter one key to finish setup.')}
+                  </small>
                 </label>
+
                 <label>
                   {t('Model')}
                   <Input
@@ -529,7 +361,9 @@ export default function LlmSettingsPage() {
                     onChange={(event) => update('model', event.target.value)}
                     placeholder="gpt-4o-mini"
                   />
+                  {!hasModel ? <small className="muted">{t('Model is required.')}</small> : null}
                 </label>
+
                 <label>
                   {t('Temperature (0-2)')}
                   <Input
@@ -541,125 +375,95 @@ export default function LlmSettingsPage() {
                     onChange={(event) => update('temperature', Number(event.target.value))}
                   />
                 </label>
-                <label className="workspace-form-span-2 row gap align-center workspace-checkbox-row">
+              </div>
+
+              <div className="row gap wrap align-center">
+                <label className="workspace-checkbox-row">
                   <Checkbox
                     checked={form.enabled}
                     onChange={(event) => update('enabled', event.target.checked)}
                   />
-                  {t('Enable custom LLM in conversation workspace')}
+                  <span>{t('Enable custom LLM in conversation workspace')}</span>
                 </label>
-              </div>
-
-              <Panel className="workspace-record-item compact" tone="soft">
-                <small className="muted">
-                  {t('OpenAI-compatible mode.')}{' '}
-                  {keyHandlingText}
-                </small>
-              </Panel>
-
-              <strong>{t('Quick presets')}</strong>
-
-              <div className="workspace-action-grid">
-                {CHATANYWHERE_MODEL_PRESETS.map((item) => (
-                  <Button
-                    key={item}
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => applyRecommendedModel(item)}
-                    disabled={busy}
-                    block
-                  >
-                    {t('Use {model}', { model: item })}
+                {hasTypedApiKey ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={discardTypedApiKey} disabled={busy}>
+                    {t('Discard typed key')}
                   </Button>
-                ))}
+                ) : null}
               </div>
+              {requiresKeyWhenEnabled ? (
+                <InlineAlert
+                  tone="warning"
+                  description={t('Enable mode requires API key input or an already saved key.')}
+                />
+              ) : null}
+            </SectionCard>
 
-              <WorkspaceActionStack>
-                <Button type="button" onClick={save} disabled={busy} block>
-                  {t('Save')}
-                </Button>
-                <Button type="button" variant="secondary" onClick={testConnection} disabled={busy} block>
-                  {testing ? t('Testing...') : t('Test Connection')}
-                </Button>
-                <Button type="button" variant="danger" onClick={clear} disabled={busy} block>
-                  {t('Clear')}
-                </Button>
-              </WorkspaceActionStack>
-            </Card>
-            </div>
+            <SectionCard
+              title={t('Verify connection')}
+              description={t('Test endpoint, key, and model before saving. Use the page header action after the check turns green.')}
+            >
+              <ActionBar
+                primary={
+                  <Button type="button" onClick={testConnection} disabled={!canTest}>
+                    {testing ? t('Testing...') : t('Test connection')}
+                  </Button>
+                }
+                secondary={
+                  connectionVerified ? (
+                    <Badge tone="success">{t('Connection verified')}</Badge>
+                  ) : (
+                    <Badge tone="neutral">{t('Not verified')}</Badge>
+                  )
+                }
+              />
+              {connectionAdvice ? (
+                <small className="muted">{connectionAdvice}</small>
+              ) : null}
+            </SectionCard>
+
+            <details className="workspace-details">
+              <summary>{t('Danger zone')}</summary>
+              <div className="stack tight">
+                <small className="muted">
+                  {t('Only use this when you want to wipe the saved provider configuration.')}
+                </small>
+                <ActionBar
+                  secondary={
+                    <Button type="button" variant="danger" onClick={clear} disabled={busy}>
+                      {t('Clear saved settings')}
+                    </Button>
+                  }
+                />
+              </div>
+            </details>
           </div>
         }
         side={
           <div className="workspace-inspector-rail">
-            <WorkspaceActionPanel
-              title={t('Saved settings')}
-              description={t('Saved values stay visible here so you know what will be reused.')}
-            >
-              <ul className="workspace-record-list compact">
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('Mode')}</strong>
-                    <StatusTag status={statusVariant}>
-                      {savedEnabled ? t('enabled') : t('disabled')}
-                    </StatusTag>
-                  </div>
-                  <small className="muted">
-                    {t('Base URL')}: {savedBaseUrl}
-                  </small>
-                </li>
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('Stored key')}</strong>
-                    <StatusTag status={keyVariant}>
-                      {hasApiKey ? t('Ready') : t('not set')}
-                    </StatusTag>
-                  </div>
-                  <small className="muted">{t('Masked key reminder: {key}', { key: apiKeyMasked })}</small>
-                </li>
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('Model')}</strong>
-                    <StatusTag status="info">{savedModel}</StatusTag>
-                  </div>
-                  <small className="muted">
-                    {t('Temperature')}: {savedTemperature}
-                  </small>
-                </li>
-                <li className="workspace-record-item compact">
-                  <div className="row between gap wrap">
-                    <strong>{t('Pending changes')}</strong>
-                    <StatusTag status={unsavedVariant}>
-                      {hasUnsavedChanges ? t('Yes') : t('No')}
-                    </StatusTag>
-                  </div>
-                  <small className="muted">
-                    {hasUnsavedChanges ? t('Pending changes are waiting to be saved.') : t('No pending changes.')}
-                  </small>
-                </li>
-              </ul>
-            </WorkspaceActionPanel>
-
-            <AdvancedSection
-              title={t('Connection notes')}
-              description={t('Open troubleshooting and security reminders only when needed.')}
-            >
-              {connectionAdvice ? (
-                <StateBlock variant="success" title={t('Troubleshooting')} description={connectionAdvice} />
-              ) : (
-                <StateBlock
-                  variant="empty"
-                  title={t('No connection advice right now.')}
-                  description={t('Run a test after changing the endpoint, key, or model.')}
+            <details className="workspace-details">
+              <summary className="row between gap wrap align-center">
+                <span>{t('Saved settings')}</span>
+                <Badge tone={hasUnsavedChanges ? 'warning' : 'neutral'}>
+                  {hasUnsavedChanges ? t('Unsaved') : t('Saved')}
+                </Badge>
+              </summary>
+              <SectionCard
+                title={t('Saved settings snapshot')}
+                description={t('Open only when you need to compare saved values.')}
+              >
+                <DetailList
+                  items={[
+                    { label: t('Mode'), value: savedEnabled ? t('enabled') : t('disabled') },
+                    { label: t('Base URL'), value: savedBaseUrl },
+                    { label: t('Model'), value: savedModel },
+                    { label: t('Temperature'), value: savedTemperature },
+                    { label: t('Stored key'), value: hasApiKey ? apiKeyMasked : t('not set') },
+                    { label: t('Pending changes'), value: hasUnsavedChanges ? t('Yes') : t('No') }
+                  ]}
                 />
-              )}
-
-              <small className="muted">
-                {t(
-                  'Stored key reuse follows the current form state. Free keys may have per-day or per-IP limits, and exposed keys should be rotated while keeping `LLM_CONFIG_SECRET` private.'
-                )}
-              </small>
-            </AdvancedSection>
+              </SectionCard>
+            </details>
           </div>
         }
       />

@@ -50,19 +50,38 @@ Define executable route and page structure for the AI-native conversation worksp
     - one page owns one core operator task only
     - other task domains may appear only as summary context or navigation links
     - do not embed a second full workflow module just because it is adjacent
-  - first-run onboarding card should explain the core loop in plain language (`prepare data -> annotate/review -> train -> register -> validate -> feedback`) with direct links
-  - onboarding card should show completion signals from real workspace state so zero-knowledge users can understand "what is done" and "what is next"
-  - inline onboarding cards should stay compact by default: keep the plain-language summary plus the single recommended next step visible, and move the full checklist behind on-demand expansion / the fixed help entry
-  - pages with onboarding guidance should also expose a persistent fixed help entry near the top-right of the viewport so users can reopen current-page hints at any time without scrolling back to the inline card
-  - the fixed help entry should highlight the first incomplete step as the recommended next action, so beginners always see one clear thing to do next
-  - on the first visit to a guided page, the fixed help entry may auto-open once as a lightweight hint, then remain quiet on later visits unless the user reopens it
-  - the console home main workspace should also mirror that beginner guidance with one explicit starter task card, so first-time users can act without reading the full dashboard
+  - console home should stay routing-focused: one priority queue + dedicated lane links, no embedded multi-workflow execution modules
   - professional workbench pages use a stable three-zone structure:
     - top context toolbar (`WorkspaceContextBar`) for search/filter/batch actions
     - middle main work area for operational lists/canvas/tables
     - right inspector panel for selected-object details and primary follow-up actions
   - left global nav, middle work area, and right inspector are independently scrollable within the shell
   - operational pages should reuse `WorkspaceWorkbench` to keep control surfaces consistent across dataset/training/model lanes
+  - rollout update (2026-04): for high-frequency console routes, heavy onboarding cards are replaced with a compact single-task hint block to reduce first-screen noise while keeping clear next-action links
+
+### 3.4.1 Single-Task Hint Rollout (2026-04)
+- migrated routes:
+  - `/workspace/console`
+  - `/models/explore`
+  - `/models/my-models`
+  - `/models/create`
+  - `/settings/account`
+  - `/settings/llm`
+  - `/settings/runtime`
+  - `/settings/workers`
+  - `/datasets`
+  - `/training/jobs`
+  - `/training/jobs/new`
+  - `/training/jobs/:jobId`
+  - `/models/versions`
+  - `/inference/validate`
+  - `/admin/models/pending`
+  - `/admin/audit`
+  - `/admin/verification-reports`
+- interaction contract:
+  - keep one primary action per page header
+  - replace duplicated onboarding/next-step cards with one compact in-page hint block
+  - keep cross-domain actions as links to dedicated pages, not embedded modules
 
 ### 3.5 Model Domain
 - `/models/explore`
@@ -78,13 +97,13 @@ Define executable route and page structure for the AI-native conversation worksp
   - model file upload step may refresh artifact statuses in background, but list updates should stay quiet and only apply when file data actually changes
 - `/models/versions`
 - shared overview layout with persistent version-registration actions and completed-job follow-up
-- page-level onboarding card should explain how to move from completed training evidence to version registration and inference validation follow-up
+- page-level onboarding card should explain how to move from completed training evidence to version registration and lineage inspection follow-up
 - the main workspace and version-inventory empty/selection-empty states should also mirror the first incomplete versioning step with one explicit next-action card
 
 ### 3.6 Dataset Domain
 - `/datasets`
   - dataset list + create entry
-  - page-level onboarding card should explain this page is the "data preparation entry" and point to annotation/training next steps
+  - page-level onboarding card should explain this page is the "data preparation entry" and point users to dataset detail as the next lane
   - onboarding should surface minimal real-state completion signals (`has_dataset`, `has_ready_dataset`) and "what to click next"
   - the main workspace and empty state should also mirror the first incomplete dataset-prep step with one explicit starter task, including a direct jump into the inline create panel when no dataset exists yet
 - `/datasets/:datasetId`
@@ -130,7 +149,7 @@ Define executable route and page structure for the AI-native conversation worksp
 - `/training/jobs`
   - job list
   - supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) so dataset-detail snapshot actions can open a filtered operational view
-  - page-level onboarding card should explain queue semantics (`active` vs `terminal`) and next actions (`new run`, `detail`, `validate`)
+  - page-level onboarding card should explain queue semantics (`active` vs `terminal`) and next actions (`new run`, `detail`)
   - the main workspace and empty states should mirror the first incomplete training-control step with one explicit next-action card
   - initial page load may show blocking loading state, but background refresh must stay non-jumping and only update visible state when job data actually changes
   - manual refresh remains available for operators who want explicit control
@@ -143,11 +162,11 @@ Define executable route and page structure for the AI-native conversation worksp
 - `/training/jobs/:jobId`
   - detail: status, logs, metrics, and artifact readiness for one run
   - scheduler history, raw fallback reasons, and technical identifiers should stay in advanced disclosure by default
-  - page-level onboarding card should explain how to interpret queue status, metrics/logs readiness, and follow-up links back to dataset/validation lanes
+  - first screen should prioritize evidence inspection (status/logs/metrics/artifacts), while cross-domain next steps stay as lightweight links
 
 ### 3.8 Inference Validation Domain
 - `/inference/validate`
-- runtime connectivity diagnostics (PaddleOCR/docTR/YOLO)
+- runtime readiness summary only (reachable / unreachable / not configured) with link to `/settings/runtime` for full diagnostics/configuration
 - supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) from dataset-detail snapshot actions
 - onboarding card should explain the validation-to-feedback loop in plain language and keep follow-up links to scoped dataset/annotation lanes visible
 - the main workspace and key empty states (`No Model Versions Yet`, `No Ready Inputs Yet`, `No Runs Yet`) should mirror the first incomplete validation step with one explicit next-action card
@@ -231,11 +250,11 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.10 Admin
 - `/admin/models/pending`
-- page-level onboarding card should explain approval responsibilities (`review request -> decide -> audit trail`) for first-time admins
+- queue-first review page: list/table for pending requests + decision drawer; adjacent admin lanes are links only
 - `/admin/audit`
 - page-level onboarding card should explain how to read governance records, distinguish user vs system actions, and jump back to adjacent admin lanes
 - `/admin/verification-reports`
-- page-level onboarding card should explain how deployment verification evidence is filtered, reviewed, and exported for release governance
+- page-level onboarding card should explain one focused task on this page: filter, review, and export deployment verification evidence for release governance
 
 ## 4. Shared UI Contracts
 - route-level page modules should be lazy-loaded by default so non-active workspaces do not block first paint

@@ -2,6 +2,7 @@ import type { DatasetRecord, DatasetVersionRecord } from '../../../shared/domain
 import StateBlock from '../StateBlock';
 import { Badge, StatusTag } from '../ui/Badge';
 import { Button, ButtonLink } from '../ui/Button';
+import { StatusTable } from '../ui/ConsolePage';
 import { Card, Panel } from '../ui/Surface';
 import { WorkspaceSectionHeader } from '../ui/WorkspacePage';
 import { formatCompactTimestamp } from '../../utils/formatting';
@@ -136,44 +137,46 @@ export default function DatasetVersionRail({
                 <ButtonLink size="sm" variant="ghost" to={buildJobsPath(selectedVersion.id)}>
                   {t('Open version jobs')}
                 </ButtonLink>
-                <ButtonLink size="sm" variant="ghost" to={buildInferencePath(selectedVersion.id)}>
-                  {t('Validate inference')}
-                </ButtonLink>
-              </div>
-              {selectedVersionComparison && baselineVersion ? (
-                <Panel as="section" className="stack tight" tone="soft">
-                  <div className="row between gap wrap align-center">
-                    <strong>{t('Cross-version Delta')}</strong>
-                    <Badge tone="neutral">
-                      {t('Baseline')}: {baselineVersion.version_name}
-                    </Badge>
+                  <ButtonLink size="sm" variant="ghost" to={buildInferencePath(selectedVersion.id)}>
+                    {t('Validate inference')}
+                  </ButtonLink>
+                </div>
+              <details className="dataset-version-delta">
+                <summary>{t('Compare with previous version')}</summary>
+                {selectedVersionComparison && baselineVersion ? (
+                  <div className="stack tight">
+                    <div className="row between gap wrap align-center">
+                      <small className="muted">
+                        {t('Baseline')}: {baselineVersion.version_name}
+                      </small>
+                    </div>
+                    <div className="row gap wrap">
+                      <Badge tone={resolveDeltaTone(selectedVersionComparison.itemCountDelta)}>
+                        {t('Items')}: {toSignedNumber(selectedVersionComparison.itemCountDelta)}
+                      </Badge>
+                      <Badge tone={resolveDeltaTone(selectedVersionComparison.coverageDelta)}>
+                        {t('Coverage')}: {toSignedPercentPoints(selectedVersionComparison.coverageDelta)}
+                      </Badge>
+                      <Badge tone={resolveDeltaTone(selectedVersionComparison.trainDelta)}>
+                        {t('train')}: {toSignedNumber(selectedVersionComparison.trainDelta)}
+                      </Badge>
+                      <Badge tone={resolveDeltaTone(selectedVersionComparison.valDelta)}>
+                        {t('val')}: {toSignedNumber(selectedVersionComparison.valDelta)}
+                      </Badge>
+                      <Badge tone={resolveDeltaTone(selectedVersionComparison.testDelta)}>
+                        {t('test')}: {toSignedNumber(selectedVersionComparison.testDelta)}
+                      </Badge>
+                    </div>
+                    <small className="muted">
+                      {t('Delta compares the active snapshot against the previous version by creation time.')}
+                    </small>
                   </div>
-                  <div className="row gap wrap">
-                    <Badge tone={resolveDeltaTone(selectedVersionComparison.itemCountDelta)}>
-                      {t('Items')}: {toSignedNumber(selectedVersionComparison.itemCountDelta)}
-                    </Badge>
-                    <Badge tone={resolveDeltaTone(selectedVersionComparison.coverageDelta)}>
-                      {t('Coverage')}: {toSignedPercentPoints(selectedVersionComparison.coverageDelta)}
-                    </Badge>
-                    <Badge tone={resolveDeltaTone(selectedVersionComparison.trainDelta)}>
-                      {t('train')}: {toSignedNumber(selectedVersionComparison.trainDelta)}
-                    </Badge>
-                    <Badge tone={resolveDeltaTone(selectedVersionComparison.valDelta)}>
-                      {t('val')}: {toSignedNumber(selectedVersionComparison.valDelta)}
-                    </Badge>
-                    <Badge tone={resolveDeltaTone(selectedVersionComparison.testDelta)}>
-                      {t('test')}: {toSignedNumber(selectedVersionComparison.testDelta)}
-                    </Badge>
-                  </div>
+                ) : (
                   <small className="muted">
-                    {t('Delta compares the active snapshot against the previous version by creation time.')}
+                    {t('Create at least two versions to unlock cross-version delta summary.')}
                   </small>
-                </Panel>
-              ) : (
-                <small className="muted">
-                  {t('Create at least two versions to unlock cross-version delta summary.')}
-                </small>
-              )}
+                )}
+              </details>
             </Panel>
             {!selectedVersionLaunchReady ? (
               <small className="muted">
@@ -204,63 +207,76 @@ export default function DatasetVersionRail({
         {versions.length === 0 ? (
           <StateBlock variant="empty" title={t('No Versions')} description={t('Create first version snapshot after split.')} />
         ) : (
-          <ul className="workspace-record-list compact">
-            {versions.map((version) => (
-              <Panel
-                key={version.id}
-                as="li"
-                className={`workspace-record-item compact stack tight${selectedVersionId === version.id ? ' selected' : ''}`}
-                tone="soft"
-              >
-                <div className="row between gap wrap align-center">
-                  <strong>{version.version_name}</strong>
-                  <div className="row gap wrap">
-                    {selectedVersionId === version.id ? (
-                      <Badge tone="success">{t('Active')}</Badge>
-                    ) : null}
-                    <Badge tone="neutral">{formatCompactTimestamp(version.created_at, t('n/a'))}</Badge>
+          <StatusTable
+            rows={versions}
+            getRowKey={(version) => version.id}
+            emptyTitle={t('No Versions')}
+            emptyDescription={t('Create first version snapshot after split.')}
+            columns={[
+              {
+                key: 'version',
+                header: t('Version'),
+                cell: (version) => (
+                  <div className="stack tight">
+                    <strong>{version.version_name}</strong>
+                    <small className="muted">{formatCompactTimestamp(version.created_at, t('n/a'))}</small>
                   </div>
-                </div>
-                <div className="row gap wrap">
-                  <Badge tone="neutral">{t('Items')}: {version.item_count}</Badge>
-                  <Badge tone="info">{t('Coverage')}: {formatCoveragePercent(version.annotation_coverage)}</Badge>
-                  <Badge tone="neutral">
-                    {t('train')} {version.split_summary.train} / {t('val')} {version.split_summary.val} / {t('test')}{' '}
-                    {version.split_summary.test}
-                  </Badge>
-                </div>
-                <small className="muted">
-                  {t('Items {count} · Coverage {coverage}', {
-                    count: version.item_count,
-                    coverage: formatCoveragePercent(version.annotation_coverage)
-                  })}
-                </small>
-                <div className="row gap wrap">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedVersionId === version.id ? 'secondary' : 'ghost'}
-                    onClick={() => onSelectVersion(version.id)}
-                  >
-                    {selectedVersionId === version.id ? t('Active snapshot') : t('Set active snapshot')}
-                  </Button>
-                  <ButtonLink size="sm" variant="secondary" to={buildTrainingPath(version.id)}>
-                    {t('Train from this version')}
-                  </ButtonLink>
-                  <ButtonLink
-                    size="sm"
-                    variant="ghost"
-                    to={buildReviewPath(version.id, 'needs_work')}
-                  >
-                    {t('Open Review Queue')}
-                  </ButtonLink>
-                  <ButtonLink size="sm" variant="ghost" to={buildJobsPath(version.id)}>
-                    {t('Open version jobs')}
-                  </ButtonLink>
-                </div>
-              </Panel>
-            ))}
-          </ul>
+                )
+              },
+              {
+                key: 'status',
+                header: t('Status'),
+                cell: (version) => (
+                  <div className="row gap wrap align-center">
+                    {selectedVersionId === version.id ? <Badge tone="success">{t('Active')}</Badge> : null}
+                    <Badge tone="neutral">{t('Items')}: {version.item_count}</Badge>
+                  </div>
+                )
+              },
+              {
+                key: 'coverage',
+                header: t('Coverage'),
+                cell: (version) => (
+                  <div className="stack tight">
+                    <Badge tone="info">{formatCoveragePercent(version.annotation_coverage)}</Badge>
+                    <small className="muted">
+                      {t('train')} {version.split_summary.train} / {t('val')} {version.split_summary.val} / {t('test')}{' '}
+                      {version.split_summary.test}
+                    </small>
+                  </div>
+                )
+              },
+              {
+                key: 'actions',
+                header: t('Actions'),
+                className: 'table-cell-actions',
+                cell: (version) => (
+                  <div className="row gap wrap">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={selectedVersionId === version.id ? 'secondary' : 'ghost'}
+                      onClick={() => onSelectVersion(version.id)}
+                    >
+                      {selectedVersionId === version.id ? t('Active snapshot') : t('Set active snapshot')}
+                    </Button>
+                    <ButtonLink size="sm" variant="secondary" to={buildTrainingPath(version.id)}>
+                      {t('Train')}
+                    </ButtonLink>
+                    <ButtonLink size="sm" variant="ghost" to={buildReviewPath(version.id, 'needs_work')}>
+                      {t('Review')}
+                    </ButtonLink>
+                    <ButtonLink size="sm" variant="ghost" to={buildJobsPath(version.id)}>
+                      {t('Jobs')}
+                    </ButtonLink>
+                    <ButtonLink size="sm" variant="ghost" to={buildInferencePath(version.id)}>
+                      {t('Validate')}
+                    </ButtonLink>
+                  </div>
+                )
+              }
+            ]}
+          />
         )}
       </Card>
     </>

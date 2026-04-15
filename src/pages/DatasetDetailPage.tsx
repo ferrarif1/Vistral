@@ -13,15 +13,12 @@ import AttachmentUploader from '../components/AttachmentUploader';
 import BulkActionBar from '../components/datasets/BulkActionBar';
 import DatasetItemBrowser from '../components/datasets/DatasetItemBrowser';
 import DatasetVersionRail from '../components/datasets/DatasetVersionRail';
-import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
-import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import StateBlock from '../components/StateBlock';
-import StepIndicator from '../components/StepIndicator';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import {
   ActionBar,
+  DetailDrawer,
   DetailList,
   FilterToolbar,
   InlineAlert,
@@ -30,11 +27,7 @@ import {
   SectionCard
 } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
-import { Card, Panel } from '../components/ui/Surface';
-import {
-  WorkspacePage,
-  WorkspaceWorkbench
-} from '../components/ui/WorkspacePage';
+import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import {
   filterItemsByAnnotationQueue,
   getItemAnnotationStatus,
@@ -71,16 +64,6 @@ const parseMetadataText = (source: string): Record<string, string> =>
       })
       .filter(([key]) => key.length > 0)
   );
-
-const reviewReasonFilterOptions: AnnotationReviewReasonCode[] = [
-  'box_mismatch',
-  'label_error',
-  'text_error',
-  'missing_object',
-  'polygon_issue',
-  'other'
-];
-const datasetDetailOnboardingDismissedStorageKey = 'vistral-dataset-detail-onboarding-dismissed';
 
 const buildAnnotationWorkspacePath = (
   datasetId: string,
@@ -168,24 +151,6 @@ type SavedSampleView = {
   metadataFilter: string;
   viewMode: 'list' | 'grid';
 };
-type ErrorPatternSlice = {
-  id: string;
-  label: string;
-  description: string;
-  count: number;
-  queueFilter: AnnotationQueueFilter;
-  splitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
-  reviewReasonFilter: ReviewReasonFilter;
-  metadataFilter: string;
-};
-type MetadataSignalSlice = {
-  id: string;
-  label: string;
-  description: string;
-  count: number;
-  metadataFilter: string;
-  queueFilter: AnnotationQueueFilter;
-};
 
 const buildDatasetDetailSignature = (detail: {
   dataset: DatasetRecord;
@@ -205,7 +170,6 @@ const buildDatasetDetailSignature = (detail: {
 export default function DatasetDetailPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
-  const steps = useMemo(() => [t('Upload'), t('Split'), t('Version')], [t]);
   const { datasetId } = useParams<{ datasetId: string }>();
   const [searchParams] = useSearchParams();
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
@@ -243,7 +207,7 @@ export default function DatasetDetailPage() {
   const [batchSplit, setBatchSplit] = useState<'keep' | 'train' | 'val' | 'test' | 'unassigned'>('keep');
   const [batchStatus, setBatchStatus] = useState<'keep' | 'uploading' | 'processing' | 'ready' | 'error'>('keep');
   const [batchTagsText, setBatchTagsText] = useState('');
-  const [step, setStep] = useState(0);
+  const [itemDrawerOpen, setItemDrawerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sectionRefreshing, setSectionRefreshing] = useState<'attachments' | 'items' | 'versions' | null>(null);
@@ -251,7 +215,6 @@ export default function DatasetDetailPage() {
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const detailSignatureRef = useRef('');
   const uploadSectionRef = useRef<HTMLDivElement | null>(null);
-  const workflowPanelRef = useRef<HTMLDivElement | null>(null);
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
   const sampleViewStorageKey = datasetId ? `vistral:dataset:${datasetId}:sample-views` : '';
 
@@ -552,77 +515,6 @@ export default function DatasetDetailPage() {
       versionId: selectedVersionId
     });
   }, [datasetId, queuePreviewEntries, selectedVersionId]);
-  const trainingCreatePathFromDetail = useMemo(() => {
-    if (!datasetId) {
-      return '/training/jobs/new';
-    }
-
-    if (selectedVersion?.id) {
-      return buildTrainingJobCreatePath(datasetId, selectedVersion.id);
-    }
-
-    const next = new URLSearchParams();
-    next.set('dataset', datasetId);
-    return `/training/jobs/new?${next.toString()}`;
-  }, [datasetId, selectedVersion?.id]);
-  const datasetRouteId = dataset?.id ?? datasetId ?? '';
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'upload',
-        label: t('Upload ready dataset files'),
-        detail: t('Start by uploading files and waiting for at least one ready item in this dataset.'),
-        done: readyCount > 0,
-        to: datasetRouteId ? `/datasets/${datasetRouteId}` : '/datasets',
-        cta: t('Upload Dataset File')
-      },
-      {
-        key: 'annotate',
-        label: t('Run annotation and review queues'),
-        detail: t('Open annotation workspace and move samples through annotate/review states.'),
-        done: annotations.length > 0,
-        to: prioritizedAnnotationWorkspacePath || (datasetRouteId ? `/datasets/${datasetRouteId}/annotate` : '/datasets'),
-        cta: t('Open Annotation Workspace')
-      },
-      {
-        key: 'version',
-        label: t('Create dataset version snapshot'),
-        detail: t('Version snapshots keep training and validation reproducible for this dataset.'),
-        done: versions.length > 0,
-        to: datasetRouteId ? `/datasets/${datasetRouteId}` : '/datasets',
-        cta: t('Create Version Snapshot')
-      },
-      {
-        key: 'launch',
-        label: t('Launch scoped training'),
-        detail: t('Use selected version readiness and launch training from this dataset context.'),
-        done: selectedVersionLaunchReady,
-        to: trainingCreatePathFromDetail,
-        cta: t('Create Training Job')
-      }
-    ],
-    [
-      annotations.length,
-      datasetRouteId,
-      prioritizedAnnotationWorkspacePath,
-      readyCount,
-      selectedVersionLaunchReady,
-      t,
-      trainingCreatePathFromDetail,
-      versions.length
-    ]
-  );
-  const nextOnboardingStep = useMemo(
-    () => onboardingSteps.find((stepItem) => !stepItem.done) ?? null,
-    [onboardingSteps]
-  );
-  const nextOnboardingStepIndex = useMemo(
-    () =>
-      nextOnboardingStep
-        ? onboardingSteps.findIndex((stepItem) => stepItem.key === nextOnboardingStep.key) + 1
-        : 0,
-    [nextOnboardingStep, onboardingSteps]
-  );
   const annotationWorkspaceFromSampleBrowserPath = useMemo(() => {
     if (!datasetId) {
       return '';
@@ -647,193 +539,6 @@ export default function DatasetDetailPage() {
     selectedVersionId,
     selectedSampleItemIds
   ]);
-  const errorPatternSlices = useMemo<ErrorPatternSlice[]>(() => {
-    const slices: ErrorPatternSlice[] = [];
-    const rejectedReasonCounts = new Map<AnnotationReviewReasonCode, number>();
-
-    for (const annotation of annotations) {
-      const latestReview = annotation.latest_review;
-      if (!latestReview || latestReview.status !== 'rejected' || !latestReview.review_reason_code) {
-        continue;
-      }
-      const reasonCode = latestReview.review_reason_code;
-      rejectedReasonCounts.set(reasonCode, (rejectedReasonCounts.get(reasonCode) ?? 0) + 1);
-    }
-
-    for (const reasonCode of reviewReasonFilterOptions) {
-      const count = rejectedReasonCounts.get(reasonCode) ?? 0;
-      if (count <= 0) {
-        continue;
-      }
-      slices.push({
-        id: `rejected-${reasonCode}`,
-        label: t('Rejected · {reason}', { reason: t(reasonCode) }),
-        description: t('Rejected samples grouped by latest review reason.'),
-        count,
-        queueFilter: 'rejected',
-        splitFilter: 'all',
-        reviewReasonFilter: reasonCode,
-        metadataFilter: ''
-      });
-    }
-
-    const lowConfidenceTagCount = items.filter((item) =>
-      Object.keys(item.metadata).some((key) => key.toLowerCase() === 'tag:low_confidence')
-    ).length;
-    if (lowConfidenceTagCount > 0) {
-      slices.push({
-        id: 'low-confidence-tag',
-        label: t('Tag · low_confidence'),
-        description: t('Samples already marked as low-confidence in metadata tags.'),
-        count: lowConfidenceTagCount,
-        queueFilter: 'all',
-        splitFilter: 'all',
-        reviewReasonFilter: 'all',
-        metadataFilter: 'tag:low_confidence'
-      });
-    }
-
-    const feedbackReturnCount = items.filter((item) => {
-      const value = item.metadata.inference_run_id;
-      return typeof value === 'string' && value.trim().length > 0;
-    }).length;
-    if (feedbackReturnCount > 0) {
-      slices.push({
-        id: 'feedback-return',
-        label: t('Feedback Return Samples'),
-        description: t('Samples returned from inference validation feedback loops.'),
-        count: feedbackReturnCount,
-        queueFilter: 'needs_work',
-        splitFilter: 'all',
-        reviewReasonFilter: 'all',
-        metadataFilter: 'inference_run_id'
-      });
-    }
-
-    const unassignedReadyCount = items.filter(
-      (item) => item.split === 'unassigned' && item.status === 'ready'
-    ).length;
-    if (unassignedReadyCount > 0) {
-      slices.push({
-        id: 'unassigned-ready',
-        label: t('Ready but Unassigned'),
-        description: t('Ready samples still waiting for train/val/test assignment.'),
-        count: unassignedReadyCount,
-        queueFilter: 'all',
-        splitFilter: 'unassigned',
-        reviewReasonFilter: 'all',
-        metadataFilter: ''
-      });
-    }
-
-    return slices.sort((left, right) => right.count - left.count).slice(0, 6);
-  }, [annotations, items, t]);
-  const applyErrorPatternSlice = useCallback(
-    (slice: ErrorPatternSlice) => {
-      setSampleSearchText('');
-      setSampleSplitFilter(slice.splitFilter);
-      setSampleStatusFilter('all');
-      setSampleQueueFilter(slice.queueFilter);
-      setSampleReviewReasonFilter(slice.reviewReasonFilter);
-      setSampleMetadataFilter(slice.metadataFilter);
-      setSelectedSampleItemIds([]);
-      setFeedback({
-        variant: 'success',
-        text: t('Sample browser focused on pattern: {pattern}', { pattern: slice.label })
-      });
-    },
-    [t]
-  );
-  const metadataSignalSlices = useMemo<MetadataSignalSlice[]>(() => {
-    const tagCounts = new Map<string, number>();
-    const sourceCounts = new Map<string, number>();
-    const feedbackReasonCounts = new Map<string, number>();
-
-    for (const item of items) {
-      const entries = Object.entries(item.metadata);
-      if (entries.length === 0) {
-        continue;
-      }
-
-      for (const [key, rawValue] of entries) {
-        const normalizedKey = key.trim().toLowerCase();
-        const value = String(rawValue).trim();
-        if (!normalizedKey) {
-          continue;
-        }
-
-        if (normalizedKey.startsWith('tag:')) {
-          tagCounts.set(normalizedKey, (tagCounts.get(normalizedKey) ?? 0) + 1);
-        }
-
-        if (normalizedKey === 'source' && value) {
-          const normalizedValue = value.toLowerCase();
-          sourceCounts.set(normalizedValue, (sourceCounts.get(normalizedValue) ?? 0) + 1);
-        }
-
-        if (normalizedKey === 'feedback_reason' && value) {
-          const normalizedValue = value.toLowerCase();
-          feedbackReasonCounts.set(
-            normalizedValue,
-            (feedbackReasonCounts.get(normalizedValue) ?? 0) + 1
-          );
-        }
-      }
-    }
-
-    const slices: MetadataSignalSlice[] = [];
-
-    for (const [tagKey, count] of [...tagCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 4)) {
-      slices.push({
-        id: `tag-${tagKey}`,
-        label: t('Tag · {tag}', { tag: tagKey.replace(/^tag:/, '') }),
-        description: t('Metadata tag slice for quick sampling and queue focus.'),
-        count,
-        metadataFilter: tagKey,
-        queueFilter: 'all'
-      });
-    }
-
-    for (const [sourceValue, count] of [...sourceCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 2)) {
-      slices.push({
-        id: `source-${sourceValue}`,
-        label: t('Source · {value}', { value: sourceValue }),
-        description: t('Samples grouped by metadata source value.'),
-        count,
-        metadataFilter: `source=${sourceValue}`,
-        queueFilter: 'all'
-      });
-    }
-
-    for (const [reasonValue, count] of [...feedbackReasonCounts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 2)) {
-      slices.push({
-        id: `feedback-${reasonValue}`,
-        label: t('Feedback reason · {value}', { value: reasonValue }),
-        description: t('Inference feedback reason slice for active rework routing.'),
-        count,
-        metadataFilter: `feedback_reason=${reasonValue}`,
-        queueFilter: 'needs_work'
-      });
-    }
-
-    return slices.filter((slice) => slice.count > 0).sort((left, right) => right.count - left.count).slice(0, 8);
-  }, [items, t]);
-  const applyMetadataSignalSlice = useCallback(
-    (slice: MetadataSignalSlice) => {
-      setSampleSearchText('');
-      setSampleSplitFilter('all');
-      setSampleStatusFilter('all');
-      setSampleQueueFilter(slice.queueFilter);
-      setSampleReviewReasonFilter('all');
-      setSampleMetadataFilter(slice.metadataFilter);
-      setSelectedSampleItemIds([]);
-      setFeedback({
-        variant: 'success',
-        text: t('Sample browser focused on metadata slice: {slice}', { slice: slice.label })
-      });
-    },
-    [t]
-  );
   const applySavedSampleView = useCallback(
     (viewId: string) => {
       setSelectedSavedSampleViewId(viewId);
@@ -896,36 +601,6 @@ export default function DatasetDetailPage() {
     selectedSavedSampleViewId,
     t
   ]);
-  const saveSliceAsSampleView = useCallback(
-    (input: {
-      name: string;
-      splitFilter: 'all' | 'train' | 'val' | 'test' | 'unassigned';
-      queueFilter: AnnotationQueueFilter;
-      reviewReasonFilter: ReviewReasonFilter;
-      metadataFilter: string;
-    }) => {
-      const normalizedName = input.name.trim() || t('View');
-      const existingByName = savedSampleViews.find((view) => view.name === normalizedName);
-      persistSampleView({
-        id: existingByName?.id,
-        name: normalizedName,
-        searchText: '',
-        splitFilter: input.splitFilter,
-        statusFilter: 'all',
-        queueFilter: input.queueFilter,
-        reviewReasonFilter: input.reviewReasonFilter,
-        metadataFilter: input.metadataFilter,
-        viewMode: 'list'
-      });
-      setFeedback({
-        variant: 'success',
-        text: existingByName
-          ? t('Updated saved view from slice: {name}', { name: normalizedName })
-          : t('Saved new view from slice: {name}', { name: normalizedName })
-      });
-    },
-    [persistSampleView, savedSampleViews, t]
-  );
   const deleteSavedSampleView = useCallback(() => {
     if (!selectedSavedSampleViewId) {
       return;
@@ -1137,7 +812,6 @@ export default function DatasetDetailPage() {
       });
 
       await loadDetail('manual');
-      setStep(2);
       setFeedback({ variant: 'success', text: t('Dataset split updated successfully.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -1273,6 +947,7 @@ export default function DatasetDetailPage() {
     setItemSplit(item.split);
     setItemStatus(item.status);
     setItemMetadataText(metadataToText(item.metadata));
+    setItemDrawerOpen(true);
   };
 
   const saveItemUpdates = async () => {
@@ -1295,6 +970,7 @@ export default function DatasetDetailPage() {
         variant: 'success',
         text: t('Item updated. The latest dataset detail is now refreshed.')
       });
+      setItemDrawerOpen(false);
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -1499,21 +1175,54 @@ export default function DatasetDetailPage() {
   };
 
   const focusWorkflowPanel = () => {
-    workflowPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('dataset-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+  const preferredTrainingVersion = selectedVersion ?? versions[0] ?? null;
+  const nextDatasetAction =
+    readyCount === 0
+      ? {
+          tone: 'warning' as const,
+          title: t('Complete upload first'),
+          description: t('Upload at least one ready file before split, annotation, and version actions.'),
+          label: t('Jump to Upload Section'),
+          onClick: focusUploadSection
+        }
+      : annotations.length === 0
+        ? {
+            tone: 'info' as const,
+            title: t('Start annotation workflow'),
+            description: t('Open annotation workspace and move samples through needs_work and in_review queues.'),
+            label: t('Open Annotation Workspace'),
+            to: prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`
+          }
+        : versions.length === 0
+          ? {
+              tone: 'info' as const,
+              title: t('Create first version snapshot'),
+              description: t('Lock current split and annotation state as a reproducible dataset version.'),
+              label: t('Open Version Controls'),
+              onClick: focusWorkflowPanel
+            }
+          : {
+          tone: 'success' as const,
+          title: t('Dataset is ready for downstream tasks'),
+          description: t('Continue with scoped training and validation using dataset version context.'),
+          label: t('Open Training Jobs'),
+          to: preferredTrainingVersion
+            ? buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)
+            : '/training/jobs'
+        };
 
   return (
     <WorkspacePage>
       <PageHeader
         eyebrow={t('Dataset Lane')}
         title={dataset.name}
-        description={t('Inspect dataset readiness, version snapshots, and next-step entry actions in one lane.')}
+        description={t('Inspect dataset readiness, sample coverage, and version snapshots without leaving the dataset lane.')}
         meta={
           <div className="row gap wrap align-center">
             <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
-            <Badge tone="neutral">{t('Task Type')}: {t(dataset.task_type)}</Badge>
             <Badge tone="neutral">{t('Attachments')}: {attachments.length}</Badge>
-            <Badge tone="info">{t('Items')}: {items.length}</Badge>
             <Badge tone="neutral">{t('Versions')}: {versions.length}</Badge>
           </div>
         }
@@ -1531,38 +1240,33 @@ export default function DatasetDetailPage() {
           </>
         }
       />
-
-      <StepIndicator steps={steps} current={step} />
-
       <KPIStatRow
         items={[
           {
             label: t('Ready files'),
             value: readyCount,
-            tone: readyCount > 0 ? 'success' : 'neutral',
-            hint: t('Attachments ready for split, annotation, or versioning')
+            tone: readyCount > 0 ? 'success' : 'warning',
+            hint: t('Files ready for downstream splits and review.')
           },
           {
-            label: t('Needs Work'),
-            value: annotationSummary.needs_work
-          },
-          {
-            label: t('in_review'),
-            value: annotationSummary.in_review,
-            tone: annotationSummary.in_review > 0 ? 'info' : 'neutral',
-            hint: t('Items currently waiting for reviewer decisions.')
-          },
-          {
-            label: t('rejected'),
-            value: annotationSummary.rejected,
-            tone: annotationSummary.rejected > 0 ? 'warning' : 'neutral',
-            hint: t('Rejected items retain latest review context for focused rework.')
+            label: t('Samples'),
+            value: items.length,
+            tone: items.length > 0 ? 'info' : 'neutral',
+            hint: t('Visible in this dataset context.')
           },
           {
             label: t('Versions'),
             value: versions.length,
             tone: versions.length > 0 ? 'info' : 'neutral',
-            hint: t('Version snapshots keep training and validation reproducible')
+            hint: t('Snapshot history for training and validation.')
+          },
+          {
+            label: t('Launch ready'),
+            value: selectedVersionLaunchReady ? t('Yes') : t('No'),
+            tone: selectedVersionLaunchReady ? 'success' : 'warning',
+            hint: selectedVersion
+              ? t('Coverage {coverage}', { coverage: formatCoveragePercent(selectedVersion.annotation_coverage) })
+              : t('Pick a version snapshot first.')
           }
         ]}
       />
@@ -1574,7 +1278,6 @@ export default function DatasetDetailPage() {
           description={feedback.text}
         />
       ) : null}
-
       <WorkspaceWorkbench
         toolbar={
           <FilterToolbar
@@ -1585,9 +1288,7 @@ export default function DatasetDetailPage() {
                   value={selectedVersionId}
                   onChange={(event) => setSelectedVersionId(event.target.value)}
                 >
-                  {versions.length === 0 ? (
-                    <option value="">{t('No Versions')}</option>
-                  ) : null}
+                  {versions.length === 0 ? <option value="">{t('No Versions')}</option> : null}
                   {versions.map((version) => (
                     <option key={version.id} value={version.id}>
                       {version.version_name}
@@ -1597,180 +1298,69 @@ export default function DatasetDetailPage() {
               </label>
             }
             actions={
-              <>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    loadDetail('manual')
-                      .then(() => setFeedback(null))
-                      .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
-                  }}
-                  disabled={busy || refreshing}
-                >
-                  {refreshing ? t('Refreshing...') : t('Refresh')}
-                </Button>
-              </>
-            }
-            summary={
-              <div className="row gap wrap">
-                <Badge tone="neutral">{t('Dataset')}: {dataset.name}</Badge>
-                <Badge tone="neutral">{t('Ready files')}: {readyCount}</Badge>
-                <Badge tone="info">{t('Filtered samples')}: {filteredSampleItems.length}</Badge>
-                <Badge tone={selectedVersion ? 'info' : 'neutral'}>
-                  {selectedVersion ? `${t('Version')}: ${selectedVersion.version_name}` : `${t('Version')}: ${t('Latest')}`}
-                </Badge>
-              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  loadDetail('manual')
+                    .then(() => setFeedback(null))
+                    .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
+                }}
+                disabled={busy || refreshing}
+              >
+                {refreshing ? t('Refreshing...') : t('Refresh')}
+              </Button>
             }
           />
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              as="section"
-              title={t('Dataset detail first-run guide')}
-              description={t('Use this page to inspect dataset readiness and move into the right next lane.')}
-              summary={t('Guide status is computed from ready files, annotation records, version snapshots, and launch readiness.')}
-              storageKey={`${datasetDetailOnboardingDismissedStorageKey}:${datasetId ?? 'unknown'}`}
-              steps={onboardingSteps.map((stepItem) => ({
-                key: stepItem.key,
-                label: stepItem.label,
-                detail: stepItem.detail,
-                done: stepItem.done,
-                primaryAction: {
-                  to: stepItem.to,
-                  label: stepItem.cta,
-                  onClick:
-                    stepItem.key === 'upload'
-                      ? focusUploadSection
-                      : stepItem.key === 'version'
-                        ? focusWorkflowPanel
-                        : undefined
+            <SectionCard
+              title={t('Dataset overview')}
+              description={t('A compact lane for status, progress, and next-step entry points.')}
+            >
+              <DetailList
+                items={[
+                  { label: t('Task Type'), value: t(dataset.task_type) },
+                  { label: t('Last updated'), value: formatCompactTimestamp(dataset.updated_at, t('n/a')) },
+                  { label: t('Visible samples'), value: filteredSampleItems.length },
+                  { label: t('Classes'), value: dataset.label_schema.classes.length }
+                ]}
+              />
+              {dataset.description ? <small className="muted">{dataset.description}</small> : null}
+              <ActionBar
+                primary={
+                  <ButtonLink
+                    to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+                    variant="secondary"
+                    size="sm"
+                  >
+                    {t('Open Annotation Workspace')}
+                  </ButtonLink>
                 }
-              }))}
-            />
-
-            {nextOnboardingStep ? (
-              <WorkspaceNextStepCard
-                title={t('Next dataset detail step')}
-                description={t('Finish one clear dataset action here before moving deeper into annotation or training.')}
-                stepLabel={nextOnboardingStep.label}
-                stepDetail={nextOnboardingStep.detail}
-                current={nextOnboardingStepIndex}
-                total={onboardingSteps.length}
-                actions={
-                  nextOnboardingStep.key === 'upload' ? (
-                    <Button type="button" variant="secondary" size="sm" onClick={focusUploadSection}>
-                      {t('Jump to Upload Section')}
-                    </Button>
-                  ) : nextOnboardingStep.key === 'version' ? (
-                    <Button type="button" variant="secondary" size="sm" onClick={focusWorkflowPanel}>
-                      {t('Open Version Controls')}
-                    </Button>
-                  ) : (
-                    <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-                      {nextOnboardingStep.cta}
+                secondary={
+                  <Button type="button" variant="ghost" size="sm" onClick={focusUploadSection}>
+                    {t('Jump to Files')}
+                  </Button>
+                }
+                tertiary={
+                  preferredTrainingVersion ? (
+                    <ButtonLink
+                      to={buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      {t('Open Training Jobs')}
                     </ButtonLink>
-                  )
+                  ) : null
                 }
               />
-            ) : null}
-
-            <SectionCard
-              title={t('Annotation Summary')}
-              description={t('Review annotation progress and jump directly into the next focused queue.')}
-            >
-              <div className="row gap wrap">
-                {selectedVersion ? (
-                  <Badge tone="info">
-                    {t('Selected version split')}: train {selectedVersion.split_summary.train} / val {selectedVersion.split_summary.val} / test{' '}
-                    {selectedVersion.split_summary.test}
-                  </Badge>
-                ) : (
-                  <Badge tone="neutral">
-                    {t('No explicit dataset version selected. Operations use current dataset context.')}
-                  </Badge>
-                )}
-                {selectedVersion ? (
-                  <Badge tone="neutral">
-                    {t('Coverage')}: {formatCoveragePercent(selectedVersion.annotation_coverage)}
-                  </Badge>
-                ) : null}
-              </div>
-
-              <div className="annotation-summary-grid">
-                {queuePreviewEntries.map((entry) => (
-                  <Card key={entry.key} as="article" className="annotation-summary-card">
-                    <div className="annotation-summary-card-top">
-                      <div className="stack tight">
-                        <small className="muted">{entry.label}</small>
-                        <strong className="metric">{entry.count}</strong>
-                      </div>
-                      <ButtonLink
-                        size="sm"
-                        variant="secondary"
-                        className="annotation-summary-action-link"
-                        to={buildAnnotationWorkspacePath(dataset.id, entry.key, entry.firstItemId, {
-                          versionId: selectedVersionId
-                        })}
-                      >
-                        {t('Open Queue')}
-                      </ButtonLink>
-                    </div>
-                    <small className="muted">{entry.description}</small>
-                    {entry.items.length > 0 ? (
-                      <ul className="workspace-record-list compact">
-                        {entry.items.map((item) => {
-                          const itemAnnotation = annotationByItemId.get(item.id) ?? null;
-                          const itemFilename = resolveItemFilename(item);
-                          return (
-                            <Panel key={item.id} as="li" className="workspace-record-item compact" tone="soft">
-                              <div className="row between gap wrap">
-                                <strong>{itemFilename}</strong>
-                                <StatusTag status={itemAnnotation?.status ?? 'draft'}>
-                                  {t(itemAnnotation?.status ?? 'unannotated')}
-                                </StatusTag>
-                              </div>
-                              {itemAnnotation?.latest_review ? (
-                                <div className="row gap wrap">
-                                  <Badge tone="neutral">
-                                    {t('Latest Review')}: {t(itemAnnotation.latest_review.status)}
-                                  </Badge>
-                                  {itemAnnotation.latest_review.review_reason_code ? (
-                                    <Badge tone="warning">
-                                      {t(itemAnnotation.latest_review.review_reason_code)}
-                                    </Badge>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                              {itemAnnotation?.latest_review?.review_comment ? (
-                                <small className="muted">{itemAnnotation.latest_review.review_comment}</small>
-                              ) : null}
-                              <ButtonLink
-                                size="sm"
-                                variant="ghost"
-                                to={buildAnnotationWorkspacePath(dataset.id, entry.key, item.id, {
-                                  versionId: selectedVersionId
-                                })}
-                              >
-                                {t('Open Item')}
-                              </ButtonLink>
-                            </Panel>
-                          );
-                        })}
-                      </ul>
-                    ) : (
-                      <small className="muted">{t('No items in this queue right now.')}</small>
-                    )}
-                  </Card>
-                ))}
-              </div>
             </SectionCard>
 
             <div ref={uploadSectionRef}>
               <AttachmentUploader
-                title={t('Step 1. Dataset File Upload')}
+                title={t('Dataset files')}
                 items={attachments}
                 onUpload={uploadDatasetFile}
                 onUploadFiles={uploadDatasetFiles}
@@ -1796,8 +1386,8 @@ export default function DatasetDetailPage() {
             </div>
 
             <SectionCard
-              title={t('Dataset Items')}
-              description={t('Sample overview, queue filtering, and batch curation stay here; full annotation editing remains in the annotation workspace.')}
+              title={t('Sample browser')}
+              description={t('Filtering and selection stay here; detailed annotation editing is in the annotation workspace.')}
               actions={
                 <Button
                   type="button"
@@ -1819,195 +1409,276 @@ export default function DatasetDetailPage() {
                 <StateBlock
                   variant="empty"
                   title={t('No Items')}
-                  description={
-                    nextOnboardingStep
-                      ? t('No items yet. Finish the recommended step below to unlock split, review, and version work.')
-                      : t('Upload files in this dataset first, then split/version operations and annotation queues will become available.')
-                  }
+                  description={t('Upload files first, then sample browsing and versioning will become available.')}
                   extra={
-                    nextOnboardingStep ? (
-                      <WorkspaceFollowUpHint
-                        layout="inline"
-                        actions={
-                          nextOnboardingStep.key === 'upload' ? (
-                            <Button type="button" variant="secondary" size="sm" onClick={focusUploadSection}>
-                              {t('Jump to Upload Section')}
-                            </Button>
-                          ) : nextOnboardingStep.key === 'version' ? (
-                            <Button type="button" variant="secondary" size="sm" onClick={focusWorkflowPanel}>
-                              {t('Open Version Controls')}
-                            </Button>
-                          ) : (
-                            <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-                              {nextOnboardingStep.cta}
-                            </ButtonLink>
-                          )
-                        }
-                        detail={nextOnboardingStep.detail}
-                      />
-                    ) : (
-                      <small className="muted">
-                        {t('Use the attachment uploader above to add source files, then return here to organize samples.')}
-                      </small>
-                    )
+                    <Button type="button" variant="secondary" size="sm" onClick={focusUploadSection}>
+                      {t('Jump to Files')}
+                    </Button>
                   }
                 />
               ) : (
-                <div className="stack">
-                  <DatasetItemBrowser
-                    t={t}
-                    busy={busy}
-                    filteredItems={filteredSampleItems}
-                    selectedItemIdSet={selectedSampleItemIdSet}
-                    allFilteredItemsSelected={allFilteredItemsSelected}
-                    selectedCount={selectedSampleItemIds.length}
-                    viewMode={sampleViewMode}
-                    searchText={sampleSearchText}
-                    splitFilter={sampleSplitFilter}
-                    statusFilter={sampleStatusFilter}
-                    queueFilter={sampleQueueFilter}
-                    reviewReasonFilter={sampleReviewReasonFilter}
-                    metadataFilter={sampleMetadataFilter}
-                    savedViewNameDraft={savedSampleViewNameDraft}
-                    selectedSavedViewId={selectedSavedSampleViewId}
-                    savedViews={savedSampleViews.map((view) => ({ id: view.id, name: view.name }))}
-                    openFilteredQueuePath={
-                      annotationWorkspaceFromSampleBrowserPath ||
-                      buildAnnotationWorkspacePath(dataset.id, sampleQueueFilter, undefined, {
-                        versionId: selectedVersionId
-                      })
-                    }
-                    batchActionBar={
-                      <BulkActionBar
-                        t={t}
-                        busy={busy}
-                        selectedCount={selectedSampleItemIds.length}
-                        batchSplit={batchSplit}
-                        batchStatus={batchStatus}
-                        batchTagsText={batchTagsText}
-                        onBatchSplitChange={setBatchSplit}
-                        onBatchStatusChange={setBatchStatus}
-                        onBatchTagsTextChange={setBatchTagsText}
-                        onApplyBatchUpdates={() => {
-                          void applyBatchItemUpdates();
-                        }}
-                      />
-                    }
-                    onSearchTextChange={setSampleSearchText}
-                    onSplitFilterChange={setSampleSplitFilter}
-                    onStatusFilterChange={setSampleStatusFilter}
-                    onQueueFilterChange={(value) => setSampleQueueFilter(value as AnnotationQueueFilter)}
-                    onReviewReasonFilterChange={setSampleReviewReasonFilter}
-                    onMetadataFilterChange={setSampleMetadataFilter}
-                    onSavedViewNameDraftChange={setSavedSampleViewNameDraft}
-                    onSelectedSavedViewChange={applySavedSampleView}
-                    onSaveCurrentView={saveCurrentSampleView}
-                    onDeleteSavedView={deleteSavedSampleView}
-                    onSelectAllFiltered={selectAllFilteredItems}
-                    onClearSelected={clearSelectedSampleItems}
-                    onClearFilters={clearSampleFilters}
-                    onViewModeChange={setSampleViewMode}
-                    onToggleSelection={toggleSampleItemSelection}
-                    onEditItem={selectItemForEditing}
-                    resolveItemFilename={resolveItemFilename}
-                    resolvePreviewUrl={resolveItemPreviewUrl}
-                    resolveAnnotationStatus={resolveAnnotationStatus}
-                  />
+                <DatasetItemBrowser
+                  t={t}
+                  busy={busy}
+                  filteredItems={filteredSampleItems}
+                  selectedItemIdSet={selectedSampleItemIdSet}
+                  allFilteredItemsSelected={allFilteredItemsSelected}
+                  selectedCount={selectedSampleItemIds.length}
+                  viewMode={sampleViewMode}
+                  searchText={sampleSearchText}
+                  splitFilter={sampleSplitFilter}
+                  statusFilter={sampleStatusFilter}
+                  queueFilter={sampleQueueFilter}
+                  reviewReasonFilter={sampleReviewReasonFilter}
+                  metadataFilter={sampleMetadataFilter}
+                  savedViewNameDraft={savedSampleViewNameDraft}
+                  selectedSavedViewId={selectedSavedSampleViewId}
+                  savedViews={savedSampleViews.map((view) => ({ id: view.id, name: view.name }))}
+                  openFilteredQueuePath={
+                    annotationWorkspaceFromSampleBrowserPath ||
+                    buildAnnotationWorkspacePath(dataset.id, sampleQueueFilter, undefined, {
+                      versionId: selectedVersionId
+                    })
+                  }
+                  batchActionBar={
+                    <BulkActionBar
+                      t={t}
+                      busy={busy}
+                      selectedCount={selectedSampleItemIds.length}
+                      batchSplit={batchSplit}
+                      batchStatus={batchStatus}
+                      batchTagsText={batchTagsText}
+                      onBatchSplitChange={setBatchSplit}
+                      onBatchStatusChange={setBatchStatus}
+                      onBatchTagsTextChange={setBatchTagsText}
+                      onApplyBatchUpdates={() => {
+                        void applyBatchItemUpdates();
+                      }}
+                    />
+                  }
+                  onSearchTextChange={setSampleSearchText}
+                  onSplitFilterChange={setSampleSplitFilter}
+                  onStatusFilterChange={setSampleStatusFilter}
+                  onQueueFilterChange={(value) => setSampleQueueFilter(value as AnnotationQueueFilter)}
+                  onReviewReasonFilterChange={setSampleReviewReasonFilter}
+                  onMetadataFilterChange={setSampleMetadataFilter}
+                  onSavedViewNameDraftChange={setSavedSampleViewNameDraft}
+                  onSelectedSavedViewChange={applySavedSampleView}
+                  onSaveCurrentView={saveCurrentSampleView}
+                  onDeleteSavedView={deleteSavedSampleView}
+                  onSelectAllFiltered={selectAllFilteredItems}
+                  onClearSelected={clearSelectedSampleItems}
+                  onClearFilters={clearSampleFilters}
+                  onViewModeChange={setSampleViewMode}
+                  onToggleSelection={toggleSampleItemSelection}
+                  onEditItem={selectItemForEditing}
+                  resolveItemFilename={resolveItemFilename}
+                  resolvePreviewUrl={resolveItemPreviewUrl}
+                  resolveAnnotationStatus={resolveAnnotationStatus}
+                />
+              )}
+            </SectionCard>
 
-                  <AdvancedSection
-                    title={t('Item Editor')}
-                    description={t('Collapsed by default for progressive disclosure.')}
+            <SectionCard
+              title={t('Version snapshots')}
+              description={t('Select the active snapshot and use it for training, review, or validation.')}
+            >
+              <DatasetVersionRail
+                t={t}
+                dataset={dataset}
+                versions={versions}
+                selectedVersionId={selectedVersionId}
+                selectedVersion={selectedVersion}
+                selectedVersionLaunchReady={selectedVersionLaunchReady}
+                selectedVersionHasTrainSplit={selectedVersionHasTrainSplit}
+                selectedVersionHasCoverage={selectedVersionHasCoverage}
+                preferredReviewQueueForSelectedVersion={preferredReviewQueueForSelectedVersion}
+                busy={busy}
+                isRefreshing={sectionRefreshing === 'versions'}
+                onRefresh={() => {
+                  void refreshVersionSection();
+                }}
+                onSelectVersion={setSelectedVersionId}
+                formatCoveragePercent={formatCoveragePercent}
+                buildTrainingPath={(versionId) => buildTrainingJobCreatePath(dataset.id, versionId)}
+                buildReviewPath={(versionId, queue) =>
+                  buildAnnotationWorkspacePath(dataset.id, queue, undefined, {
+                    versionId
+                  })
+                }
+                buildJobsPath={(versionId) => buildTrainingJobsPath(dataset.id, versionId)}
+                buildInferencePath={(versionId) => buildInferenceValidationPath(dataset.id, versionId)}
+              />
+            </SectionCard>
+
+            <div id="dataset-workflow">
+              <AdvancedSection
+                title={t('Advanced dataset operations')}
+                description={t('Split, import/export, and reference item actions stay collapsed by default.')}
+              >
+                <div className="stack">
+                  <SectionCard
+                    title={t('Dataset workflow')}
+                    description={t('Prepare split ratios and version snapshots when you are ready to curate the dataset.')}
                   >
-                    <Panel as="section" className="stack tight" tone="soft">
+                    <div className="workspace-form-grid">
                       <label>
-                        {t('Selected Item')}
+                        {t('Train Ratio')}
+                        <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
+                      </label>
+                      <label>
+                        {t('Val Ratio')}
+                        <Input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
+                      </label>
+                      <label className="workspace-form-span-2">
+                        {t('Test Ratio')}
+                        <Input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
+                      </label>
+                    </div>
+                    <Button onClick={runSplit} disabled={busy || items.length === 0} block>
+                      {t('Apply Split')}
+                    </Button>
+                    <label>
+                      {t('Version Name (optional)')}
+                      <Input
+                        value={versionName}
+                        onChange={(event) => setVersionName(event.target.value)}
+                        placeholder={t('for example: v2')}
+                      />
+                    </label>
+                    <Button onClick={createVersion} disabled={busy || items.length === 0} block>
+                      {t('Create Version Snapshot')}
+                    </Button>
+                  </SectionCard>
+
+                  <SectionCard
+                    title={t('Import / Export')}
+                    description={t('Import or export annotation files without leaving the dataset lane.')}
+                  >
+                    <div className="stack">
+                      <label>
+                        {t('Import format')}
                         <Select
-                          value={selectedItemId}
-                          onChange={(event) => {
-                            const nextId = event.target.value;
-                            const next = items.find((item) => item.id === nextId);
-                            if (!next) {
-                              return;
-                            }
-                            selectItemForEditing(next);
-                          }}
+                          value={importFormat}
+                          onChange={(event) =>
+                            setImportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
+                          }
                         >
-                          {items.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {resolveItemFilename(item) + ' · ' + t(item.split)}
-                            </option>
-                          ))}
+                          <option value="yolo">{t('yolo')}</option>
+                          <option value="coco">{t('coco')}</option>
+                          <option value="labelme">{t('labelme')}</option>
+                          <option value="ocr">{t('ocr')}</option>
                         </Select>
                       </label>
-                      {selectedItem ? (
-                        <small className="muted">
-                          {t('Current status')}: {t(selectedItem.status)}
-                        </small>
-                      ) : null}
-                      <div className="three-col">
-                        <label>
-                          {t('Item Split')}
-                          <Select
-                            value={itemSplit}
-                            onChange={(event) =>
-                              setItemSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
-                            }
-                          >
-                            <option value="unassigned">{t('unassigned')}</option>
-                            <option value="train">{t('train')}</option>
-                            <option value="val">{t('val')}</option>
-                            <option value="test">{t('test')}</option>
-                          </Select>
-                        </label>
-                        <label>
-                          {t('Item Status')}
-                          <Select
-                            value={itemStatus}
-                            onChange={(event) =>
-                              setItemStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
-                            }
-                          >
-                            <option value="ready">{t('ready')}</option>
-                            <option value="processing">{t('processing')}</option>
-                            <option value="uploading">{t('uploading')}</option>
-                            <option value="error">{t('error')}</option>
-                          </Select>
-                        </label>
-                      </div>
+                      <label>
+                        {t('Source Attachment')}
+                        <Select
+                          value={importAttachmentId}
+                          onChange={(event) => setImportAttachmentId(event.target.value)}
+                        >
+                          {attachments
+                            .filter((attachment) => attachment.status === 'ready')
+                            .map((attachment) => (
+                              <option key={attachment.id} value={attachment.id}>
+                                {attachment.filename}
+                              </option>
+                            ))}
+                        </Select>
+                      </label>
+                      <Button onClick={importAnnotations} disabled={busy || !importAttachmentId}>
+                        {t('Run Import')}
+                      </Button>
+                    </div>
+                    <div className="stack">
+                      <label>
+                        {t('Export format')}
+                        <Select
+                          value={exportFormat}
+                          onChange={(event) =>
+                            setExportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
+                          }
+                        >
+                          <option value="yolo">{t('yolo')}</option>
+                          <option value="coco">{t('coco')}</option>
+                          <option value="labelme">{t('labelme')}</option>
+                          <option value="ocr">{t('ocr')}</option>
+                        </Select>
+                      </label>
+                      <Button onClick={exportAnnotations} disabled={busy}>
+                        {t('Run Export')}
+                      </Button>
+                    </div>
+                    <div className="stack">
+                      <h4>{t('Reference items')}</h4>
+                      <small className="muted">
+                        {t('Create metadata-only items when a file binary has not been uploaded yet.')}
+                      </small>
+                      <label>
+                        {t('Reference Filename')}
+                        <Input
+                          value={referenceFilename}
+                          onChange={(event) => setReferenceFilename(event.target.value)}
+                          placeholder={t('for example: camera-A/frame-001.jpg')}
+                        />
+                      </label>
+                      <label>
+                        {t('Item Split')}
+                        <Select
+                          value={referenceSplit}
+                          onChange={(event) =>
+                            setReferenceSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
+                          }
+                        >
+                          <option value="unassigned">{t('unassigned')}</option>
+                          <option value="train">{t('train')}</option>
+                          <option value="val">{t('val')}</option>
+                          <option value="test">{t('test')}</option>
+                        </Select>
+                      </label>
+                      <label>
+                        {t('Item Status')}
+                        <Select
+                          value={referenceStatus}
+                          onChange={(event) =>
+                            setReferenceStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
+                          }
+                        >
+                          <option value="ready">{t('ready')}</option>
+                          <option value="processing">{t('processing')}</option>
+                          <option value="uploading">{t('uploading')}</option>
+                          <option value="error">{t('error')}</option>
+                        </Select>
+                      </label>
                       <label>
                         {t('Metadata (key=value per line, optional)')}
                         <Textarea
-                          value={itemMetadataText}
-                          onChange={(event) => setItemMetadataText(event.target.value)}
+                          value={referenceMetadataText}
+                          onChange={(event) => setReferenceMetadataText(event.target.value)}
                           placeholder={t('for example: source=import_reference')}
                           rows={3}
                         />
                       </label>
-                      <Button onClick={saveItemUpdates} disabled={busy || !selectedItemId}>
-                        {t('Save Item Updates')}
+                      <Button onClick={createReferenceItem} disabled={busy}>
+                        {t('Create Reference Item')}
                       </Button>
-                      <small className="muted">
-                        {selectedItem && Object.keys(selectedItem.metadata).length > 0
-                          ? t('Current metadata: {metadata}', { metadata: metadataToText(selectedItem.metadata) })
-                          : t('No metadata')}
-                      </small>
-                    </Panel>
-                  </AdvancedSection>
+                    </div>
+                  </SectionCard>
                 </div>
-              )}
-            </SectionCard>
+              </AdvancedSection>
+            </div>
           </div>
         }
         side={
           <div className="workspace-inspector-rail">
             <SectionCard
               title={t('Current status')}
-              description={t('Inspect dataset files, annotation readiness, and version snapshots in one place.')}
+              description={t('Compact dataset status and one recommended next step.')}
             >
               <DetailList
                 items={[
                   { label: t('Task Type'), value: t(dataset.task_type) },
                   { label: t('Last updated'), value: formatCompactTimestamp(dataset.updated_at, t('n/a')) },
+                  { label: t('Ready files'), value: readyCount },
                   { label: t('Visible samples'), value: filteredSampleItems.length },
                   {
                     label: t('Queue focus'),
@@ -2017,326 +1688,126 @@ export default function DatasetDetailPage() {
                         : sampleQueueFilter === 'needs_work'
                           ? t('Needs Work')
                           : t(sampleQueueFilter)
-                  },
-                  { label: t('Classes'), value: dataset.label_schema.classes.length }
+                  }
                 ]}
               />
               {dataset.description ? <small className="muted">{dataset.description}</small> : null}
-              <ActionBar
-                primary={
-                  selectedVersion ? (
-                    <ButtonLink
-                      to={buildTrainingJobCreatePath(dataset.id, selectedVersion.id)}
-                      variant="secondary"
-                      size="sm"
-                    >
-                      {t('Create Training Job')}
+              <InlineAlert
+                tone={nextDatasetAction.tone}
+                title={nextDatasetAction.title}
+                description={nextDatasetAction.description}
+                actions={
+                  nextDatasetAction.to ? (
+                    <ButtonLink to={nextDatasetAction.to} variant="secondary" size="sm">
+                      {nextDatasetAction.label}
                     </ButtonLink>
                   ) : (
-                    <Button type="button" variant="secondary" size="sm" onClick={focusWorkflowPanel}>
-                      {t('Open Version Controls')}
+                    <Button type="button" variant="secondary" size="sm" onClick={nextDatasetAction.onClick}>
+                      {nextDatasetAction.label}
                     </Button>
                   )
                 }
+              />
+              <ActionBar
                 secondary={
-                  <ButtonLink
-                    to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
-                    variant="ghost"
-                    size="sm"
-                  >
-                    {t('Open Annotation Workspace')}
-                  </ButtonLink>
+                  <Button type="button" variant="ghost" size="sm" onClick={focusWorkflowPanel}>
+                    {t('Open Advanced Actions')}
+                  </Button>
+                }
+                tertiary={
+                  preferredTrainingVersion ? (
+                    <ButtonLink
+                      to={buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      {t('Open Training Jobs')}
+                    </ButtonLink>
+                  ) : null
                 }
               />
             </SectionCard>
-
-            <DatasetVersionRail
-              t={t}
-              dataset={dataset}
-              versions={versions}
-              selectedVersionId={selectedVersionId}
-              selectedVersion={selectedVersion}
-              selectedVersionLaunchReady={selectedVersionLaunchReady}
-              selectedVersionHasTrainSplit={selectedVersionHasTrainSplit}
-              selectedVersionHasCoverage={selectedVersionHasCoverage}
-              preferredReviewQueueForSelectedVersion={preferredReviewQueueForSelectedVersion}
-              busy={busy}
-              isRefreshing={sectionRefreshing === 'versions'}
-              onRefresh={() => {
-                void refreshVersionSection();
-              }}
-              onSelectVersion={setSelectedVersionId}
-              formatCoveragePercent={formatCoveragePercent}
-              buildTrainingPath={(versionId) => buildTrainingJobCreatePath(dataset.id, versionId)}
-              buildReviewPath={(versionId, queue) =>
-                buildAnnotationWorkspacePath(dataset.id, queue, undefined, {
-                  versionId
-                })
-              }
-              buildJobsPath={(versionId) => buildTrainingJobsPath(dataset.id, versionId)}
-              buildInferencePath={(versionId) => buildInferenceValidationPath(dataset.id, versionId)}
-            />
-
-            <div ref={workflowPanelRef}>
-              <SectionCard
-                title={t('Dataset Workflow')}
-                description={t('Prepare split and snapshot actions without leaving the detail lane.')}
-              >
-                <div className="workspace-form-grid">
-                  <label>
-                    {t('Train Ratio')}
-                    <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
-                  </label>
-                  <label>
-                    {t('Val Ratio')}
-                    <Input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
-                  </label>
-                  <label className="workspace-form-span-2">
-                    {t('Test Ratio')}
-                    <Input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
-                  </label>
-                </div>
-                <Button onClick={runSplit} disabled={busy || items.length === 0} block>
-                  {t('Apply Split')}
-                </Button>
-                <label>
-                  {t('Version Name (optional)')}
-                  <Input
-                    value={versionName}
-                    onChange={(event) => setVersionName(event.target.value)}
-                    placeholder={t('for example: v2')}
-                  />
-                </label>
-                <Button onClick={createVersion} disabled={busy || items.length === 0} block>
-                  {t('Create Version Snapshot')}
-                </Button>
-              </SectionCard>
-            </div>
-
-            <AdvancedSection
-              title={t('Advanced triage slices')}
-              description={t('Quickly focus sample browser and review queues by frequent failure patterns and metadata slices.')}
-            >
-              <SectionCard
-                title={t('Error Pattern Slices')}
-                description={t('Quickly focus sample browser and review queue by frequent failure patterns.')}
-              >
-              {errorPatternSlices.length === 0 ? (
-                <small className="muted">
-                  {t('No pattern slices detected yet. Keep annotating to accumulate signals.')}
-                </small>
-              ) : (
-                <ul className="workspace-record-list compact">
-                  {errorPatternSlices.map((slice) => (
-                    <Panel key={slice.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
-                      <div className="row between gap wrap align-center">
-                        <strong>{slice.label}</strong>
-                        <Badge tone={slice.count > 0 ? 'warning' : 'neutral'}>{slice.count}</Badge>
-                      </div>
-                      <small className="muted">{slice.description}</small>
-                      <div className="row gap wrap">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => applyErrorPatternSlice(slice)}
-                        >
-                          {t('Focus in browser')}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            saveSliceAsSampleView({
-                              name: slice.label,
-                              splitFilter: slice.splitFilter,
-                              queueFilter: slice.queueFilter,
-                              reviewReasonFilter: slice.reviewReasonFilter,
-                              metadataFilter: slice.metadataFilter
-                            })
-                          }
-                        >
-                          {t('Save as view')}
-                        </Button>
-                      </div>
-                    </Panel>
-                  ))}
-                </ul>
-              )}
-
-              <div className="stack tight">
-                <strong>{t('Metadata / Tag Slices')}</strong>
-                {metadataSignalSlices.length === 0 ? (
-                  <small className="muted">
-                    {t('No metadata slices detected yet. Add metadata/tags in item editing or feedback loops.')}
-                  </small>
-                ) : (
-                  <ul className="workspace-record-list compact">
-                    {metadataSignalSlices.map((slice) => (
-                      <Panel key={slice.id} as="li" className="workspace-record-item compact stack tight" tone="soft">
-                        <div className="row between gap wrap align-center">
-                          <strong>{slice.label}</strong>
-                          <Badge tone={slice.count > 0 ? 'info' : 'neutral'}>{slice.count}</Badge>
-                        </div>
-                        <small className="muted">{slice.description}</small>
-                        <small className="muted">
-                          {t('Filter')}: {slice.metadataFilter}
-                        </small>
-                        <div className="row gap wrap">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => applyMetadataSignalSlice(slice)}
-                          >
-                            {t('Focus in browser')}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              saveSliceAsSampleView({
-                                name: slice.label,
-                                splitFilter: 'all',
-                                queueFilter: slice.queueFilter,
-                                reviewReasonFilter: 'all',
-                                metadataFilter: slice.metadataFilter
-                              })
-                            }
-                          >
-                            {t('Save as view')}
-                          </Button>
-                        </div>
-                      </Panel>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              </SectionCard>
-            </AdvancedSection>
-
-            <AdvancedSection
-              title={t('Annotation Import / Export')}
-              description={t('Use this section to import or export annotation files in selected format.')}
-            >
-              <Card as="section">
-                <h4>{t('Import Annotations')}</h4>
-                <label>
-                  {t('Format')}
-                  <Select
-                    value={importFormat}
-                    onChange={(event) =>
-                      setImportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
-                    }
-                  >
-                    <option value="yolo">{t('yolo')}</option>
-                    <option value="coco">{t('coco')}</option>
-                    <option value="labelme">{t('labelme')}</option>
-                    <option value="ocr">{t('ocr')}</option>
-                  </Select>
-                </label>
-                <label>
-                  {t('Source Attachment')}
-                  <Select
-                    value={importAttachmentId}
-                    onChange={(event) => setImportAttachmentId(event.target.value)}
-                  >
-                    {attachments
-                      .filter((attachment) => attachment.status === 'ready')
-                      .map((attachment) => (
-                        <option key={attachment.id} value={attachment.id}>
-                          {attachment.filename}
-                        </option>
-                      ))}
-                  </Select>
-                </label>
-                <Button onClick={importAnnotations} disabled={busy || !importAttachmentId}>
-                  {t('Run Import')}
-                </Button>
-              </Card>
-
-              <Card as="section">
-                <h4>{t('Export Annotations')}</h4>
-                <label>
-                  {t('Format')}
-                  <Select
-                    value={exportFormat}
-                    onChange={(event) =>
-                      setExportFormat(event.target.value as 'yolo' | 'coco' | 'labelme' | 'ocr')
-                    }
-                  >
-                    <option value="yolo">{t('yolo')}</option>
-                    <option value="coco">{t('coco')}</option>
-                    <option value="labelme">{t('labelme')}</option>
-                    <option value="ocr">{t('ocr')}</option>
-                  </Select>
-                </label>
-                <Button onClick={exportAnnotations} disabled={busy}>
-                  {t('Run Export')}
-                </Button>
-              </Card>
-
-              <Card as="section">
-                <h4>{t('Reference Dataset Items')}</h4>
-                <small className="muted">
-                  {t('Create metadata-only items when file binary is not uploaded yet.')}
-                </small>
-                <label>
-                  {t('Reference Filename')}
-                  <Input
-                    value={referenceFilename}
-                    onChange={(event) => setReferenceFilename(event.target.value)}
-                    placeholder={t('for example: camera-A/frame-001.jpg')}
-                  />
-                </label>
-                <label>
-                  {t('Item Split')}
-                  <Select
-                    value={referenceSplit}
-                    onChange={(event) =>
-                      setReferenceSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')
-                    }
-                  >
-                    <option value="unassigned">{t('unassigned')}</option>
-                    <option value="train">{t('train')}</option>
-                    <option value="val">{t('val')}</option>
-                    <option value="test">{t('test')}</option>
-                  </Select>
-                </label>
-                <label>
-                  {t('Item Status')}
-                  <Select
-                    value={referenceStatus}
-                    onChange={(event) =>
-                      setReferenceStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')
-                    }
-                  >
-                    <option value="ready">{t('ready')}</option>
-                    <option value="processing">{t('processing')}</option>
-                    <option value="uploading">{t('uploading')}</option>
-                    <option value="error">{t('error')}</option>
-                  </Select>
-                </label>
-                <label>
-                  {t('Metadata (key=value per line, optional)')}
-                  <Textarea
-                    value={referenceMetadataText}
-                    onChange={(event) => setReferenceMetadataText(event.target.value)}
-                    placeholder={t('for example: source=import_reference')}
-                    rows={3}
-                  />
-                </label>
-                <Button onClick={createReferenceItem} disabled={busy}>
-                  {t('Create Reference Item')}
-                </Button>
-              </Card>
-            </AdvancedSection>
-
           </div>
         }
       />
+
+      <DetailDrawer
+        open={itemDrawerOpen}
+        onClose={() => setItemDrawerOpen(false)}
+        title={selectedItem ? resolveItemFilename(selectedItem) : t('Edit Item')}
+        description={
+          selectedItem
+            ? t('Update split, status, and metadata for the selected sample.')
+            : t('Choose a sample to edit.')
+        }
+        actions={
+          <div className="row gap wrap">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setItemDrawerOpen(false)}>
+              {t('Close')}
+            </Button>
+            <Button onClick={saveItemUpdates} disabled={busy || !selectedItemId} size="sm">
+              {t('Save Item Updates')}
+            </Button>
+          </div>
+        }
+      >
+        {selectedItem ? (
+          <div className="stack">
+            <DetailList
+              items={[
+                { label: t('Filename'), value: resolveItemFilename(selectedItem) },
+                { label: t('Current status'), value: t(selectedItem.status) },
+                { label: t('Split'), value: t(selectedItem.split) },
+                { label: t('Metadata keys'), value: Object.keys(selectedItem.metadata).length }
+              ]}
+            />
+            <label>
+              {t('Item Split')}
+              <Select
+                value={itemSplit}
+                onChange={(event) => setItemSplit(event.target.value as 'train' | 'val' | 'test' | 'unassigned')}
+              >
+                <option value="unassigned">{t('unassigned')}</option>
+                <option value="train">{t('train')}</option>
+                <option value="val">{t('val')}</option>
+                <option value="test">{t('test')}</option>
+              </Select>
+            </label>
+            <label>
+              {t('Item Status')}
+              <Select
+                value={itemStatus}
+                onChange={(event) => setItemStatus(event.target.value as 'uploading' | 'processing' | 'ready' | 'error')}
+              >
+                <option value="ready">{t('ready')}</option>
+                <option value="processing">{t('processing')}</option>
+                <option value="uploading">{t('uploading')}</option>
+                <option value="error">{t('error')}</option>
+              </Select>
+            </label>
+            <label>
+              {t('Metadata (key=value per line, optional)')}
+              <Textarea
+                value={itemMetadataText}
+                onChange={(event) => setItemMetadataText(event.target.value)}
+                placeholder={t('for example: source=import_reference')}
+                rows={4}
+              />
+            </label>
+            <small className="muted">
+              {Object.keys(selectedItem.metadata).length > 0
+                ? t('Current metadata: {metadata}', { metadata: metadataToText(selectedItem.metadata) })
+                : t('No metadata')}
+            </small>
+          </div>
+        ) : (
+          <StateBlock
+            variant="empty"
+            title={t('No item selected')}
+            description={t('Pick a sample from the browser to edit it here.')}
+          />
+        )}
+      </DetailDrawer>
     </WorkspacePage>
   );
 }

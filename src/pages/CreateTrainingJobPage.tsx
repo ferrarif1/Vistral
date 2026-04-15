@@ -2,19 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { DatasetRecord, DatasetVersionRecord, RequirementTaskDraft } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
-import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
-import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
+import { InlineAlert, PageHeader } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -28,7 +23,6 @@ const curatedBaseModelCatalog = {
   yolo: ['yolo11n']
 } as const;
 const taskTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
-const createTrainingOnboardingDismissedStorageKey = 'vistral-create-training-onboarding-dismissed';
 
 type TrainingFramework = keyof typeof curatedBaseModelCatalog;
 const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
@@ -72,7 +66,6 @@ export default function CreateTrainingJobPage() {
   const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
   const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
   const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
-  const [runtimeDisableInferenceFallback, setRuntimeDisableInferenceFallback] = useState(false);
   const [runtimePythonBin, setRuntimePythonBin] = useState('');
   const [nonStrictLaunchConfirmed, setNonStrictLaunchConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -86,7 +79,6 @@ export default function CreateTrainingJobPage() {
   const jobNameInputRef = useRef<HTMLInputElement | null>(null);
   const datasetVersionSelectRef = useRef<HTMLSelectElement | null>(null);
   const currentStepCardRef = useRef<HTMLDivElement | null>(null);
-  const draftAnnotationType = taskDraft?.recommended_annotation_type ?? taskDraft?.annotation_type ?? '';
 
   useEffect(() => {
     setLoading(true);
@@ -192,7 +184,6 @@ export default function CreateTrainingJobPage() {
           return;
         }
         setRuntimeDisableSimulatedTrainFallback(view.controls.disable_simulated_train_fallback);
-        setRuntimeDisableInferenceFallback(view.controls.disable_inference_fallback);
         setRuntimePythonBin(view.controls.python_bin.trim());
       })
       .catch((error) => {
@@ -242,28 +233,6 @@ export default function CreateTrainingJobPage() {
     () => datasetVersions.find((version) => version.id === datasetVersionId) ?? null,
     [datasetVersionId, datasetVersions]
   );
-  const scopedJobsPath = useMemo(() => {
-    const next = new URLSearchParams();
-    if (datasetId) {
-      next.set('dataset', datasetId);
-    }
-    if (datasetVersionId) {
-      next.set('version', datasetVersionId);
-    }
-    const query = next.toString();
-    return query ? `/training/jobs?${query}` : '/training/jobs';
-  }, [datasetId, datasetVersionId]);
-  const scopedDatasetDetailPath = useMemo(() => {
-    if (!selectedDataset) {
-      return '/datasets';
-    }
-    if (!datasetVersionId) {
-      return `/datasets/${selectedDataset.id}`;
-    }
-    const next = new URLSearchParams();
-    next.set('version', datasetVersionId);
-    return `/datasets/${selectedDataset.id}?${next.toString()}`;
-  }, [datasetVersionId, selectedDataset]);
   const snapshotPrefilledFromLink =
     Boolean(preferredDatasetId) &&
     datasetId === preferredDatasetId &&
@@ -478,86 +447,8 @@ export default function CreateTrainingJobPage() {
         step === steps.length - 1
           ? t('This run is ready for final review.')
           : t('This run will be ready for final review after earlier steps are completed.')
-    }
-  ];
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'scope',
-        label: t('Confirm task and run scope'),
-        detail: t('Set job name, task type, and framework so this run has a clear target.'),
-        done: Boolean(name.trim()) && Boolean(framework),
-        to: '/training/jobs/new',
-        cta: t('Jump to task scope')
-      },
-      {
-        key: 'snapshot',
-        label: t('Bind dataset version snapshot'),
-        detail: t('Training launch must bind an explicit dataset version, not an implicit latest dataset state.'),
-        done: Boolean(selectedDatasetVersion),
-        to: selectedDataset ? `/datasets/${selectedDataset.id}` : '/datasets',
-        cta:
-          selectedDataset && datasetVersions.length > 0
-            ? t('Jump to snapshot step')
-            : selectedDataset
-              ? t('Open Dataset Detail')
-              : t('Manage Datasets')
-      },
-      {
-        key: 'readiness',
-        label: t('Pass launch readiness gates'),
-        detail: t('Dataset ready, train split available, and annotation coverage > 0 are required before launch.'),
-        done: launchReady,
-        to: scopedDatasetDetailPath,
-        cta: t('Check readiness source')
-      },
-      {
-        key: 'strict',
-        label: t('Confirm runtime safety guard'),
-        detail: t('If the safety guard is off, explicit risk confirmation is required before launch.'),
-        done: !runtimeSettingsLoading && !runtimeSettingsError && strictLaunchGateReady,
-        to: '/settings/runtime',
-        cta: t('Open Runtime Settings')
       }
-    ],
-    [
-      framework,
-      launchReady,
-      name,
-      runtimeSettingsError,
-      runtimeSettingsLoading,
-      scopedDatasetDetailPath,
-      datasetVersions.length,
-      selectedDataset,
-      selectedDatasetVersion,
-      strictLaunchGateReady,
-      t
-    ]
-  );
-  const nextOnboardingStep = useMemo(
-    () => onboardingSteps.find((item) => !item.done) ?? null,
-    [onboardingSteps]
-  );
-  const nextOnboardingStepIndex = useMemo(
-    () => (nextOnboardingStep ? onboardingSteps.findIndex((item) => item.key === nextOnboardingStep.key) + 1 : 0),
-    [nextOnboardingStep, onboardingSteps]
-  );
-
-  const focusTaskScopeStep = () => {
-    setStep(0);
-    currentStepCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    window.setTimeout(() => {
-      jobNameInputRef.current?.focus();
-    }, 180);
-  };
-
-  const focusSnapshotStep = () => {
-    setStep(1);
-    currentStepCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    window.setTimeout(() => {
-      datasetVersionSelectRef.current?.focus();
-    }, 180);
-  };
+  ];
   const renderStage = () => {
     if (step === 0) {
       return (
@@ -824,9 +715,6 @@ export default function CreateTrainingJobPage() {
                 {t('Resolve runtime settings first. Training launch stays blocked until safety status can be verified.')}
               </small>
             </div>
-            <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-              {t('Open Runtime Settings')}
-            </ButtonLink>
           </Panel>
         ) : null}
         {!runtimeSettingsLoading && !runtimeSettingsError && !runtimeDisableSimulatedTrainFallback ? (
@@ -848,9 +736,6 @@ export default function CreateTrainingJobPage() {
               />
               <span>{t('I understand the risk and still want to launch this training job')}</span>
             </label>
-            <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-              {t('Open Runtime Settings')}
-            </ButtonLink>
           </Panel>
         ) : null}
       </Card>
@@ -859,28 +744,20 @@ export default function CreateTrainingJobPage() {
 
   return (
     <WorkspacePage>
-      <WorkspaceHero
+      <PageHeader
         eyebrow={t('Training Job Builder')}
         title={t('Create Training Job')}
-        description={t('Build a training run from requirement draft to launch-ready configuration.')}
-        stats={[
-          {
-            label: t('Current step'),
-            value: `${step + 1}/${steps.length}`
-          },
-          {
-            label: t('Matching datasets'),
-            value: filteredDatasets.length
-          },
-          {
-            label: t('Draft assist'),
-            value: taskDraft ? 1 : 0
-          },
-          {
-            label: t('Snapshot prefill'),
-            value: snapshotPrefilledFromLink ? t('Ready') : t('N/A')
-          }
-        ]}
+        description={t('Launch one training run from a fixed dataset snapshot after readiness checks pass.')}
+        meta={
+          <div className="row gap wrap align-center">
+            <Badge tone="neutral">{t('Step')}: {step + 1}/{steps.length}</Badge>
+            <Badge tone="info">{t('Matching datasets')}: {filteredDatasets.length}</Badge>
+            <Badge tone="success">{t('Ready datasets')}: {readyMatchingDatasets}</Badge>
+            <Badge tone={snapshotPrefilledFromLink ? 'success' : 'neutral'}>
+              {t('Snapshot prefill')}: {snapshotPrefilledFromLink ? t('Ready') : t('N/A')}
+            </Badge>
+          </div>
+        }
       />
 
       {loading ? (
@@ -899,38 +776,30 @@ export default function CreateTrainingJobPage() {
 
       {!runtimeSettingsLoading ? (
         runtimeSettingsError ? (
-          <StateBlock
-            variant="empty"
+          <InlineAlert
+            tone="warning"
             title={t('Runtime safety status unavailable')}
             description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
-            extra={
+            actions={
               <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                 {t('Open Runtime Settings')}
               </ButtonLink>
             }
           />
         ) : runtimeDisableSimulatedTrainFallback ? (
-          <StateBlock
-            variant="success"
+          <InlineAlert
+            tone="success"
             title={t('Training safety guard is active')}
-            description={t(
-              'Degraded training output is blocked. Built-in runner Python: {pythonBin}.',
-              { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
-            )}
-            extra={
-              <Badge tone={runtimeDisableInferenceFallback ? 'success' : 'warning'}>
-                {t('Inference safety guard')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
-              </Badge>
-            }
+            description={t('Degraded training output is blocked. Built-in runner Python: {pythonBin}.', {
+              pythonBin: runtimePythonBin || t('platform default (python3 / python)')
+            })}
           />
         ) : (
-          <StateBlock
-            variant="error"
+          <InlineAlert
+            tone="warning"
             title={t('Training safety guard is off')}
-            description={t(
-              'Training may return degraded output when local execution command is unavailable. Enable the safety guard in Runtime settings before production runs.'
-            )}
-            extra={
+            description={t('Enable the runtime safety guard before production runs.')}
+            actions={
               <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                 {t('Open Runtime Settings')}
               </ButtonLink>
@@ -946,33 +815,6 @@ export default function CreateTrainingJobPage() {
           description={feedback.text}
         />
       ) : null}
-
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Matching datasets'),
-            description: t('Datasets currently compatible with the selected task type.'),
-            value: filteredDatasets.length
-          },
-          {
-            title: t('Ready Datasets'),
-            description: t('Ready datasets available for immediate training launch.'),
-            value: readyMatchingDatasets
-          },
-          {
-            title: t('Framework'),
-            description: t('Current framework family selected for the run.'),
-            value: t(framework)
-          },
-          {
-            title: t('Draft assist'),
-            description: t('Optional requirement parsing that can pre-fill task choices.'),
-            value: taskDraft ? t('Ready') : t('N/A'),
-            tone: taskDraft ? 'default' : 'attention'
-          }
-        ]}
-      />
-
       <WorkspaceWorkbench
         toolbar={
           <Card as="section" className="workspace-toolbar-card">
@@ -1004,94 +846,19 @@ export default function CreateTrainingJobPage() {
                 </Button>
               </div>
             </div>
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
-                <StatusTag status={launchReady ? 'ready' : 'draft'}>
-                  {t('Launch readiness')}: {launchReady ? t('Ready') : t('draft')}
-                </StatusTag>
-                <StatusTag status="info">
-                  {t('Current step')}: {step + 1}/{steps.length}
-                </StatusTag>
-                <StatusTag status="info">
-                  {t('Framework')}: {t(framework)}
-                </StatusTag>
-                {selectedDataset ? (
-                  <StatusTag status={selectedDataset.status}>{selectedDataset.name}</StatusTag>
-                ) : null}
-                {selectedDatasetVersion ? (
-                  <StatusTag status={datasetVersionHasAnnotationCoverage ? 'ready' : 'draft'}>
-                    {selectedDatasetVersion.version_name}
-                  </StatusTag>
-                ) : null}
-              </div>
-            </div>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              title={t('Training first-run guide')}
-              description={t('Use this page to launch reproducible training from dataset snapshots, not ad-hoc state.')}
-              summary={t('Guide status is computed from your current form and selected dataset version context.')}
-              storageKey={createTrainingOnboardingDismissedStorageKey}
-              steps={onboardingSteps.map((item) => ({
-                key: item.key,
-                label: item.label,
-                detail: item.detail,
-                done: item.done,
-                primaryAction: {
-                  to: item.to,
-                  label: item.cta,
-                  onClick:
-                    item.key === 'scope'
-                      ? focusTaskScopeStep
-                      : item.key === 'snapshot' && selectedDataset && datasetVersions.length > 0
-                        ? focusSnapshotStep
-                        : undefined
-                }
-              }))}
-	            />
-
-	            {nextOnboardingStep ? (
-	              <WorkspaceNextStepCard
-	                title={t('Next training setup step')}
-	                description={t('Finish one clear setup action here before launching the run.')}
-	                stepLabel={nextOnboardingStep.label}
-	                stepDetail={nextOnboardingStep.detail}
-	                current={nextOnboardingStepIndex}
-	                total={onboardingSteps.length}
-	                actions={
-	                  <div className="row gap wrap">
-	                    {nextOnboardingStep.key === 'scope' ? (
-	                      <Button type="button" variant="secondary" size="sm" onClick={focusTaskScopeStep}>
-	                        {t('Jump to task scope')}
-	                      </Button>
-	                    ) : nextOnboardingStep.key === 'snapshot' && selectedDataset && datasetVersions.length > 0 ? (
-	                      <Button type="button" variant="secondary" size="sm" onClick={focusSnapshotStep}>
-	                        {t('Jump to snapshot step')}
-	                      </Button>
-	                    ) : (
-	                      <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-	                        {nextOnboardingStep.cta}
-	                      </ButtonLink>
-	                    )}
-	                    <ButtonLink to="/workspace/console" variant="ghost" size="sm">
-	                      {t('Back to Console')}
-	                    </ButtonLink>
-	                  </div>
-	                }
-	              />
-	            ) : null}
-
             <div ref={currentStepCardRef}>
               <Card as="article">
-              <WorkspaceSectionHeader
-                title={t('Current step')}
-                description={stepTitles[step]}
-                actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
-              />
-              <small className="muted">{stepDescriptions[step]}</small>
-              <StepIndicator steps={steps} current={step} />
+                <WorkspaceSectionHeader
+                  title={t('Current step')}
+                  description={stepTitles[step]}
+                  actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
+                />
+                <small className="muted">{stepDescriptions[step]}</small>
+                <StepIndicator steps={steps} current={step} />
               </Card>
             </div>
             {renderStage()}
@@ -1100,12 +867,13 @@ export default function CreateTrainingJobPage() {
         side={
           <div className="workspace-inspector-rail">
             <Card as="article" className="workspace-inspector-card">
-              <div className="stack tight">
-                <h3>{t('Requirement to Task Draft')}</h3>
-                <small className="muted">
-                  {t('Turn a natural-language requirement into a suggested task, framework, labels, and metrics.')}
-                </small>
+              <div className="row between gap wrap align-center">
+                <h3>{t('Requirement to task draft')}</h3>
+                <Badge tone={taskDraft ? 'success' : 'neutral'}>{taskDraft ? t('ready') : t('optional')}</Badge>
               </div>
+              <small className="muted">
+                {t('Generate a draft only when you want a suggested task shape.')}
+              </small>
               <label>
                 {t('Requirement Description')}
                 <Textarea
@@ -1119,98 +887,62 @@ export default function CreateTrainingJobPage() {
                 {drafting ? t('Generating...') : t('Generate Task Draft')}
               </Button>
               {taskDraft ? (
-                <ul className="workspace-record-list compact">
-                  <li className="workspace-record-item compact">
-                    <div className="row between gap wrap">
-                      <strong>{t('Task Type')}</strong>
-                      <StatusTag status="info">{t(taskDraft.task_type)}</StatusTag>
+                <div className="stack tight">
+                  <div className="workspace-keyline-list">
+                    <div className="workspace-keyline-item">
+                      <span>{t('Task Type')}</span>
+                      <strong>{t(taskDraft.task_type)}</strong>
                     </div>
-                    <small className="muted">
-                      {t('Framework')}: {t(taskDraft.recommended_framework)} · {t('annotation')}:{' '}
-                      {draftAnnotationType || t('N/A')}
-                    </small>
-                  </li>
-                  <li className="workspace-record-item compact">
-                    <div className="row between gap wrap">
-                      <strong>{t('labels')}</strong>
-                      <StatusTag status="info">{taskDraft.label_hints.length}</StatusTag>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Framework')}</span>
+                      <strong>{t(taskDraft.recommended_framework)}</strong>
                     </div>
-                    <small className="muted">{taskDraft.label_hints.join(', ') || t('N/A')}</small>
-                  </li>
-                  <li className="workspace-record-item compact">
-                    <div className="row between gap wrap">
-                      <strong>{t('dataset suggestions')}</strong>
-                      <StatusTag status="info">{taskDraft.dataset_suggestions.length}</StatusTag>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Labels')}</span>
+                      <strong>{taskDraft.label_hints.length}</strong>
                     </div>
-                    <small className="muted">{taskDraft.dataset_suggestions.join('；') || t('N/A')}</small>
-                  </li>
-                  <li className="workspace-record-item compact">
-                    <div className="row between gap wrap">
-                      <strong>{t('rationale')}</strong>
-                      <StatusTag status="info">{taskDraft.source}</StatusTag>
-                    </div>
-                    <small className="muted">{taskDraft.rationale}</small>
-                  </li>
-                </ul>
+                  </div>
+                  <small className="muted">{taskDraft.rationale}</small>
+                </div>
               ) : (
                 <StateBlock
                   variant="empty"
                   title={t('No requirement draft yet.')}
                   description={t('Use the assist card to convert a free-form requirement into a structured training starting point.')}
                   extra={
-                    <WorkspaceFollowUpHint
-                      layout="inline"
-                      actions={
-                        <>
-                          <ButtonLink to="/workspace/chat" variant="secondary" size="sm">
-                            {t('Open Chat Workspace')}
-                          </ButtonLink>
-                          <ButtonLink to="/datasets" variant="ghost" size="sm">
-                            {t('Open Datasets')}
-                          </ButtonLink>
-                        </>
-                      }
-                    />
+                    <div className="row gap wrap">
+                      <ButtonLink to="/workspace/chat" variant="secondary" size="sm">
+                        {t('Open Chat Workspace')}
+                      </ButtonLink>
+                      <ButtonLink to="/datasets" variant="ghost" size="sm">
+                        {t('Open Datasets')}
+                      </ButtonLink>
+                    </div>
                   }
                 />
               )}
             </Card>
 
             <Card as="article" className="workspace-inspector-card">
-              <div className="stack tight">
+              <div className="row between gap wrap align-center">
                 <h3>{t('Current run plan')}</h3>
-                <small className="muted">{stepDescriptions[step]}</small>
+                <Badge tone="neutral">
+                  {runChecklist.filter((item) => item.done).length}/{runChecklist.length}
+                </Badge>
               </div>
-              <ul className="workspace-record-list compact">
-                {runChecklist.map((item) => (
-                  <li key={item.label} className="workspace-record-item compact">
-                    <div className="row between gap wrap">
-                      <strong>{item.label}</strong>
-                      <StatusTag status={item.done ? 'ready' : 'draft'}>
-                        {item.done ? t('Ready') : t('draft')}
-                      </StatusTag>
-                    </div>
-                    <small className="muted">{item.hint}</small>
-                  </li>
+              <small className="muted">
+                {t('Keep the full checklist short and only highlight the blockers you still need to resolve.')}
+              </small>
+              <div className="workspace-keyline-list">
+                {runChecklist.slice(0, 4).map((item) => (
+                  <div key={item.label} className="workspace-keyline-item">
+                    <span>{item.label}</span>
+                    <small>{item.done ? t('Ready') : t('Pending')}</small>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </Card>
 
-            <WorkspaceActionPanel
-              title={t('Launch lane')}
-              description={t('Keep the main training actions and supporting routes close together.')}
-              surface="panel"
-              actions={
-                <>
-                  <ButtonLink to={scopedDatasetDetailPath} variant="secondary" block>
-                    {selectedDataset ? t('Open scoped dataset') : t('Manage Datasets')}
-                  </ButtonLink>
-                  <ButtonLink to={scopedJobsPath} variant="secondary" block>
-                    {t('Open Training Jobs')}
-                  </ButtonLink>
-                </>
-              }
-            />
           </div>
         }
       />

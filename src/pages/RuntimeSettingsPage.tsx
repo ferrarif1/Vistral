@@ -14,20 +14,15 @@ import type {
   ModelRecord,
   ModelVersionRecord
 } from '../../shared/domain';
-import AdvancedSection from '../components/AdvancedSection';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
-import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import StateBlock from '../components/StateBlock';
 import SettingsTabs from '../components/settings/SettingsTabs';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import {
   ActionBar,
-  DetailList,
   FilterToolbar,
   HealthSummaryPanel,
   InlineAlert,
-  KPIStatRow,
   PageHeader,
   SectionCard,
   StatusTable,
@@ -35,13 +30,8 @@ import {
 } from '../components/ui/ConsolePage';
 import WorkspaceActionStack from '../components/ui/WorkspaceActionStack';
 import { Input, Select, Textarea } from '../components/ui/Field';
-import ProgressStepper from '../components/ui/ProgressStepper';
-import { Card, Panel } from '../components/ui/Surface';
-import {
-  WorkspacePage,
-  WorkspaceSectionHeader,
-  WorkspaceWorkbench
-} from '../components/ui/WorkspacePage';
+import { Panel } from '../components/ui/Surface';
+import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
@@ -49,7 +39,6 @@ import { detectInferenceRunReality } from '../utils/inferenceSource';
 
 const FRAMEWORKS: ModelFramework[] = ['paddleocr', 'doctr', 'yolo'];
 const recentMetricJobsPerFramework = 2;
-const runtimeOnboardingDismissedStorageKey = 'vistral-runtime-onboarding-dismissed';
 
 type FrameworkMetricKeySummary = {
   framework: ModelFramework;
@@ -463,13 +452,8 @@ const resolveRuntimeApiKeyExpiryStatus = (
 
 export default function RuntimeSettingsPage() {
   const { t } = useI18n();
-  const runtimeUiBuildId = (import.meta.env.VITE_APP_BUILD_ID as string | undefined)?.trim() ?? '';
   const runtimeRecommendedLocalPythonBin = '/opt/vistral-venv/bin/python';
-  const runtimeUiBuildLabel = runtimeUiBuildId
-    ? runtimeUiBuildId.length > 24
-      ? `${runtimeUiBuildId.slice(0, 24)}...`
-      : runtimeUiBuildId
-    : t('unknown');
+  const [runtimePageMode, setRuntimePageMode] = useState<'setup' | 'readiness' | 'advanced'>('setup');
   const [checks, setChecks] = useState<RuntimeConnectivityRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
@@ -1431,7 +1415,6 @@ export default function RuntimeSettingsPage() {
   const reachableCount = checks.filter((item) => item.source === 'reachable').length;
   const unreachableCount = checks.filter((item) => item.source === 'unreachable').length;
   const configuredCount = checks.filter((item) => item.source !== 'not_configured').length;
-  const notConfiguredCount = Math.max(FRAMEWORKS.length - configuredCount, 0);
   const hasCompletedTrainingJobs = frameworkMetricKeySummary.some((entry) => entry.jobsChecked > 0);
   const runtimeReadinessIssueCount = runtimeReadiness?.issues.length ?? 0;
   const runtimeReadinessErrorCount =
@@ -1726,11 +1709,7 @@ export default function RuntimeSettingsPage() {
   };
   const runtimeReadinessReady = runtimeReadiness?.status === 'ready' && runtimeManualTaskBlockingCount === 0;
   const runtimeLocalConfigPersisted = runtimeAllFrameworksLocalMode && !runtimeHasUnsavedChanges;
-  const runtimeConfigurationPrepared =
-    configuredCount > 0 || (runtimeLocalConfigPersisted && Boolean(runtimeSettingsUpdatedAt));
-  const runtimeExecutionPathReady = reachableCount > 0 || runtimeLocalConfigPersisted;
-  const runtimeLocalQuickSetupRecommended =
-    notConfiguredCount === FRAMEWORKS.length && !runtimeConfigurationPrepared;
+  const configuredLocalPythonBin = runtimeControlDraft.python_bin.trim() || runtimeRecommendedLocalPythonBin;
   const localQuickStartSteps = useMemo(
     () => [
       {
@@ -1753,68 +1732,6 @@ export default function RuntimeSettingsPage() {
   );
   const localQuickStartNextStep =
     localQuickStartSteps.find((stepItem) => !stepItem.done) ?? null;
-  const localQuickStartCompletedCount = localQuickStartSteps.filter((stepItem) => stepItem.done).length;
-  const localQuickStartCompleted = localQuickStartCompletedCount === localQuickStartSteps.length;
-  const localQuickStartCurrentIndex = localQuickStartNextStep
-    ? localQuickStartSteps.findIndex((stepItem) => stepItem.key === localQuickStartNextStep.key)
-    : localQuickStartSteps.length;
-  const runtimeOnboardingSteps = useMemo(
-    () => [
-      {
-        key: 'configure',
-        label: t('Configure at least one framework'),
-        detail: runtimeLocalQuickSetupRecommended
-          ? t('Use local quick setup to save a local-first runtime baseline, then run readiness checks.')
-          : t('Complete endpoint or local command settings (or run auto-config) so framework checks can run.'),
-        done: runtimeConfigurationPrepared,
-        to: '/settings/runtime',
-        cta: t('Open runtime configuration')
-      },
-      {
-        key: 'profile',
-        label: t('Activate runtime profile'),
-        detail: t('Switch active runtime profile so checks and execution follow the intended target.'),
-        done: Boolean(runtimeSettingsActiveProfileId),
-        to: '/settings/runtime',
-        cta: t('Activate profile')
-      },
-      {
-        key: 'readiness',
-        label: t('Pass readiness checks'),
-        detail: t('Resolve local environment issues and safety checks before production runs.'),
-        done: runtimeReadinessReady,
-        to: '/settings/runtime',
-        cta: t('Run readiness checks')
-      },
-      {
-        key: 'next',
-        label: t('Continue to validation lane'),
-        detail: t('After readiness is green, run inference validation with real runtime output.'),
-        done: runtimeReadinessReady && runtimeConfigurationPrepared && runtimeExecutionPathReady,
-        to: '/inference/validate',
-        cta: t('Validate Inference')
-      }
-    ],
-    [
-      runtimeConfigurationPrepared,
-      runtimeExecutionPathReady,
-      runtimeLocalQuickSetupRecommended,
-      runtimeReadinessReady,
-      runtimeSettingsActiveProfileId,
-      t
-    ]
-  );
-  const nextOnboardingStep = useMemo(
-    () => runtimeOnboardingSteps.find((stepItem) => !stepItem.done) ?? null,
-    [runtimeOnboardingSteps]
-  );
-  const nextOnboardingStepIndex = useMemo(
-    () =>
-      nextOnboardingStep
-        ? runtimeOnboardingSteps.findIndex((stepItem) => stepItem.key === nextOnboardingStep.key) + 1
-        : 0,
-    [nextOnboardingStep, runtimeOnboardingSteps]
-  );
 
   const focusRuntimeConfiguration = useCallback(() => {
     runtimeConfigurationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1824,68 +1741,6 @@ export default function RuntimeSettingsPage() {
     readinessSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
-  const renderRuntimeNextAction = useCallback(
-    (
-      stepItem: (typeof runtimeOnboardingSteps)[number],
-      options?: {
-        variant?: 'secondary' | 'ghost';
-      }
-    ) => {
-      const variant = options?.variant ?? 'secondary';
-
-      if (stepItem.key === 'next') {
-        return (
-          <ButtonLink to={stepItem.to} variant={variant} size="sm">
-            {stepItem.cta}
-          </ButtonLink>
-        );
-      }
-
-      if (stepItem.key === 'readiness') {
-        return (
-          <Button type="button" variant={variant} size="sm" onClick={focusReadinessSection}>
-            {stepItem.cta}
-          </Button>
-        );
-      }
-
-      if (stepItem.key === 'configure' && runtimeLocalQuickSetupRecommended) {
-        return (
-          <Button
-            type="button"
-            variant={variant}
-            size="sm"
-            onClick={() => void applyLocalQuickSetup()}
-            disabled={
-              runtimeSettingsLoading ||
-              runtimeSettingsSaving ||
-              runtimeSettingsClearing ||
-              runtimeSettingsAutoConfiguring
-            }
-          >
-            {runtimeSettingsSaving ? t('Applying...') : t('Apply local quick setup')}
-          </Button>
-        );
-      }
-
-      return (
-        <Button type="button" variant={variant} size="sm" onClick={focusRuntimeConfiguration}>
-          {stepItem.key === 'profile' ? t('Activate profile') : t('Open runtime configuration')}
-        </Button>
-      );
-    },
-    [
-      applyLocalQuickSetup,
-      focusReadinessSection,
-      focusRuntimeConfiguration,
-      runtimeLocalQuickSetupRecommended,
-      runtimeSettingsAutoConfiguring,
-      runtimeSettingsClearing,
-      runtimeSettingsLoading,
-      runtimeSettingsSaving,
-      t
-    ]
-  );
   const renderLocalQuickStartAction = useCallback(
     (variant: 'secondary' | 'ghost' = 'secondary') => {
       if (localQuickStartNextStep?.key === 'prepare') {
@@ -2129,97 +1984,108 @@ export default function RuntimeSettingsPage() {
     ]
   );
 
-  const runtimeChecklistCollapsed =
-    runtimeConfigurationPrepared &&
-    Boolean(runtimeSettingsActiveProfileId) &&
-    runtimeReadinessReady &&
-    runtimeManualTaskBlockingCount === 0;
+  void [
+    Input,
+    Textarea,
+    describeTrainingExecutionSummaryLabel,
+    doctrPreseedRecoveryCommands,
+    resolveRuntimeApiKeyExpiryStatus,
+    runtimeModelOptionsLoading,
+    runtimeModelOptionsError,
+    summaryLoading,
+    inferenceSourceSummary,
+    trainingModeSummary,
+    trainingJobLabels,
+    metricsRetentionSummary,
+    frameworkModelOptions,
+    frameworkVersionOptions,
+    updateRuntimeDraftModelApiKeyExpiresAt,
+    updateRuntimeDraftModelApiKeyMaxCalls,
+    generateAndApplyFrameworkApiKey,
+    generateAndApplyModelBindingApiKey,
+    revokeRuntimeApiKey,
+    rotateRuntimeApiKey,
+    setRuntimeFrameworkMode,
+    updateRuntimeControlDraft,
+    clearRuntimeSettingsConfig,
+    autoConfigureRuntimeSettingsConfig,
+    hasCompletedTrainingJobs,
+    doctrPreseedMissingFiles,
+    doctrPreseedHostDirHint,
+    doctrPreseedExpectedFileNames,
+    showDoctrPreseedRecoveryGuide,
+    runtimeManualTaskPendingCount,
+    runtimeManualTaskWarningCount,
+    runtimeManualTaskStatusTone
+  ];
+
   const heroSection = (
-    <>
-      <PageHeader
-        eyebrow={t('Runtime operations')}
-        title={t('Runtime Settings')}
-        description={t('Configure framework execution paths and readiness here. Worker lifecycle operations are handled in Worker Settings.')}
-        meta={
-          <div className="row gap wrap align-center">
-            <StatusTag status={checking ? 'running' : 'ready'}>
-              {checking ? t('Checking...') : t('Ready')}
-            </StatusTag>
-            <Badge tone={runtimeHasUnsavedChanges ? 'warning' : 'neutral'}>
-              {runtimeHasUnsavedChanges ? t('Unsaved edits') : t('Saved draft')}
-            </Badge>
-            <Badge tone="neutral">
-              {t('Active profile')}: {runtimeSettingsActiveProfileId ?? t('saved')}
-            </Badge>
-            <Badge tone="neutral">
-              {t('Build ID')}: {runtimeUiBuildLabel}
-            </Badge>
-          </div>
-        }
-        primaryAction={{
-          label: runtimeReadinessLoading ? t('Checking...') : t('Run readiness check'),
-          onClick: () => {
-            focusReadinessSection();
-            void refreshRuntimeReadiness();
-          },
-          disabled: runtimeReadinessLoading
-        }}
-        secondaryActions={
-          <div className="row gap wrap">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => void saveRuntimeSettingsConfig()}
-              disabled={
-                runtimeSettingsLoading ||
-                runtimeSettingsSaving ||
-                runtimeSettingsClearing ||
-                runtimeSettingsAutoConfiguring
-              }
-            >
-              {runtimeSettingsSaving ? t('Saving...') : t('Save runtime settings')}
-            </Button>
-          </div>
-        }
-      />
-      <KPIStatRow
-        items={[
-          {
-            label: t('Reachable frameworks'),
-            value: reachableCount,
-            tone: reachableCount > 0 ? 'success' : 'warning',
-            hint: t('{count} of {total} frameworks are reachable.', {
-              count: reachableCount,
-              total: FRAMEWORKS.length
-            })
-          },
-          {
-            label: t('Unconfigured frameworks'),
-            value: notConfiguredCount,
-            tone: notConfiguredCount > 0 ? 'warning' : 'neutral',
-            hint: t('Frameworks still missing endpoint or local setup.')
-          },
-          {
-            label: t('Active profile'),
-            value: runtimeSettingsActiveProfileId ? t('configured') : t('none'),
-            tone: runtimeSettingsActiveProfileId ? 'success' : 'warning',
-            hint: runtimeSettingsActiveProfileId
-              ? runtimeSettingsActiveProfileId
-              : t('Activate one runtime profile before production validation.')
-          },
-          {
-            label: t('Open issues'),
-            value: runtimeReadinessIssueCount,
-            tone: runtimeReadinessIssueCount > 0 ? 'danger' : 'success',
-            hint: t('error {errors} / warning {warnings}', {
-              errors: runtimeReadinessErrorCount,
-              warnings: runtimeReadinessWarningCount
-            })
-          }
-        ]}
-      />
-    </>
+    <PageHeader
+      eyebrow={t('Runtime operations')}
+      title={t('Runtime Settings')}
+      description={t('Choose a setup path first, then inspect readiness only when you need to fix something. Worker lifecycle operations live in Worker Settings.')}
+      meta={
+        <div className="row gap wrap align-center">
+          <Badge tone={runtimeHasUnsavedChanges ? 'warning' : 'neutral'}>
+            {runtimeHasUnsavedChanges ? t('Unsaved edits') : t('Saved draft')}
+          </Badge>
+          <Badge tone="neutral">
+            {t('Python')}: <code>{configuredLocalPythonBin}</code>
+          </Badge>
+        </div>
+      }
+      primaryAction={{
+        label: runtimeReadinessLoading ? t('Checking...') : t('Run readiness check'),
+        onClick: () => {
+          setRuntimePageMode('readiness');
+          focusReadinessSection();
+          void refreshRuntimeReadiness();
+        },
+        disabled: runtimeReadinessLoading
+      }}
+      secondaryActions={
+        <div className="row gap wrap">
+          <Button
+            type="button"
+            variant={runtimePageMode === 'setup' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setRuntimePageMode('setup')}
+          >
+            {t('Setup')}
+          </Button>
+          <Button
+            type="button"
+            variant={runtimePageMode === 'readiness' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setRuntimePageMode('readiness')}
+          >
+            {t('Readiness')}
+          </Button>
+          <Button
+            type="button"
+            variant={runtimePageMode === 'advanced' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setRuntimePageMode('advanced')}
+          >
+            {t('Advanced')}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void saveRuntimeSettingsConfig()}
+            disabled={
+              runtimeSettingsLoading ||
+              runtimeSettingsSaving ||
+              runtimeSettingsClearing ||
+              runtimeSettingsAutoConfiguring
+            }
+          >
+            {runtimeSettingsSaving ? t('Saving...') : t('Save runtime settings')}
+          </Button>
+        </div>
+      }
+    />
   );
 
   if (loading) {
@@ -2237,6 +2103,20 @@ export default function RuntimeSettingsPage() {
       <SettingsTabs />
       {heroSection}
 
+      {runtimeSettingsError ? (
+        <InlineAlert
+          tone="danger"
+          title={t('Runtime settings unavailable')}
+          description={runtimeSettingsError}
+        />
+      ) : null}
+      {runtimeSettingsMessage ? (
+        <InlineAlert
+          tone="success"
+          title={t('Runtime settings')}
+          description={runtimeSettingsMessage}
+        />
+      ) : null}
       {error ? (
         <InlineAlert
           tone="danger"
@@ -2244,108 +2124,6 @@ export default function RuntimeSettingsPage() {
           description={error}
         />
       ) : null}
-
-      <SectionCard
-        title={t('Quick local setup')}
-        description={t('Complete this three-step path first. It keeps runtime usable without endpoint/API key setup.')}
-        actions={
-          <div className="row gap wrap align-center">
-            <Badge tone={localQuickStartCompleted ? 'success' : 'info'}>
-              {localQuickStartCompleted
-                ? t('Ready')
-                : t('Current step')}: {localQuickStartNextStep?.label ?? t('Completed')}
-            </Badge>
-            <Badge tone="neutral">
-              {t('Done {done}/{total}', {
-                done: localQuickStartCompletedCount,
-                total: localQuickStartSteps.length
-              })}
-            </Badge>
-          </div>
-        }
-      >
-        <ProgressStepper
-          steps={localQuickStartSteps.map((stepItem) => stepItem.label)}
-          current={localQuickStartCurrentIndex}
-          title={t('Local quick-start progress')}
-          caption={t('Completed') + `: ${localQuickStartCompletedCount}/${localQuickStartSteps.length}`}
-        />
-        <ActionBar
-          primary={renderLocalQuickStartAction('secondary')}
-          secondary={
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={focusRuntimeConfiguration}
-            >
-              {t('Open runtime configuration')}
-            </Button>
-          }
-          tertiary={
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                focusReadinessSection();
-                void refreshRuntimeReadiness();
-              }}
-              disabled={runtimeReadinessLoading}
-            >
-              {runtimeReadinessLoading ? t('Checking...') : t('Run readiness checks')}
-            </Button>
-          }
-        />
-      </SectionCard>
-
-      <SectionCard
-        title={t('Local runtime configuration (single machine)')}
-        description={t('If you only run local runtime, keep endpoint and API key empty. Use one Python executable for all local runners.')}
-        actions={
-          <div className="row gap wrap">
-            <Badge tone="info">{t('Mode')}: {t('Local mode')}</Badge>
-            <Badge tone="neutral">
-              {t('Recommended Python')}: {runtimeRecommendedLocalPythonBin}
-            </Badge>
-          </div>
-        }
-      >
-        <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
-          <li className="muted">{t('1. Click "Prepare local-only draft" to clear endpoint/API key for all frameworks.')}</li>
-          <li className="muted">{t('2. Keep every framework in local mode. Endpoint/API key fields are not required for local execution.')}</li>
-          <li className="muted">{t('3. Set Built-in runner Python executable, then click "Apply local quick setup".')}</li>
-          <li className="muted">{t('4. Run readiness checks. When status is ready, continue to inference validation.')}</li>
-        </ul>
-        <ActionBar
-          primary={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => updateRuntimeControlDraft('python_bin', runtimeRecommendedLocalPythonBin)}
-            >
-              {t('Use recommended Python path')}
-            </Button>
-          }
-          secondary={
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => void applyLocalQuickSetup()}
-              disabled={
-                runtimeSettingsLoading ||
-                runtimeSettingsSaving ||
-                runtimeSettingsClearing ||
-                runtimeSettingsAutoConfiguring
-              }
-            >
-              {runtimeSettingsSaving ? t('Applying...') : t('Apply local quick setup')}
-            </Button>
-          }
-        />
-      </SectionCard>
 
       <WorkspaceWorkbench
         toolbar={
@@ -2396,1695 +2174,427 @@ export default function RuntimeSettingsPage() {
                 >
                   {checking && frameworkFilter !== 'all' ? t('Checking...') : t('Check Selected')}
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void refreshExecutionSummary()}
-                  disabled={summaryLoading}
-                >
-                  {summaryLoading ? t('Refreshing...') : t('Refresh Summary')}
-                </Button>
               </>
-            }
-            summary={
-              <div className="row gap wrap">
-                <Badge tone="neutral">{t('Reachable frameworks')}: {reachableCount}</Badge>
-                <Badge tone={unreachableCount > 0 ? 'warning' : 'neutral'}>
-                  {t('Unreachable frameworks')}: {unreachableCount}
-                </Badge>
-                <Badge tone="neutral">{t('Not Configured')}: {notConfiguredCount}</Badge>
-                <Badge tone={runtimeSettingsActiveProfileId ? 'success' : 'warning'}>
-                  {t('Active profile')}: {runtimeSettingsActiveProfileId ? t('configured') : t('none')}
-                </Badge>
-              </div>
             }
           />
         }
         main={
           <div className="workspace-main-stack">
-            {runtimeChecklistCollapsed ? (
-              <InlineAlert
-                tone="success"
-                title={t('Runtime checklist complete')}
-                description={t('Framework configuration, active profile, and readiness are all in a healthy state.')}
-                actions={
-                  <div className="row gap wrap">
-                    <ButtonLink to="/inference/validate" variant="secondary" size="sm">
-                      {t('Validate Inference')}
-                    </ButtonLink>
+            {runtimePageMode === 'setup' ? (
+              <div ref={runtimeConfigurationRef} className="stack">
+                <SectionCard
+                  title={t('Setup path')}
+                  description={t('Choose the local path first. Keep profile activation and manual overrides collapsed unless you need them.')}
+                  actions={
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
-                      onClick={focusRuntimeConfiguration}
-                    >
-                      {t('Review configuration')}
-                    </Button>
-                  </div>
-                }
-              />
-            ) : (
-              <>
-                <WorkspaceOnboardingCard
-                  title={t('Runtime first-run guide')}
-                  description={t('Use this page to prepare runtime connectivity before real inference/training.')}
-                  summary={t('Runtime guide status is computed from runtime settings, profile activation, readiness report, and connectivity checks.')}
-                  storageKey={runtimeOnboardingDismissedStorageKey}
-                  steps={runtimeOnboardingSteps.map((stepItem) => ({
-                    key: stepItem.key,
-                    label: stepItem.label,
-                    detail: stepItem.detail,
-                    done: stepItem.done,
-                    primaryAction: {
-                      to: stepItem.key === 'next' ? stepItem.to : undefined,
-                      label:
-                        stepItem.key === 'next'
-                          ? stepItem.cta
-                          : stepItem.key === 'readiness'
-                            ? t('Run readiness checks')
-                            : stepItem.key === 'profile'
-                              ? t('Activate profile')
-                              : t('Open runtime configuration'),
-                      onClick:
-                        stepItem.key === 'next'
-                          ? undefined
-                          : stepItem.key === 'readiness'
-                            ? focusReadinessSection
-                            : focusRuntimeConfiguration
-                    }
-                  }))}
-                />
-
-                {nextOnboardingStep ? (
-                  <WorkspaceNextStepCard
-                    title={t('Next runtime step')}
-                    description={t('Finish one clear runtime setup action here before switching to validation.')}
-                    stepLabel={nextOnboardingStep.label}
-                    stepDetail={nextOnboardingStep.detail}
-                    current={nextOnboardingStepIndex}
-                    total={runtimeOnboardingSteps.length}
-                    actions={
-                      <div className="row gap wrap">
-                        {renderRuntimeNextAction(nextOnboardingStep)}
-                        <ButtonLink to="/settings/account" variant="ghost" size="sm">
-                          {t('Account Settings')}
-                        </ButtonLink>
-                      </div>
-                    }
-                  />
-                ) : null}
-              </>
-            )}
-
-            <div ref={runtimeConfigurationRef}>
-            <Card as="article">
-              <WorkspaceSectionHeader
-                title={t('Runtime configuration')}
-                description={t('Configure each framework in local mode or endpoint mode directly from UI.')}
-                actions={
-                  <ActionBar
-                    primary={
-                      <div className="row gap wrap">
-                        <Badge tone="neutral">
-                          {t('Last updated')}: {formatTimestamp(runtimeSettingsUpdatedAt)}
-                        </Badge>
-                        <Badge tone="info">
-                          {t('Active profile')}: {runtimeSettingsActiveProfileId ?? t('saved')}
-                        </Badge>
-                      </div>
-                    }
-                    secondary={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => void saveRuntimeSettingsConfig()}
-                        disabled={
-                          runtimeSettingsLoading ||
-                          runtimeSettingsSaving ||
-                          runtimeSettingsClearing ||
-                          runtimeSettingsAutoConfiguring
-                        }
-                      >
-                        {runtimeSettingsSaving ? t('Saving...') : t('Save runtime settings')}
-                      </Button>
-                    }
-                    tertiary={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void refreshRuntimeSettings()}
-                        disabled={
-                          runtimeSettingsLoading ||
-                          runtimeSettingsSaving ||
-                          runtimeSettingsClearing ||
-                          runtimeSettingsAutoConfiguring
-                        }
-                      >
-                        {runtimeSettingsLoading ? t('Loading...') : t('Reload settings')}
-                      </Button>
-                    }
-                  />
-                }
-              />
-
-            <div className="row gap wrap align-center">
-              <label className="stack tight" style={{ minWidth: 280 }}>
-                <small className="muted">{t('Deployment runtime profile')}</small>
-                <Select
-                  value={selectedRuntimeProfileId}
-                  onChange={(event) => setSelectedRuntimeProfileId(event.target.value)}
-                  disabled={
-                    runtimeSettingsLoading ||
-                    runtimeSettingsSaving ||
-                    runtimeSettingsClearing ||
-                    runtimeSettingsAutoConfiguring
-                  }
-                >
-                  {runtimeProfiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.label} ({profile.source})
-                    </option>
-                  ))}
-                  {runtimeProfiles.length === 0 ? <option value="">{t('No profiles')}</option> : null}
-                </Select>
-              </label>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => void activateRuntimeProfile()}
-                disabled={
-                  runtimeSettingsLoading ||
-                  runtimeSettingsSaving ||
-                  runtimeSettingsClearing ||
-                  runtimeSettingsAutoConfiguring ||
-                  runtimeProfileActivating ||
-                  !selectedRuntimeProfileId.trim()
-                }
-              >
-                {runtimeProfileActivating ? t('Switching...') : t('Activate profile')}
-              </Button>
-              {runtimeHasUnsavedChanges ? (
-                <Badge tone="warning">{t('Unsaved edits will be overwritten')}</Badge>
-              ) : null}
-            </div>
-            {selectedRuntimeProfile ? (
-              <Panel as="section" className="workspace-record-item stack tight" tone="soft">
-                <div className="row between gap wrap align-center">
-                  <strong>{t('Selected profile snapshot')}</strong>
-                  <Badge tone="neutral">
-                    {t('Source')}: {selectedRuntimeProfile.source}
-                  </Badge>
-                </div>
-                <div className="workspace-keyline-list">
-                  <div className="workspace-keyline-item">
-                    <span>{t('Built-in runner Python executable')}</span>
-                    <small>{selectedRuntimeProfile.controls.python_bin || t('platform default')}</small>
-                  </div>
-                  <div className="workspace-keyline-item">
-                    <span>{t('YOLO local model path')}</span>
-                    <small>{selectedRuntimeProfile.frameworks.yolo.local_model_path || t('not set')}</small>
-                  </div>
-                  <div className="workspace-keyline-item">
-                    <span>{t('Runtime safety guards')}</span>
-                    <small>
-                      {t('Training safety guard')}:{' '}
-                      {selectedRuntimeProfile.controls.disable_simulated_train_fallback ? t('yes') : t('no')} ·{' '}
-                      {t('Inference safety guard')}:{' '}
-                      {selectedRuntimeProfile.controls.disable_inference_fallback ? t('yes') : t('no')}
-                    </small>
-                  </div>
-                  <div className="workspace-keyline-item">
-                    <span>{t('Endpoints')}</span>
-                    <small>
-                      OCR={selectedRuntimeProfile.frameworks.paddleocr.endpoint || '-'} · docTR=
-                      {selectedRuntimeProfile.frameworks.doctr.endpoint || '-'} · YOLO=
-                      {selectedRuntimeProfile.frameworks.yolo.endpoint || '-'}
-                    </small>
-                  </div>
-                </div>
-              </Panel>
-            ) : null}
-            <div ref={readinessSectionRef}>
-
-            {runtimeSettingsError ? (
-              <InlineAlert
-                tone="danger"
-                title={t('Runtime settings unavailable')}
-                description={runtimeSettingsError}
-              />
-            ) : null}
-            {runtimeSettingsMessage ? (
-              <InlineAlert
-                tone="success"
-                title={t('Runtime settings')}
-                description={runtimeSettingsMessage}
-              />
-            ) : null}
-            <AdvancedSection
-              title={t('Choose runtime setup path')}
-              description={t(
-                'Start with one clear setup path. Keep expert maintenance collapsed until you really need it.'
-              )}
-            >
-              <Panel as="section" className="workspace-record-item stack tight" tone="soft">
-                <div className="three-col">
-                  <Panel as="section" className="workspace-record-item stack tight" tone="soft">
-                  <div className="row between gap wrap align-center">
-                    <strong>{t('Local quick setup path')}</strong>
-                    <Badge tone={runtimeLocalConfigPersisted ? 'success' : 'info'}>
-                      {runtimeLocalConfigPersisted ? t('ready') : t('Recommended')}
-                    </Badge>
-                  </div>
-                  <small className="muted">
-                    {t('Best for first-time single-machine usage. No endpoint or API key is required.')}
-                  </small>
-                  <ProgressStepper
-                    steps={localQuickStartSteps.map((stepItem) => stepItem.label)}
-                    current={localQuickStartCurrentIndex}
-                    title={t('Local quick-start progress')}
-                    caption={t('Completed') + `: ${localQuickStartCompletedCount}/${localQuickStartSteps.length}`}
-                  />
-                  <WorkspaceActionStack>{renderLocalQuickStartAction()}</WorkspaceActionStack>
-                </Panel>
-                <Panel as="section" className="workspace-record-item stack tight" tone="soft">
-                  <div className="row between gap wrap align-center">
-                    <strong>{t('Profile activation path')}</strong>
-                    <Badge
-                      tone={
-                        runtimeSettingsActiveProfileId &&
-                        runtimeSettingsActiveProfileId !== 'saved'
-                          ? 'success'
-                          : selectedRuntimeProfileId.trim()
-                            ? 'info'
-                            : 'neutral'
-                      }
-                    >
-                      {runtimeSettingsActiveProfileId && runtimeSettingsActiveProfileId !== 'saved'
-                        ? t('active')
-                        : selectedRuntimeProfileId.trim()
-                          ? t('selected')
-                          : t('pending')}
-                    </Badge>
-                  </div>
-                  <small className="muted">
-                    {t('Use this when deployment/runtime profiles are already prepared by your environment or ops team.')}
-                  </small>
-                  <div className="workspace-keyline-list">
-                    <div className="workspace-keyline-item">
-                      <span>{t('Selected profile')}</span>
-                      <small>{selectedRuntimeProfile?.label || t('No profiles')}</small>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Source')}</span>
-                      <small>{selectedRuntimeProfile?.source || t('n/a')}</small>
-                    </div>
-                  </div>
-                  <WorkspaceActionStack>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void activateRuntimeProfile()}
+                      onClick={() => void refreshRuntimeSettings()}
                       disabled={
                         runtimeSettingsLoading ||
                         runtimeSettingsSaving ||
                         runtimeSettingsClearing ||
-                        runtimeSettingsAutoConfiguring ||
-                        runtimeProfileActivating ||
-                        !selectedRuntimeProfileId.trim()
+                        runtimeSettingsAutoConfiguring
                       }
                     >
-                      {runtimeProfileActivating ? t('Switching...') : t('Activate profile')}
+                      {runtimeSettingsLoading ? t('Loading...') : t('Reload settings')}
                     </Button>
-                    {!selectedRuntimeProfileId.trim() ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={focusRuntimeConfiguration}
-                      >
-                        {t('Open runtime configuration')}
-                      </Button>
-                    ) : null}
-                  </WorkspaceActionStack>
-                </Panel>
-                <Panel as="section" className="workspace-record-item stack tight" tone="soft">
-                  <div className="row between gap wrap align-center">
-                    <strong>{t('Custom framework setup')}</strong>
-                    <Badge tone={runtimeHasUnsavedChanges ? 'warning' : configuredCount > 0 ? 'info' : 'neutral'}>
-                      {runtimeHasUnsavedChanges
-                        ? t('Unsaved edits')
-                        : configuredCount > 0
-                          ? t('in_progress')
-                          : t('pending')}
-                    </Badge>
-                  </div>
-                  <small className="muted">
-                    {t('Manually adjust framework mode, endpoint, auth, and local overrides when the guided paths are not enough.')}
-                  </small>
-                  <div className="workspace-keyline-list">
-                    <div className="workspace-keyline-item">
-                      <span>{t('Configured')}</span>
-                      <small>
-                        {configuredCount} / {FRAMEWORKS.length}
+                  }
+                >
+                  <div className="stack">
+                    <Panel as="section" className="workspace-record-item stack tight" tone="soft">
+                      <div className="row between gap wrap align-center">
+                        <strong>{t('Local quick setup')}</strong>
+                        <Badge tone={runtimeLocalConfigPersisted ? 'success' : 'info'}>
+                          {runtimeLocalConfigPersisted ? t('ready') : t('Recommended')}
+                        </Badge>
+                      </div>
+                      <small className="muted">
+                        {t('Single-machine path. Leave endpoint fields empty and use the runtime Python shown above.')}
                       </small>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Unsaved edits')}</span>
-                      <small>{runtimeHasUnsavedChanges ? t('yes') : t('no')}</small>
-                    </div>
-                  </div>
-                    <WorkspaceActionStack>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={focusRuntimeConfiguration}
-                      >
-                        {t('Open runtime configuration')}
-                      </Button>
-                    </WorkspaceActionStack>
-                  </Panel>
-                </div>
-              </Panel>
-            </AdvancedSection>
-            {runtimeReadinessError ? (
-              <StateBlock
-                variant="error"
-                title={t('Runtime readiness check failed')}
-                description={runtimeReadinessError}
-              />
-            ) : null}
-            {runtimeReadinessLoading ? (
-              <StateBlock
-                variant="loading"
-                title={t('Checking runtime readiness')}
-                description={t('Checking local runtime environment and framework availability.')}
-              />
-            ) : runtimeReadiness ? (
-              <HealthSummaryPanel
-                title={t('Runtime readiness')}
-                description={t('Keep the summary visible by default, and only open detailed diagnostics when you need to fix something.')}
-                status={
-                  <Badge tone={runtimeReadinessBadgeTone}>
-                    {t('Status')}: {runtimeReadiness.status}
-                  </Badge>
-                }
-                items={[
-                  {
-                    label: t('Errors'),
-                    value: runtimeReadinessErrorCount,
-                    tone: runtimeReadinessErrorCount > 0 ? 'danger' : 'success'
-                  },
-                  {
-                    label: t('Warnings'),
-                    value: runtimeReadinessWarningCount,
-                    tone: runtimeReadinessWarningCount > 0 ? 'warning' : 'neutral'
-                  },
-                  {
-                    label: t('Suggestions'),
-                    value: Math.max(
-                      runtimeReadinessIssueCount -
-                        runtimeReadinessErrorCount -
-                        runtimeReadinessWarningCount,
-                      0
-                    ),
-                    tone: 'info'
-                  },
-                  {
-                    label: t('Runtime mode'),
-                    value: runtimeAllFrameworksLocalMode ? t('Local-first') : t('Mixed / endpoint'),
-                    tone: runtimeAllFrameworksLocalMode ? 'info' : 'warning'
-                  }
-                ]}
-                actions={
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void refreshRuntimeReadiness()}
-                    disabled={runtimeReadinessLoading}
-                  >
-                    {t('Refresh readiness')}
-                  </Button>
-                }
-              >
-                <DetailList
-                  items={[
-                    {
-                      label: t('Python'),
-                      value: `${runtimeReadiness.python_bin_requested || t('platform default')} -> ${
-                        runtimeReadiness.python_bin_resolved || t('unavailable')
-                      }`
-                    },
-                    {
-                      label: t('Safety guards'),
-                      value: `${t('train')}: ${
-                        runtimeReadiness.strict_controls.disable_simulated_train_fallback
-                          ? t('yes')
-                          : t('no')
-                      } · ${t('inference')}: ${
-                        runtimeReadiness.strict_controls.disable_inference_fallback
-                          ? t('yes')
-                          : t('no')
-                      }`
-                    },
-                    {
-                      label: t('Open issues'),
-                      value: `${runtimeReadinessIssueCount} (${t('error')} ${runtimeReadinessErrorCount} / ${t(
-                        'warning'
-                      )} ${runtimeReadinessWarningCount})`
-                    }
-                  ]}
-                />
-                {runtimeReadinessFixCommands.length > 0 || runtimeReadiness.issues.length > 0 ? (
-                  <details className="workspace-details">
-                    <summary>{t('Advanced diagnostics and fix commands')}</summary>
-                    <div className="stack tight">
-                      {runtimeReadinessFixCommands.length > 0 ? (
-                        <div className="stack tight">
-                          <div className="row gap wrap align-center">
-                            <strong>{t('Fix commands')}</strong>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() =>
-                                void copyText(t('Operations checklist'), runtimeReadinessOpsChecklist)
+                      <small className="muted">
+                        {t('Runtime Python')}: <code>{configuredLocalPythonBin}</code>
+                      </small>
+                      <WorkspaceActionStack>{renderLocalQuickStartAction()}</WorkspaceActionStack>
+                    </Panel>
+
+                    <details className="workspace-details">
+                      <summary>
+                        {t('Other setup paths')} · {t('profiles')} / {t('manual overrides')}
+                      </summary>
+                      <div className="stack">
+                        <Panel as="section" className="workspace-record-item stack tight" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <strong>{t('Profile activation')}</strong>
+                            <Badge
+                              tone={
+                                runtimeSettingsActiveProfileId && runtimeSettingsActiveProfileId !== 'saved'
+                                  ? 'success'
+                                  : selectedRuntimeProfileId.trim()
+                                    ? 'info'
+                                    : 'neutral'
                               }
                             >
-                              {t('Copy checklist')}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() =>
-                                void copyText(t('Fix commands'), runtimeReadinessFixCommands.join('\n'))
-                              }
-                            >
-                              {t('Copy all commands')}
-                            </Button>
+                              {runtimeSettingsActiveProfileId && runtimeSettingsActiveProfileId !== 'saved'
+                                ? t('active')
+                                : selectedRuntimeProfileId.trim()
+                                  ? t('selected')
+                                  : t('pending')}
+                            </Badge>
                           </div>
-                          <small className="muted">{t('Run these on the runtime host, then refresh readiness.')}</small>
-                          <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
-                            {runtimeReadinessFixCommands.map((command) => (
-                              <li key={command} className="muted">
-                                <div className="row gap wrap align-center">
-                                  <code>{command}</code>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => void copyText(t('Fix command'), command)}
-                                  >
-                                    {t('Copy command')}
-                                  </Button>
-                                </div>
-                              </li>
-                            ))}
-                          </ul>
-                          {runtimeReadinessCommandGroups.length > 0 ? (
-                            <div className="stack tight">
-                              {runtimeReadinessCommandGroups.map((group) => (
-                                <div key={group.key} className="stack tight">
-                                  <strong>{group.label}</strong>
-                                  <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
-                                    {group.commands.map((command) => (
-                                      <li key={`${group.key}-${command}`} className="muted">
-                                        <code>{command}</code>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
+                          <small className="muted">
+                            {t('Use this when deployment/runtime profiles are already prepared by your environment or ops team.')}
+                          </small>
+                          <label className="stack tight">
+                            <small className="muted">{t('Deployment runtime profile')}</small>
+                            <Select
+                              value={selectedRuntimeProfileId}
+                              onChange={(event) => setSelectedRuntimeProfileId(event.target.value)}
+                              disabled={
+                                runtimeSettingsLoading ||
+                                runtimeSettingsSaving ||
+                                runtimeSettingsClearing ||
+                                runtimeSettingsAutoConfiguring
+                              }
+                            >
+                              {runtimeProfiles.map((profile) => (
+                                <option key={profile.id} value={profile.id}>
+                                  {profile.label} ({profile.source})
+                                </option>
                               ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {runtimeReadiness.issues.length > 0 ? (
-                        <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
-                          {runtimeReadiness.issues.map((issue) => (
-                            <li key={`${issue.code}-${issue.message}`} className="muted">
-                              <div className="row gap wrap align-center">
-                                <Badge tone={issue.level === 'error' ? 'danger' : issue.level === 'warning' ? 'warning' : 'neutral'}>
-                                  {t(issue.level)}
-                                </Badge>
-                                <small className="muted">{issue.message}</small>
-                              </div>
-                              <small className="muted">
-                                {t('Issue code')}: {issue.code}
-                              </small>
-                              {issue.remediation ? (
-                                <div className="row gap wrap align-center" style={{ marginTop: 4 }}>
-                                  <small className="muted">
-                                    {t('Remediation')}: {issue.remediation}
-                                  </small>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => void copyText(t('Remediation'), issue.remediation ?? '')}
-                                  >
-                                    {t('Copy fix')}
-                                  </Button>
-                                </div>
-                              ) : null}
-                              {issue.remediation_command ? (
-                                <div className="row gap wrap align-center" style={{ marginTop: 4 }}>
-                                  <small className="muted">
-                                    {t('Fix command')}: <code>{issue.remediation_command}</code>
-                                  </small>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() =>
-                                      void copyText(t('Fix command'), issue.remediation_command ?? '')
-                                    }
-                                  >
-                                    {t('Copy command')}
-                                  </Button>
-                                </div>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                    </div>
-                  </details>
-                ) : (
-                  <small className="muted">{t('No blocking runtime issues detected.')}</small>
-                )}
-              </HealthSummaryPanel>
-            ) : null}
-            {showDoctrPreseedRecoveryGuide && doctrBootstrapFailureIssue ? (
-              <Panel as="section" className="workspace-record-item stack tight" tone="soft">
-                <div className="row between gap wrap align-center">
-                  <strong>{t('docTR local bootstrap recovery')}</strong>
-                  <Badge tone="warning">{t('Action required')}</Badge>
-                </div>
-                <InlineAlert
-                  tone="warning"
-                  title={t('docTR model warmup failed in local mode')}
-                  description={
-                    doctrBootstrapFailureIssue.remediation ||
-                    t('Pre-seed docTR model files, then restart API and refresh readiness.')
-                  }
-                />
-                <div className="stack tight">
-                  <small className="muted">
-                    {t('Runtime preseed directory')}: <code>{doctrPreseedRuntimeDir}</code>
-                  </small>
-                  <small className="muted">
-                    {t('Host preseed directory hint')}: <code>{doctrPreseedHostDirHint}</code>
-                  </small>
-                  <small className="muted">{t('Required files')}:</small>
-                  <div className="row gap wrap align-center">
-                    {doctrPreseedExpectedFileNames.map((file) => {
-                      const current = doctrPreseedExpectedFiles.find((item) => item.name === file);
-                      const present = current ? current.present : false;
-                      return (
-                        <span key={file} className="row gap wrap align-center">
-                          <code>{file}</code>
-                          <Badge tone={present ? 'success' : 'danger'}>
-                            {present ? t('ready') : t('missing')}
-                          </Badge>
-                        </span>
-                      );
-                    })}
+                              {runtimeProfiles.length === 0 ? <option value="">{t('No profiles')}</option> : null}
+                            </Select>
+                          </label>
+                          <div className="stack tight">
+                            <small className="muted">
+                              {t('Selected profile')}: {selectedRuntimeProfile?.label || t('No profiles')}
+                            </small>
+                            <small className="muted">
+                              {t('Source')}: {selectedRuntimeProfile?.source || t('n/a')}
+                            </small>
+                          </div>
+                          <WorkspaceActionStack>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => void activateRuntimeProfile()}
+                              disabled={
+                                runtimeSettingsLoading ||
+                                runtimeSettingsSaving ||
+                                runtimeSettingsClearing ||
+                                runtimeSettingsAutoConfiguring ||
+                                runtimeProfileActivating ||
+                                !selectedRuntimeProfileId.trim()
+                              }
+                            >
+                              {runtimeProfileActivating ? t('Switching...') : t('Activate profile')}
+                            </Button>
+                          </WorkspaceActionStack>
+                        </Panel>
+
+                        <Panel as="section" className="workspace-record-item stack tight" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <strong>{t('Custom framework setup')}</strong>
+                            <Badge tone={runtimeHasUnsavedChanges ? 'warning' : configuredCount > 0 ? 'info' : 'neutral'}>
+                              {runtimeHasUnsavedChanges
+                                ? t('Unsaved edits')
+                                : configuredCount > 0
+                                  ? t('in progress')
+                                  : t('pending')}
+                            </Badge>
+                          </div>
+                          <small className="muted">
+                            {t('Manual mode for endpoint, auth, and local overrides when the guided paths are not enough.')}
+                          </small>
+                          <div className="stack tight">
+                            <small className="muted">
+                              {t('Configured')}: {configuredCount} / {FRAMEWORKS.length}
+                            </small>
+                            <small className="muted">
+                              {t('Unsaved edits')}: {runtimeHasUnsavedChanges ? t('yes') : t('no')}
+                            </small>
+                          </div>
+                        </Panel>
+                      </div>
+                    </details>
                   </div>
-                  {doctrPreseedMissingFiles.length > 0 ? (
-                    <small className="muted">
-                      {t('Missing files')}: {doctrPreseedMissingFiles.join(', ')}
-                    </small>
-                  ) : (
-                    <small className="muted">{t('All expected preseed files are present.')}</small>
-                  )}
-                </div>
-                <div className="stack tight">
-                  <div className="row gap wrap align-center">
-                    <strong>{t('Quick recovery commands')}</strong>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        void copyText(
-                          t('docTR recovery commands'),
-                          doctrPreseedRecoveryCommands.join('\n')
-                        )
-                      }
-                    >
-                      {t('Copy all commands')}
-                    </Button>
-                  </div>
-                  <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
-                    {doctrPreseedRecoveryCommands.map((command) => (
-                      <li key={command} className="muted">
-                        <div className="row gap wrap align-center">
-                          <code>{command}</code>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => void copyText(t('Fix command'), command)}
-                          >
-                            {t('Copy command')}
-                          </Button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div className="row gap wrap align-center">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void refreshRuntimeReadiness()}
-                    disabled={runtimeReadinessLoading}
-                  >
-                    {runtimeReadinessLoading ? t('Refreshing...') : t('Refresh readiness')}
-                  </Button>
-                </div>
-              </Panel>
-            ) : null}
-            </div>
-            <Panel as="section" className="workspace-record-item stack tight" tone="soft">
-              <div className="row between gap wrap align-center">
-                <strong>{t('Manual-only required checks')}</strong>
-                <div className="row gap wrap align-center">
-                  <Badge tone="danger">
-                    {t('Action required')}: {runtimeManualTaskBlockingCount}
-                  </Badge>
-                  <Badge tone="warning">
-                    {t('warning')}: {runtimeManualTaskWarningCount}
-                  </Badge>
-                  <Badge tone="neutral">
-                    {t('pending')}: {runtimeManualTaskPendingCount}
-                  </Badge>
-                </div>
+                </SectionCard>
               </div>
-              <small className="muted">
-                {t('Auto-config handles defaults, but these items still require manual confirmation for production readiness.')}
-              </small>
-              <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
-                {runtimeManualTaskItems.map((item) => (
-                  <li key={item.key} className="muted">
-                    <div className="row between gap wrap align-center">
-                      <strong>{item.title}</strong>
-                      <Badge tone={runtimeManualTaskStatusTone(item.status)}>
-                        {item.status === 'action_required' ? t('Action required') : t(item.status)}
-                      </Badge>
-                    </div>
-                    <small className="muted">{item.detail}</small>
-                    {item.actionHref && item.actionLabel ? (
-                      <div className="row gap wrap align-center" style={{ marginTop: 6 }}>
+            ) : runtimePageMode === 'readiness' ? (
+              <div ref={readinessSectionRef} className="stack">
+                {runtimeReadinessError ? (
+                  <StateBlock
+                    variant="error"
+                    title={t('Runtime readiness check failed')}
+                    description={runtimeReadinessError}
+                  />
+                ) : runtimeReadinessLoading ? (
+                  <StateBlock
+                    variant="loading"
+                    title={t('Checking runtime readiness')}
+                    description={t('Checking local runtime environment and framework availability.')}
+                  />
+                ) : runtimeReadiness ? (
+                  <>
+                    <HealthSummaryPanel
+                      title={t('Runtime readiness')}
+                      description={t('Keep the summary visible by default. Open the technical diagnostics only when you need to fix something.')}
+                      status={
+                        <Badge tone={runtimeReadinessBadgeTone}>
+                          {t('Status')}: {runtimeReadiness.status}
+                        </Badge>
+                      }
+                      items={[
+                        {
+                          label: t('Errors'),
+                          value: runtimeReadinessErrorCount,
+                          tone: runtimeReadinessErrorCount > 0 ? 'danger' : 'success'
+                        },
+                        {
+                          label: t('Warnings'),
+                          value: runtimeReadinessWarningCount,
+                          tone: runtimeReadinessWarningCount > 0 ? 'warning' : 'neutral'
+                        },
+                        {
+                          label: t('Suggestions'),
+                          value: Math.max(
+                            runtimeReadinessIssueCount -
+                              runtimeReadinessErrorCount -
+                              runtimeReadinessWarningCount,
+                            0
+                          ),
+                          tone: 'info'
+                        },
+                        {
+                          label: t('Runtime mode'),
+                          value: runtimeAllFrameworksLocalMode ? t('Local-first') : t('Mixed / endpoint'),
+                          tone: runtimeAllFrameworksLocalMode ? 'info' : 'warning'
+                        }
+                      ]}
+                      actions={
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
-                          onClick={() => {
-                            window.location.assign(item.actionHref as string);
-                          }}
+                          onClick={() => void refreshRuntimeReadiness()}
+                          disabled={runtimeReadinessLoading}
                         >
-                          {item.actionLabel}
+                          {t('Refresh readiness')}
                         </Button>
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-            <AdvancedSection
-              title={t('Expert runtime controls')}
-              description={t(
-                'Keep low-frequency maintenance, safety controls, and advanced command overrides here so first-run setup stays calm.'
-              )}
-            >
-              <div className="row gap wrap align-center">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void autoConfigureRuntimeSettingsConfig(false)}
-                  disabled={
-                    runtimeSettingsLoading ||
-                    runtimeSettingsSaving ||
-                    runtimeSettingsClearing ||
-                    runtimeSettingsAutoConfiguring
-                  }
-                >
-                  {runtimeSettingsAutoConfiguring
-                    ? t('Auto-configuring...')
-                    : t('Auto configure (safe)')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void autoConfigureRuntimeSettingsConfig(true)}
-                  disabled={
-                    runtimeSettingsLoading ||
-                    runtimeSettingsSaving ||
-                    runtimeSettingsClearing ||
-                    runtimeSettingsAutoConfiguring
-                  }
-                >
-                  {t('Auto configure (overwrite endpoints)')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void clearRuntimeSettingsConfig()}
-                  disabled={
-                    runtimeSettingsLoading ||
-                    runtimeSettingsSaving ||
-                    runtimeSettingsClearing ||
-                    runtimeSettingsAutoConfiguring
-                  }
-                >
-                  {runtimeSettingsClearing ? t('Clearing...') : t('Clear UI settings')}
-                </Button>
-              </div>
-              {!runtimeAllFrameworksLocalMode ? (
-                <label className="row gap wrap align-center">
-                  <input
-                    type="checkbox"
-                    className="ui-checkbox"
-                    checked={keepExistingApiKeys}
-                    onChange={(event) => setKeepExistingApiKeys(event.target.checked)}
-                  />
-                  <span>{t('Keep existing API keys when key field is left blank')}</span>
-                </label>
-              ) : (
-                <small className="muted">
-                  {t('All frameworks are in local mode, so API key fields stay hidden by default.')}
-                </small>
-              )}
-              <Panel as="section" className="workspace-record-item" tone="soft">
-                <div className="stack tight">
-                  <strong>{t('Runtime safety guards')}</strong>
-                  <small className="muted">
-                    {t(
-                      'Set safety behavior for runtime output, and choose the default Python executable for built-in runners.'
-                    )}
-                  </small>
-                </div>
-                <label className="stack tight">
-                  <small className="muted">{t('Built-in runner Python executable')}</small>
-                  <Input
-                    value={runtimeControlDraft.python_bin}
-                    onChange={(event) =>
-                      updateRuntimeControlDraft('python_bin', event.target.value)
-                    }
-                    placeholder={`${t('Recommended')}: ${runtimeRecommendedLocalPythonBin}`}
-                  />
-                </label>
-                <label className="row gap wrap align-center">
-                  <input
-                    type="checkbox"
-                    className="ui-checkbox"
-                    checked={runtimeControlDraft.disable_simulated_train_fallback}
-                    onChange={(event) =>
-                      updateRuntimeControlDraft(
-                        'disable_simulated_train_fallback',
-                        event.target.checked
-                      )
-                    }
-                  />
-                  <span>
-                    {t(
-                      'Stop training immediately when local execution command is unavailable'
-                    )}
-                  </span>
-                </label>
-                <label className="row gap wrap align-center">
-                  <input
-                    type="checkbox"
-                    className="ui-checkbox"
-                    checked={runtimeControlDraft.disable_inference_fallback}
-                    onChange={(event) =>
-                      updateRuntimeControlDraft(
-                        'disable_inference_fallback',
-                        event.target.checked
-                      )
-                    }
-                  />
-                  <span>
-                    {t(
-                      'Block degraded inference output and return an explicit error'
-                    )}
-                  </span>
-                </label>
-              </Panel>
-            </AdvancedSection>
-
-	            {runtimeSettingsLoading ? (
-	              <StateBlock
-	                variant="loading"
-                title={t('Loading runtime settings')}
-                description={t('Fetching saved runtime configuration from backend.')}
-              />
-            ) : (
-              <div className="three-col">
-                {FRAMEWORKS.map((framework) => {
-                  const draft = runtimeDrafts[framework];
-                  const connectionMode = runtimeConnectionModes[framework];
-                  const isLocalMode = connectionMode === 'local';
-                  const modelOptions = frameworkModelOptions[framework] ?? [];
-                  const versionOptions = frameworkVersionOptions[framework] ?? [];
-                  const selectedModelBindingKey = draft.default_model_id.trim()
-                    ? `model:${draft.default_model_id.trim()}`
-                    : '';
-                  const selectedModelVersionBindingKey = draft.default_model_version_id.trim()
-                    ? `model_version:${draft.default_model_version_id.trim()}`
-                    : '';
-                  const selectedModelApiKeyMeta = selectedModelBindingKey
-                    ? draft.model_api_keys_meta[selectedModelBindingKey]
-                    : null;
-                  const selectedModelVersionApiKeyMeta = selectedModelVersionBindingKey
-                    ? draft.model_api_keys_meta[selectedModelVersionBindingKey]
-                    : null;
-                  const selectedModelKeyExpiryStatus = resolveRuntimeApiKeyExpiryStatus(
-                    selectedModelApiKeyMeta
-                  );
-                  const selectedModelVersionKeyExpiryStatus = resolveRuntimeApiKeyExpiryStatus(
-                    selectedModelVersionApiKeyMeta
-                  );
-                  const selectedModelApiKeyValue = selectedModelBindingKey
-                    ? (draft.model_api_keys[selectedModelBindingKey] ?? '')
-                    : '';
-                  const selectedModelApiKeyExpiresAtValue = selectedModelBindingKey
-                    ? (draft.model_api_key_expires_at[selectedModelBindingKey] ?? '')
-                    : '';
-                  const selectedModelApiKeyMaxCallsValue = selectedModelBindingKey
-                    ? (draft.model_api_key_max_calls[selectedModelBindingKey] ?? '')
-                    : '';
-                  const selectedModelVersionApiKeyValue = selectedModelVersionBindingKey
-                    ? (draft.model_api_keys[selectedModelVersionBindingKey] ?? '')
-                    : '';
-                  const selectedModelVersionApiKeyExpiresAtValue = selectedModelVersionBindingKey
-                    ? (draft.model_api_key_expires_at[selectedModelVersionBindingKey] ?? '')
-                    : '';
-                  const selectedModelVersionApiKeyMaxCallsValue = selectedModelVersionBindingKey
-                    ? (draft.model_api_key_max_calls[selectedModelVersionBindingKey] ?? '')
-                    : '';
-                  return (
-                    <Panel key={framework} as="section" className="workspace-record-item" tone="soft">
-                      <div className="row between gap wrap align-center">
-                        <strong>{t(framework)}</strong>
-                        <div className="row gap wrap align-center">
-                          <Badge tone={isLocalMode ? 'info' : 'warning'}>
-                            {isLocalMode ? t('Local mode') : t('Endpoint mode')}
-                          </Badge>
-                          {draft.has_api_key ? (
-                            <Badge tone="success">{t('API key saved')}</Badge>
-                          ) : (
-                            <Badge tone="neutral">{t('No API key')}</Badge>
-                          )}
-                        </div>
-                      </div>
-                      <div className="row gap wrap align-center">
-                        <small className="muted">{t('Runtime setup path')}</small>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={isLocalMode ? 'secondary' : 'ghost'}
-                          onClick={() => setRuntimeFrameworkMode(framework, 'local')}
-                        >
-                          {t('Use local mode')}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={isLocalMode ? 'ghost' : 'secondary'}
-                          onClick={() => setRuntimeFrameworkMode(framework, 'endpoint')}
-                        >
-                          {t('Use endpoint mode')}
-                        </Button>
-                      </div>
-                      {isLocalMode ? (
-                        <small className="muted">
-                          {t('This framework will run through local command or bundled runner path on this machine. No API key is needed.')}
-                        </small>
-                      ) : (
-                        <small className="muted">
-                          {t('This framework will call a remote runtime endpoint. API key is optional and only needed when that endpoint requires auth.')}
-                        </small>
-                      )}
-
-                      <label className="stack tight">
-                        <small className="muted">{t('Default model')}</small>
-                        <Select
-                          value={draft.default_model_id}
-                          onChange={(event) => {
-                            const nextModelId = event.target.value;
-                            setRuntimeDrafts((prev) => {
-                              const previousDraft = prev[framework];
-                              const keepVersion = runtimeModelVersions.some(
-                                (item) =>
-                                  item.id === previousDraft.default_model_version_id &&
-                                  item.model_id === nextModelId
-                              );
-                              return {
-                                ...prev,
-                                [framework]: {
-                                  ...previousDraft,
-                                  default_model_id: nextModelId,
-                                  default_model_version_id: keepVersion
-                                    ? previousDraft.default_model_version_id
-                                    : ''
-                                }
-                              };
-                            });
-                          }}
-                        >
-                          <option value="">{t('Select model (optional)')}</option>
-                          {modelOptions.map((option) => (
-                            <option key={option.id} value={option.id}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </Select>
-                        {runtimeModelOptionsLoading ? (
-                          <small className="muted">{t('Loading model options...')}</small>
-                        ) : runtimeModelOptionsError ? (
-                          <small className="muted">
-                            {t('Model options unavailable: {message}', {
-                              message: runtimeModelOptionsError
-                            })}
-                          </small>
-                        ) : modelOptions.length === 0 ? (
-                          <small className="muted">
-                            {t('No foundation/published model options found for this framework yet.')}
-                          </small>
-                        ) : (
-                          <small className="muted">
-                            {t('{count} model options available.', { count: modelOptions.length })}
-                          </small>
-                        )}
-                      </label>
-
-                      <label className="stack tight">
-                        <small className="muted">{t('Default model version')}</small>
-                        <Select
-                          value={draft.default_model_version_id}
-                          onChange={(event) =>
-                            updateRuntimeDraft(
-                              framework,
-                              'default_model_version_id',
-                              event.target.value
-                            )
-                          }
-                          disabled={versionOptions.length === 0}
-                        >
-                          <option value="">
-                            {draft.default_model_id
-                              ? t('Select model version (optional)')
-                              : t('Select model first')}
-                          </option>
-                          {versionOptions.map((option) => (
-                            <option key={option.id} value={option.id}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </Select>
-                        {draft.default_model_id && versionOptions.length === 0 ? (
-                          <small className="muted">
-                            {t('No registered model versions found under current model.')}
-                          </small>
-                        ) : null}
-                      </label>
-
-                      {!isLocalMode ? (
-                        <>
-                          <label className="stack tight">
-                            <small className="muted">{t('Runtime endpoint')}</small>
-                            <Input
-                              value={draft.endpoint}
-                              onChange={(event) => updateRuntimeDraft(framework, 'endpoint', event.target.value)}
-                              placeholder={`http://127.0.0.1:9393/predict`}
-                            />
-                          </label>
-
-                          <label className="stack tight">
-                            <small className="muted">{t('Runtime API key (optional, endpoint auth only)')}</small>
+                      }
+                    />
+                    {runtimeReadinessFixCommands.length > 0 || runtimeReadiness.issues.length > 0 ? (
+                      <details className="workspace-details">
+                        <summary>{t('Technical diagnostics and fix commands')}</summary>
+                        <SectionCard
+                          title={t('Detailed diagnostics')}
+                          description={t('Keep raw issues, remediation text, and copyable commands folded until you need to act.')}
+                          actions={
                             <div className="row gap wrap align-center">
-                              <Input
-                                type="password"
-                                value={draft.api_key}
-                                onChange={(event) =>
-                                  updateRuntimeDraft(framework, 'api_key', event.target.value)
-                                }
-                                placeholder={
-                                  draft.api_key_masked
-                                    ? t('Stored key: {masked}', {
-                                        masked: draft.api_key_masked
-                                      })
-                                    : t('Leave blank if runtime endpoint has no key')
-                                }
-                              />
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => generateAndApplyFrameworkApiKey(framework)}
-                              >
-                                {t('Generate key')}
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => rotateRuntimeApiKey(framework)}
-                              >
-                                {t('Rotate key')}
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                disabled={!draft.has_api_key}
-                                onClick={() => revokeRuntimeApiKey(framework)}
-                              >
-                                {t('Revoke key')}
-                              </Button>
+                              {runtimeReadinessFixCommands.length > 0 ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() =>
+                                    void copyText(t('Fix commands'), runtimeReadinessFixCommands.join('\n'))
+                                  }
+                                >
+                                  {t('Copy all commands')}
+                                </Button>
+                              ) : null}
+                              {runtimeReadiness.issues.length > 0 ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() =>
+                                    void copyText(t('Operations checklist'), runtimeReadinessOpsChecklist)
+                                  }
+                                >
+                                  {t('Copy checklist')}
+                                </Button>
+                              ) : null}
                             </div>
-                            <small className="muted">
-                              {t('Generated key must also be configured and validated by the remote runtime service.')}
-                            </small>
-                          </label>
-
-                          <AdvancedSection
-                            title={t('Per-model auth routing')}
-                            description={t('Only needed when remote runtime differentiates auth by model or model version.')}
-                          >
-                            {selectedModelBindingKey ? (
-                              <label className="stack tight">
-                                <small className="muted">
-                                  {t('Model API key (for selected model)')}
-                                </small>
-                                <div className="row gap wrap align-center">
-                                  <Input
-                                    type="password"
-                                    value={selectedModelApiKeyValue}
-                                    onChange={(event) =>
-                                      updateRuntimeDraftModelApiKey(
-                                        framework,
-                                        selectedModelBindingKey,
-                                        event.target.value
-                                      )
-                                    }
-                                    placeholder={
-                                      selectedModelApiKeyMeta?.api_key_masked
-                                        ? t('Stored key: {masked}', {
-                                            masked: selectedModelApiKeyMeta.api_key_masked
-                                          })
-                                        : t('Leave blank if selected model does not need dedicated auth')
-                                    }
-                                  />
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() =>
-                                      generateAndApplyModelBindingApiKey(
-                                        framework,
-                                        selectedModelBindingKey
-                                      )
-                                    }
-                                  >
-                                    {t('Generate key')}
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() =>
-                                      rotateRuntimeApiKey(
-                                        framework,
-                                        selectedModelBindingKey
-                                      )
-                                    }
-                                  >
-                                    {t('Rotate key')}
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    disabled={!selectedModelApiKeyMeta?.has_api_key}
-                                    onClick={() =>
-                                      revokeRuntimeApiKey(
-                                        framework,
-                                        selectedModelBindingKey
-                                      )
-                                    }
-                                  >
-                                    {t('Revoke key')}
-                                  </Button>
-                                </div>
-                                <small className="muted">
-                                  {t('This model-level key only works after remote runtime is configured with the same key.')}
-                                </small>
-                                {selectedModelApiKeyMeta?.expires_at ? (
-                                  <small className="muted">
-                                    {t('Model key expires at {expiresAt}.', {
-                                      expiresAt: selectedModelApiKeyMeta.expires_at
-                                    })}
-                                  </small>
+                          }
+                        >
+                          <div className="stack tight">
+                            {runtimeReadinessFixCommands.length > 0 ? (
+                              <div className="stack tight">
+                                <small className="muted">{t('Run these on the runtime host, then refresh readiness.')}</small>
+                                <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
+                                  {runtimeReadinessFixCommands.map((command) => (
+                                    <li key={command} className="muted">
+                                      <div className="row gap wrap align-center">
+                                        <code>{command}</code>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => void copyText(t('Fix command'), command)}
+                                        >
+                                          {t('Copy command')}
+                                        </Button>
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+                                {runtimeReadinessCommandGroups.length > 0 ? (
+                                  <div className="stack tight">
+                                    {runtimeReadinessCommandGroups.map((group) => (
+                                      <div key={group.key} className="stack tight">
+                                        <strong>{group.label}</strong>
+                                        <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
+                                          {group.commands.map((command) => (
+                                            <li key={`${group.key}-${command}`} className="muted">
+                                              <code>{command}</code>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    ))}
+                                  </div>
                                 ) : null}
-                                <div className="row gap wrap">
-                                  <Badge tone={selectedModelApiKeyMeta?.is_expired ? 'danger' : 'neutral'}>
-                                    {selectedModelApiKeyMeta?.is_expired ? t('expired') : t('active')}
-                                  </Badge>
-                                  {selectedModelKeyExpiryStatus.tier === 'within_3_days' ? (
-                                    <Badge tone="danger">{t('Expiring <=3d')}</Badge>
-                                  ) : null}
-                                  {selectedModelKeyExpiryStatus.tier === 'within_7_days' ? (
-                                    <Badge tone="warning">{t('Expiring <=7d')}</Badge>
-                                  ) : null}
-                                  <Badge tone="neutral">
-                                    {t('Used')}: {selectedModelApiKeyMeta?.used_calls ?? 0}
-                                  </Badge>
-                                  <Badge tone="neutral">
-                                    {t('Remaining')}:{' '}
-                                    {selectedModelApiKeyMeta?.remaining_calls ?? t('unlimited')}
-                                  </Badge>
-                                </div>
-                                {selectedModelKeyExpiryStatus.tier === 'expired' ? (
-                                  <small className="muted">
-                                    {t('Model key expired. Rotate key and sync remote runtime now.')}
-                                  </small>
-                                ) : null}
-                                {selectedModelKeyExpiryStatus.tier === 'within_3_days' &&
-                                selectedModelKeyExpiryStatus.daysLeft !== null ? (
-                                  <small className="muted">
-                                    {t('Model key expires in {days} day(s). Rotate soon.', {
-                                      days: selectedModelKeyExpiryStatus.daysLeft
-                                    })}
-                                  </small>
-                                ) : null}
-                                {selectedModelKeyExpiryStatus.tier === 'within_7_days' &&
-                                selectedModelKeyExpiryStatus.daysLeft !== null ? (
-                                  <small className="muted">
-                                    {t('Model key expires in {days} day(s). Plan key rotation.', {
-                                      days: selectedModelKeyExpiryStatus.daysLeft
-                                    })}
-                                  </small>
-                                ) : null}
-                                <div className="stack tight">
-                                  <small className="muted">{t('Expires at (optional)')}</small>
-                                  <Input
-                                    value={selectedModelApiKeyExpiresAtValue}
-                                    onChange={(event) =>
-                                      updateRuntimeDraftModelApiKeyExpiresAt(
-                                        framework,
-                                        selectedModelBindingKey,
-                                        event.target.value
-                                      )
-                                    }
-                                    placeholder={t('ISO time, e.g. 2026-12-31T23:59:59Z')}
-                                  />
-                                </div>
-                                <div className="stack tight">
-                                  <small className="muted">{t('Max calls (optional)')}</small>
-                                  <Input
-                                    type="number"
-                                    min={0}
-                                    value={selectedModelApiKeyMaxCallsValue}
-                                    onChange={(event) =>
-                                      updateRuntimeDraftModelApiKeyMaxCalls(
-                                        framework,
-                                        selectedModelBindingKey,
-                                        event.target.value
-                                      )
-                                    }
-                                    placeholder={t('Leave empty for unlimited')}
-                                  />
-                                </div>
-                              </label>
-                            ) : (
-                              <small className="muted">
-                                {t('Select default model first to configure model-level API key.')}
-                              </small>
-                            )}
-
-                            {selectedModelVersionBindingKey ? (
-                              <label className="stack tight">
-                                <small className="muted">
-                                  {t('Model version API key (for selected version)')}
-                                </small>
-                                <div className="row gap wrap align-center">
-                                  <Input
-                                    type="password"
-                                    value={selectedModelVersionApiKeyValue}
-                                    onChange={(event) =>
-                                      updateRuntimeDraftModelApiKey(
-                                        framework,
-                                        selectedModelVersionBindingKey,
-                                        event.target.value
-                                      )
-                                    }
-                                    placeholder={
-                                      selectedModelVersionApiKeyMeta?.api_key_masked
-                                        ? t('Stored key: {masked}', {
-                                            masked: selectedModelVersionApiKeyMeta.api_key_masked
-                                          })
-                                        : t('Leave blank if selected model version does not need dedicated auth')
-                                    }
-                                  />
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() =>
-                                      generateAndApplyModelBindingApiKey(
-                                        framework,
-                                        selectedModelVersionBindingKey
-                                      )
-                                    }
-                                  >
-                                    {t('Generate key')}
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() =>
-                                      rotateRuntimeApiKey(
-                                        framework,
-                                        selectedModelVersionBindingKey
-                                      )
-                                    }
-                                  >
-                                    {t('Rotate key')}
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    disabled={!selectedModelVersionApiKeyMeta?.has_api_key}
-                                    onClick={() =>
-                                      revokeRuntimeApiKey(
-                                        framework,
-                                        selectedModelVersionBindingKey
-                                      )
-                                    }
-                                  >
-                                    {t('Revoke key')}
-                                  </Button>
-                                </div>
-                                <small className="muted">
-                                  {t('This model-version key only works after remote runtime is configured with the same key.')}
-                                </small>
-                                {selectedModelVersionApiKeyMeta?.expires_at ? (
-                                  <small className="muted">
-                                    {t('Model version key expires at {expiresAt}.', {
-                                      expiresAt: selectedModelVersionApiKeyMeta.expires_at
-                                    })}
-                                  </small>
-                                ) : null}
-                                <div className="row gap wrap">
-                                  <Badge tone={selectedModelVersionApiKeyMeta?.is_expired ? 'danger' : 'neutral'}>
-                                    {selectedModelVersionApiKeyMeta?.is_expired ? t('expired') : t('active')}
-                                  </Badge>
-                                  {selectedModelVersionKeyExpiryStatus.tier === 'within_3_days' ? (
-                                    <Badge tone="danger">{t('Expiring <=3d')}</Badge>
-                                  ) : null}
-                                  {selectedModelVersionKeyExpiryStatus.tier === 'within_7_days' ? (
-                                    <Badge tone="warning">{t('Expiring <=7d')}</Badge>
-                                  ) : null}
-                                  <Badge tone="neutral">
-                                    {t('Used')}: {selectedModelVersionApiKeyMeta?.used_calls ?? 0}
-                                  </Badge>
-                                  <Badge tone="neutral">
-                                    {t('Remaining')}:{' '}
-                                    {selectedModelVersionApiKeyMeta?.remaining_calls ?? t('unlimited')}
-                                  </Badge>
-                                </div>
-                                {selectedModelVersionKeyExpiryStatus.tier === 'expired' ? (
-                                  <small className="muted">
-                                    {t(
-                                      'Model version key expired. Rotate key and sync remote runtime now.'
-                                    )}
-                                  </small>
-                                ) : null}
-                                {selectedModelVersionKeyExpiryStatus.tier === 'within_3_days' &&
-                                selectedModelVersionKeyExpiryStatus.daysLeft !== null ? (
-                                  <small className="muted">
-                                    {t('Model version key expires in {days} day(s). Rotate soon.', {
-                                      days: selectedModelVersionKeyExpiryStatus.daysLeft
-                                    })}
-                                  </small>
-                                ) : null}
-                                {selectedModelVersionKeyExpiryStatus.tier === 'within_7_days' &&
-                                selectedModelVersionKeyExpiryStatus.daysLeft !== null ? (
-                                  <small className="muted">
-                                    {t('Model version key expires in {days} day(s). Plan key rotation.', {
-                                      days: selectedModelVersionKeyExpiryStatus.daysLeft
-                                    })}
-                                  </small>
-                                ) : null}
-                                <div className="stack tight">
-                                  <small className="muted">{t('Expires at (optional)')}</small>
-                                  <Input
-                                    value={selectedModelVersionApiKeyExpiresAtValue}
-                                    onChange={(event) =>
-                                      updateRuntimeDraftModelApiKeyExpiresAt(
-                                        framework,
-                                        selectedModelVersionBindingKey,
-                                        event.target.value
-                                      )
-                                    }
-                                    placeholder={t('ISO time, e.g. 2026-12-31T23:59:59Z')}
-                                  />
-                                </div>
-                                <div className="stack tight">
-                                  <small className="muted">{t('Max calls (optional)')}</small>
-                                  <Input
-                                    type="number"
-                                    min={0}
-                                    value={selectedModelVersionApiKeyMaxCallsValue}
-                                    onChange={(event) =>
-                                      updateRuntimeDraftModelApiKeyMaxCalls(
-                                        framework,
-                                        selectedModelVersionBindingKey,
-                                        event.target.value
-                                      )
-                                    }
-                                    placeholder={t('Leave empty for unlimited')}
-                                  />
-                                </div>
-                              </label>
+                              </div>
                             ) : null}
-                          </AdvancedSection>
-                        </>
-                      ) : null}
-
-                      <AdvancedSection
-                        title={t('Local runtime overrides')}
-                        description={t('Optional local path and command overrides for operators who need non-default runners or weights.')}
-                      >
-                        <label className="stack tight">
-                          <small className="muted">{t('Local model path')}</small>
-                          <Input
-                            value={draft.local_model_path}
-                            onChange={(event) =>
-                              updateRuntimeDraft(framework, 'local_model_path', event.target.value)
-                            }
-                            placeholder={
-                              framework === 'yolo'
-                                ? t('Optional. Recommended for YOLO real local execution.')
-                                : t('Optional. Leave blank unless this framework needs a local model asset path.')
-                            }
-                          />
-                          <small className="muted">
-                            {framework === 'yolo'
-                              ? t('Used for local real training/inference when endpoint is unavailable or you prefer local weights.')
-                              : t('Only needed when this framework relies on local model assets instead of remote runtime defaults.')}
-                          </small>
-                        </label>
-
-                        <label className="stack tight">
-                          <small className="muted">{t('Local train command')}</small>
-                          <Textarea
-                            value={draft.local_train_command}
-                            onChange={(event) =>
-                              updateRuntimeDraft(framework, 'local_train_command', event.target.value)
-                            }
-                            rows={4}
-                            placeholder={t('Optional. Leave empty to use built-in local runner preset.')}
-                          />
-                        </label>
-
-                        <label className="stack tight">
-                          <small className="muted">{t('Local predict command')}</small>
-                          <Textarea
-                            value={draft.local_predict_command}
-                            onChange={(event) =>
-                              updateRuntimeDraft(framework, 'local_predict_command', event.target.value)
-                            }
-                            rows={4}
-                            placeholder={t('Optional. Leave empty to use built-in local runner preset.')}
-                          />
-                        </label>
-                      </AdvancedSection>
-                    </Panel>
-                  );
-	                })}
-	              </div>
-	            )}
-	          </Card>
-	          </div>
-
-	          <SectionCard
-              title={t('Framework inventory')}
-              description={t('Use the table to see which frameworks are configured, reachable, and ready for endpoint or local execution.')}
-              actions={
-                <div className="row gap wrap">
-                  <Badge tone="neutral">{t('Visible')}: {visibleFrameworks.length}</Badge>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={focusRuntimeConfiguration}
+                            {runtimeReadiness.issues.length > 0 ? (
+                              <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
+                                {runtimeReadiness.issues.map((issue) => (
+                                  <li key={`${issue.code}-${issue.message}`} className="muted">
+                                    <div className="row gap wrap align-center">
+                                      <Badge tone={issue.level === 'error' ? 'danger' : issue.level === 'warning' ? 'warning' : 'neutral'}>
+                                        {t(issue.level)}
+                                      </Badge>
+                                      <small className="muted">{issue.message}</small>
+                                    </div>
+                                    <small className="muted">
+                                      {t('Issue code')}: {issue.code}
+                                    </small>
+                                    {issue.remediation ? (
+                                      <div className="row gap wrap align-center" style={{ marginTop: 4 }}>
+                                        <small className="muted">
+                                          {t('Remediation')}: {issue.remediation}
+                                        </small>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => void copyText(t('Remediation'), issue.remediation ?? '')}
+                                        >
+                                          {t('Copy fix')}
+                                        </Button>
+                                      </div>
+                                    ) : null}
+                                    {issue.remediation_command ? (
+                                      <div className="row gap wrap align-center" style={{ marginTop: 4 }}>
+                                        <small className="muted">
+                                          {t('Fix command')}: <code>{issue.remediation_command}</code>
+                                        </small>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() =>
+                                            void copyText(t('Fix command'), issue.remediation_command ?? '')
+                                          }
+                                        >
+                                          {t('Copy command')}
+                                        </Button>
+                                      </div>
+                                    ) : null}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </div>
+                        </SectionCard>
+                      </details>
+                    ) : (
+                      <small className="muted">{t('No blocking runtime issues detected.')}</small>
+                    )}
+                  </>
+                ) : null}
+              </div>
+            ) : (
+              <div className="stack">
+                <SectionCard
+                  title={t('Framework inventory')}
+                  description={t('Use the table to see which frameworks are configured, reachable, and ready for endpoint or local execution.')}
+                  actions={
+                    <div className="row gap wrap">
+                      <Badge tone="neutral">{t('Visible')}: {visibleFrameworks.length}</Badge>
+                    </div>
+                  }
+                >
+                  <StatusTable
+                    columns={frameworkTableColumns}
+                    rows={visibleFrameworks}
+                    getRowKey={(framework) => framework}
+                    emptyTitle={t('No frameworks')}
+                    emptyDescription={t('No framework matches the current filter.')}
+                  />
+                </SectionCard>
+                <details className="workspace-details">
+                  <summary>{t('Other setup paths')} · {t('profiles')} / {t('manual overrides')}</summary>
+                  <SectionCard
+                    title={t('Advanced setup')}
+                    description={t('Keep profile activation and manual overrides here instead of the main setup path.')}
                   >
-                    {t('Open runtime configuration')}
-                  </Button>
-                </div>
-              }
-            >
-              <StatusTable
-                columns={frameworkTableColumns}
-                rows={visibleFrameworks}
-                getRowKey={(framework) => framework}
-                emptyTitle={t('No frameworks')}
-                emptyDescription={t('No framework matches the current filter.')}
-              />
-            </SectionCard>
+                    <small className="muted">{t('Use this lane only when the guided setup is not enough.')}</small>
+                  </SectionCard>
+                </details>
+              </div>
+            )}
 
-	          </div>
+          </div>
         }
         side={
           <div className="workspace-inspector-rail">
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Next runtime step')}
-                description={t('Finish one clear runtime setup action here before switching to validation.')}
-                actions={
-                  <Badge tone={localQuickStartCompleted ? 'success' : 'info'}>
-                    {t('Done {done}/{total}', {
-                      done: localQuickStartCompletedCount,
-                      total: localQuickStartSteps.length
-                    })}
-                  </Badge>
+            <SectionCard
+              title={t('Next step')}
+              description={t('Keep the rail short. The main setup flow stays on the left.')}
+            >
+              <small className="muted">
+                {t('Current focus')}:{' '}
+                {runtimePageMode === 'setup'
+                  ? localQuickStartNextStep?.label ?? t('Completed')
+                  : runtimePageMode === 'readiness'
+                    ? t('Refresh readiness and resolve open issues')
+                    : t('Review framework inventory and advanced controls')}
+              </small>
+              <ActionBar
+                primary={
+                  runtimePageMode === 'setup'
+                    ? renderLocalQuickStartAction('ghost')
+                    : runtimePageMode === 'readiness'
+                      ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void refreshRuntimeReadiness()}
+                          disabled={runtimeReadinessLoading}
+                        >
+                          {runtimeReadinessLoading ? t('Checking...') : t('Refresh readiness')}
+                        </Button>
+                      )
+                      : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void refresh()}
+                          disabled={checking}
+                        >
+                          {checking ? t('Checking...') : t('Refresh frameworks')}
+                        </Button>
+                      )
                 }
               />
-              <div className="stack tight">
-                <small className="muted">
-                  {localQuickStartNextStep?.label ?? t('Completed')}
-                </small>
-                <div className="row gap wrap">
-                  <Badge tone={runtimeReadinessIssueCount > 0 ? 'warning' : 'success'}>
-                    {t('Open issues')}: {runtimeReadinessIssueCount}
-                  </Badge>
-                  <Badge tone="neutral">
-                    {t('Active profile')}: {runtimeSettingsActiveProfileId ? t('configured') : t('none')}
-                  </Badge>
-                </div>
-              </div>
-              <div className="row gap wrap" style={{ marginTop: 8 }}>
-                {renderLocalQuickStartAction('secondary')}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={focusRuntimeConfiguration}
-                >
-                  {t('Open runtime configuration')}
-                </Button>
-              </div>
-            </Card>
+            </SectionCard>
 
-          <Card as="article" className="workspace-inspector-card">
-            <WorkspaceSectionHeader
-              title={t('Other pages')}
-              description={t('Keep Runtime page focused. Open other domains in their dedicated pages.')}
-              actions={<Badge tone="info">{t('Single primary task')}</Badge>}
-            />
-            <div className="stack tight">
-              <div className="row gap wrap">
-                <ButtonLink to="/settings/runtime/templates" size="sm" variant="secondary">
-                  {t('Open Runtime Templates')}
-                </ButtonLink>
-                <ButtonLink to="/settings/workers" size="sm" variant="ghost">
-                  {t('Open Worker Settings')}
-                </ButtonLink>
-              </div>
-              <small className="muted">
-                {t('Use Runtime Templates for endpoint snippets and Worker Settings for lifecycle actions.')}
-              </small>
-            </div>
-          </Card>
-
-          <AdvancedSection
-            title={t('Recent activity')}
-            description={t('Recent inference and training summaries stay visible here.')}
-          >
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Recent activity')}
-                description={t('Recent inference and training summaries stay visible here.')}
-              />
-              {summaryLoading ? (
-                <StateBlock
-                  variant="loading"
-                  title={t('Loading Summary')}
-                  description={t('Collecting recent training and inference execution sources.')}
-                />
-              ) : (
-                <ul className="workspace-record-list compact">
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="stack tight">
-                    <strong>{t('Inference source distribution')}</strong>
-                    {inferenceSourceSummary.length === 0 ? (
-                      <small className="muted">{t('No inference runs yet.')}</small>
-                    ) : (
-                      <div className="row gap wrap">
-                        {inferenceSourceSummary.map((entry) => (
-                          <Badge key={entry.key} tone={entry.key === 'fallback' ? 'warning' : 'success'}>
-                            {entry.key === 'fallback' ? t('Degraded mode') : t('Real execution')}: {entry.count}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </Panel>
-
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="stack tight">
-                    <strong>{t('Training execution mode distribution')}</strong>
-                    {trainingModeSummary.length === 0 ? (
-                      <small className="muted">{t('No training jobs yet.')}</small>
-                    ) : (
-                      <div className="row gap wrap">
-                        {trainingModeSummary.map((entry) => (
-                          <Badge key={entry.key} tone="info">
-                            {describeTrainingExecutionSummaryLabel(t, entry.key)}: {entry.count}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </Panel>
-
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="stack tight">
-                    <strong>{t('Latest framework metric keys')}</strong>
-                    {!hasCompletedTrainingJobs ? (
-                      <small className="muted">{t('No completed training jobs yet.')}</small>
-                    ) : (
-                      <div className="stack">
-                        {frameworkMetricKeySummary.map((entry) => (
-                          <div key={entry.framework} className="stack tight">
-                            <div className="row gap wrap align-center">
-                              <Badge tone="info">{t(entry.framework)}</Badge>
-                              <small className="muted">
-                                {entry.jobsChecked > 0
-                                  ? t('Checked {count} recent completed jobs.', { count: entry.jobsChecked })
-                                  : t('No completed jobs yet for this framework.')}
-                              </small>
-                              {entry.jobsWithMetrics > 0 ? (
-                                <Badge tone="success">
-                                  {t('Metrics found')}: {entry.jobsWithMetrics}
-                                </Badge>
-                              ) : null}
-                            </div>
-                            {entry.metricKeys.length > 0 ? (
-                              <>
-                                <div className="row gap wrap">
-                                  {entry.metricKeys.map((metricKey) => (
-                                    <Badge key={`${entry.framework}-${metricKey}`} tone="neutral">
-                                      {metricKey}
-                                    </Badge>
-                                  ))}
-                                </div>
-                                <small className="muted">
-                                  {t('Latest artifact: {job} · {time}', {
-                                    job: entry.latestJobLabel ?? t('n/a'),
-                                    time: formatTimestamp(entry.latestGeneratedAt)
-                                  })}
-                                </small>
-                              </>
-                            ) : entry.jobsChecked > 0 ? (
-                              <small className="muted">
-                                {t('No artifact metrics captured in the latest completed jobs yet.')}
-                              </small>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </Panel>
-
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="stack tight">
-                    <strong>{t('Training metric retention')}</strong>
-                    {!metricsRetentionSummary ? (
-                      <small className="muted">{t('Retention summary unavailable.')}</small>
-                    ) : (
-                      <>
-                        <div className="row gap wrap">
-                          <Badge tone="neutral">
-                            {t('Current rows')}: {metricsRetentionSummary.current_total_rows}
-                          </Badge>
-                          <Badge tone="neutral">
-                            {t('Total cap')}: {metricsRetentionSummary.max_total_rows}
-                          </Badge>
-                          <Badge tone="neutral">
-                            {t('Per-job cap')}: {metricsRetentionSummary.max_points_per_job}
-                          </Badge>
-                          <Badge tone="neutral">
-                            {t('Jobs with metrics')}: {metricsRetentionSummary.jobs_with_metrics}
-                          </Badge>
-                          <Badge tone="info">
-                            {t('Visible jobs')}: {metricsRetentionSummary.visible_job_count}
-                          </Badge>
-                          <Badge tone="warning">
-                            {t('Max rows (single job)')}: {metricsRetentionSummary.max_rows_single_job}
-                          </Badge>
-                        </div>
-                        <small className="muted">
-                          {metricsRetentionSummary.near_total_cap
-                            ? t('Retention usage is close to cap. Consider lowering metric density or increasing cap.')
-                            : t('Retention usage is within normal range.')}
-                        </small>
-                        {metricsRetentionSummary.top_jobs.length > 0 ? (
-                          <div className="row gap wrap">
-                            {metricsRetentionSummary.top_jobs.map((item) => (
-                              <Badge key={item.training_job_id} tone="info">
-                                {trainingJobLabels[item.training_job_id] || t('Recent training job')}: {item.rows}
-                              </Badge>
-                            ))}
-                          </div>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-                </Panel>
-                </ul>
-              )}
-            </Card>
-          </AdvancedSection>
           </div>
         }
       />

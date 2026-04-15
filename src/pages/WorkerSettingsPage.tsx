@@ -10,14 +10,13 @@ import type {
 import SettingsTabs from '../components/settings/SettingsTabs';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button, ButtonLink } from '../components/ui/Button';
+import { Button } from '../components/ui/Button';
 import {
   ActionBar,
+  ConfirmDangerDialog,
   DetailDrawer,
   DetailList,
-  FilterToolbar,
   InlineAlert,
-  KPIStatRow,
   PageHeader,
   SectionCard,
   StatusTable,
@@ -27,11 +26,7 @@ import { Input, Select, Textarea } from '../components/ui/Field';
 import { Drawer } from '../components/ui/Overlay';
 import ProgressStepper from '../components/ui/ProgressStepper';
 import { Card, Panel } from '../components/ui/Surface';
-import {
-  WorkspacePage,
-  WorkspaceSectionHeader,
-  WorkspaceWorkbench
-} from '../components/ui/WorkspacePage';
+import { WorkspacePage, WorkspaceSectionHeader, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
@@ -193,6 +188,7 @@ const workerCompatibilityBadgeTone = (
 
 export default function WorkerSettingsPage() {
   const { t } = useI18n();
+  const [workerView, setWorkerView] = useState<'inventory' | 'pairing'>('inventory');
   const [workersLoading, setWorkersLoading] = useState(true);
   const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
   const [workersAccessDenied, setWorkersAccessDenied] = useState(false);
@@ -228,6 +224,7 @@ export default function WorkerSettingsPage() {
   const [activatingBootstrapWorkerId, setActivatingBootstrapWorkerId] = useState<string | null>(null);
   const [reconfiguringWorkerId, setReconfiguringWorkerId] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState('');
+  const [removingWorker, setRemovingWorker] = useState<TrainingWorkerNodeView | null>(null);
 
   const refreshTrainingWorkers = useCallback(async () => {
     setWorkersLoading(true);
@@ -273,6 +270,10 @@ export default function WorkerSettingsPage() {
     void refreshTrainingWorkers();
     void refreshBootstrapSessions();
   }, [refreshBootstrapSessions, refreshTrainingWorkers]);
+
+  const refreshAll = async () => {
+    await Promise.all([refreshTrainingWorkers(), refreshBootstrapSessions()]);
+  };
 
   const copyText = async (label: string, text: string) => {
     try {
@@ -362,18 +363,13 @@ export default function WorkerSettingsPage() {
   };
 
   const removeWorker = async (worker: TrainingWorkerNodeView) => {
-    const confirmed = window.confirm(
-      t('Remove worker {name} from the scheduling pool?', { name: worker.name })
-    );
-    if (!confirmed) {
-      return;
-    }
     setWorkerMutationTargetId(worker.id);
     setWorkerMutationAction('remove');
     setWorkersError('');
     try {
       await api.removeTrainingWorker(worker.id);
       setWorkers((prev) => prev.filter((item) => item.id !== worker.id));
+      setRemovingWorker(null);
     } catch (workerError) {
       setWorkersError((workerError as Error).message);
     } finally {
@@ -500,9 +496,6 @@ export default function WorkerSettingsPage() {
   const editingWorker =
     editingWorkerId ? workers.find((worker) => worker.id === editingWorkerId) ?? null : null;
   const workerRegistryTitle = editingWorker ? t('Edit Worker') : t('Register Worker');
-  const onlineWorkerCount = workers.filter((worker) => worker.enabled && worker.effective_status === 'online').length;
-  const drainingWorkerCount = workers.filter((worker) => worker.effective_status === 'draining').length;
-  const offlineWorkerCount = workers.filter((worker) => worker.effective_status === 'offline').length;
   const pendingBootstrapCount = bootstrapSessions.filter(
     (session) => session.status !== 'online' && session.status !== 'expired'
   ).length;
@@ -714,6 +707,10 @@ export default function WorkerSettingsPage() {
       ? 2
       : 1
     : 0;
+  const workerPageDescription =
+    workerView === 'inventory'
+      ? t('Inventory-first worker operations: review capacity, heartbeat, and maintenance in one place.')
+      : t('Pairing-first worker operations: generate onboarding sessions and complete callback validation.');
 
   return (
     <WorkspacePage>
@@ -721,55 +718,34 @@ export default function WorkerSettingsPage() {
       <PageHeader
         eyebrow={t('Worker operations')}
         title={t('Worker Settings')}
-        description={t('Manage distributed training workers in one dedicated page, separate from runtime framework setup.')}
-        meta={
-          <div className="row gap wrap align-center">
-            <Badge tone="neutral">{t('Workers')}: {workers.length}</Badge>
-            <Badge tone="info">{t('Pending pairing')}: {pendingBootstrapCount}</Badge>
-          </div>
-        }
+        description={workerPageDescription}
         primaryAction={{
           label: t('Add Worker'),
           onClick: () => setWorkerOnboardingOpen(true)
         }}
         secondaryActions={
           <div className="row gap wrap">
-            <Button type="button" variant="secondary" size="sm" onClick={openCreateWorkerRegistry}>
-              {t('Register Worker')}
+            <Button
+              type="button"
+              variant={workerView === 'inventory' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setWorkerView('inventory')}
+            >
+              {t('Inventory')}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => void refreshTrainingWorkers()} disabled={workersLoading}>
-              {workersLoading ? t('Refreshing workers...') : t('Refresh Workers')}
+            <Button
+              type="button"
+              variant={workerView === 'pairing' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setWorkerView('pairing')}
+            >
+              {t('Pairing')}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => void refreshBootstrapSessions()} disabled={bootstrapSessionsLoading}>
-              {bootstrapSessionsLoading ? t('Refreshing pairing...') : t('Refresh Pairing')}
+            <Button type="button" variant="ghost" size="sm" onClick={() => void refreshAll()} disabled={workersLoading || bootstrapSessionsLoading}>
+              {workersLoading || bootstrapSessionsLoading ? t('Refreshing...') : t('Refresh All')}
             </Button>
           </div>
         }
-      />
-
-      <KPIStatRow
-        items={[
-          {
-            label: t('Online workers'),
-            value: workersLoading ? t('...') : onlineWorkerCount,
-            tone: onlineWorkerCount > 0 ? 'success' : 'warning'
-          },
-          {
-            label: t('Draining workers'),
-            value: workersLoading ? t('...') : drainingWorkerCount,
-            tone: drainingWorkerCount > 0 ? 'warning' : 'neutral'
-          },
-          {
-            label: t('Offline workers'),
-            value: workersLoading ? t('...') : offlineWorkerCount,
-            tone: offlineWorkerCount > 0 ? 'danger' : 'neutral'
-          },
-          {
-            label: t('Pending pairing'),
-            value: bootstrapSessionsLoading ? t('...') : pendingBootstrapCount,
-            tone: pendingBootstrapCount > 0 ? 'info' : 'neutral'
-          }
-        ]}
       />
 
       {workersError ? <InlineAlert tone="danger" title={t('Worker list unavailable')} description={workersError} /> : null}
@@ -778,120 +754,94 @@ export default function WorkerSettingsPage() {
       ) : null}
 
       <WorkspaceWorkbench
-        toolbar={
-          <FilterToolbar
-            summary={
-              <div className="row gap wrap">
-                <Badge tone="success">{t('Online')}: {onlineWorkerCount}</Badge>
-                <Badge tone="warning">{t('Draining')}: {drainingWorkerCount}</Badge>
-                <Badge tone="danger">{t('Offline')}: {offlineWorkerCount}</Badge>
-                <Badge tone="info">{t('Pending pairing')}: {pendingBootstrapCount}</Badge>
-              </div>
-            }
-            actions={
-              <>
-                <Button type="button" variant="secondary" size="sm" onClick={() => setWorkerOnboardingOpen(true)}>
-                  {t('Add Worker')}
-                </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => void refreshTrainingWorkers()} disabled={workersLoading}>
-                  {t('Refresh workers')}
-                </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => void refreshBootstrapSessions()} disabled={bootstrapSessionsLoading}>
-                  {t('Refresh pairing')}
-                </Button>
-              </>
-            }
-          />
-        }
         main={
           <div className="workspace-main-stack">
-            <SectionCard
-              title={t('Worker inventory')}
-              description={t('Table-first worker operations: capacity, heartbeat, and scheduling controls.')}
-              actions={<Badge tone="neutral">{t('Total')}: {workers.length}</Badge>}
-            >
-              {workersLoading ? (
-                <StateBlock
-                  variant="loading"
-                  title={t('Loading Workers')}
-                  description={t('Collecting worker status and recent activity.')}
-                />
-              ) : workersAccessDenied ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('Admin only')}
-                  description={t('Worker management is visible to administrators only.')}
-                />
-              ) : (
-                <StatusTable
-                  columns={workerTableColumns}
-                  rows={workers}
-                  getRowKey={(worker) => worker.id}
-                  emptyTitle={t('No workers')}
-                  emptyDescription={t('No training workers are currently registered in the control plane.')}
-                  onRowClick={(worker) => setSelectedWorkerId(worker.id)}
-                />
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title={t('Worker pairing sessions')}
-              description={t('Track Add Worker pairing state, callback validation, and activation progress.')}
-              actions={
-                <div className="row gap wrap">
-                  <Badge tone="info">{t('Sessions')}: {bootstrapSessions.length}</Badge>
-                  <Button type="button" variant="secondary" size="sm" onClick={() => setWorkerOnboardingOpen(true)}>
-                    {t('Add Worker')}
-                  </Button>
-                </div>
-              }
-            >
-              {bootstrapSessionsLoading ? (
-                <StateBlock
-                  variant="loading"
-                  title={t('Loading pairing sessions')}
-                  description={t('Collecting recent worker bootstrap commands and states.')}
-                />
-              ) : bootstrapSessionsAccessDenied ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('Admin only')}
-                  description={t('Worker onboarding sessions are visible to administrators only.')}
-                />
-              ) : (
-                <StatusTable
-                  columns={bootstrapTableColumns}
-                  rows={bootstrapSessions}
-                  getRowKey={(session) => session.id}
-                  emptyTitle={t('No pairing sessions')}
-                  emptyDescription={t('Create an Add Worker session to generate a startup command and pairing token.')}
-                />
-              )}
-            </SectionCard>
+            {workerView === 'inventory' ? (
+              <SectionCard
+                title={t('Worker inventory')}
+                description={t('Table-first worker operations: capacity, heartbeat, and scheduling controls.')}
+                actions={<Badge tone="neutral">{t('Total')}: {workers.length}</Badge>}
+              >
+                {workersLoading ? (
+                  <StateBlock
+                    variant="loading"
+                    title={t('Loading Workers')}
+                    description={t('Collecting worker status and recent activity.')}
+                  />
+                ) : workersAccessDenied ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Admin only')}
+                    description={t('Worker management is visible to administrators only.')}
+                  />
+                ) : (
+                  <StatusTable
+                    columns={workerTableColumns}
+                    rows={workers}
+                    getRowKey={(worker) => worker.id}
+                    emptyTitle={t('No workers')}
+                    emptyDescription={t('No training workers are currently registered in the control plane.')}
+                    onRowClick={(worker) => setSelectedWorkerId(worker.id)}
+                  />
+                )}
+              </SectionCard>
+            ) : (
+              <SectionCard
+                title={t('Worker pairing sessions')}
+                description={t('Generate and verify worker onboarding sessions from one table-first view.')}
+                actions={<Badge tone={pendingBootstrapCount > 0 ? 'warning' : 'neutral'}>{t('Sessions')}: {bootstrapSessions.length}</Badge>}
+              >
+                {bootstrapSessionsLoading ? (
+                  <StateBlock
+                    variant="loading"
+                    title={t('Loading pairing sessions')}
+                    description={t('Collecting recent worker bootstrap commands and states.')}
+                  />
+                ) : bootstrapSessionsAccessDenied ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Admin only')}
+                    description={t('Worker onboarding sessions are visible to administrators only.')}
+                  />
+                ) : (
+                  <StatusTable
+                    columns={bootstrapTableColumns}
+                    rows={bootstrapSessions}
+                    getRowKey={(session) => session.id}
+                    emptyTitle={t('No pairing sessions')}
+                    emptyDescription={t('Create an Add Worker session to generate a startup command and pairing token.')}
+                  />
+                )}
+              </SectionCard>
+            )}
           </div>
         }
         side={
           <div className="workspace-inspector-rail">
             <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
-                title={t('Worker onboarding')}
-                description={t('One clear path: configure -> start worker -> finish pairing.')}
-                actions={<Badge tone="info">{t('Pending')}: {pendingBootstrapCount}</Badge>}
+                title={t('Add Worker')}
+                description={t('Use the drawer for the full pairing flow.')}
               />
-              <ProgressStepper
-                steps={[t('Configure'), t('Start Worker'), t('Finish Pairing')]}
-                current={onboardingStep}
-                title={t('Current progress')}
-                caption={activeBootstrapSession ? t(activeBootstrapSession.status) : t('No active session')}
+              <ActionBar
+                primary={
+                  <Button type="button" onClick={() => setWorkerOnboardingOpen(true)}>
+                    {t('Open Add Worker')}
+                  </Button>
+                }
               />
-              <div className="row gap wrap" style={{ marginTop: 8 }}>
-                <Button type="button" variant="secondary" size="sm" onClick={() => setWorkerOnboardingOpen(true)}>
-                  {t('Open Add Worker')}
-                </Button>
-                <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
-                  {t('Open Runtime Settings')}
-                </ButtonLink>
-              </div>
+              <ActionBar
+                secondary={
+                  <Button type="button" variant="ghost" size="sm" onClick={openCreateWorkerRegistry}>
+                    {t('Register Existing Worker')}
+                  </Button>
+                }
+              />
+              <small className="muted">
+                {workerView === 'inventory'
+                  ? t('Switch to Pairing for startup commands and callback validation.')
+                  : t('Switch to Inventory for capacity and heartbeat maintenance.')}
+              </small>
             </Card>
           </div>
         }
@@ -951,59 +901,98 @@ export default function WorkerSettingsPage() {
                 { label: t('Capabilities'), value: selectedWorker.capabilities.join(', ') || t('No capabilities') }
               ]}
             />
-            <ActionBar
-              primary={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={workerMutationTargetId === selectedWorker.id}
-                  onClick={() =>
-                    void patchWorker(
-                      selectedWorker.id,
-                      { status: selectedWorker.status === 'draining' ? 'online' : 'draining' },
-                      'status'
-                    )
-                  }
-                >
-                  {workerMutationTargetId === selectedWorker.id && workerMutationAction === 'status'
-                    ? t('Saving...')
-                    : selectedWorker.status === 'draining'
-                      ? t('Resume Scheduling')
-                      : t('Mark Draining')}
-                </Button>
-              }
-              secondary={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={workerMutationTargetId === selectedWorker.id}
-                  onClick={() =>
-                    void patchWorker(selectedWorker.id, { enabled: !selectedWorker.enabled }, 'enabled')
-                  }
-                >
-                  {workerMutationTargetId === selectedWorker.id && workerMutationAction === 'enabled'
-                    ? t('Saving...')
-                    : selectedWorker.enabled
-                      ? t('Disable')
-                      : t('Enable')}
-                </Button>
-              }
-              tertiary={
-                <Button
-                  type="button"
-                  variant="danger"
-                  size="sm"
-                  disabled={selectedWorker.in_flight_jobs > 0 || workerMutationTargetId === selectedWorker.id}
-                  onClick={() => void removeWorker(selectedWorker)}
-                >
-                  {workerMutationTargetId === selectedWorker.id && workerMutationAction === 'remove'
-                    ? t('Removing...')
-                    : t('Remove')}
-                </Button>
-              }
-            />
+            <SectionCard
+              title={t('Worker operations')}
+              description={t('Use this order: edit identity, reconfigure callback, then adjust scheduling state.')}
+            >
+              <ActionBar
+                primary={
+                  <Button type="button" variant="secondary" size="sm" onClick={() => openEditWorkerRegistry(selectedWorker)}>
+                    {t('Edit')}
+                  </Button>
+                }
+                secondary={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={reconfiguringWorkerId === selectedWorker.id}
+                    onClick={() => void createWorkerReconfigureSession(selectedWorker)}
+                  >
+                    {reconfiguringWorkerId === selectedWorker.id ? t('Creating...') : t('Reconfigure')}
+                  </Button>
+                }
+              />
+              <details className="workspace-details">
+                <summary>{t('Maintenance actions')}</summary>
+                <div className="stack tight">
+                  <small className="muted">
+                    {t('Scheduling state changes are available here when the worker needs a temporary pause or re-enable.')}
+                  </small>
+                  <ActionBar
+                    primary={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={workerMutationTargetId === selectedWorker.id}
+                        onClick={() =>
+                          void patchWorker(
+                            selectedWorker.id,
+                            { status: selectedWorker.status === 'draining' ? 'online' : 'draining' },
+                            'status'
+                          )
+                        }
+                      >
+                        {workerMutationTargetId === selectedWorker.id && workerMutationAction === 'status'
+                          ? t('Saving...')
+                          : selectedWorker.status === 'draining'
+                            ? t('Resume Scheduling')
+                            : t('Mark Draining')}
+                      </Button>
+                    }
+                    secondary={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={workerMutationTargetId === selectedWorker.id}
+                        onClick={() =>
+                          void patchWorker(selectedWorker.id, { enabled: !selectedWorker.enabled }, 'enabled')
+                        }
+                      >
+                        {workerMutationTargetId === selectedWorker.id && workerMutationAction === 'enabled'
+                          ? t('Saving...')
+                          : selectedWorker.enabled
+                            ? t('Disable')
+                            : t('Enable')}
+                      </Button>
+                    }
+                  />
+                </div>
+              </details>
+            </SectionCard>
+
+            <SectionCard
+              title={t('Danger zone')}
+              description={t('Remove worker only when it has no in-flight jobs. This operation requires confirmation.')}
+            >
+              <ActionBar
+                primary={
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    disabled={selectedWorker.in_flight_jobs > 0 || workerMutationTargetId === selectedWorker.id}
+                    onClick={() => setRemovingWorker(selectedWorker)}
+                  >
+                    {workerMutationTargetId === selectedWorker.id && workerMutationAction === 'remove'
+                      ? t('Removing...')
+                      : t('Remove Worker')}
+                  </Button>
+                }
+              />
+            </SectionCard>
           </>
         ) : null}
       </DetailDrawer>
@@ -1511,6 +1500,29 @@ export default function WorkerSettingsPage() {
           </Card>
         </div>
       </Drawer>
+
+      <ConfirmDangerDialog
+        open={Boolean(removingWorker)}
+        onClose={() => setRemovingWorker(null)}
+        title={t('Remove worker')}
+        description={
+          removingWorker
+            ? t('This will remove worker {name} from inventory. Continue?', {
+                name: removingWorker.name
+              })
+            : t('Confirm remove action')
+        }
+        confirmLabel={t('Confirm remove')}
+        cancelLabel={t('Cancel')}
+        confirmationPhrase={removingWorker?.name}
+        busy={Boolean(removingWorker && workerMutationTargetId === removingWorker.id)}
+        onConfirm={() => {
+          if (!removingWorker) {
+            return;
+          }
+          void removeWorker(removingWorker);
+        }}
+      />
     </WorkspacePage>
   );
 }

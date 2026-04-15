@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { DatasetItemRecord } from '../../../shared/domain';
+import AdvancedSection from '../AdvancedSection';
 import VirtualList from '../VirtualList';
 import { Badge, StatusTag } from '../ui/Badge';
 import { Button, ButtonLink } from '../ui/Button';
@@ -261,7 +262,16 @@ export default function DatasetItemBrowser({
             {t('Clear filters')}
           </Button>
         </div>
-        <div className="dataset-item-browser-actions">
+      </Panel>
+
+      <AdvancedSection
+        title={t('Curation tools')}
+        description={t('Batch updates and saved filter views stay collapsed until you need them.')}
+      >
+        <Panel as="section" className="stack tight" tone="soft">
+          {batchActionBar}
+        </Panel>
+        <Panel as="section" className="stack tight" tone="soft">
           <div className="dataset-item-browser-toolbar">
             <Select
               value={selectedSavedViewId}
@@ -294,12 +304,8 @@ export default function DatasetItemBrowser({
               {t('Delete view')}
             </Button>
           </div>
-        </div>
-      </Panel>
-
-      <Panel as="section" className="stack tight" tone="soft">
-        {batchActionBar}
-      </Panel>
+        </Panel>
+      </AdvancedSection>
 
       {filteredItems.length === 0 ? (
         <StateBlock

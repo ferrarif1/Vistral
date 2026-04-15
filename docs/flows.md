@@ -114,14 +114,14 @@ Actor: `new user` (zero prior product knowledge)
    - `/datasets`: explain data-prep purpose, surface one starter task in the main workspace, and when empty offer a direct jump into the inline create panel
    - `/datasets/:datasetId`: explain upload/split/version progress, mirror the current next step in the main workspace, and show direct queue/version follow-up links
    - `/datasets/:datasetId/annotate`: explain review queue operation, mirror one current next step in the main workspace/queue-empty state, and keep "back to dataset / validate" links visible
-   - `/training/jobs`: explain active-vs-terminal queue semantics, mirror one current next action in the main workspace, and keep clear entry points into create/detail/validate lanes
+   - `/training/jobs`: explain active-vs-terminal queue semantics, mirror one current next action in the main workspace, and keep clear entry points into create/detail lanes
    - `/training/jobs/new`: explain snapshot-based training and readiness gates, and mirror one current next setup action in the main workspace
    - `/training/jobs/:jobId`: explain how to read current status, logs/metrics readiness, and follow-up links back to dataset/validation
-   - `/models/versions`: explain completed-training evidence, version registration, and validation follow-up, while mirroring the first incomplete versioning step in the main workspace and version empty/selection-empty states
+   - `/models/versions`: explain completed-training evidence, version registration, and version-lineage inspection follow-up, while mirroring the first incomplete versioning step in the main workspace and version empty/selection-empty states
    - `/inference/validate`: explain validation + feedback routing as the loop close-out, while mirroring the first incomplete validation step in the main workspace and the key empty states (`No Model Versions Yet`, `No Ready Inputs Yet`, `No Runs Yet`)
    - `/admin/models/pending`: explain admin review responsibility (`review -> decide -> audit trail`)
    - `/admin/audit`: explain how to read governance records, distinguish user vs system events, and continue into adjacent admin lanes
-   - `/admin/verification-reports`: explain how deployment verification reports are filtered, reviewed, and exported for release governance
+   - `/admin/verification-reports`: explain one focused task on this page: filter, review, and export deployment verification reports for release governance
    - `/settings/account`: explain first account setup (`identity -> password -> role-aware governance -> next settings tab`), and mirror the first incomplete setup step in the main workspace plus directory empty/filter-empty states when relevant
    - `/settings/llm`: explain first LLM setup (`preset -> key -> enable -> test -> chat`), and mirror the first incomplete setup step in the main workspace plus key blocked states
    - `/settings/runtime`: explain runtime first-run setup (`configure -> activate profile -> readiness -> validate`), and mirror the first incomplete setup step in the main workspace plus readiness/configuration empty states

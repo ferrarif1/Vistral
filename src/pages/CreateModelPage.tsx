@@ -2,18 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FileAttachment, ModelRecord } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
-import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
-import { StatusTag } from '../components/ui/Badge';
-import { Button, ButtonLink } from '../components/ui/Button';
-import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
+import { Badge, StatusTag } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { PageHeader } from '../components/ui/ConsolePage';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Card } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -24,7 +20,6 @@ import { api } from '../services/api';
 
 const backgroundRefreshIntervalMs = 5000;
 const modelTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
-const createModelOnboardingDismissedStorageKey = 'vistral-create-model-onboarding-dismissed';
 
 const buildModelFilesSignature = (modelId: string | null, files: FileAttachment[]): string =>
   JSON.stringify({
@@ -101,37 +96,6 @@ export default function CreateModelPage() {
     [modelFiles]
   );
   const draftStatusLabel = draftModel ? t(draftModel.status) : t('not started');
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'metadata',
-        label: t('Create metadata shell'),
-        detail: t('Start with name, description, model type, and visibility so the draft has a stable identity.'),
-        done: Boolean(draftModel),
-        to: '/models/create',
-        cta: t('Fill metadata')
-      },
-      {
-        key: 'artifact',
-        label: t('Upload ready artifact'),
-        detail: t('Add at least one ready model file before moving into parameter review and approval submission.'),
-        done: readyFileCount > 0,
-        to: '/models/create',
-        cta: t('Upload model file')
-      },
-      {
-        key: 'submit',
-        label: t('Submit approval request'),
-        detail: t('Use the final review step to submit the draft into the approval queue and keep governance traceable.'),
-        done: draftModel?.status === 'pending_approval',
-        to: '/admin/models/pending',
-        cta: t('Open Approval Queue'),
-        secondaryTo: '/models/my-models',
-        secondaryLabel: t('Open My Models')
-      }
-    ],
-    [draftModel, readyFileCount, t]
-  );
 
   useBackgroundPolling(
     () => {
@@ -438,24 +402,17 @@ export default function CreateModelPage() {
 
   return (
     <WorkspacePage>
-      <WorkspaceHero
+      <PageHeader
         eyebrow={t('Model Draft Studio')}
         title={t('Create Model')}
-        description={t('Move from metadata shell to approval-ready artifact package with a calmer guided flow.')}
-        stats={[
-          {
-            label: t('Current step'),
-            value: `${step + 1}/${steps.length}`
-          },
-          {
-            label: t('Ready model files'),
-            value: readyFileCount
-          },
-          {
-            label: t('Draft status'),
-            value: draftStatusLabel
-          }
-        ]}
+        description={t('Move from metadata shell to approval-ready artifact package with a calm guided flow.')}
+        meta={
+          <div className="row gap wrap align-center">
+            <Badge tone="neutral">{t('Step')}: {step + 1}/{steps.length}</Badge>
+            <Badge tone="info">{t('Ready model files')}: {readyFileCount}</Badge>
+            <Badge tone="neutral">{t('Draft status')}: {draftStatusLabel}</Badge>
+          </div>
+        }
       />
 
       {feedback ? (
@@ -465,32 +422,6 @@ export default function CreateModelPage() {
           description={feedback.text}
         />
       ) : null}
-
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Draft shell'),
-            description: t('Metadata shell for the model record.'),
-            value: draftModel ? 1 : 0
-          },
-          {
-            title: t('Ready model files'),
-            description: t('Artifacts already ready for review and approval flow.'),
-            value: readyFileCount
-          },
-          {
-            title: t('Visibility'),
-            description: t('Current exposure setting for this draft.'),
-            value: t(draftModel?.visibility ?? visibility)
-          },
-          {
-            title: t('Submission readiness'),
-            description: t('The final review step is where approval submission becomes available.'),
-            value: step === steps.length - 1 && readyFileCount > 0 ? t('Ready') : t('draft'),
-            tone: step === steps.length - 1 && readyFileCount > 0 ? 'default' : 'attention'
-          }
-        ]}
-      />
 
       <WorkspaceWorkbench
         toolbar={
@@ -512,44 +443,10 @@ export default function CreateModelPage() {
                 </Button>
               </div>
             </div>
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
-                <StatusTag status={draftModel?.status ?? 'draft'}>{draftStatusLabel}</StatusTag>
-                <StatusTag status="info">{t('Ready model files')}: {readyFileCount}</StatusTag>
-                <StatusTag status="info">
-                  {t('Current step')}: {step + 1}/{steps.length}
-                </StatusTag>
-                {draftModel ? <StatusTag status="info">{t('Model Type')}: {t(draftModel.model_type)}</StatusTag> : null}
-              </div>
-            </div>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              title={t('Model draft first-run guide')}
-              description={t('Use this wizard to move from model metadata into artifact upload, parameter review, and approval submission.')}
-              summary={t('Guide status is computed from draft creation, ready artifact count, and approval queue status.')}
-              storageKey={createModelOnboardingDismissedStorageKey}
-              steps={onboardingSteps.map((stepItem) => ({
-                key: stepItem.key,
-                label: stepItem.label,
-                detail: stepItem.detail,
-                done: stepItem.done,
-                primaryAction: {
-                  to: stepItem.to,
-                  label: stepItem.cta
-                },
-                secondaryAction:
-                  stepItem.secondaryTo && stepItem.secondaryLabel
-                    ? {
-                        to: stepItem.secondaryTo,
-                        label: stepItem.secondaryLabel
-                      }
-                    : undefined
-              }))}
-            />
-
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Current step')}
@@ -570,77 +467,56 @@ export default function CreateModelPage() {
                 <small className="muted">{stepDescriptions[step]}</small>
               </div>
               {draftModel ? (
-                <ul className="workspace-record-list compact">
-                  <li className="workspace-record-item compact">
-                    <div className="row between gap wrap">
+                <div className="stack tight">
+                  <div className="workspace-keyline-list">
+                    <div className="workspace-keyline-item">
+                      <span>{t('Model')}</span>
                       <strong>{draftModel.name}</strong>
-                      <StatusTag status={draftModel.status}>{t(draftModel.status)}</StatusTag>
                     </div>
-                    <small className="muted">
-                      {t('Model Type')}: {t(draftModel.model_type)}
-                    </small>
-                  </li>
-                  <li className="workspace-record-item compact">
-                    <div className="row between gap wrap">
-                      <strong>{t('Visibility')}</strong>
-                      <StatusTag status="info">{t(draftModel.visibility)}</StatusTag>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Status')}</span>
+                      <strong>{t(draftModel.status)}</strong>
                     </div>
-                    <small className="muted">
-                      {t('Metadata ready')} · {t('Ready model files')}: {readyFileCount}
-                    </small>
-                  </li>
-                </ul>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Files')}</span>
+                      <strong>{readyFileCount}</strong>
+                    </div>
+                  </div>
+                  <div className="row gap wrap">
+                    <Badge tone="neutral">{t('Model Type')}: {t(draftModel.model_type)}</Badge>
+                    <Badge tone="info">{t('Visibility')}: {t(draftModel.visibility)}</Badge>
+                  </div>
+                </div>
               ) : (
                 <StateBlock
                   variant="empty"
                   title={t('No draft yet.')}
                   description={t('Create the metadata shell first, then upload model artifacts in the next step.')}
-                  extra={
-                    <WorkspaceFollowUpHint
-                      detail={t(
-                        'Start with name, type, visibility, and description on the left. When step 1 is complete, this inspector will reflect the draft immediately.'
-                      )}
-                    />
-                  }
+                  extra={<small className="muted">{t('Start with name, type, visibility, and description in Step 1.')}</small>}
                 />
               )}
             </Card>
 
             <Card as="article" className="workspace-inspector-card">
-              <div className="stack tight">
-                <h3>{t('Submission checklist')}</h3>
-                <small className="muted">{t('Keep the approval path visible while you finish the wizard.')}</small>
+              <div className="row between gap wrap align-center">
+                <h3>{t('Submission status')}</h3>
+                <Badge tone="neutral">
+                  {checklist.filter((item) => item.done).length}/{checklist.length}
+                </Badge>
               </div>
-              <ul className="workspace-record-list compact">
-                {checklist.map((item) => (
-                  <li key={item.label} className="workspace-record-item compact">
-                    <div className="row between gap wrap">
-                      <strong>{item.label}</strong>
-                      <StatusTag status={item.done ? 'ready' : 'draft'}>
-                        {item.done ? t('Ready') : t('draft')}
-                      </StatusTag>
-                    </div>
-                    <small className="muted">{item.hint}</small>
-                  </li>
+              <small className="muted">
+                {t('Keep this as a quick check, not a second workflow.')}
+              </small>
+              <div className="stack tight">
+                {checklist.slice(0, 2).map((item) => (
+                  <div key={item.label} className="workspace-keyline-item">
+                    <span>{item.label}</span>
+                    <small>{item.done ? t('Ready') : t('Pending')}</small>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </Card>
 
-            <WorkspaceActionPanel
-              title={t('Review links')}
-              description={t('Track draft progress and approval results from the model workspace.')}
-              surface="panel"
-              actions={
-                <>
-                  <ButtonLink to="/models/my-models" variant="secondary" block>
-                    {t('Manage My Models')}
-                  </ButtonLink>
-                  <ButtonLink to="/models/versions" variant="secondary" block>
-                    {t('Open Model Versions')}
-                  </ButtonLink>
-                </>
-              }
-            />
           </div>
         }
       />

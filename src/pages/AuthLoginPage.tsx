@@ -3,9 +3,8 @@ import StateBlock from '../components/StateBlock';
 import Button from '../components/ui/Button';
 import { Input } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
+import { PageHeader } from '../components/ui/ConsolePage';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceSplit
@@ -36,29 +35,20 @@ export default function AuthLoginPage() {
 
   return (
     <WorkspacePage>
-      <WorkspaceHero
+      <PageHeader
         eyebrow={t('Account Access')}
         title={t('Login')}
         description={t('Enter your provisioned account to reopen chat history, settings, and workflow actions.')}
-        stats={[
-          { label: t('Access mode'), value: t('Username + password') },
-          { label: t('Provisioning'), value: t('Administrator only') }
-        ]}
-      />
-
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Public registration'),
-            description: t('Account creation is not exposed from this page in the current product phase.'),
-            value: t('Disabled')
-          },
-          {
-            title: t('Provisioning'),
-            description: t('New accounts are opened by administrators from authenticated settings.'),
-            value: t('Administrator only')
-          }
-        ]}
+        meta={
+          <div className="row gap wrap align-center">
+            <span className="muted">{t('Access mode')}: {t('Username + password')}</span>
+            <span className="muted">{t('Provisioning')}: {t('Administrator only')}</span>
+          </div>
+        }
+        primaryAction={{
+          label: t('Login'),
+          onClick: submit
+        }}
       />
 
       <WorkspaceSplit

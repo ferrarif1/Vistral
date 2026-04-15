@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AuditLogRecord, User } from '../../shared/domain';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
-import { Button, ButtonLink } from '../components/ui/Button';
+import { Button } from '../components/ui/Button';
 import {
   DetailDrawer,
   DetailList,
   FilterToolbar,
   InlineAlert,
-  KPIStatRow,
   PageHeader,
   SectionCard,
   StatusTable,
@@ -22,8 +20,6 @@ import {
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
-
-const adminAuditOnboardingDismissedStorageKey = 'vistral-admin-audit-onboarding-dismissed';
 
 const humanizeAuditToken = (value: string) => {
   const normalized = value
@@ -105,63 +101,13 @@ export default function AdminAuditPage() {
     [users]
   );
 
-  const summary = useMemo(
-    () => ({
-      total: sortedItems.length,
-      userTriggered: sortedItems.filter((item) => Boolean(item.user_id)).length,
-      systemTriggered: sortedItems.filter((item) => !item.user_id).length,
-      entityTypes: new Set(sortedItems.map((item) => item.entity_type)).size
-    }),
-    [sortedItems]
-  );
   const entityOptions = useMemo(
     () =>
       Array.from(new Set(sortedItems.map((item) => item.entity_type)))
         .sort((left, right) => left.localeCompare(right)),
     [sortedItems]
   );
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'timeline',
-        label: t('Review governance timeline'),
-        detail: t('Start from the newest governance records so policy-sensitive actions are easy to trace.'),
-        done: sortedItems.length > 0,
-        to: '/admin/audit',
-        cta: t('Review timeline')
-      },
-      {
-        key: 'event_mix',
-        label: t('Separate user vs system actions'),
-        detail: t('Use event badges and counts to distinguish operator actions from background automation before deciding what to review next.'),
-        done: summary.userTriggered > 0 || summary.systemTriggered > 0,
-        to: '/admin/audit',
-        cta: t('Compare event types')
-      },
-      {
-        key: 'next_lane',
-        label: t('Continue into adjacent admin lanes'),
-        detail: t('Jump from audit logs into approvals or verification evidence when the timeline reveals the next governance action.'),
-        done: sortedItems.length > 0,
-        to: '/admin/models/pending',
-        cta: t('Open approval queue'),
-        secondaryTo: '/admin/verification-reports',
-        secondaryLabel: t('Open verification reports')
-      }
-    ],
-    [sortedItems.length, summary.systemTriggered, summary.userTriggered, t]
-  );
 
-  const topEntityTypes = useMemo(() => {
-    const counts = sortedItems.reduce<Record<string, number>>((result, item) => {
-      result[item.entity_type] = (result[item.entity_type] ?? 0) + 1;
-      return result;
-    }, {});
-
-    return Object.entries(counts)
-      .sort((left, right) => right[1] - left[1])
-      .slice(0, 4);
-  }, [sortedItems]);
   const filteredItems = useMemo(() => {
     const query = searchText.trim().toLowerCase();
     return sortedItems.filter((item) => {
@@ -263,24 +209,9 @@ export default function AdminAuditPage() {
         )
       },
       {
-        key: 'metadata',
-        header: t('Details'),
-        width: '10%',
-        cell: (item) => {
-          const metadataCount = Object.keys(item.metadata ?? {}).length;
-          return (
-            <Badge tone={metadataCount > 0 ? 'warning' : 'neutral'}>
-              {metadataCount > 0
-                ? t('Detailed fields: {count}', { count: metadataCount })
-                : t('No detailed fields')}
-            </Badge>
-          );
-        }
-      },
-      {
         key: 'actions',
         header: t('Actions'),
-        width: '10%',
+        width: '12%',
         cell: (item) => (
           <Button
             type="button"
@@ -304,15 +235,7 @@ export default function AdminAuditPage() {
       <PageHeader
         eyebrow={t('Governance Trail')}
         title={t('Admin Audit Logs')}
-        description={t('Use this page to read governance history, compare user vs system events, and continue into adjacent admin lanes without losing context.')}
-        meta={
-          <div className="row gap wrap align-center">
-            <Badge tone="neutral">{t('Total records')}: {summary.total}</Badge>
-            <Badge tone="info">{t('User triggered')}: {summary.userTriggered}</Badge>
-            <Badge tone="neutral">{t('System events')}: {summary.systemTriggered}</Badge>
-            <Badge tone="neutral">{t('Entity types')}: {summary.entityTypes}</Badge>
-          </div>
-        }
+        description={t('Search governance history and inspect one record at a time.')}
         primaryAction={{
           label: loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh'),
           onClick: () => {
@@ -322,47 +245,6 @@ export default function AdminAuditPage() {
           },
           disabled: loading || refreshing
         }}
-        secondaryActions={
-          <>
-            <ButtonLink to="/admin/models/pending" variant="ghost" size="sm">
-              {t('Approval Queue')}
-            </ButtonLink>
-            <ButtonLink to="/admin/verification-reports" variant="ghost" size="sm">
-              {t('Verification Reports')}
-            </ButtonLink>
-          </>
-        }
-      />
-
-      <KPIStatRow
-        items={[
-          {
-            label: t('Total records'),
-            value: summary.total,
-            tone: summary.total > 0 ? 'info' : 'neutral',
-            hint: t('All governance events currently retained in the visible log window.')
-          },
-          {
-            label: t('User triggered'),
-            value: summary.userTriggered,
-            tone: summary.userTriggered > 0 ? 'info' : 'neutral',
-            hint: t('Events initiated by authenticated users instead of backend automation.')
-          },
-          {
-            label: t('System events'),
-            value: summary.systemTriggered,
-            tone: summary.systemTriggered > 0 ? 'warning' : 'neutral',
-            hint: t('Background jobs, policy hooks, and other platform-generated actions.')
-          },
-          {
-            label: t('Top entity'),
-            value: topEntityTypes[0] ? humanizeAuditToken(topEntityTypes[0][0]) : t('n/a'),
-            tone: topEntityTypes[0] ? 'neutral' : 'neutral',
-            hint: topEntityTypes[0]
-              ? t('Current leading entity count: {count}', { count: topEntityTypes[0][1] })
-              : t('Entity mix will appear after audit records are available.')
-          }
-        ]}
       />
 
       {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}
@@ -377,70 +259,29 @@ export default function AdminAuditPage() {
         <StateBlock variant="loading" title={t('Loading')} description={t('Fetching latest audit logs.')} />
       ) : sortedItems.length === 0 ? (
         <div className="workspace-main-stack">
-          <WorkspaceOnboardingCard
-            title={t('Audit log first-run guide')}
-            description={t('Use this page to read governance history, compare user vs system events, and continue into adjacent admin lanes without losing context.')}
-            summary={t('Guide status is computed from retained audit records and visible governance event mix.')}
-            storageKey={adminAuditOnboardingDismissedStorageKey}
-            steps={onboardingSteps.map((stepItem) => ({
-              key: stepItem.key,
-              label: stepItem.label,
-              detail: stepItem.detail,
-              done: stepItem.done,
-              primaryAction: {
-                to: stepItem.to,
-                label: stepItem.cta
-              },
-              secondaryAction: stepItem.secondaryTo
-                ? {
-                    to: stepItem.secondaryTo,
-                    label: stepItem.secondaryLabel ?? ''
-                  }
-                : undefined
-            }))}
-          />
-
           <StateBlock
             variant="empty"
             title={t('No Logs Yet')}
             description={t('Governance events will appear here after account, model, runtime, or training actions are executed.')}
             extra={
-              <div className="row gap wrap">
-                <ButtonLink to="/settings/account" variant="secondary" size="sm">
-                  {t('Open Account Settings')}
-                </ButtonLink>
-                <ButtonLink to="/admin/models/pending" variant="ghost" size="sm">
-                  {t('Open Pending Approvals')}
-                </ButtonLink>
-              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  load('manual').catch(() => {
+                    // handled by local state
+                  });
+                }}
+                disabled={refreshing || loading}
+              >
+                {refreshing ? t('Refreshing...') : t('Refresh')}
+              </Button>
             }
           />
         </div>
       ) : (
         <div className="workspace-main-stack">
-          <WorkspaceOnboardingCard
-            title={t('Audit log first-run guide')}
-            description={t('Use this page to read governance history, compare user vs system events, and continue into adjacent admin lanes without losing context.')}
-            summary={t('Guide status is computed from retained audit records and visible governance event mix.')}
-            storageKey={adminAuditOnboardingDismissedStorageKey}
-            steps={onboardingSteps.map((stepItem) => ({
-              key: stepItem.key,
-              label: stepItem.label,
-              detail: stepItem.detail,
-              done: stepItem.done,
-              primaryAction: {
-                to: stepItem.to,
-                label: stepItem.cta
-              },
-              secondaryAction: stepItem.secondaryTo
-                ? {
-                    to: stepItem.secondaryTo,
-                    label: stepItem.secondaryLabel ?? ''
-                  }
-                : undefined
-            }))}
-          />
-
           <FilterToolbar
             filters={
               <>
@@ -489,21 +330,11 @@ export default function AdminAuditPage() {
                 </Button>
               ) : undefined
             }
-            summary={
-              <div className="row gap wrap">
-                <Badge tone="info">{t('Showing {count} records.', { count: filteredItems.length })}</Badge>
-                {topEntityTypes.slice(0, 3).map(([entityType, count]) => (
-                  <Badge key={entityType} tone="neutral">
-                    {humanizeAuditToken(entityType)}: {count}
-                  </Badge>
-                ))}
-              </div>
-            }
           />
 
           <SectionCard
             title={t('Recent audit timeline')}
-            description={t('Newest records first so governance follow-up stays easy to trace.')}
+            description={t('Newest records first so one governance record stays easy to inspect.')}
           >
             <StatusTable
               columns={tableColumns}
@@ -522,7 +353,7 @@ export default function AdminAuditPage() {
         open={Boolean(selectedItem)}
         onClose={() => setSelectedLogId('')}
         title={selectedItem ? humanizeAuditToken(selectedItem.action) : t('Audit detail')}
-        description={t('Open one governance record here when you need full context, actor identity, and detailed fields.')}
+        description={t('Use the drawer for actor identity and raw fields.')}
       >
         {selectedItem ? (
           <>
@@ -551,20 +382,30 @@ export default function AdminAuditPage() {
                       })()
                     : t('Recorded by background automation.')
                 },
-                { label: t('Actor ID'), value: selectedItem.user_id ?? t('n/a') },
-                { label: t('Target ID'), value: selectedItem.entity_id ?? t('n/a') }
+                { label: t('Target record'), value: selectedItem.entity_id ?? t('n/a') }
               ]}
             />
-            <Card as="section">
-              <div className="stack tight">
-                <strong>{t('Detailed fields (advanced)')}</strong>
-                <pre className="code-block">
-                  {Object.keys(selectedItem.metadata ?? {}).length > 0
-                    ? JSON.stringify(selectedItem.metadata, null, 2)
-                    : '{}'}
-                </pre>
-              </div>
-            </Card>
+            <details className="workspace-details">
+              <summary>{t('Detailed fields (advanced)')}</summary>
+              <Card as="section">
+                <div className="stack tight">
+                  <small className="muted">
+                    {t('Raw metadata and internal identifiers stay here so the main audit drawer remains readable.')}
+                  </small>
+                  <DetailList
+                    items={[
+                      { label: t('Actor ID'), value: selectedItem.user_id ?? t('n/a') },
+                      { label: t('Target ID'), value: selectedItem.entity_id ?? t('n/a') }
+                    ]}
+                  />
+                  <pre className="code-block">
+                    {Object.keys(selectedItem.metadata ?? {}).length > 0
+                      ? JSON.stringify(selectedItem.metadata, null, 2)
+                      : '{}'}
+                  </pre>
+                </div>
+              </Card>
+            </details>
           </>
         ) : null}
       </DetailDrawer>

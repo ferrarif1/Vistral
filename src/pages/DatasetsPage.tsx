@@ -1,17 +1,13 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { DatasetRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
-import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
-import WorkspaceStarterPanel from '../components/onboarding/WorkspaceStarterPanel';
 import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import { PageHeader } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -25,7 +21,6 @@ const datasetStatusOptions = ['draft', 'ready', 'archived'] as const;
 const datasetVirtualizationThreshold = 14;
 const datasetVirtualRowHeight = 176;
 const datasetVirtualViewportHeight = 620;
-const datasetsOnboardingDismissedStorageKey = 'vistral-datasets-onboarding-dismissed';
 type LoadMode = 'initial' | 'manual';
 
 const formatTimestamp = (iso: string): string => formatCompactTimestamp(iso);
@@ -49,12 +44,6 @@ const buildDatasetSignature = (items: DatasetRecord[]): string =>
       }))
   );
 
-const buildScopedTrainingCreatePath = (datasetId: string): string => {
-  const search = new URLSearchParams();
-  search.set('dataset', datasetId);
-  return `/training/jobs/new?${search.toString()}`;
-};
-
 export default function DatasetsPage() {
   const { t } = useI18n();
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
@@ -73,7 +62,7 @@ export default function DatasetsPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const datasetsSignatureRef = useRef('');
-  const createPanelRef = useRef<HTMLDivElement | null>(null);
+  const createPanelRef = useRef<HTMLDetailsElement | null>(null);
   const datasetNameInputRef = useRef<HTMLInputElement | null>(null);
   const deferredSearchText = useDeferredValue(searchText);
 
@@ -154,54 +143,6 @@ export default function DatasetsPage() {
     [filteredDatasets, selectedDatasetId]
   );
 
-  const summary = useMemo(
-    () => ({
-      total: datasets.length,
-      filtered: filteredDatasets.length,
-      ready: datasets.filter((dataset) => dataset.status === 'ready').length,
-      draft: datasets.filter((dataset) => dataset.status === 'draft').length,
-      ocr: datasets.filter((dataset) => dataset.task_type === 'ocr').length,
-      detection: datasets.filter((dataset) => dataset.task_type === 'detection').length
-    }),
-    [datasets, filteredDatasets.length]
-  );
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'create',
-        label: t('Create dataset shell'),
-        detail: t('Start by creating one dataset record so uploads, annotation, and versions have a stable home.'),
-        done: datasets.length > 0,
-        to: '/datasets',
-        cta: t('Create Dataset')
-      },
-      {
-        key: 'prepare',
-        label: t('Prepare dataset to ready state'),
-        detail: t('Open one dataset detail page, upload files, organize split, and create a usable snapshot.'),
-        done: summary.ready > 0,
-        to: selectedDataset ? `/datasets/${selectedDataset.id}` : '/datasets',
-        cta: t('Open Dataset Detail')
-      },
-      {
-        key: 'next-lane',
-        label: t('Continue to annotation or training'),
-        detail: t('When at least one dataset is ready, move directly into annotation queue or training setup.'),
-        done: summary.ready > 0 && Boolean(selectedDataset),
-        to: selectedDataset ? `/datasets/${selectedDataset.id}/annotate` : '/training/jobs/new',
-        cta: selectedDataset ? t('Open Annotation Workspace') : t('Create Training Job')
-      }
-    ],
-    [datasets.length, selectedDataset, summary.ready, t]
-  );
-  const nextOnboardingStep = useMemo(
-    () => onboardingSteps.find((step) => !step.done) ?? null,
-    [onboardingSteps]
-  );
-  const nextOnboardingStepIndex = useMemo(
-    () => (nextOnboardingStep ? onboardingSteps.findIndex((step) => step.key === nextOnboardingStep.key) + 1 : 0),
-    [nextOnboardingStep, onboardingSteps]
-  );
   const shouldVirtualizeDatasets =
     viewMode === 'list' && filteredDatasets.length > datasetVirtualizationThreshold;
   const hasActiveFilters =
@@ -306,53 +247,33 @@ export default function DatasetsPage() {
 
   return (
     <WorkspacePage>
-      <WorkspaceHero
+      <PageHeader
         eyebrow={t('Dataset Workbench')}
         title={t('Datasets')}
-        description={t('Operate dataset assets with one stable inventory, filter, and inspector workflow.')}
-        stats={[
-          {
-            label: t('Total'),
-            value: summary.total
-          },
-          {
-            label: t('Filtered'),
-            value: summary.filtered
-          },
-          {
-            label: t('Ready'),
-            value: summary.ready
-          }
-        ]}
+        description={t('Browse dataset inventory and open one dataset at a time.')}
+        primaryAction={{
+          label: t('Create Dataset'),
+          onClick: focusCreatePanel
+        }}
+        secondaryActions={
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              load('manual').catch(() => {
+                // no-op
+              });
+            }}
+            disabled={loading || refreshing}
+          >
+            {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
+          </Button>
+        }
       />
 
       {error ? <StateBlock variant="error" title={t('Dataset Action Failed')} description={error} /> : null}
       {success ? <StateBlock variant="success" title={t('Completed')} description={success} /> : null}
-
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Total'),
-            description: t('All dataset assets currently visible to this account.'),
-            value: summary.total
-          },
-          {
-            title: t('Ready'),
-            description: t('Datasets already prepared for downstream steps.'),
-            value: summary.ready
-          },
-          {
-            title: t('draft'),
-            description: t('Draft datasets still waiting for organization and review.'),
-            value: summary.draft
-          },
-          {
-            title: t('Task mix'),
-            description: t('OCR and detection remain the main operational lanes.'),
-            value: `${summary.ocr} ${t('ocr')} / ${summary.detection} ${t('detection')}`
-          }
-        ]}
-      />
 
       <WorkspaceWorkbench
         toolbar={
@@ -453,67 +374,17 @@ export default function DatasetsPage() {
               </label>
             </div>
 
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
-                <Badge tone="info">
-                  {t('Showing {count} datasets in inventory.', { count: filteredDatasets.length })}
-                </Badge>
-                {selectedDataset ? <Badge tone="neutral">{t('Selected')}: {selectedDataset.name}</Badge> : null}
-              </div>
-            </div>
+            <small className="muted">
+              {t('Showing {count} datasets in inventory.', { count: filteredDatasets.length })}
+            </small>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              title={t('Dataset first-run guide')}
-              description={t('This page is your data preparation entry. Finish these steps before annotation and training.')}
-              summary={t('Guide status is computed from real dataset records in this workspace.')}
-              storageKey={datasetsOnboardingDismissedStorageKey}
-              steps={onboardingSteps.map((step) => ({
-                key: step.key,
-                label: step.label,
-                detail: step.detail,
-                done: step.done,
-                primaryAction: {
-                  to: step.to,
-                  label: step.cta,
-                  onClick: step.key === 'create' ? focusCreatePanel : undefined
-                }
-              }))}
-	            />
-
-	            {nextOnboardingStep ? (
-	              <WorkspaceNextStepCard
-	                title={t('Next dataset step')}
-	                description={t('Finish one clear preparation action here before moving into annotation or training.')}
-	                stepLabel={nextOnboardingStep.label}
-	                stepDetail={nextOnboardingStep.detail}
-	                current={nextOnboardingStepIndex}
-	                total={onboardingSteps.length}
-	                actions={
-	                  <div className="row gap wrap">
-	                    {nextOnboardingStep.key === 'create' ? (
-	                      <Button type="button" variant="secondary" size="sm" onClick={focusCreatePanel}>
-	                        {t('Jump to Create Panel')}
-	                      </Button>
-	                    ) : (
-	                      <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-	                        {nextOnboardingStep.cta}
-	                      </ButtonLink>
-	                    )}
-	                    <ButtonLink to="/workspace/console" variant="ghost" size="sm">
-	                      {t('Back to Console')}
-	                    </ButtonLink>
-	                  </div>
-	                }
-	              />
-	            ) : null}
-
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Dataset Inventory')}
-                description={t('Select a dataset to inspect details and jump into downstream workspaces.')}
+                description={t('Select one dataset to inspect details in the right inspector.')}
               />
 
               {loading ? (
@@ -525,7 +396,7 @@ export default function DatasetsPage() {
                   description={
                     hasActiveFilters
                       ? t('No datasets match current filters. Try adjusting search or filter conditions.')
-                      : t('Create your first dataset here to unlock upload, annotation, training, and validation flows.')
+                      : t('Create your first dataset here to start upload, split, and version preparation.')
                   }
                   extra={
                     hasActiveFilters ? (
@@ -533,14 +404,9 @@ export default function DatasetsPage() {
                         {t('Clear search or filter chips to reveal the full dataset inventory again.')}
                       </small>
                     ) : (
-                      <div className="row gap wrap">
-                        <Button type="button" variant="secondary" size="sm" onClick={focusCreatePanel}>
-                          {t('Jump to Create Panel')}
-                        </Button>
-                        <small className="muted">
-                          {t('Use the Create Dataset panel in the inspector to define name, task type, and classes without leaving this page.')}
-                        </small>
-                      </div>
+                      <small className="muted">
+                        {t('Use the create panel on the right to start the first dataset.')}
+                      </small>
                     )
                   }
                 />
@@ -576,30 +442,11 @@ export default function DatasetsPage() {
               />
 
               {!selectedDataset ? (
-                nextOnboardingStep ? (
-                  <WorkspaceStarterPanel
-                    title={t('Dataset starter task')}
-                    label={nextOnboardingStep.label}
-                    detail={nextOnboardingStep.detail}
-                    actions={
-                      nextOnboardingStep.key === 'create' ? (
-                        <Button type="button" variant="secondary" size="sm" onClick={focusCreatePanel}>
-                          {t('Jump to Create Panel')}
-                        </Button>
-                      ) : (
-                        <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-                          {nextOnboardingStep.cta}
-                        </ButtonLink>
-                      )
-                    }
-                  />
-                ) : (
-                  <StateBlock
-                    variant="empty"
-                    title={t('No selection')}
-                    description={t('Select one dataset from the inventory to inspect and continue.')}
-                  />
-                )
+                <StateBlock
+                  variant="empty"
+                  title={t('No selection')}
+                  description={t('Select one dataset from the inventory to inspect and continue.')}
+                />
               ) : (
                 <>
                   <Panel as="section" tone="soft" className="stack tight">
@@ -618,92 +465,66 @@ export default function DatasetsPage() {
                       {t('Last updated')}: {formatTimestamp(selectedDataset.updated_at)}
                     </small>
                   </Panel>
-                  <div className="workspace-keyline-list">
-                    <div className="workspace-keyline-item">
-                      <span>{t('Task')}</span>
-                      <strong>{t(selectedDataset.task_type)}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Status')}</span>
-                      <strong>{t(selectedDataset.status)}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Classes')}</span>
-                      <strong>{selectedDataset.label_schema.classes.length}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Coverage')}</span>
-                      <small>{selectedDataset.label_schema.classes.slice(0, 4).join(', ') || '—'}</small>
-                    </div>
-                  </div>
                   <div className="workspace-action-cluster">
                     <ButtonLink to={`/datasets/${selectedDataset.id}`} variant="secondary" size="sm" block>
                       {t('Open Dataset Detail')}
-                    </ButtonLink>
-                    <ButtonLink to={`/datasets/${selectedDataset.id}/annotate`} variant="secondary" size="sm" block>
-                      {t('Open Annotation Workspace')}
-                    </ButtonLink>
-                    <ButtonLink
-                      to={buildScopedTrainingCreatePath(selectedDataset.id)}
-                      variant="ghost"
-                      size="sm"
-                      block
-                    >
-                      {t('Create Training Job')}
                     </ButtonLink>
                   </div>
                 </>
               )}
             </Card>
 
-            <div ref={createPanelRef}>
-              <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Create Dataset')}
-                description={t('Create a new asset container without leaving the workbench.')}
-              />
+            <details ref={createPanelRef} className="workspace-disclosure workspace-inspector-card">
+              <summary className="row between gap wrap align-center">
+                <span>{t('Create Dataset')}</span>
+              </summary>
+              <div className="workspace-disclosure-content">
+                <WorkspaceSectionHeader
+                  title={t('Create Dataset')}
+                  description={t('Create a new dataset in the side panel when you need one.')}
+                />
 
-              <div className="workspace-form-grid">
-                <label>
-                  {t('Name')}
-                  <Input ref={datasetNameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
-                </label>
-                <label>
-                  {t('Task Type')}
-                  <Select
-                    value={taskType}
-                    onChange={(event) =>
-                      setTaskType(
-                        event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
-                      )
-                    }
-                  >
-                    {taskTypeOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {t(option)}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <label className="workspace-form-span-2">
-                  {t('Description')}
-                  <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
-                </label>
-                <label className="workspace-form-span-2">
-                  {t('Classes')}
-                  <Input
-                    value={classesText}
-                    onChange={(event) => setClassesText(event.target.value)}
-                    placeholder={t('Comma-separated label classes')}
-                  />
-                </label>
+                <div className="workspace-form-grid">
+                  <label>
+                    {t('Name')}
+                    <Input ref={datasetNameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
+                  </label>
+                  <label>
+                    {t('Task Type')}
+                    <Select
+                      value={taskType}
+                      onChange={(event) =>
+                        setTaskType(
+                          event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
+                        )
+                      }
+                    >
+                      {taskTypeOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {t(option)}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <label className="workspace-form-span-2">
+                    {t('Description')}
+                    <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+                  </label>
+                  <label className="workspace-form-span-2">
+                    {t('Classes')}
+                    <Input
+                      value={classesText}
+                      onChange={(event) => setClassesText(event.target.value)}
+                      placeholder={t('Comma-separated label classes')}
+                    />
+                  </label>
+                </div>
+
+                <Button onClick={createDataset} disabled={submitting} block>
+                  {submitting ? t('Creating...') : t('Create Dataset')}
+                </Button>
               </div>
-
-              <Button onClick={createDataset} disabled={submitting} block>
-                {submitting ? t('Creating...') : t('Create Dataset')}
-              </Button>
-              </Card>
-            </div>
+            </details>
           </div>
         }
       />

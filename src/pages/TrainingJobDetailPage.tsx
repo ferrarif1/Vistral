@@ -7,13 +7,12 @@ import type {
   TrainingMetricRecord,
   RuntimeSettingsView
 } from '../../shared/domain';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { InlineAlert, KPIStatRow, PageHeader } from '../components/ui/ConsolePage';
+import { DetailList, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
 import { Card, Panel } from '../components/ui/Surface';
 import {
   WorkspacePage,
@@ -52,7 +51,6 @@ const metricTimelineVirtualRowHeight = 56;
 const metricTimelineVirtualViewportHeight = 420;
 const logsBatchSize = 300;
 const backgroundRefreshIntervalMs = 5000;
-const trainingJobDetailOnboardingDismissedStorageKey = 'vistral-training-job-detail-onboarding-dismissed';
 
 type LoadMode = 'initial' | 'manual' | 'background';
 
@@ -96,6 +94,7 @@ export default function TrainingJobDetailPage() {
   const [exportingMetrics, setExportingMetrics] = useState(false);
   const [exportingMetricsCsv, setExportingMetricsCsv] = useState(false);
   const [visibleLogCount, setVisibleLogCount] = useState(logsBatchSize);
+  const [evidenceView, setEvidenceView] = useState<'overview' | 'metrics' | 'logs'>('overview');
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const detailSignatureRef = useRef('');
 
@@ -494,7 +493,6 @@ export default function TrainingJobDetailPage() {
   const canCancel = ['queued', 'preparing', 'running'].includes(job.status);
   const canRetry = ['failed', 'cancelled'].includes(job.status);
   const isInterrupted = job.status === 'failed' || job.status === 'cancelled';
-  const isCompleted = job.status === 'completed';
   const linkedDataset = datasetsById.get(job.dataset_id);
   const queryScopedDatasetId = (searchParams.get('dataset') ?? '').trim();
   const queryScopedVersionId = (searchParams.get('version') ?? '').trim();
@@ -542,32 +540,6 @@ export default function TrainingJobDetailPage() {
       job.scheduler_decision?.selected_worker_id ||
       (job.scheduler_decision?.excluded_worker_ids.length ?? 0) > 0
   );
-  const onboardingSteps = [
-    {
-      key: 'status',
-      label: t('Read current run status'),
-      detail: t('Start from status, dataset snapshot, and execution target so you know whether this run is queued, active, or finished.'),
-      done: Boolean(job),
-      to: scopedJobsPath,
-      cta: t('Open Jobs List')
-    },
-    {
-      key: 'evidence',
-      label: t('Check logs, metrics, and artifact evidence'),
-      detail: t('As the run progresses, use this page to confirm that logs, metrics, and output artifacts are appearing as expected.'),
-      done: logs.length > 0 || metrics.length > 0 || Boolean(artifactAttachmentId),
-      to: `/training/jobs/${job.id}`,
-      cta: t('Inspect run evidence')
-    },
-    {
-      key: 'followup',
-      label: t('Continue into validation follow-up'),
-      detail: t('After the run stabilizes, continue into inference validation from the same scoped context.'),
-      done: isCompleted || isInterrupted,
-      to: scopedInferencePath,
-      cta: t('Validate Inference')
-    }
-  ];
   const refreshDetail = () => {
     load('manual')
       .then(() => setFeedback(null))
@@ -600,9 +572,14 @@ export default function TrainingJobDetailPage() {
           disabled: loading || refreshing || busy
         }}
         secondaryActions={
-          <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
-            {t('Jobs List')}
-          </ButtonLink>
+          <>
+            <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
+              {t('Jobs List')}
+            </ButtonLink>
+            <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
+              {t('Validate Inference')}
+            </ButtonLink>
+          </>
         }
       />
 
@@ -627,10 +604,6 @@ export default function TrainingJobDetailPage() {
             status: t(job.status)
           })}
         />
-      ) : null}
-
-      {isCompleted ? (
-        <InlineAlert tone="success" title={t('Training Completed')} description={t('Job reached completed state.')} />
       ) : null}
 
       {executionInsight.showWarning ? (
@@ -659,43 +632,16 @@ export default function TrainingJobDetailPage() {
         runtimeSettingsError ? (
           <InlineAlert
             tone="warning"
-            title={t('Runtime safety status unavailable')}
-            description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
-            actions={
-              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                {t('Open Runtime Settings')}
-              </ButtonLink>
-            }
-          />
-        ) : runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback ? (
-          <InlineAlert
-            tone="success"
-            title={t('Runtime safety guard is active')}
-            description={t(
-              'Training and inference safety guards are reflected in this workspace. Built-in runner Python: {pythonBin}.',
-              { pythonBin: runtimePythonBin || t('platform default (python3 / python)') }
-            )}
-            actions={
-              <div className="row gap wrap">
-                <Badge tone={runtimeDisableSimulatedTrainFallback ? 'success' : 'warning'}>
-                  {t('Training safety guard')}: {runtimeDisableSimulatedTrainFallback ? t('yes') : t('no')}
-                </Badge>
-                <Badge tone={runtimeDisableInferenceFallback ? 'success' : 'warning'}>
-                  {t('Inference safety guard')}: {runtimeDisableInferenceFallback ? t('yes') : t('no')}
-                </Badge>
-                <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                  {t('Open Runtime Settings')}
-                </ButtonLink>
-              </div>
-            }
+            title={t('Runtime settings loaded incompletely')}
+            description={t('Open Runtime Settings to verify the runtime guard state if you need it for approval.')}
           />
         ) : (
           <InlineAlert
-            tone="warning"
-            title={t('Runtime safety guard is off')}
-            description={t(
-              'This training detail may still include degraded-output evidence. Enable runtime safety guards before production approval.'
-            )}
+            tone={runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback ? 'success' : 'warning'}
+            title={t('Runtime settings available')}
+            description={t('Runtime Python: {pythonBin}. Guard state stays in Runtime Settings.', {
+              pythonBin: runtimePythonBin || t('platform default (python3 / python)')
+            })}
             actions={
               <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                 {t('Open Runtime Settings')}
@@ -704,35 +650,6 @@ export default function TrainingJobDetailPage() {
           />
         )
       ) : null}
-
-      <KPIStatRow
-        items={[
-          {
-            label: t('Run status'),
-            value: t(job.status),
-            tone: ['failed', 'cancelled'].includes(job.status) ? 'warning' : 'info',
-            hint: t('Current lifecycle stage for this training job.')
-          },
-          {
-            label: t('Metrics'),
-            value: metrics.length,
-            tone: metrics.length > 0 ? 'info' : 'neutral',
-            hint: t('Recorded metric points from this run timeline.')
-          },
-          {
-            label: t('Logs'),
-            value: logs.length,
-            tone: logs.length > 0 ? 'neutral' : 'warning',
-            hint: t('Captured execution log lines for the selected run.')
-          },
-          {
-            label: t('Artifact'),
-            value: artifactAttachmentId ? t('Ready') : t('pending'),
-            tone: artifactAttachmentId ? 'success' : 'warning',
-            hint: t('Artifact attachment generated by this run.')
-          }
-        ]}
-      />
 
       <WorkspaceWorkbench
         toolbar={
@@ -755,26 +672,6 @@ export default function TrainingJobDetailPage() {
                     {t('Retry')}
                   </Button>
                 ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={downloadMetricsJson}
-                  disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
-                  title={t('Export all metrics timeline in JSON format.')}
-                >
-                  {exportingMetrics ? t('Exporting...') : t('Metrics JSON')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={downloadMetricsCsv}
-                  disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
-                  title={t('Export all metrics timeline in CSV format.')}
-                >
-                  {exportingMetricsCsv ? t('Exporting...') : t('Metrics CSV')}
-                </Button>
                 {artifactAttachmentId ? (
                   <Button type="button" variant="ghost" size="sm" onClick={downloadArtifact}>
                     {t('Download Artifact')}
@@ -782,83 +679,37 @@ export default function TrainingJobDetailPage() {
                 ) : null}
               </div>
             </div>
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
-                <Badge tone="neutral">{t('Dataset')}: {datasetDisplayName}</Badge>
-                <Badge tone={job.dataset_version_id ? 'info' : 'warning'}>
-                  {t('Version snapshot')}: {versionSnapshotLabel}
-                </Badge>
-                <Badge tone={job.execution_target === 'worker' ? 'info' : 'warning'}>
-                  {t('Execution target')}: {executionTargetLabel}
-                </Badge>
-                <Badge tone="neutral">{t('Last updated')}: {latestUpdateLabel}</Badge>
-                <Badge tone={artifactAttachmentId ? 'success' : 'neutral'}>
-                  {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('pending')}
-                </Badge>
-              </div>
-            </div>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              title={t('Training detail first-run guide')}
-              description={t('Use this page to interpret run state, inspect execution evidence, and continue into the next scoped workflow.')}
-              summary={t('Guide status is computed from current run status, evidence availability, and follow-up readiness.')}
-              storageKey={`${trainingJobDetailOnboardingDismissedStorageKey}:${job.id}`}
-              steps={onboardingSteps.map((stepItem) => ({
-                key: stepItem.key,
-                label: stepItem.label,
-                detail: stepItem.detail,
-                done: stepItem.done,
-                primaryAction: {
-                  to: stepItem.to,
-                  label: stepItem.cta
-                },
-                secondaryAction: undefined
-              }))}
-            />
-
             <Card as="section" className="stack">
               <WorkspaceSectionHeader
                 title={t('Run Summary')}
                 description={t('Dataset scope, launch state, and handoff readiness for this run.')}
               />
-              <div className="row gap wrap">
-                <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-                <Badge tone="neutral">{t('Dataset')}: {datasetDisplayName}</Badge>
-                <Badge tone="neutral">{t('Base model')}: {job.base_model}</Badge>
-                <Badge tone={job.dataset_version_id ? 'success' : 'warning'}>
-                  {t('Version snapshot')}: {versionSnapshotLabel}
-                </Badge>
-                <Badge tone={job.execution_target === 'worker' ? 'info' : 'warning'}>
-                  {t('Execution target')}: {executionTargetLabel}
-                </Badge>
-                <Badge tone={artifactAttachmentId ? 'success' : 'warning'}>
-                  {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('pending')}
-                </Badge>
-              </div>
-              <small className="muted">
-                {job.dataset_version_id
-                  ? t('Dataset snapshot is already locked for this run.')
-                  : t('Run is still preparing its version snapshot.')}
-              </small>
-              <small className="muted">
-                {artifactAttachmentId
-                  ? t('Artifact linked and ready for downstream use.')
-                  : t('Artifact is still pending or unavailable for this version.')}
-              </small>
-              {artifactAttachmentId ? (
-                <div className="row gap wrap">
-                  <Button type="button" variant="secondary" size="sm" onClick={downloadArtifact}>
-                    {t('Download Artifact')}
-                  </Button>
-                  <small className="muted">{t('Artifact ready for download from this detail page.')}</small>
-                </div>
-              ) : null}
-              <small className="muted">
-                {t('Scheduler history, fallback reasons, and technical identifiers are available in advanced diagnostics.')}
-              </small>
+              <DetailList
+                items={[
+                  { label: t('Status'), value: <StatusTag status={job.status}>{t(job.status)}</StatusTag> },
+                  { label: t('Dataset'), value: datasetDisplayName },
+                  { label: t('Base model'), value: job.base_model },
+                  { label: t('Version snapshot'), value: versionSnapshotLabel },
+                  { label: t('Execution target'), value: executionTargetLabel },
+                  {
+                    label: t('Artifact'),
+                    value: artifactAttachmentId ? (
+                      <div className="row gap wrap align-center">
+                        <Badge tone="success">{t('Ready')}</Badge>
+                        <Button type="button" variant="ghost" size="sm" onClick={downloadArtifact}>
+                          {t('Download Artifact')}
+                        </Button>
+                      </div>
+                    ) : (
+                      t('pending')
+                    )
+                  }
+                ]}
+              />
               <details className="workspace-details">
                 <summary>{t('Execution diagnostics (advanced)')}</summary>
                 <div className="stack tight">
@@ -1022,12 +873,69 @@ export default function TrainingJobDetailPage() {
                   ) : (
                     <small className="muted">{t('Scheduler update not available yet.')}</small>
                   )}
-                  {trimmedLogExcerpt ? (
-                    <Panel className="stack tight" tone="soft">
-                      <strong>{t('Latest log summary')}</strong>
-                      <pre className="code-block">{trimmedLogExcerpt}</pre>
-                    </Panel>
-                  ) : null}
+                </div>
+              </details>
+              <details className="workspace-details">
+                <summary>{t('Export metrics')}</summary>
+                <div className="row gap wrap">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={downloadMetricsJson}
+                    disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
+                    title={t('Export all metrics timeline in JSON format.')}
+                  >
+                    {exportingMetrics ? t('Exporting...') : t('Metrics JSON')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={downloadMetricsCsv}
+                    disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
+                    title={t('Export all metrics timeline in CSV format.')}
+                  >
+                    {exportingMetricsCsv ? t('Exporting...') : t('Metrics CSV')}
+                  </Button>
+                </div>
+              </details>
+            </Card>
+
+            <SectionCard
+              title={t('Run evidence')}
+              description={t('Switch between a quick overview, metric history, and raw logs.')}
+              actions={
+                <div className="row gap wrap">
+                  <Button
+                    type="button"
+                    variant={evidenceView === 'overview' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => setEvidenceView('overview')}
+                  >
+                    {t('Overview')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={evidenceView === 'metrics' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => setEvidenceView('metrics')}
+                  >
+                    {t('Metrics')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={evidenceView === 'logs' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => setEvidenceView('logs')}
+                  >
+                    {t('Logs')}
+                  </Button>
+                </div>
+              }
+            >
+              {evidenceView === 'overview' ? (
+                <div className="stack">
                   {artifactSummary ? (
                     <Panel className="stack tight" tone="soft">
                       <div className="row gap wrap">
@@ -1064,35 +972,49 @@ export default function TrainingJobDetailPage() {
                       ) : null}
                     </Panel>
                   ) : null}
-                </div>
-              </details>
-            </Card>
-
-            <Card as="section" className="stack">
-              <WorkspaceSectionHeader
-                title={t('Metrics')}
-                description={t('Use JSON for structured integrations and CSV for spreadsheet analysis.')}
-              />
-              {metrics.length === 0 ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('No Metrics Yet')}
-                  description={t('Metrics will appear after evaluation stage or when the runtime returns metric artifacts.')}
-                  extra={
+                  {latestMetrics.length === 0 ? (
+                    <StateBlock
+                      variant="empty"
+                      title={t('No Metrics Yet')}
+                      description={t('Metrics will appear after evaluation or when the runtime returns metric artifacts.')}
+                    />
+                  ) : (
+                    <div className="row gap wrap">
+                      {latestMetrics.map((metric) => (
+                        <Badge key={metric.id} tone="neutral">
+                          {metric.metric_name}: {metric.metric_value.toFixed(4)} · {t('step')} {metric.step}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  {trimmedLogExcerpt ? (
+                    <Panel className="stack tight" tone="soft">
+                      <strong>{t('Latest log summary')}</strong>
+                      <pre className="code-block">{trimmedLogExcerpt}</pre>
+                    </Panel>
+                  ) : (
                     <small className="muted">
-                      {t('Keep this page open while the job reaches running/evaluating, or refresh later after completion.')}
+                      {t('No short log summary is available yet. Open Logs for the full output.')}
                     </small>
-                  }
-                />
-              ) : (
-                <>
-                  <div className="row gap wrap">
-                    {latestMetrics.map((metric) => (
-                      <Badge key={metric.id} tone="neutral">
-                        {metric.metric_name}: {metric.metric_value.toFixed(4)} · {t('step')} {metric.step}
-                      </Badge>
-                    ))}
-                  </div>
+                  )}
+                </div>
+              ) : evidenceView === 'metrics' ? (
+                <div className="stack">
+                  {latestMetrics.length > 0 ? (
+                    <div className="row gap wrap">
+                      {latestMetrics.map((metric) => (
+                        <Badge key={metric.id} tone="neutral">
+                          {metric.metric_name}: {metric.metric_value.toFixed(4)} · {t('step')} {metric.step}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <StateBlock
+                      variant="empty"
+                      title={t('No Metrics Yet')}
+                      description={t('Metrics will appear after evaluation stage or when the runtime returns metric artifacts.')}
+                    />
+                  )}
                   <details className="workspace-details">
                     <summary>{t('Metric Timeline')}</summary>
                     {shouldVirtualizeMetricTimeline ? (
@@ -1112,91 +1034,89 @@ export default function TrainingJobDetailPage() {
                       </ul>
                     )}
                   </details>
-                </>
-              )}
-            </Card>
-
-            {metricCurves.length > 0 ? (
-              <Card as="section">
-                <h3>{t('Metric Curves')}</h3>
-                <div className="metric-chart-grid">
-                  {metricCurves.map((curve) => (
-                    <article key={curve.metricName} className="metric-chart-card stack tight">
-                      <div className="row between gap wrap align-center">
-                        <strong>{curve.metricName}</strong>
-                        <Badge tone="info">{curve.latestValue.toFixed(4)}</Badge>
+                  {metricCurves.length > 0 ? (
+                    <details className="workspace-details">
+                      <summary>{t('Metric curves')}</summary>
+                      <div className="metric-chart-grid">
+                        {metricCurves.map((curve) => (
+                          <article key={curve.metricName} className="metric-chart-card stack tight">
+                            <div className="row between gap wrap align-center">
+                              <strong>{curve.metricName}</strong>
+                              <Badge tone="info">{curve.latestValue.toFixed(4)}</Badge>
+                            </div>
+                            <svg
+                              className="metric-chart-svg"
+                              viewBox={`0 0 ${METRIC_CHART_WIDTH} ${METRIC_CHART_HEIGHT}`}
+                              role="img"
+                              aria-label={`${curve.metricName} metric curve`}
+                            >
+                              <line
+                                x1={METRIC_CHART_PADDING}
+                                y1={METRIC_CHART_HEIGHT - METRIC_CHART_PADDING}
+                                x2={METRIC_CHART_WIDTH - METRIC_CHART_PADDING}
+                                y2={METRIC_CHART_HEIGHT - METRIC_CHART_PADDING}
+                                stroke="var(--color-border)"
+                                strokeWidth="1"
+                              />
+                              <line
+                                x1={METRIC_CHART_PADDING}
+                                y1={METRIC_CHART_PADDING}
+                                x2={METRIC_CHART_PADDING}
+                                y2={METRIC_CHART_HEIGHT - METRIC_CHART_PADDING}
+                                stroke="var(--color-border)"
+                                strokeWidth="1"
+                              />
+                              <polyline points={curve.polyline} fill="none" stroke={curve.color} strokeWidth="2.2" />
+                              {curve.lastPoint ? (
+                                <circle cx={curve.lastPoint.x} cy={curve.lastPoint.y} r="3.4" fill={curve.color} />
+                              ) : null}
+                            </svg>
+                            <small className="muted">
+                              {t('Step range')}: {curve.minStep} - {curve.maxStep} · {t('Value range')}:{' '}
+                              {curve.minValue.toFixed(4)} - {curve.maxValue.toFixed(4)}
+                            </small>
+                          </article>
+                        ))}
                       </div>
-                      <svg
-                        className="metric-chart-svg"
-                        viewBox={`0 0 ${METRIC_CHART_WIDTH} ${METRIC_CHART_HEIGHT}`}
-                        role="img"
-                        aria-label={`${curve.metricName} metric curve`}
-                      >
-                        <line
-                          x1={METRIC_CHART_PADDING}
-                          y1={METRIC_CHART_HEIGHT - METRIC_CHART_PADDING}
-                          x2={METRIC_CHART_WIDTH - METRIC_CHART_PADDING}
-                          y2={METRIC_CHART_HEIGHT - METRIC_CHART_PADDING}
-                          stroke="var(--color-border)"
-                          strokeWidth="1"
-                        />
-                        <line
-                          x1={METRIC_CHART_PADDING}
-                          y1={METRIC_CHART_PADDING}
-                          x2={METRIC_CHART_PADDING}
-                          y2={METRIC_CHART_HEIGHT - METRIC_CHART_PADDING}
-                          stroke="var(--color-border)"
-                          strokeWidth="1"
-                        />
-                        <polyline points={curve.polyline} fill="none" stroke={curve.color} strokeWidth="2.2" />
-                        {curve.lastPoint ? (
-                          <circle cx={curve.lastPoint.x} cy={curve.lastPoint.y} r="3.4" fill={curve.color} />
-                        ) : null}
-                      </svg>
-                      <small className="muted">
-                        {t('Step range')}: {curve.minStep} - {curve.maxStep} · {t('Value range')}:{' '}
-                        {curve.minValue.toFixed(4)} - {curve.maxValue.toFixed(4)}
-                      </small>
-                    </article>
-                  ))}
-                </div>
-              </Card>
-            ) : null}
-
-            <Card as="section" className="stack">
-              <WorkspaceSectionHeader
-                title={t('Training Logs')}
-                description={t('Latest execution logs are shown here with optional backfill for earlier lines.')}
-              />
-              {logs.length === 0 ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('No Logs Yet')}
-                  description={t('Logs will appear after the selected executor starts preparing or running the job.')}
-                  extra={
-                    <small className="muted">
-                      {t('If the job is still queued, wait for scheduler dispatch or inspect runtime/worker readiness from settings.')}
-                    </small>
-                  }
-                />
-              ) : (
-                <div className="stack tight">
-                  {hiddenLogCount > 0 ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        setVisibleLogCount((previous) => Math.min(logs.length, previous + logsBatchSize));
-                      }}
-                    >
-                      {t('Load earlier logs')} ({hiddenLogCount})
-                    </Button>
+                    </details>
                   ) : null}
-                  <pre className="code-block">{visibleLogs.join('\n')}</pre>
+                </div>
+              ) : (
+                <div className="stack">
+                  <small className="muted">
+                    {t('Latest execution logs are shown here with optional backfill for earlier lines.')}
+                  </small>
+                  {logs.length === 0 ? (
+                    <StateBlock
+                      variant="empty"
+                      title={t('No Logs Yet')}
+                      description={t('Logs will appear after the selected executor starts preparing or running the job.')}
+                      extra={
+                        <small className="muted">
+                          {t('If the job is still queued, wait for scheduler dispatch or inspect runtime/worker readiness from settings.')}
+                        </small>
+                      }
+                    />
+                  ) : (
+                    <div className="stack tight">
+                      {hiddenLogCount > 0 ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setVisibleLogCount((previous) => Math.min(logs.length, previous + logsBatchSize));
+                          }}
+                        >
+                          {t('Load earlier logs')} ({hiddenLogCount})
+                        </Button>
+                      ) : null}
+                      <pre className="code-block">{visibleLogs.join('\n')}</pre>
+                    </div>
+                  )}
                 </div>
               )}
-            </Card>
+            </SectionCard>
           </div>
         }
         side={
@@ -1223,28 +1143,6 @@ export default function TrainingJobDetailPage() {
                   {t('Execution mode')}: {t(job.execution_mode)} · {t('Last updated')}: {latestUpdateLabel}
                 </small>
               </Panel>
-              <div className="workspace-keyline-list">
-                <div className="workspace-keyline-item">
-                  <span>{t('Dataset')}</span>
-                  <small>{datasetDisplayName}</small>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Version snapshot')}</span>
-                  <strong>{versionSnapshotLabel}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Base model')}</span>
-                  <small>{job.base_model}</small>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Execution target')}</span>
-                  <small>{executionTargetLabel}</small>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Artifact')}</span>
-                  <strong>{artifactAttachmentId ? t('Ready') : t('pending')}</strong>
-                </div>
-              </div>
               <small className="muted">
                 {linkedDataset
                   ? t('Dataset scope stays pinned so downstream validation and version lookup remain reproducible.')
@@ -1252,53 +1150,6 @@ export default function TrainingJobDetailPage() {
               </small>
             </Card>
 
-            <Card as="section" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Outputs')}
-                description={t('Artifact and runner metadata without leaving the detail lane.')}
-              />
-              <div className="workspace-keyline-list">
-                <div className="workspace-keyline-item">
-                  <span>{t('Metrics points')}</span>
-                  <strong>{metrics.length}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Log lines')}</span>
-                  <strong>{logs.length}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Artifact')}</span>
-                  <small>{artifactAttachmentId ? t('Attached') : t('Pending')}</small>
-                </div>
-              </div>
-              {artifactSummary ? (
-                <Panel as="section" className="stack tight" tone="soft">
-                  <div className="row gap wrap">
-                    <Badge tone="neutral">{t('Runner mode')}: {artifactSummary.mode || t('pending')}</Badge>
-                    <Badge tone="neutral">{t('Runner')}: {artifactSummary.runner || t('pending')}</Badge>
-                    {artifactSummary.sampled_items !== null ? (
-                      <Badge tone="info">{t('Sampled items')}: {artifactSummary.sampled_items}</Badge>
-                    ) : null}
-                  </div>
-                  {artifactSummary.metrics_keys.length > 0 ? (
-                    <div className="row gap wrap">
-                      {artifactSummary.metrics_keys.map((metricKey) => (
-                        <Badge key={metricKey} tone="neutral">
-                          {metricKey}
-                        </Badge>
-                      ))}
-                    </div>
-                  ) : null}
-                  {artifactSummary.fallback_reason ? (
-                    <small className="muted">
-                      {t('Degradation reason')}: {formatFallbackReasonLabel(artifactSummary.fallback_reason)}
-                    </small>
-                  ) : null}
-                </Panel>
-              ) : (
-                <small className="muted">{t('Artifact summary will appear after runner output is captured.')}</small>
-              )}
-            </Card>
           </div>
         }
       />

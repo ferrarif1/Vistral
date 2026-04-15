@@ -1,13 +1,11 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, User } from '../../shared/domain';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import ModelInventory from '../components/models/ModelInventory';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { FilterToolbar, InlineAlert, KPIStatRow, PageHeader } from '../components/ui/ConsolePage';
-import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
+import { FilterToolbar, InlineAlert, PageHeader } from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
-import { Card, Panel } from '../components/ui/Surface';
+import { Card } from '../components/ui/Surface';
 import {
   WorkspacePage,
   WorkspaceSectionHeader,
@@ -22,7 +20,6 @@ const readyStatusSet = new Set<ModelRecord['status']>(['approved', 'published'])
 const terminalTrainingStatuses = new Set<TrainingJobRecord['status']>(['completed', 'failed', 'cancelled']);
 const modelStatusOptions = ['draft', 'pending_approval', 'approved', 'rejected', 'published', 'deprecated'] as const;
 const visibilityOptions = ['private', 'workspace', 'public'] as const;
-const modelsExploreOnboardingDismissedStorageKey = 'vistral-models-explore-onboarding-dismissed';
 type LoadMode = 'initial' | 'manual';
 
 export default function ModelsExplorePage() {
@@ -35,7 +32,6 @@ export default function ModelsExplorePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [deletingModelId, setDeletingModelId] = useState<string | null>(null);
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>({});
-  const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
   const [searchText, setSearchText] = useState('');
@@ -119,12 +115,10 @@ export default function ModelsExplorePage() {
   useEffect(() => {
     if (!relevantLocalCommandJobs.length) {
       setJobExecutionInsights({});
-      setJobInsightsLoading(false);
       return;
     }
 
     let active = true;
-    setJobInsightsLoading(true);
 
     Promise.all(
       relevantLocalCommandJobs.map(async (job) => {
@@ -159,12 +153,6 @@ export default function ModelsExplorePage() {
           next[id] = insight;
         });
         setJobExecutionInsights(next);
-      })
-      .finally(() => {
-        if (!active) {
-          return;
-        }
-        setJobInsightsLoading(false);
       });
 
     return () => {
@@ -299,52 +287,6 @@ export default function ModelsExplorePage() {
     statusFilter !== 'all' ||
     visibilityFilter !== 'all' ||
     modelTypeFilter !== 'all';
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'catalog',
-        label: t('Scan shared catalog'),
-        detail: t('Start by browsing visible models and narrowing the catalog with filters that match your current task.'),
-        done: models.length > 0,
-        to: '/models/explore',
-        cta: t('Review catalog')
-      },
-      {
-        key: 'signals',
-        label: t('Recognize ready vs risky models'),
-        detail: t('Use approval status, visibility, and authenticity signals to decide whether a model is ready for real usage.'),
-        done: filteredSummary.ready > 0 || filteredRiskyModels > 0,
-        to: '/models/explore',
-        cta: t('Inspect model signals')
-      },
-      {
-        key: 'next',
-        label: t('Continue into ownership or versions'),
-        detail: t('Move into your owned models or registered versions when you need to continue authoring or deployment follow-up.'),
-        done:
-          Boolean(currentUser && models.some((model) => model.owner_user_id === currentUser.id)) ||
-          modelVersions.length > 0,
-        to: '/models/my-models',
-        cta: t('Open My Models'),
-        secondaryTo: '/models/versions',
-        secondaryLabel: t('Open Model Versions')
-      }
-    ],
-    [currentUser, filteredRiskyModels, filteredSummary.ready, modelVersions.length, models, t]
-  );
-
-  const summary = useMemo(
-    () => ({
-      total: models.length,
-      ready: models.filter((model) => readyStatusSet.has(model.status)).length,
-      pending: models.filter((model) => model.status === 'pending_approval').length,
-      publicCount: models.filter((model) => model.visibility === 'public').length,
-      workspaceCount: models.filter((model) => model.visibility === 'workspace').length,
-      privateCount: models.filter((model) => model.visibility === 'private').length,
-      sharedCount: models.filter((model) => model.visibility === 'workspace' || model.visibility === 'public').length
-    }),
-    [models]
-  );
 
   const deleteModel = async (model: ModelRecord) => {
     setDeletingModelId(model.id);
@@ -392,35 +334,6 @@ export default function ModelsExplorePage() {
             {t('Create model draft')}
           </ButtonLink>
         }
-      />
-
-      <KPIStatRow
-        items={[
-          {
-            label: t('Visible catalog'),
-            value: summary.total,
-            tone: 'info',
-            hint: t('Models visible right now across public and workspace scopes.')
-          },
-          {
-            label: t('Ready for use'),
-            value: summary.ready,
-            tone: summary.ready > 0 ? 'success' : 'neutral',
-            hint: t('Approved or published models that are ready for downstream use.')
-          },
-          {
-            label: t('Pending review'),
-            value: summary.pending,
-            tone: summary.pending > 0 ? 'warning' : 'neutral',
-            hint: t('Models still waiting for governance review or publication.')
-          },
-          {
-            label: t('Authenticity risk'),
-            value: filteredRiskyModels,
-            tone: filteredRiskyModels > 0 ? 'warning' : 'neutral',
-            hint: t('Models in current view linked to non-real/unknown version evidence.')
-          }
-        ]}
       />
 
       {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}
@@ -489,48 +402,10 @@ export default function ModelsExplorePage() {
                 </Button>
               ) : undefined
             }
-            summary={
-              <div className="row gap wrap">
-                <Badge tone="info">{t('Matched')}: {filteredSummary.total}</Badge>
-                <Badge tone="neutral">{t('Ready for use')}: {filteredSummary.ready}</Badge>
-                <Badge tone={filteredSummary.pending > 0 ? 'warning' : 'neutral'}>
-                  {t('Pending review')}: {filteredSummary.pending}
-                </Badge>
-                <Badge tone="neutral">{t('Shared access')}: {filteredSummary.shared}</Badge>
-                <Badge tone={filteredRiskyModels > 0 ? 'warning' : 'neutral'}>
-                  {t('Authenticity risk')}: {filteredRiskyModels}
-                </Badge>
-                {jobInsightsLoading ? <Badge tone="neutral">{t('Checking authenticity...')}</Badge> : null}
-              </div>
-            }
           />
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              title={t('Model catalog first-run guide')}
-              description={t('Use this page to understand what is already available in the shared model catalog before creating or registering anything new.')}
-              summary={t('Guide status is computed from visible catalog records, readiness signals, and ownership/version follow-up availability.')}
-              storageKey={modelsExploreOnboardingDismissedStorageKey}
-              steps={onboardingSteps.map((stepItem) => ({
-                key: stepItem.key,
-                label: stepItem.label,
-                detail: stepItem.detail,
-                done: stepItem.done,
-                primaryAction: {
-                  to: stepItem.to,
-                  label: stepItem.cta
-                },
-                secondaryAction:
-                  stepItem.secondaryTo && stepItem.secondaryLabel
-                    ? {
-                        to: stepItem.secondaryTo,
-                        label: stepItem.secondaryLabel
-                      }
-                    : undefined
-              }))}
-            />
-
             <ModelInventory
               title={t('Visible Model Inventory')}
               description={t(
@@ -544,9 +419,6 @@ export default function ModelsExplorePage() {
                 <div className="row gap wrap">
                   <ButtonLink to="/models/create" variant="secondary" size="sm">
                     {t('Create Model Draft')}
-                  </ButtonLink>
-                  <ButtonLink to="/models/versions" variant="ghost" size="sm">
-                    {t('Open Model Versions')}
                   </ButtonLink>
                 </div>
               }
@@ -571,84 +443,18 @@ export default function ModelsExplorePage() {
           <div className="workspace-inspector-rail">
             <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
-                title={t('Current catalog lens')}
-                description={t('Keep the active filter context visible while scanning the shared inventory.')}
+                title={t('Catalog snapshot')}
+                description={t('Keep the active catalog context compact and always visible.')}
               />
-              <div className="workspace-keyline-list">
-                <div className="workspace-keyline-item">
-                  <span>{t('Search')}</span>
-                  <strong>{searchText.trim() || t('all')}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Visibility')}</span>
-                  <strong>{visibilityFilter === 'all' ? t('all') : t(visibilityFilter)}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Status')}</span>
-                  <strong>{statusFilter === 'all' ? t('all') : t(statusFilter)}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Model Type')}</span>
-                  <small>{modelTypeFilter === 'all' ? t('all') : t(modelTypeFilter)}</small>
-                </div>
-              </div>
+              <small className="muted">
+                {t('Search')}: {searchText.trim() || t('all')} · {t('Visibility')}: {visibilityFilter === 'all' ? t('all') : t(visibilityFilter)} · {t('Status')}: {statusFilter === 'all' ? t('all') : t(statusFilter)}
+              </small>
               <div className="row gap wrap">
-                <Badge tone="info">{t('Matched')}: {filteredSummary.total}</Badge>
-                <Badge tone="neutral">{t('Ready for use')}: {filteredSummary.ready}</Badge>
+                <Badge tone="neutral">{t('Visible')}: {filteredSummary.total}</Badge>
                 <Badge tone={filteredRiskyModels > 0 ? 'warning' : 'neutral'}>
-                  {t('Authenticity risk')}: {filteredRiskyModels}
+                  {t('Risky')}: {filteredRiskyModels}
                 </Badge>
               </div>
-            </Card>
-
-            <WorkspaceActionPanel
-              title={t('Next actions')}
-              description={t('Move from exploration to ownership, creation, or version follow-up without losing context.')}
-              actions={
-                <>
-                  <ButtonLink to="/models/create" variant="secondary" size="sm">
-                    {t('Create model draft')}
-                  </ButtonLink>
-                  <ButtonLink to="/models/my-models" variant="secondary" size="sm">
-                    {t('Inspect my models')}
-                  </ButtonLink>
-                  <ButtonLink to="/models/versions" variant="secondary" size="sm">
-                    {t('Review versions')}
-                  </ButtonLink>
-                </>
-              }
-            />
-
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Catalog mix')}
-                description={t('Visibility and governance split for the models currently shown here.')}
-              />
-              <ul className="workspace-record-list compact">
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Public reach')}</strong>
-                    <Badge tone="neutral">{summary.publicCount}</Badge>
-                  </div>
-                  <small className="muted">{t('Shared across the broadest audience scope.')}</small>
-                </Panel>
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Workspace shared')}</strong>
-                    <Badge tone="info">{summary.workspaceCount}</Badge>
-                  </div>
-                  <small className="muted">{t('Shared inside the current workspace boundary.')}</small>
-                </Panel>
-                <Panel as="li" className="workspace-record-item compact" tone="soft">
-                  <div className="row between gap wrap">
-                    <strong>{t('Private to owner')}</strong>
-                    <Badge tone="warning">{summary.privateCount}</Badge>
-                  </div>
-                  <small className="muted">
-                    {t('Visible only to the owner or explicitly authorized collaborators.')}
-                  </small>
-                </Panel>
-              </ul>
             </Card>
           </div>
         }

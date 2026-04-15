@@ -1,18 +1,21 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import type { User, VerificationReportRecord, VerificationReportStatus } from '../../shared/domain';
-import AdvancedSection from '../components/AdvancedSection';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button, ButtonLink } from '../components/ui/Button';
-import WorkspaceActionPanel from '../components/ui/WorkspaceActionPanel';
+import { Button } from '../components/ui/Button';
+import {
+  ActionBar,
+  DetailDrawer,
+  DetailList,
+  PageHeader,
+  SectionCard,
+  StatusTable,
+  type StatusTableColumn
+} from '../components/ui/ConsolePage';
 import { Checkbox, Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
-  WorkspaceMetricGrid,
   WorkspacePage,
-  WorkspaceSectionHeader,
   WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
@@ -22,8 +25,6 @@ import { formatCompactTimestamp } from '../utils/formatting';
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 type ReportSortMode = 'latest' | 'oldest' | 'failed_first';
 type DateQuickRange = 'all' | '7d' | '30d';
-const adminVerificationReportsOnboardingDismissedStorageKey =
-  'vistral-admin-verification-reports-onboarding-dismissed';
 
 const getReportTimestamp = (item: VerificationReportRecord): number => {
   const raw = item.finished_at_utc || item.started_at_utc;
@@ -61,6 +62,8 @@ export default function AdminVerificationReportsPage() {
   const [quickRange, setQuickRange] = useState<DateQuickRange>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(10);
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const activePageTitle = t('Admin Verification Reports');
 
   const loadReports = useCallback(async (mode: 'initial' | 'manual' = 'initial') => {
     if (mode === 'initial') {
@@ -190,46 +193,70 @@ export default function AdminVerificationReportsPage() {
   const safePage = Math.min(currentPage, totalPages);
   const pageStart = (safePage - 1) * pageSize;
   const paginatedItems = filteredItems.slice(pageStart, pageStart + pageSize);
-  const summary = useMemo(
-    () => ({
-      total: items.length,
-      failed: items.filter((item) => item.status === 'failed').length,
-      passed: items.filter((item) => item.status === 'passed').length,
-      failedChecks: items.reduce((sum, item) => sum + item.checks_failed, 0),
-      targets: baseUrlOptions.length
-    }),
-    [baseUrlOptions.length, items]
+  const selectedReport = useMemo(
+    () => (selectedReportId ? items.find((item) => item.id === selectedReportId) ?? null : null),
+    [items, selectedReportId]
   );
-  const onboardingSteps = useMemo(
+
+  const reportTableColumns = useMemo<StatusTableColumn<VerificationReportRecord>[]>(
     () => [
       {
-        key: 'load_reports',
-        label: t('Load deployment evidence'),
-        detail: t('Start by confirming deployment verification reports are present so release review is grounded in recorded evidence.'),
-        done: items.length > 0,
-        to: '/admin/verification-reports',
-        cta: t('Review reports')
+        key: 'filename',
+        header: t('Report'),
+        width: '28%',
+        cell: (item) => (
+          <div className="stack tight">
+            <strong>{item.filename}</strong>
+            <small className="muted">{item.summary || t('No summary provided.')}</small>
+          </div>
+        )
       },
       {
-        key: 'filter_scope',
-        label: t('Filter failed or scoped results'),
-        detail: t('Use keyword, status, base URL, and date controls to narrow evidence down to the release slice you actually need.'),
-        done: hasActivePrimaryFilters || filteredItems.length > 0,
-        to: '/admin/verification-reports',
-        cta: t('Filter reports')
+        key: 'status',
+        header: t('Status'),
+        width: '12%',
+        cell: (item) => <StatusTag status={item.status}>{t(item.status)}</StatusTag>
       },
       {
-        key: 'export',
-        label: t('Export governance evidence'),
-        detail: t('Once the current slice is correct, export the filtered JSON or continue into audit logs for broader governance follow-up.'),
-        done: filteredItems.length > 0,
-        to: '/admin/verification-reports',
-        cta: t('Export evidence'),
-        secondaryTo: '/admin/audit',
-        secondaryLabel: t('Open audit logs')
+        key: 'target',
+        header: t('Target'),
+        width: '24%',
+        cell: (item) => (
+          <div className="stack tight">
+            <small className="muted">{item.target_base_url || notAvailable}</small>
+            <small className="muted">
+              {t('business')}: {item.business_username || notAvailable} · {t('probe')}: {item.probe_username || notAvailable}
+            </small>
+          </div>
+        )
+      },
+      {
+        key: 'checks',
+        header: t('Checks'),
+        width: '16%',
+        cell: (item) => (
+          <div className="stack tight">
+            <Badge tone={item.checks_failed > 0 ? 'danger' : 'success'}>
+              {item.checks_failed} {t('failed')} / {item.checks_total} {t('total')}
+            </Badge>
+            {item.runtime_metrics_retention ? (
+              <small className="muted">
+                {t('metrics rows')}: {item.runtime_metrics_retention.current_total_rows} / {item.runtime_metrics_retention.max_total_rows}
+              </small>
+            ) : (
+              <small className="muted">{t('No metrics retention summary')}</small>
+            )}
+          </div>
+        )
+      },
+      {
+        key: 'finished',
+        header: t('Finished'),
+        width: '20%',
+        cell: (item) => formatCompactTimestamp(item.finished_at_utc, notAvailable)
       }
     ],
-    [filteredItems.length, hasActivePrimaryFilters, items.length, t]
+    [notAvailable, t]
   );
 
   const exportFilteredReports = useCallback(() => {
@@ -304,24 +331,14 @@ export default function AdminVerificationReportsPage() {
     setCurrentPage(1);
   }, []);
 
-  const heroSection = (
-    <WorkspaceHero
-      eyebrow={t('Operations Audit')}
-      title={t('Admin Verification Reports')}
-      description={t('Reports generated by `docker:verify:full` are collected from server runtime data.')}
-      stats={[
-        { label: t('Total'), value: summary.total },
-        { label: t('Failed'), value: summary.failed },
-        { label: t('Passed'), value: summary.passed },
-        { label: t('Targets'), value: summary.targets }
-      ]}
-    />
-  );
-
   if (loading) {
     return (
       <WorkspacePage>
-        {heroSection}
+        <PageHeader
+          eyebrow={t('Operations Audit')}
+          title={activePageTitle}
+          description={t('Review deployment verification evidence and inspect one report at a time.')}
+        />
         <StateBlock
           variant="loading"
           title={t('Loading')}
@@ -334,7 +351,11 @@ export default function AdminVerificationReportsPage() {
   if (error) {
     return (
       <WorkspacePage>
-        {heroSection}
+        <PageHeader
+          eyebrow={t('Operations Audit')}
+          title={activePageTitle}
+          description={t('Review deployment verification evidence and inspect one report at a time.')}
+        />
         <StateBlock variant="error" title={t('Load Failed')} description={error} />
       </WorkspacePage>
     );
@@ -343,7 +364,11 @@ export default function AdminVerificationReportsPage() {
   if (currentUser && currentUser.role !== 'admin') {
     return (
       <WorkspacePage>
-        {heroSection}
+        <PageHeader
+          eyebrow={t('Operations Audit')}
+          title={activePageTitle}
+          description={t('Review deployment verification evidence and inspect one report at a time.')}
+        />
         <StateBlock
           variant="error"
           title={t('Permission Denied')}
@@ -356,44 +381,30 @@ export default function AdminVerificationReportsPage() {
   if (items.length === 0) {
     return (
       <WorkspacePage>
-        {heroSection}
+        <PageHeader
+          eyebrow={t('Operations Audit')}
+          title={activePageTitle}
+          description={t('Review deployment verification evidence and inspect one report at a time.')}
+        />
         <div className="workspace-main-stack">
-          <WorkspaceOnboardingCard
-            title={t('Verification reports first-run guide')}
-            description={t('Use this page to filter deployment evidence, focus failed checks, and export the exact report slice needed for release governance.')}
-            summary={t('Guide status is computed from loaded reports, active filters, and export-ready evidence on the current page.')}
-            storageKey={adminVerificationReportsOnboardingDismissedStorageKey}
-            steps={onboardingSteps.map((stepItem) => ({
-              key: stepItem.key,
-              label: stepItem.label,
-              detail: stepItem.detail,
-              done: stepItem.done,
-              primaryAction: {
-                to: stepItem.to,
-                label: stepItem.cta
-              },
-              secondaryAction: stepItem.secondaryTo
-                ? {
-                    to: stepItem.secondaryTo,
-                    label: stepItem.secondaryLabel ?? ''
-                  }
-                : undefined
-            }))}
-          />
-
           <StateBlock
             variant="empty"
             title={t('No Reports Yet')}
             description={t('Run docker verification scripts to generate reports.')}
             extra={
-              <div className="row gap wrap">
-                <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                  {t('Open Runtime Settings')}
-                </ButtonLink>
-                <ButtonLink to="/admin/audit" variant="ghost" size="sm">
-                  {t('Open Audit Logs')}
-                </ButtonLink>
-              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  loadReports('manual').catch(() => {
+                    // handled by local state
+                  });
+                }}
+                disabled={refreshing || loading}
+              >
+                {refreshing ? t('Refreshing...') : t('Refresh')}
+              </Button>
             }
           />
         </div>
@@ -403,32 +414,19 @@ export default function AdminVerificationReportsPage() {
 
   return (
     <WorkspacePage>
-      {heroSection}
-
-      <WorkspaceMetricGrid
-        items={[
-          {
-            title: t('Filtered reports'),
-            description: t('Reports matching the current filters and pagination scope.'),
-            value: filteredItems.length
+      <PageHeader
+        eyebrow={t('Operations Audit')}
+        title={activePageTitle}
+        description={t('Review deployment verification evidence and inspect one report at a time.')}
+        primaryAction={{
+          label: refreshing ? t('Refreshing...') : t('Refresh'),
+          onClick: () => {
+            loadReports('manual').catch(() => {
+              // handled by local state
+            });
           },
-          {
-            title: t('Failed checks'),
-            description: t('Aggregate failed checks across all reports in this workspace view.'),
-            value: summary.failedChecks,
-            tone: summary.failed > 0 ? 'attention' : 'default'
-          },
-          {
-            title: t('Current page'),
-            description: t('Pagination stays stable while filters update quietly in the background.'),
-            value: `${safePage}/${totalPages}`
-          },
-          {
-            title: t('Page size'),
-            description: t('Visible report density per page.'),
-            value: pageSize
-          }
-        ]}
+          disabled: refreshing || loading
+        }}
       />
 
       <WorkspaceWorkbench
@@ -438,13 +436,10 @@ export default function AdminVerificationReportsPage() {
               <div className="workspace-toolbar-copy">
                 <h3>{t('Verification Controls')}</h3>
                 <small className="muted">
-                  {t('Keep release triage filters, refresh, and export actions in one stable strip.')}
+                  {t('Keep release triage filters and refresh actions in one stable strip.')}
                 </small>
               </div>
               <div className="workspace-toolbar-actions">
-                <Button variant="secondary" size="sm" onClick={exportFilteredReports}>
-                  {t('Export Filtered JSON')}
-                </Button>
                 {hasActivePrimaryFilters ? (
                   <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
                     {t('Clear filters')}
@@ -461,6 +456,9 @@ export default function AdminVerificationReportsPage() {
                   disabled={refreshing || loading}
                 >
                   {refreshing ? t('Refreshing...') : t('Refresh')}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={exportFilteredReports}>
+                  {t('Export JSON')}
                 </Button>
               </div>
             </div>
@@ -512,55 +510,15 @@ export default function AdminVerificationReportsPage() {
               </label>
             </div>
 
-            <div className="workspace-toolbar-meta">
-              <div className="workspace-segmented-actions">
-                <Badge tone="info">{t('Matched')}: {filteredItems.length}</Badge>
-                <Badge tone={summary.failed > 0 ? 'warning' : 'neutral'}>
-                  {t('Failed reports')}: {summary.failed}
-                </Badge>
-                <Badge tone={summary.failedChecks > 0 ? 'warning' : 'neutral'}>
-                  {t('Failed checks')}: {summary.failedChecks}
-                </Badge>
-                <Badge tone="neutral">
-                  {t('Page')}: {safePage}/{totalPages}
-                </Badge>
-              </div>
-            </div>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              title={t('Verification reports first-run guide')}
-              description={t('Use this page to filter deployment evidence, focus failed checks, and export the exact report slice needed for release governance.')}
-              summary={t('Guide status is computed from loaded reports, active filters, and export-ready evidence on the current page.')}
-              storageKey={adminVerificationReportsOnboardingDismissedStorageKey}
-              steps={onboardingSteps.map((stepItem) => ({
-                key: stepItem.key,
-                label: stepItem.label,
-                detail: stepItem.detail,
-                done: stepItem.done,
-                primaryAction: {
-                  to: stepItem.to,
-                  label: stepItem.cta
-                },
-                secondaryAction: stepItem.secondaryTo
-                  ? {
-                      to: stepItem.secondaryTo,
-                      label: stepItem.secondaryLabel ?? ''
-                    }
-                  : undefined
-              }))}
-            />
-
-            <Card as="article">
-              <WorkspaceSectionHeader
-                title={t('Advanced report filters')}
-                description={t('Date windows, sort order, and density controls stay available without crowding the top toolbar.')}
-              />
-              <AdvancedSection
-                title={t('Expand advanced controls')}
-                description={t('Use these when release evidence triage needs date windows or alternate ordering.')}
+            <details className="workspace-details">
+              <summary>{t('Advanced report filters')}</summary>
+              <SectionCard
+                title={t('Date window and density')}
+                description={t('Keep the narrower filter set collapsed until you need a specific evidence slice.')}
               >
                 <div className="filters-grid">
                   <label>
@@ -638,19 +596,17 @@ export default function AdminVerificationReportsPage() {
                     {t('Clear Range')}
                   </Button>
                 </div>
-              </AdvancedSection>
-            </Card>
-
-            <Card as="article">
-              <WorkspaceSectionHeader
-                title={t('Verification reports')}
-                description={t('Review the filtered evidence set and expand individual reports only when you need deeper check context.')}
-                actions={
-                  <Badge tone="neutral">
-                    {t('Showing {count} items', { count: paginatedItems.length })}
-                  </Badge>
-                }
-              />
+              </SectionCard>
+            </details>
+            <SectionCard
+              title={t('Verification reports')}
+              description={t('Review the filtered evidence set and expand individual reports only when you need deeper check context.')}
+              actions={
+                <Badge tone="neutral">
+                  {t('Showing {count} items', { count: paginatedItems.length })}
+                </Badge>
+              }
+            >
               <small className="muted">
                 {t('Use filters to narrow release evidence and export the exact subset required for governance review.')}
               </small>
@@ -662,116 +618,19 @@ export default function AdminVerificationReportsPage() {
                   description={t('Adjust filters or run docker verification scripts to create new reports.')}
                 />
               ) : (
-                <ul className="workspace-record-list">
-                  {paginatedItems.map((item) => {
-                    const visibleChecks = failedOnly
-                      ? item.checks.filter((check) => check.status !== 'passed')
-                      : item.checks;
-
-                    return (
-                      <Panel key={item.id} as="li" className="workspace-record-item" tone="soft">
-                        <div className="row between gap wrap align-center">
-                          <strong>{item.filename}</strong>
-                          <StatusTag status={item.status}>{t(item.status)}</StatusTag>
-                        </div>
-                        <small className="muted">{item.summary || t('No summary provided.')}</small>
-                        <div className="row gap wrap">
-                          <Badge tone="neutral">
-                            {t('finished')}: {formatCompactTimestamp(item.finished_at_utc, notAvailable)}
-                          </Badge>
-                          <Badge tone="info">
-                            {t('base_url')}: {item.target_base_url || notAvailable}
-                          </Badge>
-                          <Badge tone="neutral">
-                            {t('business user')}: {item.business_username || notAvailable}
-                          </Badge>
-                          <Badge tone="neutral">
-                            {t('probe user')}: {item.probe_username || notAvailable}
-                          </Badge>
-                          <Badge tone={item.checks_failed > 0 ? 'danger' : 'success'}>
-                            {t('checks')}: {item.checks_total} {t('total')}, {item.checks_failed} {t('failed')}
-                          </Badge>
-                        </div>
-                        {item.runtime_metrics_retention ? (
-                          <div className="row gap wrap">
-                            <Badge tone="neutral">
-                              {t('metrics rows')}: {item.runtime_metrics_retention.current_total_rows} /{' '}
-                              {item.runtime_metrics_retention.max_total_rows}
-                            </Badge>
-                            <Badge tone="warning">
-                              {t('Per-job cap')}: {item.runtime_metrics_retention.max_points_per_job}
-                            </Badge>
-                          </div>
-                        ) : null}
-                        <details className="workspace-details">
-                          <summary>{t('Checks detail ({count})', { count: visibleChecks.length })}</summary>
-                          {visibleChecks.length > 0 ? (
-                            <div className="stack tight">
-                              {visibleChecks.map((check) => (
-                                <Panel key={`${item.id}-${check.name}`} tone="soft">
-                                  <div className="row gap wrap align-center">
-                                    <StatusTag status={check.status}>{t(check.status)}</StatusTag>
-                                    <strong>{check.name}</strong>
-                                  </div>
-                                  <small className="muted">{check.detail}</small>
-                                </Panel>
-                              ))}
-                            </div>
-                          ) : (
-                            <small className="muted">{t('No checks to show for current filter.')}</small>
-                          )}
-                        </details>
-                      </Panel>
-                    );
-                  })}
-                </ul>
+                <StatusTable
+                  columns={reportTableColumns}
+                  rows={paginatedItems}
+                  getRowKey={(item) => item.id}
+                  emptyTitle={t('No Matching Reports')}
+                  emptyDescription={t('Adjust filters or run docker verification scripts to create new reports.')}
+                  onRowClick={(item) => setSelectedReportId(item.id)}
+                />
               )}
-            </Card>
-          </div>
-        }
-        side={
-          <div className="workspace-inspector-rail">
-            <WorkspaceActionPanel
-              title={t('Current scope')}
-              description={t('Keep the active triage context visible while scrolling through report evidence.')}
-            >
-              <div className="workspace-keyline-list">
-                <div className="workspace-keyline-item">
-                  <span>{t('Search')}</span>
-                  <strong>{searchTerm.trim() || t('all')}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Status')}</span>
-                  <strong>{statusFilter === 'all' ? t('all') : t(statusFilter)}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Base URL')}</span>
-                  <small>{baseUrlFilter === 'all' ? t('all') : baseUrlFilter}</small>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Date range')}</span>
-                  <small>
-                    {fromDate || toDate ? `${fromDate || '...'} -> ${toDate || '...'}` : t('all')}
-                  </small>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Sort')}</span>
-                  <strong>{sortMode === 'latest' ? t('latest first') : sortMode === 'oldest' ? t('oldest first') : t('failed first')}</strong>
-                </div>
-              </div>
-              <div className="row gap wrap">
-                <Badge tone={failedOnly ? 'warning' : 'neutral'}>
-                  {failedOnly ? t('Failed-only mode') : t('All checks visible')}
-                </Badge>
-                <Badge tone="neutral">{t('Quick range')}: {quickRange === 'all' ? t('none') : quickRange}</Badge>
-              </div>
-            </WorkspaceActionPanel>
 
-            <WorkspaceActionPanel
-              title={t('Pagination')}
-              description={t('Move between pages without resetting the current verification lens.')}
-              actions={
-                <>
+              <ActionBar
+                className="workspace-table-pagination"
+                primary={
                   <Button
                     variant="ghost"
                     size="sm"
@@ -780,6 +639,17 @@ export default function AdminVerificationReportsPage() {
                   >
                     {t('Prev Page')}
                   </Button>
+                }
+                secondary={
+                  <div className="row gap wrap">
+                    <Badge tone="neutral">{t('total')}: {items.length}</Badge>
+                    <Badge tone="info">{t('matched')}: {filteredItems.length}</Badge>
+                    <Badge tone="neutral">
+                      {t('page')}: {safePage}/{totalPages}
+                    </Badge>
+                  </div>
+                }
+                tertiary={
                   <Button
                     variant="ghost"
                     size="sm"
@@ -788,20 +658,116 @@ export default function AdminVerificationReportsPage() {
                   >
                     {t('Next Page')}
                   </Button>
-                </>
-              }
-            >
-              <div className="row gap wrap">
-                <Badge tone="neutral">{t('total')}: {items.length}</Badge>
-                <Badge tone="info">{t('matched')}: {filteredItems.length}</Badge>
-                <Badge tone="neutral">
-                  {t('page')}: {safePage}/{totalPages}
-                </Badge>
-              </div>
-            </WorkspaceActionPanel>
+                }
+              />
+            </SectionCard>
           </div>
         }
       />
+
+      <DetailDrawer
+        open={Boolean(selectedReport)}
+        onClose={() => setSelectedReportId(null)}
+        title={selectedReport ? selectedReport.filename : t('Verification report')}
+        description={t('Inspect one report at a time. Raw checks and retention details stay behind the drawer.')}
+      >
+        {selectedReport ? (
+          <>
+            <div className="row gap wrap">
+              <StatusTag status={selectedReport.status}>{t(selectedReport.status)}</StatusTag>
+              <Badge tone="neutral">
+                {t('finished')}: {formatCompactTimestamp(selectedReport.finished_at_utc, notAvailable)}
+              </Badge>
+              <Badge tone="info">{t('base_url')}: {selectedReport.target_base_url || notAvailable}</Badge>
+            </div>
+
+            <DetailList
+              items={[
+                { label: t('Summary'), value: selectedReport.summary || t('No summary provided.') },
+                { label: t('Business user'), value: selectedReport.business_username || notAvailable },
+                { label: t('Probe user'), value: selectedReport.probe_username || notAvailable },
+                { label: t('Checks total'), value: String(selectedReport.checks_total) },
+                { label: t('Checks failed'), value: String(selectedReport.checks_failed) }
+              ]}
+            />
+
+            {selectedReport.runtime_metrics_retention ? (
+              <details className="workspace-details">
+                <summary>{t('Metrics retention')}</summary>
+                <SectionCard
+                  title={t('Metrics retention')}
+                  description={t('Keep this technical summary collapsed unless you need a quota or retention check.')}
+                >
+                  <DetailList
+                    items={[
+                      {
+                        label: t('Current rows'),
+                        value: String(selectedReport.runtime_metrics_retention.current_total_rows)
+                      },
+                      {
+                        label: t('Max rows'),
+                        value: String(selectedReport.runtime_metrics_retention.max_total_rows)
+                      },
+                      {
+                        label: t('Per-job cap'),
+                        value: String(selectedReport.runtime_metrics_retention.max_points_per_job)
+                      }
+                    ]}
+                  />
+                </SectionCard>
+              </details>
+            ) : null}
+
+            <SectionCard
+              title={t('Checks detail')}
+              description={t('Only failed checks are shown when the failed-only filter is active.')}
+            >
+              <div className="stack tight">
+                {(failedOnly
+                  ? selectedReport.checks.filter((check) => check.status !== 'passed')
+                  : selectedReport.checks
+                ).length > 0 ? (
+                  (failedOnly
+                    ? selectedReport.checks.filter((check) => check.status !== 'passed')
+                    : selectedReport.checks
+                  ).map((check) => (
+                    <Panel key={`${selectedReport.id}-${check.name}`} tone="soft">
+                      <div className="row gap wrap align-center">
+                        <StatusTag status={check.status}>{t(check.status)}</StatusTag>
+                        <strong>{check.name}</strong>
+                      </div>
+                      <small className="muted">{check.detail}</small>
+                    </Panel>
+                  ))
+                ) : (
+                  <small className="muted">{t('No checks to show for current filter.')}</small>
+                )}
+              </div>
+            </SectionCard>
+
+            <details className="workspace-details">
+              <summary>{t('Entities')}</summary>
+              <SectionCard
+                title={t('Entities')}
+                description={t('Raw entity keys stay available for governance follow-up without crowding the main page.')}
+              >
+                <div className="stack tight">
+                  {Object.entries(selectedReport.entities).length > 0 ? (
+                    Object.entries(selectedReport.entities).map(([key, value]) => (
+                      <div key={key} className="workspace-keyline-item">
+                        <span>{key}</span>
+                        <small>{value}</small>
+                      </div>
+                    ))
+                  ) : (
+                    <small className="muted">{t('No entity metadata recorded.')}</small>
+                  )}
+                </div>
+              </SectionCard>
+            </details>
+          </>
+        ) : null}
+      </DetailDrawer>
     </WorkspacePage>
   );
 }

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import type {
   AnnotationReviewReasonCode,
@@ -12,19 +12,17 @@ import PredictionOverlayControls from '../components/annotation/PredictionOverla
 import SampleReviewWorkbench from '../components/annotation/SampleReviewWorkbench';
 import type { AnnotationBox } from '../components/AnnotationCanvas';
 import type { PolygonAnnotation } from '../components/PolygonCanvas';
-import WorkspaceFollowUpHint from '../components/onboarding/WorkspaceFollowUpHint';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
 import StateBlock from '../components/StateBlock';
 import StatusBadge from '../components/StatusBadge';
 import StepIndicator from '../components/StepIndicator';
 import VirtualList from '../components/VirtualList';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
+import { InlineAlert, PageHeader } from '../components/ui/ConsolePage';
 import WorkspaceActionStack from '../components/ui/WorkspaceActionStack';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
-  WorkspaceHero,
   WorkspacePage,
   WorkspaceSectionHeader,
   WorkspaceWorkbench
@@ -95,7 +93,6 @@ interface PredictionCandidate {
 
 const nextLineId = (): string => `line-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 const nextReturnPointId = (): string => `rp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-const annotationWorkspaceOnboardingDismissedStorageKey = 'vistral-annotation-onboarding-dismissed';
 
 const toNumber = (value: unknown, fallback: number): number => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -521,16 +518,6 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
   return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
 };
 
-const buildScopedInferenceValidationPath = (datasetId: string, versionId?: string): string => {
-  const search = new URLSearchParams();
-  search.set('dataset', datasetId);
-  const normalizedVersionId = versionId?.trim() ?? '';
-  if (normalizedVersionId) {
-    search.set('version', normalizedVersionId);
-  }
-  return `/inference/validate?${search.toString()}`;
-};
-
 const formatSessionClock = (timestamp: number | null, fallback: string): string => {
   if (!timestamp) {
     return fallback;
@@ -665,13 +652,6 @@ export default function AnnotationWorkspacePage() {
       ? `${workspaceReturnPointsStorageKeyPrefix}.${datasetId}.${scopedDatasetVersionId}`
       : `${workspaceReturnPointsStorageKeyPrefix}.${datasetId}`;
   }, [datasetId, scopedDatasetVersionId]);
-  const scopedInferenceValidationPath = useMemo(
-    () =>
-      datasetId
-        ? buildScopedInferenceValidationPath(datasetId, scopedDatasetVersionId)
-        : '/inference/validate',
-    [datasetId, scopedDatasetVersionId]
-  );
 
   const load = useCallback(async (mode: LoadMode) => {
     if (!datasetId) {
@@ -1535,72 +1515,6 @@ export default function AnnotationWorkspacePage() {
 
     return 1;
   }, [selectedAnnotation, selectedItemId]);
-  const annotationWorkspaceEntryPath = useMemo(() => {
-    if (!datasetId) {
-      return '/datasets';
-    }
-
-    if (!scopedDatasetVersionId) {
-      return `/datasets/${datasetId}/annotate`;
-    }
-
-    const search = new URLSearchParams();
-    search.set('version', scopedDatasetVersionId);
-    return `/datasets/${datasetId}/annotate?${search.toString()}`;
-  }, [datasetId, scopedDatasetVersionId]);
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'select',
-        label: t('Select queue sample'),
-        detail: t('Pick one sample from queue filters so edits and review actions stay focused.'),
-        done: Boolean(selectedItem),
-        to: items.length === 0 && datasetId ? `/datasets/${datasetId}` : annotationWorkspaceEntryPath,
-        cta: items.length === 0 ? t('Open Dataset Detail') : t('Focus queue')
-      },
-      {
-        key: 'annotate',
-        label: t('Create annotation payload'),
-        detail: t('Add boxes/OCR lines/polygons and save at least one annotation state for this item.'),
-        done: Boolean(selectedAnnotation),
-        to: annotationWorkspaceEntryPath,
-        cta: t('Open annotation canvas')
-      },
-      {
-        key: 'review',
-        label: t('Submit into review flow'),
-        detail: t('Move annotations from editing states into in_review/approved/rejected lifecycle.'),
-        done: Boolean(
-          selectedAnnotation && ['in_review', 'approved', 'rejected'].includes(selectedAnnotation.status)
-        ),
-        to: annotationWorkspaceEntryPath,
-        cta: t('Open annotation actions')
-      },
-      {
-        key: 'loop',
-        label: t('Continue to next loop lane'),
-        detail: t('After review signals exist, continue with scoped validation follow-up.'),
-        done: reviewSessionStats.total > 0 || annotationSummary.approved > 0,
-        to: scopedInferenceValidationPath,
-        cta: t('Validate Inference')
-      }
-    ],
-    [
-      annotationSummary.approved,
-      annotationWorkspaceEntryPath,
-      datasetId,
-      items.length,
-      reviewSessionStats.total,
-      scopedInferenceValidationPath,
-      selectedAnnotation,
-      selectedItem,
-      t
-    ]
-  );
-  const nextOnboardingStep = useMemo(
-    () => onboardingSteps.find((stepItem) => !stepItem.done) ?? null,
-    [onboardingSteps]
-  );
   useEffect(() => {
     if (items.length === 0) {
       if (selectedItemId) {
@@ -1895,12 +1809,6 @@ export default function AnnotationWorkspacePage() {
     }
     queueSearchInputRef.current?.focus();
   }, [filteredItems, focusWorkspaceItem, queueFilter, selectedItemId]);
-  const focusAnnotationCanvas = useCallback(() => {
-    canvasSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
-  const focusAnnotationActions = useCallback(() => {
-    actionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
   const createWorkspaceReturnPoint = useCallback(
     (): WorkspaceReturnPoint => ({
       id: nextReturnPointId(),
@@ -3119,13 +3027,67 @@ export default function AnnotationWorkspacePage() {
     }
   };
 
-  const heroSection = (
-    <WorkspaceHero
-      eyebrow={t('Annotation Lane')}
-      title={dataset ? dataset.name : t('Annotation Workspace')}
-      description={
-        dataset
-          ? scopedDatasetVersionId
+  if (!datasetId) {
+    return (
+      <WorkspacePage>
+        <PageHeader
+          eyebrow={t('Annotation Lane')}
+          title={t('Annotation Workspace')}
+          description={t('Annotate and review samples in this focused workspace.')}
+          secondaryActions={
+            <ButtonLink to="/datasets" variant="ghost" size="sm">
+              {t('Back to Datasets')}
+            </ButtonLink>
+          }
+        />
+        <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset detail page.')} />
+      </WorkspacePage>
+    );
+  }
+
+  if (loading) {
+    return (
+      <WorkspacePage>
+        <PageHeader
+          eyebrow={t('Annotation Lane')}
+          title={t('Annotation Workspace')}
+          description={t('Annotate and review samples in this focused workspace.')}
+          secondaryActions={
+            <ButtonLink to={`/datasets/${datasetId}`} variant="ghost" size="sm">
+              {t('Back to Dataset')}
+            </ButtonLink>
+          }
+        />
+        <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation workspace.')} />
+      </WorkspacePage>
+    );
+  }
+
+  if (!dataset) {
+    return (
+      <WorkspacePage>
+        <PageHeader
+          eyebrow={t('Annotation Lane')}
+          title={t('Annotation Workspace')}
+          description={t('Annotate and review samples in this focused workspace.')}
+          secondaryActions={
+            <ButtonLink to="/datasets" variant="ghost" size="sm">
+              {t('Back to Datasets')}
+            </ButtonLink>
+          }
+        />
+        <StateBlock variant="error" title={t('Dataset Not Found')} description={t('Requested dataset is unavailable.')} />
+      </WorkspacePage>
+    );
+  }
+
+  return (
+    <WorkspacePage>
+      <PageHeader
+        eyebrow={t('Annotation Lane')}
+        title={dataset.name}
+        description={
+          scopedDatasetVersionId
             ? t('Task {task} · Version {version}. Keep one sample in focus and move it through annotation and review.', {
                 task: t(dataset.task_type),
                 version: scopedDatasetVersionId
@@ -3133,49 +3095,22 @@ export default function AnnotationWorkspacePage() {
             : t('Task {task}. Keep one sample in focus and move it through annotation and review.', {
                 task: t(dataset.task_type)
               })
-          : t('Review queue status, annotate items, and complete approvals in one flow.')
-      }
-      actions={
-        dataset ? (
+        }
+        meta={
           <div className="row gap wrap align-center">
             <Badge tone="neutral">{t(dataset.task_type)}</Badge>
             <Badge tone="info">{queueLabel(queueFilter)}</Badge>
             {scopedDatasetVersionId ? <Badge tone="neutral">{t('Version')}: {scopedDatasetVersionId}</Badge> : null}
             {selectedItem ? <Badge tone="neutral">{t('Current sample')}: {selectedFilename}</Badge> : null}
+            <Badge tone="info">{t('Visible items')}: {filteredItems.length}</Badge>
           </div>
-        ) : undefined
-      }
-    />
-  );
-
-  const renderShell = (content: ReactNode) => (
-    <WorkspacePage>
-      {heroSection}
-      {content}
-    </WorkspacePage>
-  );
-
-  if (!datasetId) {
-    return renderShell(
-      <StateBlock variant="error" title={t('Missing Dataset ID')} description={t('Open from dataset detail page.')} />
-    );
-  }
-
-  if (loading) {
-    return renderShell(
-      <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation workspace.')} />
-    );
-  }
-
-  if (!dataset) {
-    return renderShell(
-      <StateBlock variant="error" title={t('Dataset Not Found')} description={t('Requested dataset is unavailable.')} />
-    );
-  }
-
-  return (
-    <WorkspacePage>
-      {heroSection}
+        }
+        secondaryActions={
+          <ButtonLink size="sm" variant="ghost" to={`/datasets/${dataset.id}`}>
+            {t('Back to Dataset')}
+          </ButtonLink>
+        }
+      />
 
       <StepIndicator steps={steps} current={currentStep} />
 
@@ -3186,8 +3121,8 @@ export default function AnnotationWorkspacePage() {
       ) : null}
 
       {feedback ? (
-        <StateBlock
-          variant={feedback.variant}
+        <InlineAlert
+          tone={feedback.variant === 'success' ? 'success' : 'danger'}
           title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
         />
@@ -3411,23 +3346,12 @@ export default function AnnotationWorkspacePage() {
           <StateBlock
             variant="empty"
             title={t('No Items')}
-            description={
-              nextOnboardingStep
-                ? t('No queue items yet. Finish the recommended review step below to continue.')
-                : t('Upload sample files first, then come back here to annotate and review them.')
-            }
+            description={t('Upload sample files first, then come back here to annotate and review them.')}
             extra={
               <div className="row gap wrap review-empty-followup">
-                {nextOnboardingStep ? (
-                  <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-                    {nextOnboardingStep.cta}
-                  </ButtonLink>
-                ) : (
-                  <ButtonLink to={`/datasets/${datasetId}`} variant="secondary" size="sm">
-                    {t('Open Dataset Detail')}
-                  </ButtonLink>
-                )}
-                {nextOnboardingStep ? <small className="muted">{nextOnboardingStep.detail}</small> : null}
+                <ButtonLink to={`/datasets/${datasetId}`} variant="secondary" size="sm">
+                  {t('Open Dataset Detail')}
+                </ButtonLink>
               </div>
             }
           />
@@ -3438,9 +3362,7 @@ export default function AnnotationWorkspacePage() {
             description={
               queueFilter === 'in_review'
                 ? t('All submitted items are now processed. Switch queue filters for follow-up.')
-                : nextOnboardingStep
-                  ? t('No queue items yet. Finish the recommended review step below to continue.')
-                  : t('Try another queue or run pre-annotation to bring more samples into this lane.')
+                : t('Try another queue or run pre-annotation to bring more samples into this lane.')
             }
             extra={
               queueFilter === 'in_review' ? (
@@ -3468,32 +3390,16 @@ export default function AnnotationWorkspacePage() {
                     <small className="muted">{t('No follow-up queues with pending items.')}</small>
                   )}
                 </div>
-              ) : nextOnboardingStep ? (
-                <WorkspaceFollowUpHint
-                  layout="inline"
-                  className="review-empty-followup"
-                  actions={
-                    nextOnboardingStep.key === 'select' && items.length > 0 ? (
-                      <Button type="button" variant="secondary" size="sm" onClick={focusQueueSection}>
-                        {t('Focus queue')}
-                      </Button>
-                    ) : nextOnboardingStep.key === 'annotate' ? (
-                      <Button type="button" variant="secondary" size="sm" onClick={focusAnnotationCanvas}>
-                        {t('Open annotation canvas')}
-                      </Button>
-                    ) : nextOnboardingStep.key === 'review' ? (
-                      <Button type="button" variant="secondary" size="sm" onClick={focusAnnotationActions}>
-                        {t('Open annotation actions')}
-                      </Button>
-                    ) : (
-                      <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-                        {nextOnboardingStep.cta}
-                      </ButtonLink>
-                    )
-                  }
-                  detail={nextOnboardingStep.detail}
-                />
-              ) : null
+              ) : (
+                <div className="row gap wrap review-empty-followup">
+                  <Button type="button" variant="secondary" size="sm" onClick={focusQueueSection}>
+                    {t('Focus queue')}
+                  </Button>
+                  <ButtonLink to={`/datasets/${datasetId}`} variant="ghost" size="sm">
+                    {t('Open Dataset Detail')}
+                  </ButtonLink>
+                </div>
+              )
             }
           />
         ) : shouldVirtualizeQueueList ? (
@@ -3560,19 +3466,19 @@ export default function AnnotationWorkspacePage() {
                 >
                   {refreshing ? t('Refreshing...') : t('Refresh')}
                 </Button>
-                <Button
-                  type="button"
-                  variant={showWorkspaceUtilities ? 'secondary' : 'ghost'}
-                  size="sm"
-                  onClick={() => setShowWorkspaceUtilities((current) => !current)}
-                >
-                  {showWorkspaceUtilities ? t('Hide workspace tools') : t('Open workspace tools')}
-                </Button>
                 <ButtonLink size="sm" variant="ghost" to={`/datasets/${dataset.id}`}>
                   {t('Back to Dataset')}
                 </ButtonLink>
               </div>
-              {showWorkspaceUtilities ? (
+              <details
+                className="workspace-disclosure"
+                open={showWorkspaceUtilities}
+                onToggle={(event) => setShowWorkspaceUtilities(event.currentTarget.open)}
+              >
+                <summary className="row between gap wrap align-center">
+                  <span>{t('Workspace tools')}</span>
+                  <Badge tone="neutral">{t('Optional')}</Badge>
+                </summary>
                 <Panel as="section" className="annotation-utility-panel" tone="soft">
                   <div className="workspace-section-header">
                     <div className="stack tight">
@@ -3605,6 +3511,25 @@ export default function AnnotationWorkspacePage() {
                       </div>
                     </div>
                   </details>
+                  <div className="row gap wrap">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowShortcutGuide((current) => !current)}
+                    >
+                      {showShortcutGuide ? t('Hide shortcut guide') : t('Open shortcut guide')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={saveCurrentWorkspaceReturnPoint}
+                      disabled={!selectedItemId}
+                    >
+                      {t('Set Return Point')}
+                    </Button>
+                  </div>
                   {showShortcutGuide ? (
                     <Panel as="section" className="workspace-keyline-list" tone="soft">
                       <div className="row between gap wrap align-center">
@@ -3705,25 +3630,6 @@ export default function AnnotationWorkspacePage() {
                       <small className="muted">{t('Press ? to toggle this panel, Esc to close it.')}</small>
                     </Panel>
                   ) : null}
-                  <div className="row gap wrap">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setShowShortcutGuide((current) => !current)}
-                    >
-                      {showShortcutGuide ? t('Hide shortcut guide') : t('Open shortcut guide')}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={saveCurrentWorkspaceReturnPoint}
-                      disabled={!selectedItemId}
-                    >
-                      {t('Set Return Point')}
-                    </Button>
-                  </div>
                   <details className="workspace-disclosure">
                     <summary>
                       <span>{t('Review session summary')}</span>
@@ -3903,38 +3809,26 @@ export default function AnnotationWorkspacePage() {
                     </div>
                   </details>
                 </Panel>
-              ) : null}
+              </details>
             </div>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
-            <WorkspaceOnboardingCard
-              as="section"
-              inlineMode="summary"
-              title={t('Annotation first-run guide')}
-              description={t('Use this page to move queue samples through annotation and review, then continue scoped validation lane.')}
-              summary={t('Guide status is computed from selected sample, annotation status, review actions, and approved queue count.')}
-              storageKey={`${annotationWorkspaceOnboardingDismissedStorageKey}:${datasetId ?? 'unknown'}`}
-              steps={onboardingSteps.map((stepItem) => ({
-                key: stepItem.key,
-                label: stepItem.label,
-                detail: stepItem.detail,
-                done: stepItem.done,
-                primaryAction: {
-                  to: stepItem.to,
-                  label: stepItem.cta,
-                  onClick:
-                    stepItem.key === 'select' && items.length > 0
-                      ? focusQueueSection
-                      : stepItem.key === 'annotate'
-                        ? focusAnnotationCanvas
-                        : stepItem.key === 'review'
-                          ? focusAnnotationActions
-                          : undefined
-                }
-              }))}
-	            />
+            <InlineAlert
+              tone={selectedItem ? 'info' : 'warning'}
+              title={selectedItem ? t('Focused sample ready') : t('Pick a sample to begin')}
+              description={
+                selectedItem
+                  ? t('Use the canvas to annotate, then send the item through review or the next queue.')
+                  : t('Select one queue item before editing so the canvas and review actions stay focused.')
+              }
+              actions={
+                <Button type="button" variant="secondary" size="sm" onClick={focusQueueSection}>
+                  {t('Focus queue')}
+                </Button>
+              }
+            />
 
             <div ref={canvasSectionRef}>
               <section className="stack">
@@ -4330,27 +4224,28 @@ export default function AnnotationWorkspacePage() {
             ) : null}
           </Card>
 
-          <Card as="section" className="workspace-inspector-card">
-            <div className="stack tight">
-              <h3>{t('More review context')}</h3>
+          <details className="workspace-disclosure workspace-inspector-card">
+            <summary className="row between gap wrap align-center">
+              <span>{t('More review context')}</span>
+              <Badge tone="neutral">
+                {filteredReviewActionHistory.length + lowConfidenceQueueRadarItems.length}
+              </Badge>
+            </summary>
+            <div className="workspace-disclosure-content">
               <small className="muted">
                 {t('Open queue position, review history, and low-confidence triage only when you need more context.')}
               </small>
-            </div>
-            <div className="annotation-review-support-summary">
-              <Panel as="section" className="annotation-review-support-card" tone="soft">
-                <small className="muted">{t('Queue Focus')}</small>
-                <strong>{queuePositionSummary}</strong>
-              </Panel>
-              <Panel as="section" className="annotation-review-support-card" tone="soft">
-                <small className="muted">{t('Review Session History')}</small>
-                <strong>{t('{count} reviewed in this session', { count: filteredReviewActionHistory.length })}</strong>
-              </Panel>
-              <Panel as="section" className="annotation-review-support-card" tone="soft">
-                <small className="muted">{t('Low-confidence Radar')}</small>
-                <strong>{t('{count} samples need attention', { count: lowConfidenceQueueRadarItems.length })}</strong>
-              </Panel>
-            </div>
+              <div className="row gap wrap">
+                <Badge tone="neutral">
+                  {t('Queue focus')}: {queuePositionSummary}
+                </Badge>
+                <Badge tone="info">
+                  {t('History')}: {filteredReviewActionHistory.length}
+                </Badge>
+                <Badge tone={lowConfidenceQueueRadarItems.length > 0 ? 'warning' : 'neutral'}>
+                  {t('Low-confidence')}: {lowConfidenceQueueRadarItems.length}
+                </Badge>
+              </div>
             <details className="workspace-disclosure">
               <summary>
                 <span>{t('Queue Focus')}</span>
@@ -4585,7 +4480,8 @@ export default function AnnotationWorkspacePage() {
                 )}
               </div>
             </details>
-          </Card>
+            </div>
+          </details>
           </div>
         }
       />

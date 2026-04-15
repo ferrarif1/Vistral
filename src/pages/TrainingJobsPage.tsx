@@ -6,8 +6,6 @@ import type {
   TrainingJobRecord,
   TrainingJobStatus
 } from '../../shared/domain';
-import WorkspaceOnboardingCard from '../components/onboarding/WorkspaceOnboardingCard';
-import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
@@ -16,14 +14,12 @@ import {
   DetailList,
   FilterToolbar,
   InlineAlert,
-  KPIStatRow,
   PageHeader,
   SectionCard,
   StatusTable,
   type StatusTableColumn
 } from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
-import { Panel } from '../components/ui/Surface';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import {
   deriveTrainingExecutionInsight,
@@ -38,7 +34,6 @@ import { bucketRuntimeFallbackReason, runtimeFallbackReasonLabelKey } from '../u
 const activeStatusSet = new Set<TrainingJobStatus>(['queued', 'preparing', 'running', 'evaluating']);
 const terminalStatusSet = new Set<TrainingJobStatus>(['completed', 'failed', 'cancelled']);
 const backgroundRefreshIntervalMs = 5000;
-const trainingJobsOnboardingDismissedStorageKey = 'vistral-training-jobs-onboarding-dismissed';
 
 type LoadMode = 'initial' | 'manual' | 'background';
 type QueueFilter = 'all' | 'active' | 'terminal';
@@ -94,23 +89,6 @@ const describeExecutionTargetLabel = (
   target: TrainingJobRecord['execution_target']
 ) => (target === 'worker' ? t('Worker execution') : t('Local execution'));
 
-const describeRunnerModeLabel = (
-  t: (source: string, vars?: Record<string, string | number>) => string,
-  mode: string
-) => {
-  const normalized = mode.trim().toLowerCase();
-  if (normalized === 'real') {
-    return t('Real execution');
-  }
-  if (normalized === 'template') {
-    return t('Degraded execution');
-  }
-  if (normalized === 'simulated') {
-    return t('Degraded execution');
-  }
-  return t('Unknown execution');
-};
-
 const describeFallbackReasonLabel = (
   t: (source: string, vars?: Record<string, string | number>) => string,
   reason: string
@@ -136,13 +114,10 @@ export default function TrainingJobsPage() {
   const [selectedArtifactSummary, setSelectedArtifactSummary] = useState<TrainingArtifactSummary | null>(
     null
   );
-  const [selectedDetailLoading, setSelectedDetailLoading] = useState(false);
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>(
     {}
   );
-  const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
   const jobsSignatureRef = useRef('');
-  const queueTableRef = useRef<HTMLDivElement | null>(null);
 
   const load = async (mode: LoadMode) => {
     if (mode === 'initial') {
@@ -223,12 +198,10 @@ export default function TrainingJobsPage() {
   useEffect(() => {
     if (!terminalLocalCommandCandidates.length) {
       setJobExecutionInsights({});
-      setJobInsightsLoading(false);
       return;
     }
 
     let active = true;
-    setJobInsightsLoading(true);
 
     Promise.all(
       terminalLocalCommandCandidates.map(async (job) => {
@@ -263,12 +236,6 @@ export default function TrainingJobsPage() {
           next[id] = insight;
         });
         setJobExecutionInsights(next);
-      })
-      .finally(() => {
-        if (!active) {
-          return;
-        }
-        setJobInsightsLoading(false);
       });
 
     return () => {
@@ -317,15 +284,6 @@ export default function TrainingJobsPage() {
       );
     });
   }, [frameworkFilter, queueFilter, scopedJobs, searchText, taskFilter]);
-
-  const liveJobs = useMemo(
-    () => filteredJobs.filter((job) => activeStatusSet.has(job.status)),
-    [filteredJobs]
-  );
-  const terminalJobs = useMemo(
-    () => filteredJobs.filter((job) => terminalStatusSet.has(job.status)),
-    [filteredJobs]
-  );
 
   useEffect(() => {
     if (!filteredJobs.length) {
@@ -381,12 +339,10 @@ export default function TrainingJobsPage() {
   useEffect(() => {
     if (!selectedJobKey) {
       setSelectedArtifactSummary(null);
-      setSelectedDetailLoading(false);
       return;
     }
 
     let cancelled = false;
-    setSelectedDetailLoading(true);
 
     api
       .getTrainingJobDetail(selectedJobKey)
@@ -401,9 +357,6 @@ export default function TrainingJobsPage() {
         }
       })
       .finally(() => {
-        if (!cancelled) {
-          setSelectedDetailLoading(false);
-        }
       });
 
     return () => {
@@ -431,95 +384,17 @@ export default function TrainingJobsPage() {
     return `/training/jobs/new?${next.toString()}`;
   }, [hasScopeFilter, scopedDatasetId, scopedVersionId]);
 
-  const summary = useMemo(
-    () => ({
-      running: scopedJobs.filter((job) => activeStatusSet.has(job.status)).length,
-      completed: scopedJobs.filter((job) => job.status === 'completed').length,
-      failed: scopedJobs.filter((job) => ['failed', 'cancelled'].includes(job.status)).length
-    }),
-    [scopedJobs]
-  );
-
-  const workerLiveJobs = liveJobs.filter((job) => job.execution_target === 'worker').length;
-  const controlPlaneLiveJobs = liveJobs.filter((job) => job.execution_target === 'control_plane').length;
-  const selectedJobDetailPath = selectedJob ? `/training/jobs/${selectedJob.id}${detailQuerySuffix}` : '/training/jobs';
-
-  const selectedJobScopedInferencePath = useMemo(() => {
-    if (!selectedJob?.dataset_id) {
-      return '/inference/validate';
-    }
-
-    const next = new URLSearchParams();
-    next.set('dataset', selectedJob.dataset_id);
-    if (selectedJob.dataset_version_id) {
-      next.set('version', selectedJob.dataset_version_id);
-    }
-    return `/inference/validate?${next.toString()}`;
-  }, [selectedJob?.dataset_id, selectedJob?.dataset_version_id]);
-
-  const onboardingSteps = useMemo(
-    () => [
-      {
-        key: 'create',
-        label: t('Create or load training runs'),
-        detail: t('Start with at least one run so this queue can track progress and execution evidence.'),
-        done: scopedJobs.length > 0,
-        to: scopedCreatePath,
-        cta: t('Create Training Job')
-      },
-      {
-        key: 'queue',
-        label: t('Monitor active queue'),
-        detail: t('Use queue filters to focus active jobs instead of splitting the page into separate live and terminal modules.'),
-        done: liveJobs.length > 0,
-        to: '/training/jobs',
-        cta: t('Focus active queue')
-      },
-      {
-        key: 'detail',
-        label: t('Inspect one run'),
-        detail: t('Open one job only when you need its current evidence, authenticity, and next actions.'),
-        done: Boolean(selectedJobId),
-        to: selectedJobDetailPath,
-        cta: t('Open Job Detail')
-      },
-      {
-        key: 'next',
-        label: t('Continue to validation lane'),
-        detail: t('After choosing a finished run, jump into scoped inference validation for closed-loop checks.'),
-        done: Boolean(selectedJob?.dataset_id) && terminalJobs.length > 0,
-        to: selectedJobScopedInferencePath,
-        cta: t('Validate Inference')
-      }
-    ],
-    [
-      liveJobs.length,
-      scopedCreatePath,
-      scopedJobs.length,
-      selectedJob?.dataset_id,
-      selectedJobDetailPath,
-      selectedJobId,
-      selectedJobScopedInferencePath,
-      t,
-      terminalJobs.length
-    ]
-  );
-
-  const nextOnboardingStep = useMemo(
-    () => onboardingSteps.find((stepItem) => !stepItem.done) ?? null,
-    [onboardingSteps]
-  );
-
-  const nextOnboardingStepIndex = useMemo(
-    () =>
-      nextOnboardingStep
-        ? onboardingSteps.findIndex((stepItem) => stepItem.key === nextOnboardingStep.key) + 1
-        : 0,
-    [nextOnboardingStep, onboardingSteps]
-  );
-
   const hasActiveFilters =
     searchText.trim().length > 0 || taskFilter !== 'all' || frameworkFilter !== 'all' || queueFilter !== 'all';
+  const needsVerificationCount = filteredJobs.filter((job) => {
+    const insight =
+      jobExecutionInsights[job.id] ??
+      deriveTrainingExecutionInsight({
+        status: job.status,
+        executionMode: job.execution_mode
+      });
+    return insight.reality !== 'real';
+  }).length;
 
   const resetFilters = () => {
     setSearchText('');
@@ -528,21 +403,9 @@ export default function TrainingJobsPage() {
     setQueueFilter('all');
   };
 
-  const focusQueueTable = () => {
-    setQueueFilter('active');
-    queueTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
   const openJobDrawer = (jobId: string) => {
     setSelectedJobId(jobId);
     setDetailDrawerOpen(true);
-  };
-
-  const selectStarterJob = () => {
-    const candidate = filteredJobs[0] ?? scopedJobs[0] ?? liveJobs[0] ?? terminalJobs[0] ?? null;
-    if (candidate) {
-      openJobDrawer(candidate.id);
-    }
   };
 
   const tableColumns = useMemo<StatusTableColumn<TrainingJobRecord>[]>(
@@ -655,18 +518,7 @@ export default function TrainingJobsPage() {
       <PageHeader
         eyebrow={t('Training control')}
         title={t('Training Jobs')}
-        description={t('Browse, filter, and compare training runs from one queue-first page. Open one run only when you need deeper evidence or follow-up actions.')}
-        meta={
-          <div className="row gap wrap align-center">
-            <Badge tone="info">{t('Scoped total')}: {scopedJobs.length}</Badge>
-            {hasScopeFilter && scopedDatasetId ? (
-              <Badge tone="neutral">{t('dataset')}: {scopedDatasetId}</Badge>
-            ) : null}
-            {hasScopeFilter && scopedVersionId ? (
-              <Badge tone="neutral">{t('version')}: {scopedVersionId}</Badge>
-            ) : null}
-          </div>
-        }
+        description={t('Browse and compare training runs from one queue-first page. Open a run only when you need deeper evidence or follow-up actions.')}
         primaryAction={{
           label: t('Create Training Job'),
           onClick: () => {
@@ -688,35 +540,6 @@ export default function TrainingJobsPage() {
             {loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh')}
           </Button>
         }
-      />
-
-      <KPIStatRow
-        items={[
-          {
-            label: t('Active runs'),
-            value: summary.running,
-            tone: summary.running > 0 ? 'info' : 'neutral',
-            hint: t('Queued, preparing, running, evaluating')
-          },
-          {
-            label: t('Completed'),
-            value: summary.completed,
-            tone: summary.completed > 0 ? 'success' : 'neutral',
-            hint: t('Ready for version registration or comparison')
-          },
-          {
-            label: t('Failed / Cancelled'),
-            value: summary.failed,
-            tone: summary.failed > 0 ? 'warning' : 'neutral',
-            hint: t('Runs that may need retry or review')
-          },
-          {
-            label: t('Worker execution'),
-            value: workerLiveJobs,
-            tone: workerLiveJobs > 0 ? 'info' : 'neutral',
-            hint: t('Local execution: {count}', { count: controlPlaneLiveJobs })
-          }
-        ]}
       />
 
       {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}
@@ -787,155 +610,69 @@ export default function TrainingJobsPage() {
             }
             actions={
               <>
+                <div className="row gap wrap align-center">
+                  <Badge tone="neutral">{t('Visible')}: {filteredJobs.length}</Badge>
+                  <Badge tone={needsVerificationCount > 0 ? 'warning' : 'success'}>
+                    {t('Needs verification')}: {needsVerificationCount}
+                  </Badge>
+                </div>
                 {hasActiveFilters ? (
                   <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
                     {t('Clear filters')}
                   </Button>
                 ) : null}
-                <Button type="button" variant="ghost" size="sm" onClick={focusQueueTable}>
-                  {t('Focus active queue')}
-                </Button>
               </>
-            }
-            summary={
-              <div className="row gap wrap">
-                <Badge tone="info">{t('Showing {count} jobs.', { count: filteredJobs.length })}</Badge>
-                <Badge tone="neutral">{t('Active')}: {liveJobs.length}</Badge>
-                <Badge tone="neutral">{t('Terminal')}: {terminalJobs.length}</Badge>
-                {hasScopeFilter && scopedDatasetId ? (
-                  <Badge tone="info">{t('dataset')}: {scopedDatasetId}</Badge>
-                ) : null}
-                {hasScopeFilter && scopedVersionId ? (
-                  <Badge tone="info">{t('version')}: {scopedVersionId}</Badge>
-                ) : null}
-              </div>
             }
           />
         }
         main={
           <div className="workspace-main-stack">
-            {nextOnboardingStep ? (
-              <>
-                <WorkspaceOnboardingCard
-                  title={t('Training queue first-run guide')}
-                  description={t('This page is your training control lane: launch runs, monitor queues, inspect evidence, and continue validation.')}
-                  summary={t('Guide status is computed from real queue, selection, and terminal run states.')}
-                  storageKey={trainingJobsOnboardingDismissedStorageKey}
-                  steps={onboardingSteps.map((stepItem) => ({
-                    key: stepItem.key,
-                    label: stepItem.label,
-                    detail: stepItem.detail,
-                    done: stepItem.done,
-                    primaryAction: {
-                      to: stepItem.to,
-                      label: stepItem.cta,
-                      onClick:
-                        stepItem.key === 'queue'
-                          ? focusQueueTable
-                          : stepItem.key === 'detail' && !selectedJob
-                            ? selectStarterJob
-                            : undefined
-                    }
-                  }))}
+            <SectionCard
+              title={t('Training queue')}
+              description={t('Table-first queue view for comparing active and terminal jobs without turning the page into two separate workspaces.')}
+            >
+              {loading ? (
+                <StateBlock
+                  variant="loading"
+                  title={t('Loading Jobs')}
+                  description={t('Fetching training jobs.')}
                 />
-                <WorkspaceNextStepCard
-                  title={t('Next training queue step')}
-                  description={t('Finish one clear training-control action here before leaving this lane.')}
-                  stepLabel={nextOnboardingStep.label}
-                  stepDetail={nextOnboardingStep.detail}
-                  current={nextOnboardingStepIndex}
-                  total={onboardingSteps.length}
-                  actions={
-                    nextOnboardingStep.key === 'queue' ? (
-                      <Button type="button" variant="secondary" size="sm" onClick={focusQueueTable}>
-                        {t('Focus active queue')}
-                      </Button>
-                    ) : nextOnboardingStep.key === 'detail' ? (
-                      <Button type="button" variant="secondary" size="sm" onClick={selectStarterJob}>
-                        {t('Select first job')}
-                      </Button>
-                    ) : (
-                      <ButtonLink to={nextOnboardingStep.to} variant="secondary" size="sm">
-                        {nextOnboardingStep.cta}
+              ) : filteredJobs.length === 0 ? (
+                <StateBlock
+                  variant="empty"
+                  title={hasActiveFilters ? t('No jobs match current filters.') : t('No training jobs yet.')}
+                  description={
+                    hasActiveFilters
+                      ? t('Try clearing filters or changing queue scope to see more runs.')
+                      : t('Create your first run to start monitoring training execution here.')
+                  }
+                  extra={
+                    <div className="row gap wrap">
+                      <ButtonLink to={scopedCreatePath} variant="secondary" size="sm">
+                        {t('Create Training Job')}
                       </ButtonLink>
-                    )
+                      {hasActiveFilters ? (
+                        <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                          {t('Clear filters')}
+                        </Button>
+                      ) : null}
+                    </div>
                   }
                 />
-              </>
-            ) : (
-              <InlineAlert
-                tone="success"
-                title={t('Training queue ready')}
-                description={t('You already have runs in this lane. Use filters to compare jobs, then open one run only when you need details.')}
-                actions={
-                  <div className="row gap wrap">
-                    <ButtonLink to={scopedCreatePath} variant="secondary" size="sm">
-                      {t('Create Training Job')}
-                    </ButtonLink>
-                    {selectedJob ? (
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setDetailDrawerOpen(true)}>
-                        {t('Reopen selection')}
-                      </Button>
-                    ) : null}
-                  </div>
-                }
-              />
-            )}
-
-            <div ref={queueTableRef}>
-              <SectionCard
-                title={t('Training queue')}
-                description={t('Table-first queue view for comparing active and terminal jobs without turning the page into two separate workspaces.')}
-                actions={
-                  <div className="row gap wrap">
-                    <Badge tone="neutral">{t('Active')}: {liveJobs.length}</Badge>
-                    <Badge tone="neutral">{t('Terminal')}: {terminalJobs.length}</Badge>
-                  </div>
-                }
-              >
-                {loading ? (
-                  <StateBlock
-                    variant="loading"
-                    title={t('Loading Jobs')}
-                    description={t('Fetching training jobs.')}
-                  />
-                ) : filteredJobs.length === 0 ? (
-                  <StateBlock
-                    variant="empty"
-                    title={hasActiveFilters ? t('No jobs match current filters.') : t('No training jobs yet.')}
-                    description={
-                      hasActiveFilters
-                        ? t('Try clearing filters or changing queue scope to see more runs.')
-                        : t('Create your first run to start monitoring training execution here.')
-                    }
-                    extra={
-                      <div className="row gap wrap">
-                        <ButtonLink to={scopedCreatePath} variant="secondary" size="sm">
-                          {t('Create Training Job')}
-                        </ButtonLink>
-                        {hasActiveFilters ? (
-                          <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
-                            {t('Clear filters')}
-                          </Button>
-                        ) : null}
-                      </div>
-                    }
-                  />
-                ) : (
-                  <StatusTable
-                    columns={tableColumns}
-                    rows={filteredJobs}
-                    getRowKey={(job) => job.id}
-                    onRowClick={(job) => openJobDrawer(job.id)}
-                    rowClassName={(job) =>
-                      selectedJobId === job.id && detailDrawerOpen ? 'selected' : undefined
-                    }
-                    emptyTitle={t('No jobs')}
-                    emptyDescription={t('No training jobs are available in this view.')}
-                  />
-                )}
-              </SectionCard>
-            </div>
+              ) : (
+                <StatusTable
+                  columns={tableColumns}
+                  rows={filteredJobs}
+                  getRowKey={(job) => job.id}
+                  onRowClick={(job) => openJobDrawer(job.id)}
+                  rowClassName={(job) =>
+                    selectedJobId === job.id && detailDrawerOpen ? 'selected' : undefined
+                  }
+                  emptyTitle={t('No jobs')}
+                  emptyDescription={t('No training jobs are available in this view.')}
+                />
+              )}
+            </SectionCard>
           </div>
         }
       />
@@ -944,7 +681,7 @@ export default function TrainingJobsPage() {
         open={detailDrawerOpen && Boolean(selectedJob)}
         onClose={() => setDetailDrawerOpen(false)}
         title={selectedJob ? selectedJob.name : t('Job detail')}
-        description={t('Keep the list page focused on comparison. Use this drawer for current-job context and jump to the full detail page only when you need complete logs and metrics.')}
+        description={t('Keep the list focused on comparison. Use this drawer for a short summary, then open the full detail page only when you need deeper evidence.')}
         actions={
           selectedJob ? (
             <>
@@ -984,70 +721,9 @@ export default function TrainingJobsPage() {
                 { label: t('Last updated'), value: formatTimestamp(selectedJob.updated_at) }
               ]}
             />
-            <Panel as="section" className="workspace-record-item compact" tone="soft">
-              <div className="stack tight">
-                <strong>{t('Execution summary')}</strong>
-                {selectedDetailLoading ? (
-                  <small className="muted">{t('Refreshing execution summary...')}</small>
-                ) : (
-                  <>
-                    <small className="muted">
-                      {selectedArtifactSummary?.runner
-                        ? `${t('Runner')}: ${selectedArtifactSummary.runner}`
-                        : t('Runner unavailable')}
-                    </small>
-                    <small className="muted">
-                      {selectedExecutionInsight?.runnerMode
-                        ? `${t('Runner mode')}: ${describeRunnerModeLabel(t, selectedExecutionInsight.runnerMode)}`
-                        : t('Runner mode unavailable')}
-                    </small>
-                    <small className="muted">
-                      {selectedArtifactSummary?.training_performed === true
-                        ? t('Training performed')
-                        : selectedArtifactSummary?.training_performed === false
-                          ? t('Training not performed')
-                          : t('Training result not reported')}
-                    </small>
-                    {selectedArtifactSummary?.generated_at ? (
-                      <small className="muted">
-                        {t('Generated at')}: {formatTimestamp(selectedArtifactSummary.generated_at)}
-                      </small>
-                    ) : null}
-                    {selectedArtifactSummary?.primary_model_path ? (
-                      <small className="muted">
-                        {t('Primary model path')}: {selectedArtifactSummary.primary_model_path}
-                      </small>
-                    ) : null}
-                    {selectedArtifactSummary?.metrics_keys?.length ? (
-                      <div className="row gap wrap">
-                        {selectedArtifactSummary.metrics_keys.map((metricKey) => (
-                          <Badge key={metricKey} tone="neutral">
-                            {metricKey}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : null}
-                    {selectedExecutionInsight?.fallbackReason ? (
-                      <small className="muted">
-                        {t('Degradation reason')}:{' '}
-                        {describeFallbackReasonLabel(t, selectedExecutionInsight.fallbackReason)}
-                      </small>
-                    ) : null}
-                  </>
-                )}
-              </div>
-            </Panel>
-            {jobInsightsLoading && selectedJob.execution_mode === 'local_command' ? (
-              <small className="muted">{t('Refreshing authenticity checks...')}</small>
-            ) : null}
-            {selectedJob.log_excerpt ? (
-              <Panel as="section" className="workspace-record-item compact" tone="soft">
-                <div className="stack tight">
-                  <strong>{t('Latest log excerpt')}</strong>
-                  <small className="muted">{selectedJob.log_excerpt}</small>
-                </div>
-              </Panel>
-            ) : null}
+            <small className="muted">
+              {t('Open the full detail page for execution evidence, logs, and metrics.')}
+            </small>
             {selectedExecutionInsight?.showWarning ? (
               <InlineAlert
                 tone={selectedExecutionInsight.reality === 'simulated' ? 'danger' : 'warning'}
