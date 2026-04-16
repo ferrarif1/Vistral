@@ -19,33 +19,33 @@ const formatPredictionExtra = (candidate: PredictionCandidateView, t: TranslateF
   const rawExtra = candidate.extra.trim();
   if (candidate.kind === 'ocr_line') {
     if (candidate.regionId && candidate.regionId.trim()) {
-      return t('Linked region {id}', { id: candidate.regionId.trim() });
+      return t('绑定区域 {id}', { id: candidate.regionId.trim() });
     }
-    return t('No linked region');
+    return t('未绑定区域');
   }
   if (candidate.kind === 'box') {
-    return rawExtra || t('Bounding box');
+    return rawExtra || t('框');
   }
   if (candidate.kind === 'rotated_box') {
     if (rawExtra === 'obb') {
-      return t('Rotated box');
+      return t('旋转框');
     }
     if (rawExtra.startsWith('angle ')) {
-      return t('Angle {value}', { value: rawExtra.slice('angle '.length) });
+      return t('角度 {value}', { value: rawExtra.slice('angle '.length) });
     }
-    return rawExtra || t('Rotated box');
+    return rawExtra || t('旋转框');
   }
   if (candidate.kind === 'polygon') {
     const pointsMatch = rawExtra.match(/^(\d+)\s+pts$/);
     if (pointsMatch) {
-      return t('{count} points', { count: Number(pointsMatch[1]) });
+      return t('{count} 个点', { count: Number(pointsMatch[1]) });
     }
-    return rawExtra || t('Polygon');
+    return rawExtra || t('多边形');
   }
   if (candidate.kind === 'label') {
-    return t('Classification label');
+    return t('分类标签');
   }
-  return rawExtra || t('n/a');
+  return rawExtra || t('无');
 };
 
 interface PredictionOverlayControlsProps {
@@ -101,15 +101,15 @@ export default function PredictionOverlayControls({
     <Card as="section" className={className}>
       <div className="row between gap wrap align-center">
         <div className="stack tight">
-          <h3>{t('Prediction Compare')}</h3>
+          <h3>{t('预测对比')}</h3>
           <small className="muted">
             {hasPredictionOverlay
-              ? t('Use this panel to compare pre-annotation output with your current annotation.')
-              : t('Prediction compare becomes available after pre-annotation or prediction feedback is attached to this sample.')}
+              ? t('对比预标注结果和当前标注。')
+              : t('当前样本还没有可对比的预测结果。')}
           </small>
         </div>
         <Badge tone={hasPredictionOverlay ? 'info' : 'neutral'}>
-          {hasPredictionOverlay ? t('Prediction source ready') : t('No prediction source')}
+          {hasPredictionOverlay ? t('预测已就绪') : t('暂无预测')}
         </Badge>
       </div>
       <div className="stack tight">
@@ -118,7 +118,7 @@ export default function PredictionOverlayControls({
             checked={showAnnotationOverlay}
             onChange={(event) => onShowAnnotationOverlayChange(event.target.checked)}
           />
-          <span>{t('Show annotation overlay')}</span>
+          <span>{t('显示标注层')}</span>
         </label>
         <label className="row gap wrap align-center">
           <Checkbox
@@ -126,11 +126,11 @@ export default function PredictionOverlayControls({
             onChange={(event) => onShowPredictionOverlayChange(event.target.checked)}
             disabled={!hasPredictionOverlay}
           />
-          <span>{t('Show prediction overlay')}</span>
+          <span>{t('显示预测层')}</span>
         </label>
       </div>
       <label>
-        {t('Prediction confidence threshold')}
+        {t('置信度阈值')}
         <Input
           value={predictionConfidenceThreshold}
           onChange={(event) => onPredictionConfidenceThresholdChange(event.target.value)}
@@ -139,24 +139,24 @@ export default function PredictionOverlayControls({
       </label>
       <div className="row gap wrap">
         <Badge tone="neutral">
-          {t('Visible prediction candidates')}: {predictionCandidateCount}
+          {t('可见候选')}: {predictionCandidateCount}
         </Badge>
         <Badge tone={lowConfidencePredictionCount > 0 ? 'warning' : 'neutral'}>
-          {t('Low-confidence candidates')}: {lowConfidencePredictionCount}
+          {t('低置信候选')}: {lowConfidencePredictionCount}
         </Badge>
-        {selectedItemHasLowConfidenceTag ? <Badge tone="info">{t('Low-confidence tag')}</Badge> : null}
+        {selectedItemHasLowConfidenceTag ? <Badge tone="info">{t('低置信标记')}</Badge> : null}
       </div>
       {onlyLowConfidenceCandidates ? (
         <small className="muted">
-          {t('Queue is currently filtered to low-confidence samples only.')}
+          {t('当前队列仅保留低置信样本。')}
         </small>
       ) : null}
       {showPredictionOverlay && predictionCandidates.length > 0 ? (
         <ul className="workspace-record-list compact prediction-candidate-list">
           {predictionCandidates.slice(0, 4).map((candidate) => {
             const isLowConfidence =
-              candidate.confidence !== null &&
-              candidate.confidence < numericPredictionConfidenceThreshold;
+              candidate.confidence !== null && candidate.confidence < numericPredictionConfidenceThreshold;
+
             return (
               <Panel
                 key={candidate.id}
@@ -171,12 +171,12 @@ export default function PredictionOverlayControls({
                       {candidate.confidence.toFixed(2)}
                     </Badge>
                   ) : (
-                    <Badge tone="neutral">{t('n/a')}</Badge>
+                    <Badge tone="neutral">{t('无')}</Badge>
                   )}
                 </div>
                 <small className="muted">
                   {formatPredictionExtra(candidate, t)}
-                  {isLowConfidence ? ` · ${t('below threshold')}` : ''}
+                  {isLowConfidence ? ` · ${t('低于阈值')}` : ''}
                 </small>
                 {canUsePredictionInOcrEditor && candidate.kind === 'ocr_line' ? (
                   <Button
@@ -186,7 +186,7 @@ export default function PredictionOverlayControls({
                     onClick={() => onUsePredictionCandidate(candidate)}
                     disabled={busy}
                   >
-                    {t('Use in OCR editor')}
+                    {t('应用到 OCR')}
                   </Button>
                 ) : null}
               </Panel>
@@ -196,7 +196,7 @@ export default function PredictionOverlayControls({
       ) : null}
       {showPredictionOverlay && predictionCandidates.length > 4 ? (
         <small className="muted">
-          {t('Showing first {count} prediction candidates.', { count: 4 })}
+          {t('仅显示前 {count} 个候选。', { count: 4 })}
         </small>
       ) : null}
       <div className="workspace-button-stack">
@@ -207,7 +207,7 @@ export default function PredictionOverlayControls({
           onClick={onFocusNextLowConfidence}
           disabled={busy || !nextLowConfidenceQueueItemId}
         >
-          {t('Focus Next Low-confidence Item')}
+          {t('跳到下一个低置信样本')}
         </Button>
         <Button
           type="button"
@@ -217,14 +217,14 @@ export default function PredictionOverlayControls({
           disabled={busy || !hasSelectedItem}
         >
           {selectedItemHasLowConfidenceTag
-            ? t('Remove Low-confidence Tag')
-            : t('Tag Sample as Low-confidence')}
+            ? t('移除低置信标记')
+            : t('标记为低置信')}
         </Button>
       </div>
       <small className="muted">
         {hasPredictionOverlay
-          ? t('Current sample already carries pre-annotation output and can be reviewed here.')
-          : t('Run pre-annotation first if you want prediction overlay and low-confidence triage here.')}
+          ? t('当前样本已带有预标注结果，可在这里对比。')
+          : t('先运行预标注，再在这里查看预测对比。')}
       </small>
     </Card>
   );

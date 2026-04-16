@@ -707,10 +707,43 @@ export default function WorkerSettingsPage() {
       ? 2
       : 1
     : 0;
+  const workerOnlineCount = useMemo(
+    () => workers.filter((worker) => worker.effective_status === 'online').length,
+    [workers]
+  );
   const workerPageDescription =
     workerView === 'inventory'
       ? t('Inventory-first worker operations: review capacity, heartbeat, and maintenance in one place.')
       : t('Pairing-first worker operations: generate onboarding sessions and complete callback validation.');
+  const workerHeaderMeta = useMemo(
+    () => (
+      <div className="row gap wrap align-center">
+        {workerView === 'inventory' ? (
+          <>
+            <Badge tone={workers.length > 0 ? 'info' : 'warning'}>
+              {t('Workers')}: {workers.length}
+            </Badge>
+            <Badge tone={workerOnlineCount > 0 ? 'success' : 'warning'}>
+              {t('Online')}: {workerOnlineCount}
+            </Badge>
+            <Badge tone="neutral">
+              {t('Draining')}: {workers.filter((worker) => worker.effective_status === 'draining').length}
+            </Badge>
+          </>
+        ) : (
+          <>
+            <Badge tone={bootstrapSessions.length > 0 ? 'info' : 'warning'}>
+              {t('Sessions')}: {bootstrapSessions.length}
+            </Badge>
+            <Badge tone={pendingBootstrapCount > 0 ? 'warning' : 'success'}>
+              {t('Pending')}: {pendingBootstrapCount}
+            </Badge>
+          </>
+        )}
+      </div>
+    ),
+    [bootstrapSessions.length, pendingBootstrapCount, t, workerOnlineCount, workerView, workers]
+  );
 
   return (
     <WorkspacePage>
@@ -719,6 +752,7 @@ export default function WorkerSettingsPage() {
         eyebrow={t('Worker operations')}
         title={t('Worker Settings')}
         description={workerPageDescription}
+        meta={workerHeaderMeta}
         primaryAction={{
           label: t('Add Worker'),
           onClick: () => setWorkerOnboardingOpen(true)
@@ -820,27 +854,31 @@ export default function WorkerSettingsPage() {
           <div className="workspace-inspector-rail">
             <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
-                title={t('Add Worker')}
-                description={t('Use the drawer for the full pairing flow.')}
+                title={t('Next step')}
+                description={t('Keep the rail short. Pairing and registry actions live in drawers.')}
               />
-              <ActionBar
-                primary={
-                  <Button type="button" onClick={() => setWorkerOnboardingOpen(true)}>
-                    {t('Open Add Worker')}
-                  </Button>
-                }
-              />
-              <ActionBar
-                secondary={
-                  <Button type="button" variant="ghost" size="sm" onClick={openCreateWorkerRegistry}>
-                    {t('Register Existing Worker')}
-                  </Button>
-                }
-              />
+              <div className="row gap wrap">
+                <Button type="button" onClick={() => setWorkerOnboardingOpen(true)}>
+                  {t('Open Add Worker')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={workerView === 'inventory' ? () => setWorkerView('pairing') : () => setWorkerView('inventory')}
+                >
+                  {workerView === 'inventory' ? t('Go to Pairing') : t('Go to Inventory')}
+                </Button>
+              </div>
+              {workerView === 'inventory' ? (
+                <Button type="button" variant="ghost" size="sm" onClick={openCreateWorkerRegistry}>
+                  {t('Register Existing Worker')}
+                </Button>
+              ) : null}
               <small className="muted">
                 {workerView === 'inventory'
-                  ? t('Switch to Pairing for startup commands and callback validation.')
-                  : t('Switch to Inventory for capacity and heartbeat maintenance.')}
+                  ? t('Use the drawer for pairing or registry work so the inventory lane stays table-first.')
+                  : t('Pairing stays in the drawer so the inventory lane remains table-first.')}
               </small>
             </Card>
           </div>
@@ -1278,9 +1316,9 @@ export default function WorkerSettingsPage() {
               </Card>
 
               <Card as="section" className="stack tight">
-                <WorkspaceSectionHeader
-                  title={t('Docker startup command')}
-                  description={t('Recommended path for remote worker nodes.')}
+              <WorkspaceSectionHeader
+                title={t('Docker startup command')}
+                description={t('Recommended path for remote workers.')}
                   actions={
                     <Button
                       type="button"
@@ -1296,9 +1334,9 @@ export default function WorkerSettingsPage() {
               </Card>
 
               <Card as="section" className="stack tight">
-                <WorkspaceSectionHeader
-                  title={t('Script startup alternative')}
-                  description={t('Use this if worker host already has repository scripts.')}
+              <WorkspaceSectionHeader
+                title={t('Script startup alternative')}
+                description={t('Use this if the host already has repository scripts.')}
                   actions={
                     <Button
                       type="button"
@@ -1317,7 +1355,7 @@ export default function WorkerSettingsPage() {
             <StateBlock
               variant="empty"
               title={t('Create a pairing session')}
-              description={t('Generate one session first, then this drawer will show startup command and pairing token.')}
+              description={t('Generate one session first. Then the drawer shows the command and token.')}
             />
           )}
         </div>

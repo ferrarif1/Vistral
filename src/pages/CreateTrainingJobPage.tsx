@@ -66,7 +66,6 @@ export default function CreateTrainingJobPage() {
   const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
   const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
   const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
-  const [runtimePythonBin, setRuntimePythonBin] = useState('');
   const [nonStrictLaunchConfirmed, setNonStrictLaunchConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -78,7 +77,6 @@ export default function CreateTrainingJobPage() {
   const preferredVersionAppliedRef = useRef(false);
   const jobNameInputRef = useRef<HTMLInputElement | null>(null);
   const datasetVersionSelectRef = useRef<HTMLSelectElement | null>(null);
-  const currentStepCardRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -184,7 +182,6 @@ export default function CreateTrainingJobPage() {
           return;
         }
         setRuntimeDisableSimulatedTrainFallback(view.controls.disable_simulated_train_fallback);
-        setRuntimePythonBin(view.controls.python_bin.trim());
       })
       .catch((error) => {
         if (!active) {
@@ -237,10 +234,6 @@ export default function CreateTrainingJobPage() {
     Boolean(preferredDatasetId) &&
     datasetId === preferredDatasetId &&
     (!preferredVersionId || datasetVersionId === preferredVersionId);
-  const readyMatchingDatasets = useMemo(
-    () => filteredDatasets.filter((dataset) => dataset.status === 'ready').length,
-    [filteredDatasets]
-  );
   const datasetStatusReady = selectedDataset?.status === 'ready';
   const datasetVersionHasTrainSplit = (selectedDatasetVersion?.split_summary.train ?? 0) > 0;
   const datasetVersionHasAnnotationCoverage = (selectedDatasetVersion?.annotation_coverage ?? 0) > 0;
@@ -252,6 +245,69 @@ export default function CreateTrainingJobPage() {
     datasetVersionHasAnnotationCoverage;
   const strictLaunchGateReady = runtimeDisableSimulatedTrainFallback || nonStrictLaunchConfirmed;
   const submitReady = launchReady && !runtimeSettingsLoading && !runtimeSettingsError && strictLaunchGateReady;
+  const launchReadinessBanner = useMemo(() => {
+    if (loading || versionsLoading) {
+      return null;
+    }
+
+    if (!selectedDataset) {
+      return {
+        tone: 'info' as const,
+        title: t('Pick a dataset first'),
+        description: t('Training starts from a fixed dataset snapshot. Choose one dataset, then bind a version and launch.')
+      };
+    }
+
+    if (!selectedDatasetVersion) {
+      return {
+        tone: 'warning' as const,
+        title: t('Choose a dataset version snapshot'),
+        description: t('Launch is blocked until you bind an explicit dataset version with train split and annotation coverage.')
+      };
+    }
+
+    if (!datasetStatusReady || !datasetVersionHasTrainSplit || !datasetVersionHasAnnotationCoverage) {
+      return {
+        tone: 'warning' as const,
+        title: t('Dataset snapshot is not ready yet'),
+        description: t('Fix dataset status, train split, or annotation coverage before you create the run.')
+      };
+    }
+
+    if (runtimeSettingsError) {
+      return {
+        tone: 'danger' as const,
+        title: t('Runtime safety status is unavailable'),
+        description: t('Open Runtime Settings and resolve the runtime guard before launching training.')
+      };
+    }
+
+    if (!runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed) {
+      return {
+        tone: 'warning' as const,
+        title: t('Confirm risk before launch'),
+        description: t('This run can still fall back to degraded output. Confirm the risk acknowledgement on the right.')
+      };
+    }
+
+    return {
+      tone: 'success' as const,
+      title: t('Ready to create training job'),
+      description: t('The dataset snapshot, launch gate, and core params are ready. Review once, then create the job.')
+    };
+  }, [
+    datasetStatusReady,
+    datasetVersionHasAnnotationCoverage,
+    datasetVersionHasTrainSplit,
+    loading,
+    nonStrictLaunchConfirmed,
+    runtimeDisableSimulatedTrainFallback,
+    runtimeSettingsError,
+    selectedDataset,
+    selectedDatasetVersion,
+    t,
+    versionsLoading
+  ]);
 
   const taskFrameworkOptions = useMemo(() => {
     if (taskType === 'ocr') {
@@ -390,65 +446,45 @@ export default function CreateTrainingJobPage() {
     {
       label: t('Job name'),
       done: Boolean(name.trim()),
-      hint: name.trim() || t('This run still needs a name.')
+      hint: name.trim() || t('Name this run.')
     },
     {
       label: t('Dataset'),
       done: Boolean(selectedDataset),
       hint: selectedDataset
-        ? `${selectedDataset.name} (${t(selectedDataset.status)})`
-        : t('Pick a dataset that matches the selected task type.')
+        ? `${selectedDataset.name} · ${t(selectedDataset.status)}`
+        : t('Match the task type first.')
     },
     {
       label: t('Dataset Version'),
       done: Boolean(selectedDatasetVersion),
       hint: selectedDatasetVersion
-        ? `${selectedDatasetVersion.version_name} · ${t('train')} ${selectedDatasetVersion.split_summary.train} · ${t('Annotation coverage')}: ${formatCoveragePercent(selectedDatasetVersion.annotation_coverage)}`
-        : t('Choose an immutable dataset version snapshot for this run.')
+        ? `${selectedDatasetVersion.version_name} · ${t('train')} ${selectedDatasetVersion.split_summary.train} · ${formatCoveragePercent(selectedDatasetVersion.annotation_coverage)}`
+        : t('Choose one fixed snapshot.')
     },
     {
       label: t('Launch readiness'),
       done: launchReady,
       hint: selectedDatasetVersion
-        ? t('Dataset {datasetStatus} · train {trainCount} · coverage {coverage}% · train split ready {trainReady} · coverage ready {coverageReady}', {
-            datasetStatus: selectedDataset ? t(selectedDataset.status) : t('N/A'),
-            trainCount: selectedDatasetVersion.split_summary.train,
-            coverage: Math.round(selectedDatasetVersion.annotation_coverage * 100),
-            trainReady: t(datasetVersionHasTrainSplit ? 'ready' : 'draft'),
-            coverageReady: t(datasetVersionHasAnnotationCoverage ? 'ready' : 'draft')
-          })
-        : t('Launch readiness becomes available after a dataset version is selected.')
+        ? t('Dataset, split, and coverage are checked.')
+        : t('Launch readiness appears after a snapshot is selected.')
     },
     {
       label: t('Runtime safety guard'),
       done: strictLaunchGateReady && !runtimeSettingsLoading && !runtimeSettingsError,
       hint: runtimeSettingsLoading
-        ? t('Loading runtime safety status...')
+        ? t('Checking runtime guard...')
         : runtimeSettingsError
-          ? t('Runtime settings unavailable. Resolve Runtime settings before launch.')
+          ? t('Fix Runtime settings first.')
           : runtimeDisableSimulatedTrainFallback
-            ? t('Safety guard is active: degraded training output is blocked.')
+            ? t('Guard is active.')
             : nonStrictLaunchConfirmed
-              ? t('Risk confirmed: this launch may return degraded output when local execution fails.')
-              : t('Safety guard is off. Confirm risk acknowledgment before launch.')
-    },
-    {
-      label: t('Params'),
-      done: Boolean(epochs && batchSize && learningRate),
-      hint:
-        step >= 2
-          ? `${t('Epochs')}: ${epochs} · ${t('Batch Size')}: ${batchSize} · ${t('Learning Rate')}: ${learningRate}`
-          : t('Core params stay editable until launch.')
-    },
-    {
-      label: t('Review'),
-      done: step === steps.length - 1 && Boolean(name.trim()) && submitReady,
-      hint:
-        step === steps.length - 1
-          ? t('This run is ready for final review.')
-          : t('This run will be ready for final review after earlier steps are completed.')
-      }
+              ? t('Risk confirmed.')
+              : t('Confirm risk to continue.')
+    }
   ];
+  const blockingChecklist = runChecklist.filter((item) => !item.done);
+  const checklistPreview = blockingChecklist.length > 0 ? blockingChecklist : runChecklist;
   const renderStage = () => {
     if (step === 0) {
       return (
@@ -707,24 +743,12 @@ export default function CreateTrainingJobPage() {
             </small>
           </li>
         </ul>
-        {runtimeSettingsError ? (
-          <Panel as="section" className="workspace-record-item compact" tone="soft">
-            <div className="stack tight">
-              <strong>{t('Runtime safety status unavailable')}</strong>
-              <small className="muted">
-                {t('Resolve runtime settings first. Training launch stays blocked until safety status can be verified.')}
-              </small>
-            </div>
-          </Panel>
-        ) : null}
         {!runtimeSettingsLoading && !runtimeSettingsError && !runtimeDisableSimulatedTrainFallback ? (
           <Panel as="section" className="workspace-record-item compact" tone="soft">
             <div className="stack tight">
-              <strong>{t('Runtime safety guard is off')}</strong>
+              <strong>{t('Runtime guard needs confirmation')}</strong>
               <small className="muted">
-                {t(
-                  'This launch may return degraded output when local execution command is unavailable. Enable the safety guard for production runs.'
-                )}
+                {t('Confirm the risk if this launch may fall back to degraded output.')}
               </small>
             </div>
             <label className="row gap wrap align-center">
@@ -734,7 +758,7 @@ export default function CreateTrainingJobPage() {
                 checked={nonStrictLaunchConfirmed}
                 onChange={(event) => setNonStrictLaunchConfirmed(event.target.checked)}
               />
-              <span>{t('I understand the risk and still want to launch this training job')}</span>
+              <span>{t('I understand the risk')}</span>
             </label>
           </Panel>
         ) : null}
@@ -747,14 +771,34 @@ export default function CreateTrainingJobPage() {
       <PageHeader
         eyebrow={t('Training Job Builder')}
         title={t('Create Training Job')}
-        description={t('Launch one training run from a fixed dataset snapshot after readiness checks pass.')}
+        description={t('Create one training run from a fixed dataset snapshot.')}
         meta={
           <div className="row gap wrap align-center">
             <Badge tone="neutral">{t('Step')}: {step + 1}/{steps.length}</Badge>
             <Badge tone="info">{t('Matching datasets')}: {filteredDatasets.length}</Badge>
-            <Badge tone="success">{t('Ready datasets')}: {readyMatchingDatasets}</Badge>
             <Badge tone={snapshotPrefilledFromLink ? 'success' : 'neutral'}>
               {t('Snapshot prefill')}: {snapshotPrefilledFromLink ? t('Ready') : t('N/A')}
+            </Badge>
+            <Badge
+              tone={
+                runtimeSettingsError
+                  ? 'danger'
+                  : runtimeSettingsLoading
+                    ? 'info'
+                    : runtimeDisableSimulatedTrainFallback
+                      ? 'success'
+                      : 'warning'
+              }
+            >
+              {t('Runtime')}: {
+                runtimeSettingsError
+                  ? t('Unavailable')
+                  : runtimeSettingsLoading
+                    ? t('Checking...')
+                    : runtimeDisableSimulatedTrainFallback
+                      ? t('Guarded')
+                      : t('Review')
+              }
             </Badge>
           </div>
         }
@@ -774,45 +818,45 @@ export default function CreateTrainingJobPage() {
         />
       ) : null}
 
-      {!runtimeSettingsLoading ? (
-        runtimeSettingsError ? (
-          <InlineAlert
-            tone="warning"
-            title={t('Runtime safety status unavailable')}
-            description={t('Unable to load runtime settings: {reason}', { reason: runtimeSettingsError })}
-            actions={
-              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                {t('Open Runtime Settings')}
-              </ButtonLink>
-            }
-          />
-        ) : runtimeDisableSimulatedTrainFallback ? (
-          <InlineAlert
-            tone="success"
-            title={t('Training safety guard is active')}
-            description={t('Degraded training output is blocked. Built-in runner Python: {pythonBin}.', {
-              pythonBin: runtimePythonBin || t('platform default (python3 / python)')
-            })}
-          />
-        ) : (
-          <InlineAlert
-            tone="warning"
-            title={t('Training safety guard is off')}
-            description={t('Enable the runtime safety guard before production runs.')}
-            actions={
-              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                {t('Open Runtime Settings')}
-              </ButtonLink>
-            }
-          />
-        )
-      ) : null}
-
       {feedback ? (
         <StateBlock
           variant={feedback.variant}
           title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
+        />
+      ) : null}
+      {launchReadinessBanner ? (
+        <InlineAlert
+          tone={launchReadinessBanner.tone}
+          title={launchReadinessBanner.title}
+          description={launchReadinessBanner.description}
+          actions={
+            !selectedDataset ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => setStep(1)}>
+                {t('Go to dataset step')}
+              </Button>
+            ) : !selectedDatasetVersion ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setStep(1);
+                  window.setTimeout(() => datasetVersionSelectRef.current?.focus(), 50);
+                }}
+              >
+                {t('Select version')}
+              </Button>
+            ) : runtimeSettingsError ? (
+              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                {t('Open Runtime Settings')}
+              </ButtonLink>
+            ) : !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => setStep(3)}>
+                {t('Review risk')}
+              </Button>
+            ) : null
+          }
         />
       ) : null}
       <WorkspaceWorkbench
@@ -850,30 +894,20 @@ export default function CreateTrainingJobPage() {
         }
         main={
           <div className="workspace-main-stack">
-            <div ref={currentStepCardRef}>
-              <Card as="article">
-                <WorkspaceSectionHeader
-                  title={t('Current step')}
-                  description={stepTitles[step]}
-                  actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
-                />
-                <small className="muted">{stepDescriptions[step]}</small>
-                <StepIndicator steps={steps} current={step} />
-              </Card>
-            </div>
+            <Card as="article">
+              <WorkspaceSectionHeader
+                title={t('Launch step')}
+                description={stepTitles[step]}
+                actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
+              />
+              <small className="muted">{stepDescriptions[step]}</small>
+              <StepIndicator steps={steps} current={step} />
+            </Card>
             {renderStage()}
-          </div>
-        }
-        side={
-          <div className="workspace-inspector-rail">
-            <Card as="article" className="workspace-inspector-card">
-              <div className="row between gap wrap align-center">
-                <h3>{t('Requirement to task draft')}</h3>
-                <Badge tone={taskDraft ? 'success' : 'neutral'}>{taskDraft ? t('ready') : t('optional')}</Badge>
-              </div>
-              <small className="muted">
-                {t('Generate a draft only when you want a suggested task shape.')}
-              </small>
+            <AdvancedSection
+              title={t('Optional task sketch')}
+              description={t('Use this only when you want the system to suggest a training shape from prose. It is not required to launch training.')}
+            >
               <label>
                 {t('Requirement Description')}
                 <Textarea
@@ -905,44 +939,40 @@ export default function CreateTrainingJobPage() {
                   <small className="muted">{taskDraft.rationale}</small>
                 </div>
               ) : (
-                <StateBlock
-                  variant="empty"
-                  title={t('No requirement draft yet.')}
-                  description={t('Use the assist card to convert a free-form requirement into a structured training starting point.')}
-                  extra={
-                    <div className="row gap wrap">
-                      <ButtonLink to="/workspace/chat" variant="secondary" size="sm">
-                        {t('Open Chat Workspace')}
-                      </ButtonLink>
-                      <ButtonLink to="/datasets" variant="ghost" size="sm">
-                        {t('Open Datasets')}
-                      </ButtonLink>
-                    </div>
-                  }
-                />
+                <small className="muted">
+                  {t('Optional helper only. A real training launch still depends on dataset, snapshot, and readiness checks.')}
+                </small>
               )}
-            </Card>
-
+            </AdvancedSection>
+          </div>
+        }
+        side={
+          <div className="workspace-inspector-rail">
             <Card as="article" className="workspace-inspector-card">
               <div className="row between gap wrap align-center">
-                <h3>{t('Current run plan')}</h3>
-                <Badge tone="neutral">
-                  {runChecklist.filter((item) => item.done).length}/{runChecklist.length}
+                <h3>{t('Next checkpoint')}</h3>
+                <Badge tone={blockingChecklist.length > 0 ? 'warning' : 'success'}>
+                  {runChecklist.length - blockingChecklist.length}/{runChecklist.length}
                 </Badge>
               </div>
               <small className="muted">
-                {t('Keep the full checklist short and only highlight the blockers you still need to resolve.')}
+                {blockingChecklist.length > 0 ? t('Only unresolved blockers are shown.') : t('Launch is ready.')}
               </small>
               <div className="workspace-keyline-list">
-                {runChecklist.slice(0, 4).map((item) => (
+                {checklistPreview.slice(0, 2).map((item) => (
                   <div key={item.label} className="workspace-keyline-item">
                     <span>{item.label}</span>
                     <small>{item.done ? t('Ready') : t('Pending')}</small>
                   </div>
                 ))}
+                {blockingChecklist.length > 2 ? (
+                  <div className="workspace-keyline-item">
+                    <span>{t('More blockers')}</span>
+                    <small>{t('{count} remaining', { count: blockingChecklist.length - 2 })}</small>
+                  </div>
+                ) : null}
               </div>
             </Card>
-
           </div>
         }
       />

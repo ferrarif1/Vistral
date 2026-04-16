@@ -238,6 +238,28 @@ Rules:
   2. 跑 `npm run typecheck && npm run lint && npm run build`，确认 runtime 设置这条线不影响主分支可运行性。
   3. 补 runtime settings 最小 smoke（保存/读取/清空后 adapter 生效）。
   4. 若用户继续优先“真实训练闭环”，则在上述可编译前提下继续做 doctor + smoke 闭环验证。
+
+## 2026-04-16 12:10 (CST)
+- context: 从注重单页标注工作台的收口，切换到训练页 / 运行时页 / 设置页的单主任务重构，用户要求“继续直到作为使用者工程师觉得很好用很顺手”。
+- done:
+  - 已确认仓库合同与协作规则，读过 `README.md`、`AGENTS.md`、`.codex/config.toml`、`docs/prd.md`、`docs/ia.md`、`docs/flows.md`、`docs/data-model.md`、`docs/api-contract.md`。
+  - 已开始回看 `TrainingJobsPage`、`CreateTrainingJobPage`、`TrainingJobDetailPage`、`RuntimeSettingsPage`、`AnnotationWorkspacePage` 的当前结构。
+  - 已确认可复用的共享壳组件：`WorkspacePage`、`WorkspaceWorkbench`、`ConsolePage`、`SettingsTabs`。
+- next:
+  1. 收束 `TrainingJobsPage`，减少重复摘要噪音并保留队列主任务。
+  2. 收束 `CreateTrainingJobPage`，把训练启动流程压成更线性的单主任务页。
+  3. 收束 `TrainingJobDetailPage`，把证据与诊断分层，弱化首屏技术噪音。
+  4. 收束 `RuntimeSettingsPage`，把 local / readiness / advanced 三层拆清楚并统一中文表达。
+  5. 运行 `lint` / `typecheck` / `build` / 关键 smoke，确认重构不回退。
+- risks:
+  - 运行时设置页和训练详情页都比较密，容易在重构时误删现有保护信息或回退状态提示。
+  - 需要保持训练/运行时与后端契约一致，避免只改前端导致配置看起来“变简单”但实际不可用。
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+  - `npm run smoke:runtime-settings-persistence`
+  - `npm run smoke:real-closure`
 - risks:
   - 当前工作区存在未收口的 runtime settings 改动，若直接跑 lint/build 可能暴露未使用状态或接口对齐问题。
   - 当前真实训练闭环是否通过，仍取决于本机 Python 依赖、权重文件、local runner、以及 worker/runtime 可达性。

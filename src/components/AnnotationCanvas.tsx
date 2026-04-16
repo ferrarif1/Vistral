@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent
+} from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { Button } from './ui/Button';
 import { Input } from './ui/Field';
@@ -18,10 +27,18 @@ interface AnnotationCanvasProps {
   filename: string;
   imageUrl?: string | null;
   boxes: AnnotationBox[];
+  defaultLabel: string;
   onChange: (boxes: AnnotationBox[]) => void;
+  onSelectionChange?: (box: AnnotationBox | null) => void;
   disabled?: boolean;
   width?: number;
   height?: number;
+}
+
+export interface AnnotationCanvasHandle {
+  deleteSelectedBox: () => void;
+  clearAllBoxes: () => void;
+  getSelectedBox: () => AnnotationBox | null;
 }
 
 interface Point {
@@ -70,16 +87,21 @@ const normalizeRect = (start: Point, end: Point) => {
 const nextBoxId = (): string => `box-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 const MIN_BOX_SIZE = 8;
 
-export default function AnnotationCanvas({
+const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProps>(function AnnotationCanvas(
+{
   title,
   filename,
   imageUrl = null,
   boxes,
+  defaultLabel,
   onChange,
+  onSelectionChange,
   disabled,
   width = 700,
   height = 380
-}: AnnotationCanvasProps) {
+}: AnnotationCanvasProps,
+ref
+) {
   const { t } = useI18n();
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [interaction, setInteraction] = useState<InteractionState | null>(null);
@@ -95,6 +117,10 @@ export default function AnnotationCanvas({
   useEffect(() => {
     setImageLoadFailed(false);
   }, [imageUrl]);
+
+  useEffect(() => {
+    onSelectionChange?.(selectedBox);
+  }, [onSelectionChange, selectedBox]);
 
   const eventToPoint = (event: MouseEvent<HTMLDivElement>): Point | null => {
     return pointFromClient(event.clientX, event.clientY);
@@ -114,10 +140,10 @@ export default function AnnotationCanvas({
 
   const commitBox = useCallback(
     (boxId: string, patch: Partial<AnnotationBox>) => {
-      onChange(
-        boxes.map((item) =>
-          item.id === boxId
-            ? {
+    onChange(
+      boxes.map((item) =>
+        item.id === boxId
+          ? {
                 ...item,
                 ...patch
               }
@@ -250,26 +276,36 @@ export default function AnnotationCanvas({
       y: Number(draft.y.toFixed(1)),
       width: Number(draft.width.toFixed(1)),
       height: Number(draft.height.toFixed(1)),
-      label: `region-${boxes.length + 1}`
+      label: defaultLabel.trim() || `region-${boxes.length + 1}`
     };
 
     onChange([...boxes, created]);
     setSelectedBoxId(created.id);
   };
 
-  const removeSelected = () => {
+  const removeSelected = useCallback(() => {
     if (!selectedBoxId) {
       return;
     }
 
     onChange(boxes.filter((item) => item.id !== selectedBoxId));
     setSelectedBoxId(null);
-  };
+  }, [boxes, onChange, selectedBoxId]);
 
-  const clearAll = () => {
+  const clearAll = useCallback(() => {
     onChange([]);
     setSelectedBoxId(null);
-  };
+  }, [onChange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      deleteSelectedBox: removeSelected,
+      clearAllBoxes: clearAll,
+      getSelectedBox: () => selectedBox
+    }),
+    [removeSelected, clearAll, selectedBox]
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -356,7 +392,7 @@ export default function AnnotationCanvas({
     <Card as="section">
       <div className="row between gap wrap align-center">
         <h3>{t(title)}</h3>
-        <span className="muted">{t('Drag to create box. Click box to edit.')}</span>
+        <span className="muted">{t('拖动画框，点击框体即可编辑。')}</span>
       </div>
 
       <div
@@ -460,17 +496,17 @@ export default function AnnotationCanvas({
 
       <div className="row gap wrap">
         <Button variant="secondary" size="sm" onClick={removeSelected} disabled={disabled || !selectedBoxId}>
-          {t('Delete Selected Box')}
+          {t('删除选中框')}
         </Button>
         <Button variant="ghost" size="sm" onClick={clearAll} disabled={disabled || boxes.length === 0}>
-          {t('Clear All Boxes')}
+          {t('清空全部框')}
         </Button>
       </div>
 
       {selectedBox ? (
         <div className="annotation-box-editor">
           <label>
-            {t('Label')}
+            {t('标签')}
             <Input
               value={selectedBox.label}
               onChange={(event) => updateSelected({ label: event.target.value })}
@@ -494,7 +530,7 @@ export default function AnnotationCanvas({
             />
           </label>
           <label>
-            {t('Width')}
+            {t('宽度')}
             <Input
               value={selectedBox.width}
               onChange={(event) => updateSelected({ width: Number(event.target.value) || 0 })}
@@ -502,7 +538,7 @@ export default function AnnotationCanvas({
             />
           </label>
           <label>
-            {t('Height')}
+            {t('高度')}
             <Input
               value={selectedBox.height}
               onChange={(event) => updateSelected({ height: Number(event.target.value) || 0 })}
@@ -511,8 +547,10 @@ export default function AnnotationCanvas({
           </label>
         </div>
       ) : (
-        <small className="muted">{t('No box selected.')}</small>
+        <small className="muted">{t('未选中框。')}</small>
       )}
     </Card>
   );
-}
+});
+
+export default AnnotationCanvas;

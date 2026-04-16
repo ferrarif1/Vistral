@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  LlmConfigView,
   ModelFramework,
   RuntimeConnectivityRecord,
   RuntimeFrameworkConfigView,
-  RuntimeMetricsRetentionSummary,
   RuntimeReadinessReport,
   RuntimeProfileView,
   RuntimeSettingsView,
   RuntimeApiKeyMetaView,
-  TrainingArtifactSummary,
-  TrainingJobRecord,
   ModelRecord,
   ModelVersionRecord
 } from '../../shared/domain';
@@ -19,35 +15,22 @@ import SettingsTabs from '../components/settings/SettingsTabs';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import {
-  ActionBar,
   FilterToolbar,
-  HealthSummaryPanel,
   InlineAlert,
   PageHeader,
   SectionCard,
   StatusTable,
   type StatusTableColumn
 } from '../components/ui/ConsolePage';
-import WorkspaceActionStack from '../components/ui/WorkspaceActionStack';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Panel } from '../components/ui/Surface';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
-import { detectInferenceRunReality } from '../utils/inferenceSource';
 
 const FRAMEWORKS: ModelFramework[] = ['paddleocr', 'doctr', 'yolo'];
 const recentMetricJobsPerFramework = 2;
-
-type FrameworkMetricKeySummary = {
-  framework: ModelFramework;
-  jobsChecked: number;
-  jobsWithMetrics: number;
-  metricKeys: string[];
-  latestJobLabel: string | null;
-  latestGeneratedAt: string | null;
-};
 
 type RuntimeFrameworkDraft = {
   endpoint: string;
@@ -81,18 +64,6 @@ type RuntimeReadinessCommandGroup = {
   commands: string[];
 };
 
-type InferenceRealitySummaryKey = 'real' | 'fallback';
-type TrainingExecutionSummaryKey = 'local_command' | 'simulated' | 'unknown';
-
-type RuntimeManualTaskItem = {
-  key: string;
-  title: string;
-  status: 'ready' | 'warning' | 'pending' | 'action_required';
-  detail: string;
-  actionLabel?: string;
-  actionHref?: string;
-};
-
 type RuntimeModelOption = {
   id: string;
   label: string;
@@ -116,47 +87,6 @@ const runtimeFrameworkTaskTypes: Record<ModelFramework, string[]> = {
   paddleocr: ['ocr'],
   doctr: ['ocr'],
   yolo: ['detection', 'classification', 'segmentation', 'obb']
-};
-
-const describeTrainingExecutionSummaryLabel = (
-  t: (source: string, vars?: Record<string, string | number>) => string,
-  key: string
-): string => {
-  const normalized = key.trim() as TrainingExecutionSummaryKey;
-  if (normalized === 'local_command') {
-    return t('Local command');
-  }
-  if (normalized === 'simulated') {
-    return t('Degraded execution');
-  }
-  return t('Unknown');
-};
-
-const defaultDoctrPreseedExpectedFiles = ['db_resnet50-79bd7d70.pt', 'vgg16_bn_r-d108c19c.pt'];
-const defaultDoctrPreseedRuntimeDir = '/app/runtime-preseed/doctr';
-const defaultDoctrPreseedHostDirHint = './runtime-assets/doctr-preseed';
-const doctrPreseedRecoveryCommands = [
-  'npm run setup:doctr-preseed',
-  'docker compose up -d --build vistral-api',
-  'npm run smoke:runtime-success'
-];
-
-const resolveDoctrPreseedHostDirHint = (runtimeDir: string | null): string => {
-  if (!runtimeDir) {
-    return defaultDoctrPreseedHostDirHint;
-  }
-  const normalized = runtimeDir.trim();
-  if (!normalized) {
-    return defaultDoctrPreseedHostDirHint;
-  }
-  if (normalized === defaultDoctrPreseedRuntimeDir) {
-    return defaultDoctrPreseedHostDirHint;
-  }
-  const composeMountPrefix = '/app/runtime-preseed/';
-  if (normalized.startsWith(composeMountPrefix)) {
-    return `./runtime-assets/${normalized.slice(composeMountPrefix.length)}`;
-  }
-  return normalized;
 };
 
 const buildDefaultRuntimeFrameworkDraft = (): RuntimeFrameworkDraft => ({
@@ -291,91 +221,6 @@ const mergeRuntimeFrameworkDraft = (
   api_key_masked: view.api_key_masked
 });
 
-const buildEmptyFrameworkMetricKeySummary = (): FrameworkMetricKeySummary[] =>
-  FRAMEWORKS.map((framework) => ({
-    framework,
-    jobsChecked: 0,
-    jobsWithMetrics: 0,
-    metricKeys: [],
-    latestJobLabel: null,
-    latestGeneratedAt: null
-  }));
-
-const sortTrainingJobsByRecent = (left: TrainingJobRecord, right: TrainingJobRecord) => {
-  const leftTime = Date.parse(left.updated_at || left.created_at) || 0;
-  const rightTime = Date.parse(right.updated_at || right.created_at) || 0;
-  if (rightTime !== leftTime) {
-    return rightTime - leftTime;
-  }
-
-  return right.id.localeCompare(left.id);
-};
-
-const collectRecentMetricSummaryJobs = (jobs: TrainingJobRecord[]) => {
-  const jobsByFramework = new Map<ModelFramework, TrainingJobRecord[]>();
-  FRAMEWORKS.forEach((framework) => jobsByFramework.set(framework, []));
-
-  [...jobs]
-    .filter((job) => job.status === 'completed')
-    .sort(sortTrainingJobsByRecent)
-    .forEach((job) => {
-      const bucket = jobsByFramework.get(job.framework);
-      if (!bucket || bucket.length >= recentMetricJobsPerFramework) {
-        return;
-      }
-
-      bucket.push(job);
-    });
-
-  return jobsByFramework;
-};
-
-const summarizeFrameworkMetricKeys = (
-  jobsByFramework: Map<ModelFramework, TrainingJobRecord[]>,
-  artifactSummaryByJobId: Map<string, TrainingArtifactSummary | null>
-): FrameworkMetricKeySummary[] =>
-  FRAMEWORKS.map((framework) => {
-    const frameworkJobs = jobsByFramework.get(framework) ?? [];
-    const metricKeys = new Set<string>();
-    let jobsWithMetrics = 0;
-    let latestJobLabel: string | null = null;
-    let latestGeneratedAt: string | null = null;
-
-    frameworkJobs.forEach((job) => {
-      const artifactSummary = artifactSummaryByJobId.get(job.id);
-      const keys = artifactSummary?.metrics_keys ?? [];
-      if (keys.length === 0) {
-        return;
-      }
-
-      jobsWithMetrics += 1;
-      keys.forEach((metricKey) => metricKeys.add(metricKey));
-      if (!latestJobLabel) {
-        latestJobLabel = job.name.trim() || null;
-      }
-      if (!latestGeneratedAt) {
-        latestGeneratedAt = artifactSummary?.generated_at ?? job.updated_at;
-      }
-    });
-
-    if (!latestJobLabel && frameworkJobs[0]?.name.trim()) {
-      latestJobLabel = frameworkJobs[0].name.trim();
-    }
-    if (!latestGeneratedAt && frameworkJobs[0]) {
-      latestGeneratedAt = frameworkJobs[0].updated_at;
-    }
-
-    return {
-      framework,
-      jobsChecked: frameworkJobs.length,
-      jobsWithMetrics,
-      metricKeys: Array.from(metricKeys).sort((left, right) => left.localeCompare(right)),
-      latestJobLabel,
-      latestGeneratedAt
-    };
-  });
-
-
 type RuntimeApiKeyExpiryTier = 'none' | 'healthy' | 'within_7_days' | 'within_3_days' | 'expired';
 
 type RuntimeApiKeyExpiryStatus = {
@@ -486,21 +331,8 @@ export default function RuntimeSettingsPage() {
   const [runtimeControlDraft, setRuntimeControlDraft] = useState<RuntimeControlDraft>(() =>
     buildDefaultRuntimeControlDraft()
   );
-  const [summaryLoading, setSummaryLoading] = useState(true);
-  const [llmConfigLoading, setLlmConfigLoading] = useState(true);
-  const [llmConfigView, setLlmConfigView] = useState<LlmConfigView | null>(null);
-  const [llmConfigError, setLlmConfigError] = useState('');
   const runtimeConfigurationRef = useRef<HTMLDivElement | null>(null);
   const readinessSectionRef = useRef<HTMLDivElement | null>(null);
-  const [inferenceSourceSummary, setInferenceSourceSummary] = useState<
-    Array<{ key: InferenceRealitySummaryKey; count: number }>
-  >([]);
-  const [trainingModeSummary, setTrainingModeSummary] = useState<Array<{ key: string; count: number }>>([]);
-  const [trainingJobLabels, setTrainingJobLabels] = useState<Record<string, string>>({});
-  const [frameworkMetricKeySummary, setFrameworkMetricKeySummary] = useState<FrameworkMetricKeySummary[]>(
-    () => buildEmptyFrameworkMetricKeySummary()
-  );
-  const [metricsRetentionSummary, setMetricsRetentionSummary] = useState<RuntimeMetricsRetentionSummary | null>(null);
   const [frameworkFilter, setFrameworkFilter] = useState<'all' | ModelFramework>('all');
 
   const describeErrorKind = useCallback((kind: RuntimeConnectivityRecord['error_kind']) => {
@@ -1279,92 +1111,12 @@ export default function RuntimeSettingsPage() {
     }
   };
 
-  const refreshExecutionSummary = async () => {
-    setSummaryLoading(true);
-    try {
-      const [runs, jobs, retention] = await Promise.all([
-        api.listInferenceRuns(),
-        api.listTrainingJobs(),
-        api.getRuntimeMetricsRetentionSummary()
-      ]);
-      const sourceCounter = new Map<InferenceRealitySummaryKey, number>();
-      runs.forEach((run) => {
-        const reality = detectInferenceRunReality(run);
-        const key: InferenceRealitySummaryKey = reality.fallback ? 'fallback' : 'real';
-        sourceCounter.set(key, (sourceCounter.get(key) ?? 0) + 1);
-      });
-
-      const modeCounter = new Map<string, number>();
-      jobs.forEach((job) => {
-        const mode = job.execution_mode || 'unknown';
-        modeCounter.set(mode, (modeCounter.get(mode) ?? 0) + 1);
-      });
-      setTrainingJobLabels(
-        Object.fromEntries(
-          jobs.map((job) => [job.id, job.name.trim()])
-        )
-      );
-
-      setInferenceSourceSummary(
-        Array.from(sourceCounter.entries())
-          .sort((left, right) => right[1] - left[1])
-          .map(([key, count]) => ({ key, count }))
-      );
-      setTrainingModeSummary(
-        Array.from(modeCounter.entries())
-          .sort((left, right) => right[1] - left[1])
-          .map(([key, count]) => ({ key, count }))
-      );
-      const recentJobsByFramework = collectRecentMetricSummaryJobs(jobs);
-      const metricDetailJobs = Array.from(recentJobsByFramework.values()).flat();
-      const metricDetailResults = await Promise.allSettled(
-        metricDetailJobs.map((job) => api.getTrainingJobDetail(job.id))
-      );
-      const artifactSummaryByJobId = new Map<string, TrainingArtifactSummary | null>();
-
-      metricDetailResults.forEach((result, index) => {
-        artifactSummaryByJobId.set(
-          metricDetailJobs[index].id,
-          result.status === 'fulfilled' ? result.value.artifact_summary : null
-        );
-      });
-
-      setFrameworkMetricKeySummary(
-        summarizeFrameworkMetricKeys(recentJobsByFramework, artifactSummaryByJobId)
-      );
-      setMetricsRetentionSummary(retention);
-    } catch {
-      setInferenceSourceSummary([]);
-      setTrainingModeSummary([]);
-      setFrameworkMetricKeySummary(buildEmptyFrameworkMetricKeySummary());
-      setMetricsRetentionSummary(null);
-    } finally {
-      setSummaryLoading(false);
-    }
-  };
-
-  const refreshLlmConfigSummary = async () => {
-    setLlmConfigLoading(true);
-    setLlmConfigError('');
-    try {
-      const view = await api.getLlmConfig();
-      setLlmConfigView(view);
-    } catch (llmLoadError) {
-      setLlmConfigView(null);
-      setLlmConfigError((llmLoadError as Error).message);
-    } finally {
-      setLlmConfigLoading(false);
-    }
-  };
-
-  // Run one-time bootstrap pulls for diagnostics and worker/runtime summaries.
+  // Run one-time bootstrap pulls for runtime configuration and readiness.
   useEffect(() => {
     void refresh();
     void refreshRuntimeSettings();
     void refreshRuntimeReadiness();
     void refreshRuntimeModelOptions();
-    void refreshExecutionSummary();
-    void refreshLlmConfigSummary();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1412,10 +1164,8 @@ export default function RuntimeSettingsPage() {
   );
 
   const visibleFrameworks = frameworkFilter === 'all' ? FRAMEWORKS : [frameworkFilter];
-  const reachableCount = checks.filter((item) => item.source === 'reachable').length;
   const unreachableCount = checks.filter((item) => item.source === 'unreachable').length;
   const configuredCount = checks.filter((item) => item.source !== 'not_configured').length;
-  const hasCompletedTrainingJobs = frameworkMetricKeySummary.some((entry) => entry.jobsChecked > 0);
   const runtimeReadinessIssueCount = runtimeReadiness?.issues.length ?? 0;
   const runtimeReadinessErrorCount =
     runtimeReadiness?.issues.filter((item) => item.level === 'error').length ?? 0;
@@ -1528,186 +1278,7 @@ export default function RuntimeSettingsPage() {
     runtimeReadinessCommandGroups,
     t
   ]);
-  const doctrBootstrapFailureIssue = useMemo(
-    () =>
-      runtimeReadiness?.issues.find((issue) => issue.code === 'runtime_bootstrap_failed_doctr') ??
-      null,
-    [runtimeReadiness]
-  );
-  const doctrBootstrapAsset = useMemo(
-    () =>
-      runtimeReadiness?.bootstrap_assets.find((asset) => asset.framework === 'doctr') ?? null,
-    [runtimeReadiness]
-  );
-  const doctrPreseedExpectedFiles = doctrBootstrapAsset?.expected_files ?? [];
-  const doctrPreseedMissingFiles = doctrBootstrapAsset?.missing_files ?? [];
-  const doctrPreseedRuntimeDir =
-    doctrBootstrapAsset?.preseed_dir?.trim() || defaultDoctrPreseedRuntimeDir;
-  const doctrPreseedHostDirHint = resolveDoctrPreseedHostDirHint(doctrPreseedRuntimeDir);
-  const doctrPreseedExpectedFileNames =
-    doctrPreseedExpectedFiles.length > 0
-      ? doctrPreseedExpectedFiles.map((item) => item.name)
-      : defaultDoctrPreseedExpectedFiles;
-  const showDoctrPreseedRecoveryGuide =
-    resolveRuntimeConnectionMode(runtimeDrafts.doctr) === 'local' && Boolean(doctrBootstrapFailureIssue);
-  const runtimeManualTaskItems = useMemo<RuntimeManualTaskItem[]>(() => {
-    const items: RuntimeManualTaskItem[] = [];
-
-    if (llmConfigLoading) {
-      items.push({
-        key: 'llm',
-        title: t('LLM key configuration'),
-        status: 'pending',
-        detail: t('Checking whether a usable LLM API key is already configured.')
-      });
-    } else if (llmConfigError) {
-      items.push({
-        key: 'llm',
-        title: t('LLM key configuration'),
-        status: 'warning',
-        detail: t('Unable to load LLM settings. Verify account/session, then open LLM settings to confirm API key state.'),
-        actionLabel: t('Open LLM Settings'),
-        actionHref: '/settings/llm'
-      });
-    } else {
-      const hasLlmKey = Boolean(llmConfigView?.enabled && llmConfigView?.has_api_key);
-      items.push({
-        key: 'llm',
-        title: t('LLM key configuration'),
-        status: hasLlmKey ? 'ready' : 'action_required',
-        detail: hasLlmKey
-          ? t('LLM key is configured. Conversation and assistant routing can use real provider credentials.')
-          : t('No active LLM API key is configured. Chat and ops bridge may stay in mock/default mode until key is set.'),
-        actionLabel: t('Open LLM Settings'),
-        actionHref: '/settings/llm'
-      });
-    }
-
-    if (checking && checks.length === 0) {
-      items.push({
-        key: 'runtime-endpoint',
-        title: t('Runtime endpoint availability'),
-        status: 'pending',
-        detail: t('Checking runtime endpoint reachability across frameworks.')
-      });
-    } else if (reachableCount > 0) {
-      items.push({
-        key: 'runtime-endpoint',
-        title: t('Runtime endpoint availability'),
-        status: 'ready',
-        detail: t('At least one framework endpoint is reachable. Real runtime execution path is available.')
-      });
-    } else if (configuredCount > 0 && unreachableCount > 0) {
-      items.push({
-        key: 'runtime-endpoint',
-        title: t('Runtime endpoint availability'),
-        status: 'warning',
-        detail: t(
-          'Endpoint is configured but currently unreachable. Fix connectivity, or keep safety guards enabled before production runs.'
-        ),
-        actionLabel: t('Open Runtime Settings'),
-        actionHref: '/settings/runtime'
-      });
-    } else {
-      items.push({
-        key: 'runtime-endpoint',
-        title: t('Runtime endpoint availability'),
-        status: 'action_required',
-        detail: t(
-          'No reachable runtime endpoint. You can continue with local execution, but production runs require either a reachable endpoint or a verified local environment.'
-        ),
-        actionLabel: t('Open Runtime Settings'),
-        actionHref: '/settings/runtime'
-      });
-    }
-
-    if (runtimeReadinessLoading) {
-      items.push({
-        key: 'local-runtime',
-        title: t('Local runtime dependencies'),
-        status: 'pending',
-        detail: t('Checking local runtime environment (Python and command configuration).')
-      });
-    } else if (runtimeReadinessError) {
-      items.push({
-        key: 'local-runtime',
-        title: t('Local runtime dependencies'),
-        status: 'warning',
-        detail: t('Runtime readiness check failed. Resolve connectivity/auth issue first, then rerun readiness.')
-      });
-    } else if (runtimeReadiness) {
-      const localIssues = runtimeReadiness.issues.filter(
-        (issue) =>
-          issue.code.includes('python') ||
-          issue.code.includes('module') ||
-          issue.code.includes('local_command') ||
-          issue.code.includes('model_path') ||
-          issue.code.includes('bootstrap_failed')
-      );
-      const localErrors = localIssues.filter((issue) => issue.level === 'error').length;
-      const localWarnings = localIssues.filter((issue) => issue.level === 'warning').length;
-      if (localErrors > 0) {
-        items.push({
-          key: 'local-runtime',
-          title: t('Local runtime dependencies'),
-          status: 'action_required',
-          detail: t('Local runtime has blocking issues ({errors} errors / {warnings} warnings). Run fix commands in readiness panel.', {
-            errors: localErrors,
-            warnings: localWarnings
-          })
-        });
-      } else if (localWarnings > 0) {
-        items.push({
-          key: 'local-runtime',
-          title: t('Local runtime dependencies'),
-          status: 'warning',
-          detail: t('Local runtime has follow-up warnings ({warnings}). Recommended to fix before production runs.', {
-            warnings: localWarnings
-          })
-        });
-      } else {
-        items.push({
-          key: 'local-runtime',
-          title: t('Local runtime dependencies'),
-          status: 'ready',
-          detail: t('No blocking local runtime dependency issues detected.')
-        });
-      }
-    }
-
-    return items;
-  }, [
-    checking,
-    checks.length,
-    configuredCount,
-    llmConfigError,
-    llmConfigLoading,
-    llmConfigView,
-    reachableCount,
-    runtimeReadiness,
-    runtimeReadinessError,
-    runtimeReadinessLoading,
-    t,
-    unreachableCount
-  ]);
-  const runtimeManualTaskPendingCount = runtimeManualTaskItems.filter((item) => item.status === 'pending').length;
-  const runtimeManualTaskBlockingCount = runtimeManualTaskItems.filter((item) => item.status === 'action_required').length;
-  const runtimeManualTaskWarningCount = runtimeManualTaskItems.filter((item) => item.status === 'warning').length;
-  const runtimeManualTaskStatusTone = (
-    status: RuntimeManualTaskItem['status']
-  ): 'success' | 'warning' | 'danger' | 'neutral' => {
-    if (status === 'ready') {
-      return 'success';
-    }
-    if (status === 'action_required') {
-      return 'danger';
-    }
-    if (status === 'warning') {
-      return 'warning';
-    }
-    return 'neutral';
-  };
-  const runtimeReadinessReady = runtimeReadiness?.status === 'ready' && runtimeManualTaskBlockingCount === 0;
+  const runtimeReadinessReady = runtimeReadiness?.status === 'ready';
   const runtimeLocalConfigPersisted = runtimeAllFrameworksLocalMode && !runtimeHasUnsavedChanges;
   const configuredLocalPythonBin = runtimeControlDraft.python_bin.trim() || runtimeRecommendedLocalPythonBin;
   const localQuickStartSteps = useMemo(
@@ -1987,16 +1558,10 @@ export default function RuntimeSettingsPage() {
   void [
     Input,
     Textarea,
-    describeTrainingExecutionSummaryLabel,
-    doctrPreseedRecoveryCommands,
+    recentMetricJobsPerFramework,
     resolveRuntimeApiKeyExpiryStatus,
     runtimeModelOptionsLoading,
     runtimeModelOptionsError,
-    summaryLoading,
-    inferenceSourceSummary,
-    trainingModeSummary,
-    trainingJobLabels,
-    metricsRetentionSummary,
     frameworkModelOptions,
     frameworkVersionOptions,
     updateRuntimeDraftModelApiKeyExpiresAt,
@@ -2009,15 +1574,39 @@ export default function RuntimeSettingsPage() {
     updateRuntimeControlDraft,
     clearRuntimeSettingsConfig,
     autoConfigureRuntimeSettingsConfig,
-    hasCompletedTrainingJobs,
-    doctrPreseedMissingFiles,
-    doctrPreseedHostDirHint,
-    doctrPreseedExpectedFileNames,
-    showDoctrPreseedRecoveryGuide,
-    runtimeManualTaskPendingCount,
-    runtimeManualTaskWarningCount,
-    runtimeManualTaskStatusTone
+    unreachableCount,
+    runtimeReadinessBadgeTone
   ];
+
+  const heroPrimaryAction =
+    runtimePageMode === 'setup'
+      ? {
+          label: t('Go to readiness'),
+          onClick: () => {
+            setRuntimePageMode('readiness');
+            focusReadinessSection();
+            void refreshRuntimeReadiness();
+          },
+          disabled: runtimeReadinessLoading
+        }
+      : runtimePageMode === 'readiness'
+        ? {
+            label: runtimeReadinessLoading ? t('Checking...') : t('Refresh readiness'),
+            onClick: () => {
+              setRuntimePageMode('readiness');
+              focusReadinessSection();
+              void refreshRuntimeReadiness();
+            },
+            disabled: runtimeReadinessLoading
+          }
+        : {
+            label: checking ? t('Checking...') : t('Refresh frameworks'),
+            onClick: () => {
+              setRuntimePageMode('advanced');
+              void refresh();
+            },
+            disabled: checking
+          };
 
   const heroSection = (
     <PageHeader
@@ -2034,15 +1623,7 @@ export default function RuntimeSettingsPage() {
           </Badge>
         </div>
       }
-      primaryAction={{
-        label: runtimeReadinessLoading ? t('Checking...') : t('Run readiness check'),
-        onClick: () => {
-          setRuntimePageMode('readiness');
-          focusReadinessSection();
-          void refreshRuntimeReadiness();
-        },
-        disabled: runtimeReadinessLoading
-      }}
+      primaryAction={heroPrimaryAction}
       secondaryActions={
         <div className="row gap wrap">
           <Button
@@ -2069,23 +1650,9 @@ export default function RuntimeSettingsPage() {
           >
             {t('Advanced')}
           </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => void saveRuntimeSettingsConfig()}
-            disabled={
-              runtimeSettingsLoading ||
-              runtimeSettingsSaving ||
-              runtimeSettingsClearing ||
-              runtimeSettingsAutoConfiguring
-            }
-          >
-            {runtimeSettingsSaving ? t('Saving...') : t('Save runtime settings')}
-          </Button>
         </div>
       }
-    />
+      />
   );
 
   if (loading) {
@@ -2124,67 +1691,68 @@ export default function RuntimeSettingsPage() {
           description={error}
         />
       ) : null}
-
       <WorkspaceWorkbench
         toolbar={
-          <FilterToolbar
-            filters={
-              <>
-                <label className="stack tight">
-                  <small className="muted">{t('Framework')}</small>
-                  <Select
-                    value={frameworkFilter}
-                    onChange={(event) =>
-                      setFrameworkFilter(event.target.value as 'all' | ModelFramework)
-                    }
+          runtimePageMode === 'advanced' ? (
+            <FilterToolbar
+              filters={
+                <>
+                  <label className="stack tight">
+                    <small className="muted">{t('Framework')}</small>
+                    <Select
+                      value={frameworkFilter}
+                      onChange={(event) =>
+                        setFrameworkFilter(event.target.value as 'all' | ModelFramework)
+                      }
+                    >
+                      <option value="all">{t('all')}</option>
+                      <option value="paddleocr">{t('paddleocr')}</option>
+                      <option value="doctr">{t('doctr')}</option>
+                      <option value="yolo">{t('yolo')}</option>
+                    </Select>
+                  </label>
+                  <div className="stack tight">
+                    <small className="muted">{t('Configured')}</small>
+                    <Badge tone="neutral">
+                      {configuredCount} / {FRAMEWORKS.length}
+                    </Badge>
+                  </div>
+                </>
+              }
+              actions={
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void refresh()}
+                    disabled={checking}
                   >
-                    <option value="all">{t('all')}</option>
-                    <option value="paddleocr">{t('paddleocr')}</option>
-                    <option value="doctr">{t('doctr')}</option>
-                    <option value="yolo">{t('yolo')}</option>
-                  </Select>
-                </label>
-                <div className="stack tight">
-                  <small className="muted">{t('Configured')}</small>
-                  <Badge tone="neutral">
-                    {configuredCount} / {FRAMEWORKS.length}
-                  </Badge>
-                </div>
-              </>
-            }
-            actions={
-              <>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void refresh()}
-                  disabled={checking}
-                >
-                  {checking && frameworkFilter === 'all' ? t('Checking...') : t('Refresh All')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    void refresh(frameworkFilter === 'all' ? undefined : frameworkFilter)
-                  }
-                  disabled={checking || frameworkFilter === 'all'}
-                >
-                  {checking && frameworkFilter !== 'all' ? t('Checking...') : t('Check Selected')}
-                </Button>
-              </>
-            }
-          />
+                    {checking && frameworkFilter === 'all' ? t('Checking...') : t('Refresh All')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      void refresh(frameworkFilter === 'all' ? undefined : frameworkFilter)
+                    }
+                    disabled={checking || frameworkFilter === 'all'}
+                  >
+                    {checking && frameworkFilter !== 'all' ? t('Checking...') : t('Check Selected')}
+                  </Button>
+                </>
+              }
+            />
+          ) : null
         }
         main={
           <div className="workspace-main-stack">
             {runtimePageMode === 'setup' ? (
               <div ref={runtimeConfigurationRef} className="stack">
                 <SectionCard
-                  title={t('Setup path')}
-                  description={t('Choose the local path first. Keep profile activation and manual overrides collapsed unless you need them.')}
+                  title={t('Recommended local runtime')}
+                  description={t('Set the local Python path, then apply the draft.')}
                   actions={
                     <Button
                       type="button"
@@ -2205,24 +1773,27 @@ export default function RuntimeSettingsPage() {
                   <div className="stack">
                     <Panel as="section" className="workspace-record-item stack tight" tone="soft">
                       <div className="row between gap wrap align-center">
-                        <strong>{t('Local quick setup')}</strong>
+                        <strong>{t('Local runtime')}</strong>
                         <Badge tone={runtimeLocalConfigPersisted ? 'success' : 'info'}>
                           {runtimeLocalConfigPersisted ? t('ready') : t('Recommended')}
                         </Badge>
                       </div>
                       <small className="muted">
-                        {t('Single-machine path. Leave endpoint fields empty and use the runtime Python shown above.')}
+                        {t('Use the single-machine path and the runtime Python shown above.')}
                       </small>
                       <small className="muted">
                         {t('Runtime Python')}: <code>{configuredLocalPythonBin}</code>
                       </small>
-                      <WorkspaceActionStack>{renderLocalQuickStartAction()}</WorkspaceActionStack>
+                      <div className="row gap wrap">
+                        {renderLocalQuickStartAction()}
+                        <ButtonLink to="/inference/validate" size="sm" variant="ghost">
+                          {t('Open Validation')}
+                        </ButtonLink>
+                      </div>
                     </Panel>
 
                     <details className="workspace-details">
-                      <summary>
-                        {t('Other setup paths')} · {t('profiles')} / {t('manual overrides')}
-                      </summary>
+                      <summary>{t('Advanced setup')} · {t('profiles')} / {t('manual overrides')}</summary>
                       <div className="stack">
                         <Panel as="section" className="workspace-record-item stack tight" tone="soft">
                           <div className="row between gap wrap align-center">
@@ -2244,7 +1815,7 @@ export default function RuntimeSettingsPage() {
                             </Badge>
                           </div>
                           <small className="muted">
-                            {t('Use this when deployment/runtime profiles are already prepared by your environment or ops team.')}
+                            {t('Use this when deployment profiles are already prepared.')}
                           </small>
                           <label className="stack tight">
                             <small className="muted">{t('Deployment runtime profile')}</small>
@@ -2274,7 +1845,7 @@ export default function RuntimeSettingsPage() {
                               {t('Source')}: {selectedRuntimeProfile?.source || t('n/a')}
                             </small>
                           </div>
-                          <WorkspaceActionStack>
+                          <div className="row gap wrap">
                             <Button
                               type="button"
                               variant="secondary"
@@ -2291,7 +1862,7 @@ export default function RuntimeSettingsPage() {
                             >
                               {runtimeProfileActivating ? t('Switching...') : t('Activate profile')}
                             </Button>
-                          </WorkspaceActionStack>
+                          </div>
                         </Panel>
 
                         <Panel as="section" className="workspace-record-item stack tight" tone="soft">
@@ -2306,7 +1877,7 @@ export default function RuntimeSettingsPage() {
                             </Badge>
                           </div>
                           <small className="muted">
-                            {t('Manual mode for endpoint, auth, and local overrides when the guided paths are not enough.')}
+                            {t('Manual mode for endpoint, auth, and local overrides.')}
                           </small>
                           <div className="stack tight">
                             <small className="muted">
@@ -2318,7 +1889,29 @@ export default function RuntimeSettingsPage() {
                           </div>
                         </Panel>
                       </div>
+
                     </details>
+                    <div className="row gap wrap align-center">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void saveRuntimeSettingsConfig()}
+                        disabled={
+                          runtimeSettingsLoading ||
+                          runtimeSettingsSaving ||
+                          runtimeSettingsClearing ||
+                          runtimeSettingsAutoConfiguring
+                        }
+                      >
+                        {runtimeSettingsSaving ? t('Saving...') : t('Save runtime settings')}
+                      </Button>
+                      {runtimeHasUnsavedChanges ? (
+                        <Badge tone="warning">{t('Unsaved edits')}</Badge>
+                      ) : (
+                        <Badge tone="success">{t('Saved draft')}</Badge>
+                      )}
+                    </div>
                   </div>
                 </SectionCard>
               </div>
@@ -2334,45 +1927,13 @@ export default function RuntimeSettingsPage() {
                   <StateBlock
                     variant="loading"
                     title={t('Checking runtime readiness')}
-                    description={t('Checking local runtime environment and framework availability.')}
+                    description={t('Checking local runtime.')}
                   />
                 ) : runtimeReadiness ? (
                   <>
-                    <HealthSummaryPanel
+                    <SectionCard
                       title={t('Runtime readiness')}
-                      description={t('Keep the summary visible by default. Open the technical diagnostics only when you need to fix something.')}
-                      status={
-                        <Badge tone={runtimeReadinessBadgeTone}>
-                          {t('Status')}: {runtimeReadiness.status}
-                        </Badge>
-                      }
-                      items={[
-                        {
-                          label: t('Errors'),
-                          value: runtimeReadinessErrorCount,
-                          tone: runtimeReadinessErrorCount > 0 ? 'danger' : 'success'
-                        },
-                        {
-                          label: t('Warnings'),
-                          value: runtimeReadinessWarningCount,
-                          tone: runtimeReadinessWarningCount > 0 ? 'warning' : 'neutral'
-                        },
-                        {
-                          label: t('Suggestions'),
-                          value: Math.max(
-                            runtimeReadinessIssueCount -
-                              runtimeReadinessErrorCount -
-                              runtimeReadinessWarningCount,
-                            0
-                          ),
-                          tone: 'info'
-                        },
-                        {
-                          label: t('Runtime mode'),
-                          value: runtimeAllFrameworksLocalMode ? t('Local-first') : t('Mixed / endpoint'),
-                          tone: runtimeAllFrameworksLocalMode ? 'info' : 'warning'
-                        }
-                      ]}
+                      description={t('Keep the summary visible. Open diagnostics only when needed.')}
                       actions={
                         <Button
                           type="button"
@@ -2384,7 +1945,28 @@ export default function RuntimeSettingsPage() {
                           {t('Refresh readiness')}
                         </Button>
                       }
-                    />
+                    >
+                      <div className="stack tight">
+                        <div className="row gap wrap align-center">
+                          <Badge tone={runtimeReadinessErrorCount > 0 ? 'danger' : 'success'}>
+                            {t('Errors')}: {runtimeReadinessErrorCount}
+                          </Badge>
+                          <Badge tone={runtimeReadinessWarningCount > 0 ? 'warning' : 'neutral'}>
+                            {t('Warnings')}: {runtimeReadinessWarningCount}
+                          </Badge>
+                          <Badge tone={runtimeAllFrameworksLocalMode ? 'info' : 'warning'}>
+                            {t('Mode')}: {runtimeAllFrameworksLocalMode ? t('Local-first') : t('Mixed / endpoint')}
+                          </Badge>
+                        </div>
+                        <small className="muted">
+                            {runtimeReadinessIssueCount > 0
+                            ? t('{count} open issues remain. Open diagnostics for details.', {
+                                count: runtimeReadinessIssueCount
+                              })
+                            : t('No blocking runtime issues detected.')}
+                        </small>
+                      </div>
+                    </SectionCard>
                     {runtimeReadinessFixCommands.length > 0 || runtimeReadiness.issues.length > 0 ? (
                       <details className="workspace-details">
                         <summary>{t('Technical diagnostics and fix commands')}</summary>
@@ -2521,7 +2103,7 @@ export default function RuntimeSettingsPage() {
               <div className="stack">
                 <SectionCard
                   title={t('Framework inventory')}
-                  description={t('Use the table to see which frameworks are configured, reachable, and ready for endpoint or local execution.')}
+                  description={t('Use the table to see which frameworks are configured and reachable.')}
                   actions={
                     <div className="row gap wrap">
                       <Badge tone="neutral">{t('Visible')}: {visibleFrameworks.length}</Badge>
@@ -2540,7 +2122,7 @@ export default function RuntimeSettingsPage() {
                   <summary>{t('Other setup paths')} · {t('profiles')} / {t('manual overrides')}</summary>
                   <SectionCard
                     title={t('Advanced setup')}
-                    description={t('Keep profile activation and manual overrides here instead of the main setup path.')}
+                    description={t('Keep profile activation and manual overrides here.')}
                   >
                     <small className="muted">{t('Use this lane only when the guided setup is not enough.')}</small>
                   </SectionCard>
@@ -2564,35 +2146,31 @@ export default function RuntimeSettingsPage() {
                     ? t('Refresh readiness and resolve open issues')
                     : t('Review framework inventory and advanced controls')}
               </small>
-              <ActionBar
-                primary={
-                  runtimePageMode === 'setup'
-                    ? renderLocalQuickStartAction('ghost')
-                    : runtimePageMode === 'readiness'
-                      ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => void refreshRuntimeReadiness()}
-                          disabled={runtimeReadinessLoading}
-                        >
-                          {runtimeReadinessLoading ? t('Checking...') : t('Refresh readiness')}
-                        </Button>
-                      )
-                      : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => void refresh()}
-                          disabled={checking}
-                        >
-                          {checking ? t('Checking...') : t('Refresh frameworks')}
-                        </Button>
-                      )
-                }
-              />
+              <div className="row gap wrap">
+                {runtimePageMode === 'setup' ? (
+                  renderLocalQuickStartAction('ghost')
+                ) : runtimePageMode === 'readiness' ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void refreshRuntimeReadiness()}
+                    disabled={runtimeReadinessLoading}
+                  >
+                    {runtimeReadinessLoading ? t('Checking...') : t('Refresh readiness')}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void refresh()}
+                    disabled={checking}
+                  >
+                    {checking ? t('Checking...') : t('Refresh frameworks')}
+                  </Button>
+                )}
+              </div>
             </SectionCard>
 
           </div>

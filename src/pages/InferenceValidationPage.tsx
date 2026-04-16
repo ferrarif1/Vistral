@@ -375,6 +375,28 @@ export default function InferenceValidationPage() {
     return (selectedRun.normalized_output.ocr?.lines ?? []).length === 0;
   }, [selectedRun]);
 
+  const selectedRunNotice = useMemo(() => {
+    if (selectedRunFallbackWarning) {
+      return {
+        tone: 'danger' as const,
+        title: t('Current output is degraded and not from real OCR recognition'),
+        description: selectedRunFallbackWarning.reason
+          ? `${t('Degradation reason')}: ${formatFallbackReasonLabel(selectedRunFallbackWarning.reason)}`
+          : t('Fix runtime or local prediction command configuration before using this result for business decisions.')
+      };
+    }
+
+    if (selectedRunHasEmptyOcrResult) {
+      return {
+        tone: 'warning' as const,
+        title: t('No text recognized or this run produced no real OCR output'),
+        description: t('Check runtime or local command configuration and retry.')
+      };
+    }
+
+    return null;
+  }, [formatFallbackReasonLabel, selectedRunFallbackWarning, selectedRunHasEmptyOcrResult, t]);
+
   const step = useMemo(() => {
     if (!selectedRun) {
       return 0;
@@ -392,16 +414,40 @@ export default function InferenceValidationPage() {
     [attachments]
   );
 
-  const runtimeConnectivityTone = runtimeLoading
-    ? 'neutral'
-    : runtimeChecks.some((check) => check.configured && check.reachable)
-      ? 'success'
-      : 'warning';
-  const runtimeConnectivityLabel = runtimeLoading
-    ? t('Checking runtime')
-    : runtimeChecks.some((check) => check.configured && check.reachable)
-      ? t('Runtime checked')
-      : t('Runtime not confirmed');
+  const runtimeSummary = useMemo(() => {
+    const reachableCount = runtimeChecks.filter((check) => check.configured && check.reachable).length;
+    const configuredCount = runtimeChecks.filter((check) => check.configured).length;
+
+    if (runtimeLoading) {
+      return {
+        tone: 'info' as const,
+        title: t('Checking runtime'),
+        description: t('Checking whether validation can use a reachable endpoint or local runner.')
+      };
+    }
+
+    if (reachableCount > 0) {
+      return {
+        tone: 'success' as const,
+        title: t('Runtime ready'),
+        description: t('At least one framework is reachable. You can run validation now.')
+      };
+    }
+
+    if (configuredCount > 0) {
+      return {
+        tone: 'warning' as const,
+        title: t('Runtime configured'),
+        description: t('The endpoint or local command is not reachable yet.')
+      };
+    }
+
+    return {
+      tone: 'warning' as const,
+      title: t('Runtime not configured'),
+      description: t('Choose local mode or set a runtime endpoint before running validation.')
+    };
+  }, [runtimeChecks, runtimeLoading, t]);
 
   const hasTransientInferenceState = useMemo(
     () =>
@@ -584,9 +630,9 @@ export default function InferenceValidationPage() {
     return (
       <WorkspacePage>
         <PageHeader
-          eyebrow={t('Validation Lane')}
-          title={t('Inference Validation')}
-          description={t('Run one validation pass, inspect the result, and route failures back into dataset workflows.')}
+        eyebrow={t('Validation Lane')}
+        title={t('Inference Validation')}
+        description={t('Run one validation pass and route failures back to data.')}
           primaryAction={{
             label: refreshing ? t('Refreshing...') : t('Refresh'),
             onClick: () => {
@@ -604,17 +650,15 @@ export default function InferenceValidationPage() {
   }
 
   return (
-      <WorkspacePage>
+    <WorkspacePage>
       <PageHeader
         eyebrow={t('Validation Lane')}
         title={t('Inference Validation')}
-        description={t('Validate one input, inspect the result, and route failure samples back into dataset workflows.')}
+        description={t('Run one input, inspect the result, and route failures back to data.')}
         meta={
           <div className="row gap wrap align-center">
             <Badge tone="neutral">{t('Ready inputs')}: {readyAttachmentCount}</Badge>
-            <Badge tone="neutral">{t('Model versions')}: {versions.length}</Badge>
-            <Badge tone="info">{t('Recorded runs')}: {runs.length}</Badge>
-            <Badge tone={runtimeConnectivityTone}>{runtimeConnectivityLabel}</Badge>
+            <Badge tone={runtimeSummary.tone}>{runtimeSummary.title}</Badge>
           </div>
         }
         primaryAction={{
@@ -624,21 +668,6 @@ export default function InferenceValidationPage() {
           },
           disabled: busy || refreshing || !selectedVersionId || !selectedAttachmentId
         }}
-        secondaryActions={
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              loadAll('manual').catch((error) => {
-                setFeedback({ variant: 'error', text: (error as Error).message });
-              });
-            }}
-            disabled={busy || refreshing}
-          >
-            {refreshing ? t('Refreshing...') : t('Refresh')}
-          </Button>
-        }
         />
       <StepIndicator steps={steps} current={step} />
 
@@ -649,22 +678,23 @@ export default function InferenceValidationPage() {
           description={feedback.text}
         />
       ) : null}
-      {selectedRunFallbackWarning ? (
+      {runtimeSummary.tone === 'success' ? null : (
         <InlineAlert
-          tone="danger"
-          title={t('Current output is degraded and not from real OCR recognition')}
-          description={
-            selectedRunFallbackWarning.reason
-              ? `${t('Degradation reason')}: ${formatFallbackReasonLabel(selectedRunFallbackWarning.reason)}`
-              : t('Fix runtime or local prediction command configuration before using this result for business decisions.')
+          tone={runtimeSummary.tone}
+          title={runtimeSummary.title}
+          description={runtimeSummary.description}
+          actions={
+            <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+              {t('Open Runtime Settings')}
+            </ButtonLink>
           }
         />
-      ) : null}
-      {selectedRunHasEmptyOcrResult ? (
+      )}
+      {selectedRunNotice ? (
         <InlineAlert
-          tone="warning"
-          title={t('No text recognized or this run produced no real OCR output')}
-          description={t('Check runtime or local command configuration and retry.')}
+          tone={selectedRunNotice.tone}
+          title={selectedRunNotice.title}
+          description={selectedRunNotice.description}
         />
       ) : null}
 
@@ -674,24 +704,7 @@ export default function InferenceValidationPage() {
             <div className="workspace-toolbar-head">
               <div className="workspace-toolbar-copy">
                 <h3>{t('Validation Controls')}</h3>
-                <small className="muted">
-                  {t('Pick one version and one ready input, then run the validation pass.')}
-                </small>
-              </div>
-              <div className="workspace-toolbar-actions">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    loadAll('manual').catch((error) => {
-                      setFeedback({ variant: 'error', text: (error as Error).message });
-                    });
-                  }}
-                  disabled={busy || refreshing}
-                >
-                  {refreshing ? t('Refreshing...') : t('Refresh')}
-                </Button>
+                <small className="muted">{t('Choose one version and one ready input, then run.')}</small>
               </div>
             </div>
 
@@ -699,7 +712,7 @@ export default function InferenceValidationPage() {
               <StateBlock
                 variant="empty"
                 title={t('No Model Versions Yet')}
-                description={t('Register or train a model version before running validation.')}
+                description={t('Register or train a model version first.')}
                 extra={
                   <ButtonLink to="/models/versions" variant="secondary" size="sm">
                     {t('Open Model Versions')}
@@ -710,10 +723,10 @@ export default function InferenceValidationPage() {
               <StateBlock
                 variant="empty"
                 title={t('No Ready Inputs Yet')}
-                description={t('Upload at least one ready input attachment before running inference.')}
+                description={t('Upload one ready input before running inference.')}
                 extra={
                   <small className="muted">
-                    {t('Use the Inference Inputs uploader below to add an image or document, then rerun validation from this same page.')}
+                    {t('Use the uploader below, then run again from this page.')}
                   </small>
                 }
               />
@@ -790,7 +803,7 @@ export default function InferenceValidationPage() {
               <Card as="article">
                 <WorkspaceSectionHeader
                   title={t('Latest Inference Output')}
-                  description={t('Review execution status, preview image, and normalized output for the selected run.')}
+                  description={t('Review execution status, preview, and normalized output.')}
                   actions={
                     selectedRun ? (
                       <Button
@@ -810,10 +823,10 @@ export default function InferenceValidationPage() {
                   <StateBlock
                     variant="empty"
                     title={t('No Runs Yet')}
-                    description={t('Run inference once to inspect normalized output, execution status, and feedback routing options.')}
+                    description={t('Run inference once to inspect output and feedback routing.')}
                     extra={
                       <small className="muted">
-                        {t('Choose a model version and a ready input above, then click Run Inference.')}
+                        {t('Choose a version and a ready input above, then run.')}
                       </small>
                     }
                   />
@@ -857,11 +870,6 @@ export default function InferenceValidationPage() {
                         t('Using degraded output because runtime endpoint is unavailable.')
                       }
                     />
-                    <div className="row gap wrap">
-                      <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
-                        {t('Open Runtime Settings')}
-                      </ButtonLink>
-                    </div>
                     <Suspense
                       fallback={
                         <StateBlock
@@ -877,7 +885,7 @@ export default function InferenceValidationPage() {
                       />
                     </Suspense>
                     <details className="workspace-details">
-                      <summary>{t('Technical output')}</summary>
+                      <summary>{t('Raw output (advanced)')}</summary>
                       <pre className="code-block">
                         {JSON.stringify(
                           {
@@ -900,7 +908,7 @@ export default function InferenceValidationPage() {
             <div ref={feedbackPanelRef}>
               <SectionCard
                 title={t('Feedback')}
-                description={t('Send one failed sample to a matching dataset. Keep annotation for manual review in the dataset workspace.')}
+                description={t('Send one failed sample to a matching dataset.')}
               >
                 {!selectedRun ? (
                   <StateBlock
@@ -947,7 +955,7 @@ export default function InferenceValidationPage() {
                 </div>
 
                 <details className="workspace-details">
-                  <summary>{t('Advanced feedback options')}</summary>
+                  <summary>{t('Feedback reason')}</summary>
                   <label>
                     {t('Feedback Reason')}
                     <Input
@@ -972,7 +980,7 @@ export default function InferenceValidationPage() {
                 />
                 {selectedRun ? (
                   <small className="muted">
-                    {t('Annotation link keeps queue scope and run metadata in sync.')}
+                    {t('The annotation link keeps queue scope and run metadata in sync.')}
                   </small>
                 ) : null}
               </SectionCard>

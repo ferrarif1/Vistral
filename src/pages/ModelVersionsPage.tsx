@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
-import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { FilterToolbar, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
+import {
+  DetailDrawer,
+  DetailList,
+  FilterToolbar,
+  InlineAlert,
+  PageHeader,
+  SectionCard,
+  StatusTable,
+  type StatusTableColumn
+} from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
-import { Card, Panel } from '../components/ui/Surface';
+import { Card } from '../components/ui/Surface';
 import {
   WorkspacePage,
   WorkspaceSectionHeader,
@@ -19,9 +27,6 @@ import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
 import { bucketRuntimeFallbackReason, runtimeFallbackReasonLabelKey } from '../utils/runtimeFallbackReason';
 
-const versionsVirtualizationThreshold = 14;
-const versionsVirtualRowHeight = 214;
-const versionsVirtualViewportHeight = 640;
 const backgroundRefreshIntervalMs = 6000;
 type LoadMode = 'initial' | 'manual' | 'background';
 
@@ -109,6 +114,7 @@ export default function ModelVersionsPage() {
   const [frameworkFilter, setFrameworkFilter] = useState<'all' | 'yolo' | 'paddleocr' | 'doctr'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'registered' | 'deprecated'>('all');
   const [selectedVersionId, setSelectedVersionId] = useState('');
+  const [versionDetailOpen, setVersionDetailOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -118,7 +124,7 @@ export default function ModelVersionsPage() {
   const [compareVersions, setCompareVersions] = useState<ModelVersionRecord[]>([]);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState('');
-  const [versionToolMode, setVersionToolMode] = useState<'compare' | 'register'>('compare');
+  const [versionToolMode, setVersionToolMode] = useState<'compare' | 'register'>('register');
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>({});
   const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
   const versionsSignatureRef = useRef('');
@@ -356,10 +362,12 @@ export default function ModelVersionsPage() {
   useEffect(() => {
     if (!filteredVersions.length) {
       setSelectedVersionId('');
+      setVersionDetailOpen(false);
       return;
     }
-    if (!selectedVersionId || !filteredVersions.some((version) => version.id === selectedVersionId)) {
-      setSelectedVersionId(filteredVersions[0].id);
+    if (selectedVersionId && !filteredVersions.some((version) => version.id === selectedVersionId)) {
+      setSelectedVersionId('');
+      setVersionDetailOpen(false);
     }
   }, [filteredVersions, selectedVersionId]);
 
@@ -431,6 +439,32 @@ export default function ModelVersionsPage() {
     return Array.from(keys).sort((left, right) => left.localeCompare(right));
   }, [compareVersions]);
 
+  const comparisonColumns = useMemo<StatusTableColumn<string>[]>(() => {
+    const columns: StatusTableColumn<string>[] = [
+      {
+        key: 'metric',
+        header: t('Metric'),
+        width: compareVersions.length > 1 ? '26%' : '32%',
+        cell: (metricKey) => <strong>{metricKey}</strong>
+      }
+    ];
+
+    compareVersions.forEach((version) => {
+      columns.push({
+        key: version.id,
+        header: (
+          <div className="stack tight">
+            <strong>{version.version_name}</strong>
+            <small className="muted">{t(version.framework)}</small>
+          </div>
+        ),
+        cell: (metricKey) => <span>{version.metrics_summary[metricKey] ?? '—'}</span>
+      });
+    });
+
+    return columns;
+  }, [compareVersions, t]);
+
   const selectedVersion = useMemo(
     () => filteredVersions.find((version) => version.id === selectedVersionId) ?? null,
     [filteredVersions, selectedVersionId]
@@ -439,33 +473,38 @@ export default function ModelVersionsPage() {
     ? jobsById.get(selectedVersion.training_job_id) ?? null
     : null;
   const selectedVersionJobInsight = selectedVersionJob ? jobExecutionInsights[selectedVersionJob.id] ?? null : null;
-
-  const describeJobExecutionReality = (job?: TrainingJobRecord | null, insight?: TrainingExecutionInsight | null) => {
-    if (!job) {
-      return t('No training linkage');
-    }
-    if (job.execution_mode !== 'local_command') {
-      return t('Not registerable');
-    }
-    if (!insight) {
-      return jobInsightsLoading ? t('Checking authenticity') : t('Authenticity unknown');
-    }
-    if (insight.reality === 'real') {
-      return t('Real');
-    }
-    if (insight.reality === 'template') {
-      return t('Degraded output');
-    }
-    if (insight.reality === 'simulated') {
-      return t('Degraded output');
-    }
-    return t('Needs verification');
-  };
-  const formatFallbackReasonLabel = (reason: string | null | undefined): string =>
-    t(runtimeFallbackReasonLabelKey(bucketRuntimeFallbackReason(reason)));
-
+  const selectedVersionMetricsPreview = selectedVersion ? buildMetricsPreview(selectedVersion.metrics_summary, 4) : null;
+  const describeJobExecutionReality = useCallback(
+    (job?: TrainingJobRecord | null, insight?: TrainingExecutionInsight | null) => {
+      if (!job) {
+        return t('No training linkage');
+      }
+      if (job.execution_mode !== 'local_command') {
+        return t('Not registerable');
+      }
+      if (!insight) {
+        return jobInsightsLoading ? t('Checking authenticity') : t('Authenticity unknown');
+      }
+      if (insight.reality === 'real') {
+        return t('Real');
+      }
+      if (insight.reality === 'template') {
+        return t('Degraded output');
+      }
+      if (insight.reality === 'simulated') {
+        return t('Degraded output');
+      }
+      return t('Needs verification');
+    },
+    [jobInsightsLoading, t]
+  );
+  const openVersionDetail = useCallback((versionId: string) => {
+    setSelectedVersionId(versionId);
+    setVersionDetailOpen(true);
+  }, []);
   const toggleCompareVersion = (versionId: string) => {
     setCompareError('');
+    setVersionToolMode('compare');
     setCompareIds((current) => {
       if (current.includes(versionId)) {
         return current.filter((item) => item !== versionId);
@@ -476,6 +515,127 @@ export default function ModelVersionsPage() {
       return [...current, versionId];
     });
   };
+  const selectedVersionDetailItems = selectedVersion
+    ? [
+        { label: t('Model'), value: modelsById.get(selectedVersion.model_id)?.name ?? t('Unavailable model record') },
+        { label: t('Task'), value: t(selectedVersion.task_type) },
+        { label: t('Framework'), value: t(selectedVersion.framework) },
+        { label: t('Training job'), value: selectedVersion.training_job_id || t('manual') },
+        { label: t('Created'), value: formatCompactTimestamp(selectedVersion.created_at) },
+        {
+          label: t('Artifact'),
+          value: selectedVersion.artifact_attachment_id ? t('Ready') : t('Pending')
+        }
+      ]
+    : [];
+  const versionTableColumns = useMemo<StatusTableColumn<ModelVersionRecord>[]>(
+    () => [
+      {
+        key: 'version',
+        header: t('Version'),
+        width: '24%',
+        cell: (version) => (
+          <div className="stack tight">
+            <strong>{version.version_name}</strong>
+            <small className="muted">{formatCompactTimestamp(version.created_at)}</small>
+          </div>
+        )
+      },
+      {
+        key: 'lineage',
+        header: t('Lineage'),
+        width: '22%',
+        cell: (version) => {
+          const linkedModel = modelsById.get(version.model_id);
+          const linkedJob = version.training_job_id ? jobsById.get(version.training_job_id) : null;
+          return (
+            <div className="stack tight">
+              <small className="muted">{linkedModel?.name ?? t('Unavailable model record')}</small>
+              <small className="muted">
+                {linkedJob?.name ?? (version.training_job_id ? t('Training job record unavailable') : t('manual'))}
+              </small>
+            </div>
+          );
+        }
+      },
+      {
+        key: 'status',
+        header: t('Status'),
+        width: '18%',
+        cell: (version) => {
+          const linkedJob = version.training_job_id ? jobsById.get(version.training_job_id) : null;
+          const linkedJobInsight = linkedJob ? jobExecutionInsights[linkedJob.id] ?? null : null;
+          return (
+            <div className="stack tight">
+              <StatusTag status={version.status}>{t(version.status)}</StatusTag>
+              <div className="row gap wrap">
+                <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
+                  {version.artifact_attachment_id ? t('Ready') : t('Pending')}
+                </Badge>
+                {linkedJob ? (
+                  <Badge tone={linkedJobInsight?.reality === 'real' ? 'success' : 'warning'}>
+                    {describeJobExecutionReality(linkedJob, linkedJobInsight)}
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+          );
+        }
+      },
+      {
+        key: 'metrics',
+        header: t('Metrics'),
+        width: '24%',
+        cell: (version) => {
+          const metricsPreview = buildMetricsPreview(version.metrics_summary);
+          return (
+            <div className="stack tight">
+              <small className="muted">
+                {metricsPreview.preview
+                  ? `${metricsPreview.preview}${metricsPreview.hiddenCount > 0 ? ` · +${metricsPreview.hiddenCount}` : ''}`
+                  : t('Metrics summary unavailable.')}
+              </small>
+            </div>
+          );
+        }
+      },
+      {
+        key: 'actions',
+        header: t('Actions'),
+        width: '12%',
+        cell: (version) => (
+          <div className="workspace-record-actions">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={(event) => {
+                event.stopPropagation();
+                openVersionDetail(version.id);
+              }}
+            >
+              {selectedVersionId === version.id ? t('Selected') : t('Details')}
+            </Button>
+            <Button
+              type="button"
+              variant={compareIdSet.has(version.id) ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleCompareVersion(version.id);
+              }}
+            >
+              {compareIdSet.has(version.id) ? t('Compared') : t('Compare')}
+            </Button>
+          </div>
+        )
+      }
+    ],
+    [compareIdSet, describeJobExecutionReality, jobExecutionInsights, jobsById, modelsById, openVersionDetail, selectedVersionId, t]
+  );
+
+  const formatFallbackReasonLabel = (reason: string | null | undefined): string =>
+    t(runtimeFallbackReasonLabelKey(bucketRuntimeFallbackReason(reason)));
 
   const registerVersion = async () => {
     if (!modelId || !jobId || !versionName.trim()) {
@@ -512,9 +672,14 @@ export default function ModelVersionsPage() {
   };
 
   const registrationBlocked = models.length === 0 || registerableJobs.length === 0;
-  const shouldVirtualizeVersions = filteredVersions.length > versionsVirtualizationThreshold;
   const hasActiveFilters =
     searchText.trim().length > 0 || taskFilter !== 'all' || frameworkFilter !== 'all' || statusFilter !== 'all';
+  const versionsSummary = {
+    total: sortedVersions.length,
+    visible: filteredVersions.length,
+    registerable: registerableJobs.length,
+    compared: compareIds.length
+  };
 
   const resetFilters = () => {
     setSearchText('');
@@ -523,90 +688,25 @@ export default function ModelVersionsPage() {
     setStatusFilter('all');
   };
 
-  const renderVersionRow = (version: ModelVersionRecord, as: 'div' | 'li' = 'li') => {
-    const linkedModel = modelsById.get(version.model_id);
-    const linkedJob = version.training_job_id ? jobsById.get(version.training_job_id) : null;
-    const linkedJobInsight = linkedJob ? jobExecutionInsights[linkedJob.id] ?? null : null;
-    const metricsPreview = buildMetricsPreview(version.metrics_summary);
-    const selected = selectedVersionId === version.id;
-
-    return (
-      <Panel
-        key={version.id}
-        as={as}
-        className={`workspace-record-item${as === 'div' ? ' virtualized' : ''}${selected ? ' selected' : ''}`}
-        tone={selected ? 'accent' : 'soft'}
-      >
-        <div className="workspace-record-item-top">
-          <div className="workspace-record-summary stack tight">
-            <strong>{version.version_name}</strong>
-            <small className="muted">
-              {linkedModel?.name ?? t('Unavailable model record')} · {t(version.task_type)} · {t(version.framework)} ·{' '}
-              {t('Created')}: {formatCompactTimestamp(version.created_at)}
-            </small>
-          </div>
-          <div className="workspace-record-actions">
-            <StatusTag status={version.status}>{t(version.status)}</StatusTag>
-            <Button
-              type="button"
-              variant={selected ? 'secondary' : 'ghost'}
-              size="sm"
-              onClick={() => setSelectedVersionId(version.id)}
-            >
-              {selected ? t('Selected') : t('Select')}
-            </Button>
-            <Button
-              type="button"
-              variant={compareIdSet.has(version.id) ? 'secondary' : 'ghost'}
-              size="sm"
-              onClick={() => toggleCompareVersion(version.id)}
-            >
-              {compareIdSet.has(version.id) ? t('Compared') : t('Compare')}
-            </Button>
-            {version.training_job_id ? (
-              <ButtonLink
-                to={buildScopedTrainingJobDetailPath(version.training_job_id, linkedJob)}
-                variant="secondary"
-                size="sm"
-              >
-                {t('Open Job')}
-              </ButtonLink>
-            ) : null}
-          </div>
-        </div>
-        <p className="line-clamp-2">
-          {metricsPreview.preview
-            ? `${t('metrics')}: ${metricsPreview.preview}${
-                metricsPreview.hiddenCount > 0 ? ` · +${metricsPreview.hiddenCount}` : ''
-              }`
-            : t('Metrics summary unavailable.')}
-        </p>
-        <div className="row gap wrap">
-          <Badge tone="neutral">
-            {t('model')}: {linkedModel?.name ?? t('Unavailable model record')}
-          </Badge>
-          <Badge tone="info">
-            {t('job')}: {linkedJob?.name ?? (version.training_job_id ? t('Training job record unavailable') : t('manual'))}
-          </Badge>
-          <Badge tone={version.artifact_attachment_id ? 'success' : 'warning'}>
-            {version.artifact_attachment_id ? `${t('artifact')}: ${t('Ready')}` : t('No artifact yet')}
-          </Badge>
-          {linkedJob ? (
-            <Badge tone={linkedJobInsight?.reality === 'real' ? 'success' : 'warning'}>
-              {t('authenticity')}: {describeJobExecutionReality(linkedJob, linkedJobInsight)}
-            </Badge>
-          ) : null}
-        </div>
-      </Panel>
-    );
-  };
-
   return (
     <WorkspacePage>
       <PageHeader
         eyebrow={t('Version Registry')}
         title={t('Model Versions')}
-        description={t('Review version inventory first. Comparison and registration stay as secondary tools.')}
+        description={t('Review versions first. Compare and register from the side panel.')}
+        meta={
+          <div className="row gap wrap align-center">
+            <Badge tone="neutral">
+              {t('Total')}: {versionsSummary.total}
+            </Badge>
+            <Badge tone="info">
+              {t('Visible')}: {versionsSummary.visible}
+            </Badge>
+            <Badge tone={versionsSummary.registerable > 0 ? 'success' : 'warning'}>
+              {t('Registerable')}: {versionsSummary.registerable}
+            </Badge>
+          </div>
+        }
         primaryAction={{
           label: loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh'),
           onClick: () => {
@@ -687,12 +787,35 @@ export default function ModelVersionsPage() {
                 </label>
               </>
             }
+            summary={
+              hasActiveFilters
+                ? t('{count} versions visible after filters.', { count: versionsSummary.visible })
+                : t('Browse the inventory, then use the side panel.')
+            }
             actions={
-              hasActiveFilters ? (
-                <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
-                  {t('Clear filters')}
+              <div className="row gap wrap">
+                <Button
+                  type="button"
+                  variant={versionToolMode === 'compare' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => setVersionToolMode('compare')}
+                >
+                  {t('Compare')}
                 </Button>
-              ) : undefined
+                <Button
+                  type="button"
+                  variant={versionToolMode === 'register' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => setVersionToolMode('register')}
+                >
+                  {t('Register')}
+                </Button>
+                {hasActiveFilters ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                    {t('Clear filters')}
+                  </Button>
+                ) : null}
+              </div>
             }
           />
         }
@@ -701,11 +824,15 @@ export default function ModelVersionsPage() {
             <Card as="article">
               <WorkspaceSectionHeader
                 title={t('Version Inventory')}
-                description={t('Review registered outputs, metrics, and provenance in one list.')}
+                description={t('Select a row for details. Compare and register stay secondary.')}
               />
 
               {loading ? (
-                <StateBlock variant="loading" title={t('Loading Versions')} description={t('Fetching model version list.')} />
+                <StateBlock
+                  variant="loading"
+                  title={t('Loading Versions')}
+                  description={t('Fetching model version list.')}
+                />
               ) : filteredVersions.length === 0 ? (
                 <StateBlock
                   variant="empty"
@@ -727,188 +854,76 @@ export default function ModelVersionsPage() {
                     )
                   }
                 />
-              ) : shouldVirtualizeVersions ? (
-                <VirtualList
-                  items={filteredVersions}
-                  itemHeight={versionsVirtualRowHeight}
-                  height={versionsVirtualViewportHeight}
-                  itemKey={(version) => version.id}
-                  listClassName="workspace-record-list"
-                  rowClassName="workspace-record-row"
-                  ariaLabel={t('Version Inventory')}
-                  renderItem={(version) => renderVersionRow(version, 'div')}
-                />
               ) : (
-                <ul className="workspace-record-list">
-                  {filteredVersions.map((version) => renderVersionRow(version))}
-                </ul>
+                <StatusTable
+                  rows={filteredVersions}
+                  columns={versionTableColumns}
+                  getRowKey={(version) => version.id}
+                  onRowClick={(version) => openVersionDetail(version.id)}
+                  rowClassName={(version) => (selectedVersionId === version.id ? 'selected' : undefined)}
+                  emptyTitle={t('No Versions')}
+                  emptyDescription={t('No versions match the current filters.')}
+                />
               )}
             </Card>
           </div>
         }
         side={
           <div className="workspace-inspector-rail">
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Selected Version')}
-                description={t('Inspector panel for the selected version lineage and status.')}
-              />
-              {!selectedVersion ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('No selection')}
-                  description={t('Select one version from the inventory to inspect details.')}
-                />
-              ) : (
-                <>
-                  <Panel as="section" className="stack tight" tone="soft">
-                    <div className="row between gap wrap align-center">
-                      <strong>{selectedVersion.version_name}</strong>
-                      <StatusTag status={selectedVersion.status}>{t(selectedVersion.status)}</StatusTag>
-                    </div>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {modelsById.get(selectedVersion.model_id)?.name ?? t('Unavailable model record')}
-                      </Badge>
-                      <Badge tone="info">{t(selectedVersion.framework)}</Badge>
-                      <Badge tone="neutral">{t(selectedVersion.task_type)}</Badge>
-                    </div>
-                    <small className="muted">
-                      {t('Created')}: {formatCompactTimestamp(selectedVersion.created_at)}
-                    </small>
-                  </Panel>
-                  <div className="workspace-keyline-list">
-                    <div className="workspace-keyline-item">
-                      <span>{t('Model')}</span>
-                      <small>{modelsById.get(selectedVersion.model_id)?.name ?? '—'}</small>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Training job')}</span>
-                      <small>{selectedVersion.training_job_id || '—'}</small>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Authenticity')}</span>
-                      <strong>{describeJobExecutionReality(selectedVersionJob, selectedVersionJobInsight)}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Artifact')}</span>
-                      <strong>{selectedVersion.artifact_attachment_id ? t('Ready') : t('Pending')}</strong>
-                    </div>
-                  </div>
-                  {selectedVersionJob && selectedVersionJob.execution_mode === 'local_command' && selectedVersionJobInsight?.reality !== 'real' ? (
-                    <StateBlock
-                      variant="empty"
-                      title={t('Version linked to non-real training output')}
-                      description={
-                        selectedVersionJobInsight?.fallbackReason
-                          ? t(
-                              'Linked training run contains degraded-output evidence. Review training job detail before production usage. Reason: {reason}',
-                              { reason: formatFallbackReasonLabel(selectedVersionJobInsight.fallbackReason) }
-                            )
-                          : t(
-                              'Linked training run contains non-real execution evidence. Review training job detail before production usage.'
-                            )
-                      }
-                    />
-                  ) : null}
-                  <div className="workspace-action-cluster">
-                    {selectedVersion.training_job_id ? (
-                      <ButtonLink
-                        to={buildScopedTrainingJobDetailPath(
-                          selectedVersion.training_job_id,
-                          jobsById.get(selectedVersion.training_job_id) ?? null
-                        )}
-                        variant="secondary"
-                        size="sm"
-                        block
-                      >
-                        {t('Open Training Job')}
-                      </ButtonLink>
-                    ) : null}
-                  </div>
-                </>
-              )}
-            </Card>
-
             <SectionCard
-              title={t('Version tools')}
-              description={t('Switch between comparison and registration without mixing their workflows.')}
+              title={versionToolMode === 'compare' ? t('Compare versions') : t('Register version')}
+              description={
+                versionToolMode === 'compare'
+                  ? t('Pick up to two versions and inspect metric differences.')
+                  : t('Register a verified completed job as a version.')
+              }
               actions={
-                <div className="row gap wrap">
-                  <Button
-                    type="button"
-                    variant={versionToolMode === 'compare' ? 'secondary' : 'ghost'}
-                    size="sm"
-                    onClick={() => setVersionToolMode('compare')}
-                  >
-                    {t('Compare')}
+                versionToolMode === 'compare' && compareIds.length > 0 ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setCompareIds([])}>
+                    {t('Clear compare')}
                   </Button>
-                  <Button
-                    type="button"
-                    variant={versionToolMode === 'register' ? 'secondary' : 'ghost'}
-                    size="sm"
-                    onClick={() => setVersionToolMode('register')}
-                  >
-                    {t('Register')}
-                  </Button>
-                </div>
+                ) : versionToolMode === 'register' ? (
+                  <ButtonLink to="/training/jobs" variant="ghost" size="sm">
+                    {t('Open Training Jobs')}
+                  </ButtonLink>
+                ) : null
               }
             >
               {versionToolMode === 'compare' ? (
                 <div className="stack">
-                  <small className="muted">
-                    {t('Pick up to two versions from inventory, then inspect metrics and lineage here.')}
-                  </small>
+                  {compareIds.length > 0 ? (
+                    <div className="row gap wrap">
+                      {compareVersions.map((version) => (
+                        <Badge key={version.id} tone="info">
+                          {version.version_name}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
                   {compareError ? (
                     <StateBlock variant="error" title={t('Comparison unavailable')} description={compareError} />
                   ) : compareLoading ? (
                     <StateBlock
                       variant="loading"
                       title={t('Loading comparison')}
-                      description={t('Fetching selected version details.')}
+                      description={t('Fetching details.')}
                     />
                   ) : compareVersions.length === 0 ? (
                     <StateBlock
                       variant="empty"
                       title={t('Select versions to compare')}
-                      description={t('Use the Compare action in the inventory list.')}
+                      description={t('Use Compare in the table to add one or two versions.')}
+                    />
+                  ) : comparisonMetricKeys.length > 0 ? (
+                    <StatusTable
+                      rows={comparisonMetricKeys}
+                      columns={comparisonColumns}
+                      getRowKey={(metricKey) => metricKey}
+                      emptyTitle={t('No comparable metrics')}
+                      emptyDescription={t('The selected versions do not expose comparable metrics yet.')}
                     />
                   ) : (
-                    <div className="stack">
-                      <div className="row gap wrap">
-                        {compareVersions.map((version) => (
-                          <Badge key={version.id} tone="info">
-                            {version.version_name}
-                          </Badge>
-                        ))}
-                      </div>
-                      {comparisonMetricKeys.length > 0 ? (
-                        <div className="workspace-record-list compact">
-                          {comparisonMetricKeys.map((metricKey) => (
-                            <Panel key={metricKey} as="div" className="workspace-record-item compact" tone="soft">
-                              <div className="row between gap wrap align-center">
-                                <strong>{metricKey}</strong>
-                                {compareVersions.length === 2 ? (
-                                  <Badge tone="neutral">
-                                    {t('delta')}: {compareVersions[0].metrics_summary[metricKey] ?? '—'} vs{' '}
-                                    {compareVersions[1].metrics_summary[metricKey] ?? '—'}
-                                  </Badge>
-                                ) : null}
-                              </div>
-                              <div className="row gap wrap">
-                                {compareVersions.map((version) => (
-                                  <Badge key={`${version.id}-${metricKey}`} tone="info">
-                                    {version.version_name}: {version.metrics_summary[metricKey] ?? '—'}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </Panel>
-                          ))}
-                        </div>
-                      ) : (
-                        <small className="muted">{t('Selected versions do not expose comparable metric keys yet.')}</small>
-                      )}
-                    </div>
+                    <small className="muted">{t('No comparable metric keys are exposed yet.')}</small>
                   )}
                 </div>
               ) : registrationBlocked ? (
@@ -945,7 +960,7 @@ export default function ModelVersionsPage() {
                   {blockedCompletedJobs.length > 0 ? (
                     <Badge tone="warning">
                       {t(
-                        '{count} completed jobs are hidden because they were not completed through local execution path.',
+                        '{count} completed jobs are hidden because they were not verified through the local path.',
                         { count: blockedCompletedJobs.length }
                       )}
                     </Badge>
@@ -993,7 +1008,7 @@ export default function ModelVersionsPage() {
                   </div>
 
                   <small className="muted">
-                    {t('Registration keeps authenticity checks on. Jobs with degraded output are blocked by default.')}
+                    {t('Authenticity checks stay on. Degraded jobs are blocked.')}
                   </small>
 
                   <Button type="button" onClick={registerVersion} disabled={submitting} block>
@@ -1005,6 +1020,81 @@ export default function ModelVersionsPage() {
           </div>
         }
       />
+
+      <DetailDrawer
+        open={versionDetailOpen && Boolean(selectedVersion)}
+        onClose={() => setVersionDetailOpen(false)}
+        title={selectedVersion ? selectedVersion.version_name : t('Version detail')}
+        description={
+          selectedVersion
+            ? t('Review lineage, metrics, and artifact readiness.')
+            : t('Select a version from the inventory to inspect details.')
+        }
+        actions={
+          selectedVersion?.training_job_id ? (
+            <ButtonLink
+              to={buildScopedTrainingJobDetailPath(
+                selectedVersion.training_job_id,
+                jobsById.get(selectedVersion.training_job_id) ?? null
+              )}
+              variant="secondary"
+              size="sm"
+            >
+              {t('Open Training Job')}
+            </ButtonLink>
+          ) : null
+        }
+      >
+        {selectedVersion ? (
+          <>
+            <div className="row gap wrap">
+              <StatusTag status={selectedVersion.status}>{t(selectedVersion.status)}</StatusTag>
+              <Badge tone="neutral">
+                {modelsById.get(selectedVersion.model_id)?.name ?? t('Unavailable model record')}
+              </Badge>
+              <Badge tone="info">{t(selectedVersion.task_type)}</Badge>
+              <Badge tone="info">{t(selectedVersion.framework)}</Badge>
+            </div>
+            <DetailList items={selectedVersionDetailItems} />
+            {selectedVersionJob && selectedVersionJob.execution_mode === 'local_command' && selectedVersionJobInsight?.reality !== 'real' ? (
+              <StateBlock
+                variant="empty"
+                title={t('Version linked to non-real training output')}
+                description={
+                  selectedVersionJobInsight?.fallbackReason
+                    ? t(
+                        'Linked training run contains degraded-output evidence. Review training job detail before production usage. Reason: {reason}',
+                        { reason: formatFallbackReasonLabel(selectedVersionJobInsight.fallbackReason) }
+                      )
+                    : t(
+                        'Linked training run contains non-real execution evidence. Review training job detail before production usage.'
+                      )
+                }
+              />
+            ) : null}
+            <div className="stack tight">
+              <strong>{t('Metrics summary')}</strong>
+              <small className="muted">
+                {selectedVersionMetricsPreview?.preview
+                  ? `${selectedVersionMetricsPreview.preview}${
+                      selectedVersionMetricsPreview.hiddenCount > 0 ? ` · +${selectedVersionMetricsPreview.hiddenCount}` : ''
+                    }`
+                  : t('Metrics summary unavailable.')}
+              </small>
+              <details className="workspace-details">
+                <summary>{t('View raw metrics')}</summary>
+                <pre className="code-block">{JSON.stringify(selectedVersion.metrics_summary, null, 2)}</pre>
+              </details>
+            </div>
+          </>
+        ) : (
+          <StateBlock
+            variant="empty"
+            title={t('No selection')}
+            description={t('Select one version to inspect details.')}
+          />
+        )}
+      </DetailDrawer>
     </WorkspacePage>
   );
 }

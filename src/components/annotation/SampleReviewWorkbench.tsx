@@ -14,17 +14,17 @@ const normalizeMetadataToken = (value: string): string =>
 const formatMetadataLabel = (key: string, t: TranslateFn): string => {
   switch (key.trim().toLowerCase()) {
     case 'inference_run_id':
-      return t('Inference run');
+      return t('推理任务');
     case 'feedback_reason':
-      return t('Feedback reason');
+      return t('反馈原因');
     case 'source_attachment_id':
-      return t('Source attachment');
+      return t('源附件');
     case 'import_source_attachment_id':
-      return t('Imported attachment');
+      return t('导入附件');
     case 'original_filename':
-      return t('Original filename');
+      return t('原始文件名');
     case 'source':
-      return t('Source');
+      return t('来源');
     default:
       return normalizeMetadataToken(key);
   }
@@ -34,15 +34,15 @@ const formatMetadataValue = (key: string, value: string, t: TranslateFn): string
   const normalizedKey = key.trim().toLowerCase();
   const normalizedValue = value.trim();
   if (!normalizedValue) {
-    return t('n/a');
+    return t('无');
   }
 
   if (normalizedValue === 'true') {
-    return t('Yes');
+    return t('是');
   }
 
   if (normalizedValue === 'false') {
-    return t('No');
+    return t('否');
   }
 
   if (normalizedKey === 'source' || normalizedKey === 'feedback_reason') {
@@ -84,7 +84,7 @@ export default function SampleReviewWorkbench({
     <Card as="section" className={className}>
       <div className="row between gap wrap align-center">
         <div className="stack tight">
-          <h3>{t('Sample Review Workbench')}</h3>
+          <h3>{t('样本信息')}</h3>
           <small className="muted">{selectedFilename}</small>
         </div>
         {selectedAnnotation ? (
@@ -107,7 +107,7 @@ export default function SampleReviewWorkbench({
       ) : null}
       {hasMetadataPreview ? (
         <div className="stack tight">
-          <small className="muted">{t('Key sample fields')}</small>
+          <small className="muted">{t('关键字段')}</small>
           <ul className="annotation-review-metadata-list">
             {metadataPreview.map(([key, value]) => (
               <li key={`sample-metadata-${key}`}>
@@ -119,35 +119,35 @@ export default function SampleReviewWorkbench({
       ) : null}
       {latestReview ? (
         <div className="annotation-review-inline-summary stack tight">
-          <small className="muted">{t('Latest review')}</small>
+          <small className="muted">{t('最近复核')}</small>
           <div className="row gap wrap align-center">
             <StatusTag status={latestReview.status}>{t(latestReview.status)}</StatusTag>
             {latestReview.review_reason_code ? <Badge tone="warning">{t(latestReview.review_reason_code)}</Badge> : null}
             {latestReview.quality_score !== null ? (
               <Badge tone="info">
-                {t('Quality Score')}: {latestReview.quality_score.toFixed(2)}
+                {t('质量分')}: {latestReview.quality_score.toFixed(2)}
               </Badge>
             ) : null}
           </div>
           {latestReview.review_comment ? (
             <p className="workspace-record-summary">{latestReview.review_comment}</p>
           ) : (
-            <small className="muted">{t('No review comment yet.')}</small>
+            <small className="muted">{t('暂无复核备注。')}</small>
           )}
           <small className="muted">
-            {t('Review time')}: {formatCompactTimestamp(latestReview.created_at, t('n/a'))}
+            {t('复核时间')}: {formatCompactTimestamp(latestReview.created_at, t('无'))}
           </small>
         </div>
       ) : null}
-      {!hasVisibleSummary ? <small className="muted">{t('No extra sample fields')}</small> : null}
+      {!hasVisibleSummary ? <small className="muted">{t('暂无额外样本信息。')}</small> : null}
       {selectedItemOperationalMetadataEntries.length > metadataPreview.length ? (
         <small className="muted">
-          {t('Showing {count} metadata fields.', { count: metadataPreview.length })}
+          {t('仅显示 {count} 个字段。', { count: metadataPreview.length })}
         </small>
       ) : null}
       {selectedAnnotation ? (
         <small className="muted">
-          {t('Annotation updated')}: {formatCompactTimestamp(selectedAnnotation.updated_at, t('n/a'))}
+          {t('标注更新时间')}: {formatCompactTimestamp(selectedAnnotation.updated_at, t('无'))}
         </small>
       ) : null}
     </Card>

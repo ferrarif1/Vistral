@@ -22,7 +22,6 @@ import {
   DetailList,
   FilterToolbar,
   InlineAlert,
-  KPIStatRow,
   PageHeader,
   SectionCard
 } from '../components/ui/ConsolePage';
@@ -1142,7 +1141,7 @@ export default function DatasetDetailPage() {
         <StateBlock
           variant="loading"
           title={t('Loading Dataset')}
-          description={t('Preparing dataset detail view.')}
+          description={t('Loading dataset detail.')}
         />
       </WorkspacePage>
     );
@@ -1183,30 +1182,30 @@ export default function DatasetDetailPage() {
       ? {
           tone: 'warning' as const,
           title: t('Complete upload first'),
-          description: t('Upload at least one ready file before split, annotation, and version actions.'),
+          description: t('Upload one ready file first.'),
           label: t('Jump to Upload Section'),
           onClick: focusUploadSection
         }
       : annotations.length === 0
         ? {
-            tone: 'info' as const,
-            title: t('Start annotation workflow'),
-            description: t('Open annotation workspace and move samples through needs_work and in_review queues.'),
-            label: t('Open Annotation Workspace'),
-            to: prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`
-          }
-        : versions.length === 0
-          ? {
-              tone: 'info' as const,
-              title: t('Create first version snapshot'),
-              description: t('Lock current split and annotation state as a reproducible dataset version.'),
-              label: t('Open Version Controls'),
-              onClick: focusWorkflowPanel
-            }
-          : {
+          tone: 'info' as const,
+          title: t('Start annotation workflow'),
+          description: t('Open the annotation workspace and review samples.'),
+          label: t('Open Annotation Workspace'),
+          to: prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`
+        }
+      : versions.length === 0
+        ? {
+          tone: 'info' as const,
+          title: t('Create first version snapshot'),
+          description: t('Lock the current state as a version.'),
+          label: t('Open Version Controls'),
+          onClick: focusWorkflowPanel
+        }
+      : {
           tone: 'success' as const,
           title: t('Dataset is ready for downstream tasks'),
-          description: t('Continue with scoped training and validation using dataset version context.'),
+          description: t('Continue to training or validation.'),
           label: t('Open Training Jobs'),
           to: preferredTrainingVersion
             ? buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)
@@ -1218,7 +1217,7 @@ export default function DatasetDetailPage() {
       <PageHeader
         eyebrow={t('Dataset Lane')}
         title={dataset.name}
-        description={t('Inspect dataset readiness, sample coverage, and version snapshots without leaving the dataset lane.')}
+        description={t('Check dataset readiness, samples, and version snapshots in one place.')}
         meta={
           <div className="row gap wrap align-center">
             <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
@@ -1239,36 +1238,6 @@ export default function DatasetDetailPage() {
             </ButtonLink>
           </>
         }
-      />
-      <KPIStatRow
-        items={[
-          {
-            label: t('Ready files'),
-            value: readyCount,
-            tone: readyCount > 0 ? 'success' : 'warning',
-            hint: t('Files ready for downstream splits and review.')
-          },
-          {
-            label: t('Samples'),
-            value: items.length,
-            tone: items.length > 0 ? 'info' : 'neutral',
-            hint: t('Visible in this dataset context.')
-          },
-          {
-            label: t('Versions'),
-            value: versions.length,
-            tone: versions.length > 0 ? 'info' : 'neutral',
-            hint: t('Snapshot history for training and validation.')
-          },
-          {
-            label: t('Launch ready'),
-            value: selectedVersionLaunchReady ? t('Yes') : t('No'),
-            tone: selectedVersionLaunchReady ? 'success' : 'warning',
-            hint: selectedVersion
-              ? t('Coverage {coverage}', { coverage: formatCoveragePercent(selectedVersion.annotation_coverage) })
-              : t('Pick a version snapshot first.')
-          }
-        ]}
       />
 
       {feedback ? (
@@ -1318,7 +1287,7 @@ export default function DatasetDetailPage() {
           <div className="workspace-main-stack">
             <SectionCard
               title={t('Dataset overview')}
-              description={t('A compact lane for status, progress, and next-step entry points.')}
+              description={t('Status, progress, and the next action.')}
             >
               <DetailList
                 items={[
@@ -1387,7 +1356,7 @@ export default function DatasetDetailPage() {
 
             <SectionCard
               title={t('Sample browser')}
-              description={t('Filtering and selection stay here; detailed annotation editing is in the annotation workspace.')}
+              description={t('Filter and edit samples here; annotation editing stays in the workspace.')}
               actions={
                 <Button
                   type="button"
@@ -1481,7 +1450,7 @@ export default function DatasetDetailPage() {
 
             <SectionCard
               title={t('Version snapshots')}
-              description={t('Select the active snapshot and use it for training, review, or validation.')}
+              description={t('Select the active snapshot for training, review, or validation.')}
             >
               <DatasetVersionRail
                 t={t}
@@ -1514,12 +1483,12 @@ export default function DatasetDetailPage() {
             <div id="dataset-workflow">
               <AdvancedSection
                 title={t('Advanced dataset operations')}
-                description={t('Split, import/export, and reference item actions stay collapsed by default.')}
+                description={t('Split, import/export, and reference actions stay collapsed.')}
               >
                 <div className="stack">
                   <SectionCard
                     title={t('Dataset workflow')}
-                    description={t('Prepare split ratios and version snapshots when you are ready to curate the dataset.')}
+                    description={t('Prepare split ratios and version snapshots here.')}
                   >
                     <div className="workspace-form-grid">
                       <label>
@@ -1672,7 +1641,7 @@ export default function DatasetDetailPage() {
           <div className="workspace-inspector-rail">
             <SectionCard
               title={t('Current status')}
-              description={t('Compact dataset status and one recommended next step.')}
+              description={t('Readiness and the next action.')}
             >
               <DetailList
                 items={[

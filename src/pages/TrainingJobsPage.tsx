@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   TrainingArtifactSummary,
   TrainingExecutionMode,
@@ -96,6 +96,7 @@ const describeFallbackReasonLabel = (
 
 export default function TrainingJobsPage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<TrainingJobRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -386,22 +387,100 @@ export default function TrainingJobsPage() {
 
   const hasActiveFilters =
     searchText.trim().length > 0 || taskFilter !== 'all' || frameworkFilter !== 'all' || queueFilter !== 'all';
+  const activeJobsCount = filteredJobs.filter((job) => activeStatusSet.has(job.status)).length;
+  const terminalJobsCount = filteredJobs.filter((job) => terminalStatusSet.has(job.status)).length;
   const needsVerificationCount = filteredJobs.filter((job) => {
     const insight =
       jobExecutionInsights[job.id] ??
       deriveTrainingExecutionInsight({
         status: job.status,
         executionMode: job.execution_mode
-      });
+    });
     return insight.reality !== 'real';
   }).length;
-
-  const resetFilters = () => {
+  const resetFilters = useCallback(() => {
     setSearchText('');
     setTaskFilter('all');
     setFrameworkFilter('all');
     setQueueFilter('all');
-  };
+  }, []);
+  const queueGuidance = useMemo(() => {
+    if (filteredJobs.length === 0) {
+      return {
+        tone: hasActiveFilters ? ('warning' as const) : ('info' as const),
+        title: hasActiveFilters ? t('No jobs match the current filters') : t('Start with a training job'),
+        description: hasActiveFilters
+          ? t('Clear filters or broaden the scope.')
+          : t('Create one run to start tracking evidence.'),
+        action: hasActiveFilters ? (
+          <Button type="button" variant="secondary" size="sm" onClick={resetFilters}>
+            {t('Clear filters')}
+          </Button>
+        ) : (
+          <ButtonLink to={scopedCreatePath} variant="secondary" size="sm">
+            {t('Create Training Job')}
+          </ButtonLink>
+        )
+      };
+    }
+
+    if (activeJobsCount > 0) {
+      const nextActiveJob = filteredJobs.find((job) => activeStatusSet.has(job.status)) ?? null;
+      return {
+        tone: 'info' as const,
+        title: t('Training is in flight'),
+        description: t('Watch the table, then open one drawer for evidence.'),
+        action: nextActiveJob ? (
+          <ButtonLink to={`/training/jobs/${nextActiveJob.id}${detailQuerySuffix}`} variant="secondary" size="sm">
+            {t('Open active job')}
+          </ButtonLink>
+        ) : undefined
+      };
+    }
+
+    if (needsVerificationCount > 0) {
+      const nextVerificationJob =
+        filteredJobs.find((job) => {
+          const insight =
+            jobExecutionInsights[job.id] ??
+            deriveTrainingExecutionInsight({
+              status: job.status,
+              executionMode: job.execution_mode
+            });
+          return insight.reality !== 'real';
+        }) ?? null;
+      return {
+        tone: 'warning' as const,
+        title: t('Some runs still need verification'),
+        description: t('Open a job detail before registration.'),
+        action: nextVerificationJob ? (
+          <ButtonLink
+            to={`/training/jobs/${nextVerificationJob.id}${detailQuerySuffix}`}
+            variant="secondary"
+            size="sm"
+          >
+            {t('Open next review')}
+          </ButtonLink>
+        ) : undefined
+      };
+    }
+
+    return {
+      tone: 'success' as const,
+      title: t('Queue is clear'),
+      description: t('Compare terminal jobs or launch a new run.')
+    };
+  }, [
+    activeJobsCount,
+    detailQuerySuffix,
+    filteredJobs,
+    hasActiveFilters,
+    jobExecutionInsights,
+    needsVerificationCount,
+    resetFilters,
+    scopedCreatePath,
+    t
+  ]);
 
   const openJobDrawer = (jobId: string) => {
     setSelectedJobId(jobId);
@@ -487,17 +566,6 @@ export default function TrainingJobsPage() {
         width: '10%',
         cell: (job) => (
           <div className="workspace-record-actions">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={(event) => {
-                event.stopPropagation();
-                openJobDrawer(job.id);
-              }}
-            >
-              {t('View')}
-            </Button>
             <ButtonLink
               to={`/training/jobs/${job.id}${detailQuerySuffix}`}
               variant="ghost"
@@ -518,11 +586,24 @@ export default function TrainingJobsPage() {
       <PageHeader
         eyebrow={t('Training control')}
         title={t('Training Jobs')}
-        description={t('Browse and compare training runs from one queue-first page. Open a run only when you need deeper evidence or follow-up actions.')}
+        description={t('Browse training runs from one queue-first page. Open a drawer only when needed.')}
+        meta={
+          <div className="row gap wrap align-center">
+            <Badge tone="info">
+              {t('Active')}: {activeJobsCount}
+            </Badge>
+            <Badge tone="success">
+              {t('Terminal')}: {terminalJobsCount}
+            </Badge>
+            <Badge tone={needsVerificationCount > 0 ? 'warning' : 'success'}>
+              {t('Needs verification')}: {needsVerificationCount}
+            </Badge>
+          </div>
+        }
         primaryAction={{
           label: t('Create Training Job'),
           onClick: () => {
-            window.location.assign(scopedCreatePath);
+            navigate(scopedCreatePath);
           }
         }}
         secondaryActions={
@@ -543,6 +624,12 @@ export default function TrainingJobsPage() {
       />
 
       {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}
+      <InlineAlert
+        tone={queueGuidance.tone}
+        title={queueGuidance.title}
+        description={queueGuidance.description}
+        actions={queueGuidance.action}
+      />
 
       <WorkspaceWorkbench
         toolbar={
@@ -623,13 +710,18 @@ export default function TrainingJobsPage() {
                 ) : null}
               </>
             }
+            summary={
+              <small className="muted">
+                {t('Search and filter here, then open the drawer only for a short evidence summary.')}
+              </small>
+            }
           />
         }
         main={
           <div className="workspace-main-stack">
             <SectionCard
               title={t('Training queue')}
-              description={t('Table-first queue view for comparing active and terminal jobs without turning the page into two separate workspaces.')}
+              description={t('Compare active and terminal jobs without splitting the page.')}
             >
               {loading ? (
                 <StateBlock
@@ -681,7 +773,7 @@ export default function TrainingJobsPage() {
         open={detailDrawerOpen && Boolean(selectedJob)}
         onClose={() => setDetailDrawerOpen(false)}
         title={selectedJob ? selectedJob.name : t('Job detail')}
-        description={t('Keep the list focused on comparison. Use this drawer for a short summary, then open the full detail page only when you need deeper evidence.')}
+        description={t('Use this drawer for a short summary, then open the detail page only when needed.')}
         actions={
           selectedJob ? (
             <>
@@ -722,7 +814,7 @@ export default function TrainingJobsPage() {
               ]}
             />
             <small className="muted">
-              {t('Open the full detail page for execution evidence, logs, and metrics.')}
+              {t('Open the full detail page for execution evidence.')}
             </small>
             {selectedExecutionInsight?.showWarning ? (
               <InlineAlert
