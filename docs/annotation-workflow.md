@@ -43,9 +43,27 @@ Allowed transitions:
 ### 4.3 Editing controls (minimum)
 - save draft
 - undo
+- redo
 - continue edit from previous state
 - explicit submit to review
 - minimal canvas-style region drawing for detection/OCR region binding
+- draw/select tool switch (`B` / `V`)
+- delete selected region (`Delete`)
+- previous/next sample navigation with unsaved-change guard (`ArrowLeft` / `ArrowRight`)
+- save shortcut (`Ctrl/Cmd+S`)
+- full-screen annotation mode
+
+### 4.4 Single-sample workspace contract
+- annotation page first screen must prioritize one current sample only
+- canvas is the visual center and occupies the largest available area
+- queue filtering stays in dataset detail; annotation page keeps only queue position plus previous/next navigation
+- right-side tools are split into exactly three tabs:
+  1. `标注`: class list, selected region properties, delete selected region, shortcut help
+  2. `预测对比`: overlay toggles, confidence threshold, optional pre-annotation actions, low-confidence hints
+  3. `样本信息`: filename, split, status, updated time, metadata, history/review context entry
+- bottom action bar keeps only `undo`, `redo`, `save in progress`, `submit review`, `previous`, `next`
+- before `submit review`, unsaved changes should be auto-saved
+- new region creation should immediately expose class selection to reduce extra clicks
 
 ## 5. Review and Audit
 

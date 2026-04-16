@@ -113,6 +113,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const isCompactViewport = useCompactViewport(960);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isImmersiveWorkspace = location.pathname === '/workspace/chat';
+  const isAnnotationFocusRoute = /^\/datasets\/[^/]+\/annotate$/.test(location.pathname);
 
   const refreshUser = useCallback(() => {
     api.me().then(setCurrentUser).catch(() => setCurrentUser(null));
@@ -148,6 +149,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
     setMobileSidebarOpen(false);
   }, [isCompactViewport, location.pathname]);
+
+  useEffect(() => {
+    if (isCompactViewport || !isAnnotationFocusRoute || sidebarCollapsed) {
+      return;
+    }
+
+    setSidebarCollapsed(true);
+  }, [isAnnotationFocusRoute, isCompactViewport, sidebarCollapsed]);
 
   useEffect(() => {
     if (!isCompactViewport || !mobileSidebarOpen) {

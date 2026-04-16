@@ -26,6 +26,32 @@ const taskTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', '
 
 type TrainingFramework = keyof typeof curatedBaseModelCatalog;
 const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
+const parsePositiveInteger = (value: string): number | null => {
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const parseNonNegativeNumber = (value: string): number | null => {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const parsePositiveNumber = (value: string): number | null => {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
 
 export default function CreateTrainingJobPage() {
   const { t } = useI18n();
@@ -244,7 +270,41 @@ export default function CreateTrainingJobPage() {
     datasetVersionHasTrainSplit &&
     datasetVersionHasAnnotationCoverage;
   const strictLaunchGateReady = runtimeDisableSimulatedTrainFallback || nonStrictLaunchConfirmed;
-  const submitReady = launchReady && !runtimeSettingsLoading && !runtimeSettingsError && strictLaunchGateReady;
+  const paramValidationIssues = useMemo(() => {
+    const issues: string[] = [];
+    if (parsePositiveInteger(epochs) === null) {
+      issues.push(t('Epochs must be a positive integer.'));
+    }
+    if (parsePositiveInteger(batchSize) === null) {
+      issues.push(t('Batch size must be a positive integer.'));
+    }
+    if (parsePositiveNumber(learningRate) === null) {
+      issues.push(t('Learning rate must be greater than 0.'));
+    }
+    const parsedWarmupRatio = parseNonNegativeNumber(warmupRatio);
+    if (parsedWarmupRatio === null || parsedWarmupRatio > 1) {
+      issues.push(t('Warmup ratio must be between 0 and 1.'));
+    }
+    if (parseNonNegativeNumber(weightDecay) === null) {
+      issues.push(t('Weight decay must be 0 or greater.'));
+    }
+    return issues;
+  }, [batchSize, epochs, learningRate, t, warmupRatio, weightDecay]);
+  const paramsReady = paramValidationIssues.length === 0;
+  const submitReady =
+    launchReady &&
+    !runtimeSettingsLoading &&
+    !runtimeSettingsError &&
+    strictLaunchGateReady &&
+    paramsReady;
+  const canAdvanceFromCurrentStep =
+    step === 0
+      ? Boolean(name.trim())
+      : step === 1
+        ? Boolean(selectedDatasetVersion)
+        : step === 2
+          ? paramsReady
+          : false;
   const launchReadinessBanner = useMemo(() => {
     if (loading || versionsLoading) {
       return null;
@@ -271,6 +331,14 @@ export default function CreateTrainingJobPage() {
         tone: 'warning' as const,
         title: t('Dataset snapshot is not ready yet'),
         description: t('Fix dataset status, train split, or annotation coverage before you create the run.')
+      };
+    }
+
+    if (!paramsReady) {
+      return {
+        tone: 'warning' as const,
+        title: t('Training params need attention'),
+        description: t('Resolve the highlighted numeric issues before continuing.')
       };
     }
 
@@ -303,6 +371,7 @@ export default function CreateTrainingJobPage() {
     nonStrictLaunchConfirmed,
     runtimeDisableSimulatedTrainFallback,
     runtimeSettingsError,
+    paramsReady,
     selectedDataset,
     selectedDatasetVersion,
     t,
@@ -378,6 +447,14 @@ export default function CreateTrainingJobPage() {
       setFeedback({
         variant: 'error',
         text: t('Runtime safety guard is off. Confirm risk acknowledgment before creating this training job.')
+      });
+      return;
+    }
+
+    if (!paramsReady) {
+      setFeedback({
+        variant: 'error',
+        text: paramValidationIssues[0] ?? t('Fix the training params before launch.')
       });
       return;
     }
@@ -468,6 +545,13 @@ export default function CreateTrainingJobPage() {
       hint: selectedDatasetVersion
         ? t('Dataset, split, and coverage are checked.')
         : t('Launch readiness appears after a snapshot is selected.')
+    },
+    {
+      label: t('Training params'),
+      done: paramsReady,
+      hint: paramsReady
+        ? t('Core params checked.')
+        : paramValidationIssues[0] ?? t('Fix the training params before launch.')
     },
     {
       label: t('Runtime safety guard'),
@@ -679,27 +763,56 @@ export default function CreateTrainingJobPage() {
             <div className="three-col">
               <label>
                 {t('Epochs')}
-                <Input value={epochs} onChange={(event) => setEpochs(event.target.value)} />
+                <Input
+                  value={epochs}
+                  inputMode="numeric"
+                  onChange={(event) => setEpochs(event.target.value)}
+                />
               </label>
               <label>
                 {t('Batch Size')}
-                <Input value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
+                <Input
+                  value={batchSize}
+                  inputMode="numeric"
+                  onChange={(event) => setBatchSize(event.target.value)}
+                />
               </label>
               <label>
                 {t('Learning Rate')}
-                <Input value={learningRate} onChange={(event) => setLearningRate(event.target.value)} />
+                <Input
+                  value={learningRate}
+                  inputMode="decimal"
+                  onChange={(event) => setLearningRate(event.target.value)}
+                />
               </label>
             </div>
+            {!paramsReady ? (
+              <InlineAlert
+                tone="warning"
+                title={t('Training params need attention')}
+                description={paramValidationIssues.join(' ')}
+              />
+            ) : (
+              <small className="muted">{t('Core params checked.')}</small>
+            )}
           </Card>
 
           <AdvancedSection>
             <label>
               {t('Warmup Ratio')}
-              <Input value={warmupRatio} onChange={(event) => setWarmupRatio(event.target.value)} />
+              <Input
+                value={warmupRatio}
+                inputMode="decimal"
+                onChange={(event) => setWarmupRatio(event.target.value)}
+              />
             </label>
             <label>
               {t('Weight Decay')}
-              <Input value={weightDecay} onChange={(event) => setWeightDecay(event.target.value)} />
+              <Input
+                value={weightDecay}
+                inputMode="decimal"
+                onChange={(event) => setWeightDecay(event.target.value)}
+              />
             </label>
           </AdvancedSection>
         </section>
@@ -851,6 +964,10 @@ export default function CreateTrainingJobPage() {
               <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                 {t('Open Runtime Settings')}
               </ButtonLink>
+            ) : !paramsReady ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => setStep(2)}>
+                {t('Go to params step')}
+              </Button>
             ) : !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed ? (
               <Button type="button" variant="secondary" size="sm" onClick={() => setStep(3)}>
                 {t('Review risk')}
@@ -875,7 +992,9 @@ export default function CreateTrainingJobPage() {
                   type="button"
                   variant="secondary"
                   onClick={nextStep}
-                  disabled={step === steps.length - 1 || submitting || loading}
+                  disabled={
+                    step === steps.length - 1 || submitting || loading || !canAdvanceFromCurrentStep
+                  }
                   size="sm"
                 >
                   {t('Next')}
@@ -893,10 +1012,10 @@ export default function CreateTrainingJobPage() {
           </Card>
         }
         main={
-          <div className="workspace-main-stack">
-            <Card as="article">
-              <WorkspaceSectionHeader
-                title={t('Launch step')}
+            <div className="workspace-main-stack">
+              <Card as="article">
+                <WorkspaceSectionHeader
+                  title={t('Launch step')}
                 description={stepTitles[step]}
                 actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
               />

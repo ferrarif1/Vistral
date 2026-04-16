@@ -71,8 +71,8 @@ export default function SampleReviewWorkbench({
   selectedItemOperationalMetadataEntries,
   className
 }: SampleReviewWorkbenchProps) {
-  const metadataPreview = selectedItemOperationalMetadataEntries.slice(0, 2);
-  const tagPreview = selectedItemTagEntries.slice(0, 3);
+  const metadataPreview = selectedItemOperationalMetadataEntries.slice(0, 6);
+  const tagPreview = selectedItemTagEntries.slice(0, 4);
   const showItemStatus = selectedItem?.status && selectedItem.status !== 'ready';
   const showAnnotationSource = selectedAnnotation?.source && selectedAnnotation.source !== 'manual';
   const hasMetadataPreview = metadataPreview.length > 0;
@@ -96,6 +96,24 @@ export default function SampleReviewWorkbench({
         {showItemStatus && selectedItem ? <StatusTag status={selectedItem.status}>{t(selectedItem.status)}</StatusTag> : null}
         {showAnnotationSource && selectedAnnotation ? <Badge tone="neutral">{t(selectedAnnotation.source)}</Badge> : null}
       </div>
+      <div className="annotation-sample-info-list">
+        <div>
+          <small className="muted">{t('文件名')}</small>
+          <strong>{selectedFilename}</strong>
+        </div>
+        <div>
+          <small className="muted">{t('数据集切分')}</small>
+          <strong>{selectedItem ? t(selectedItem.split) : t('无')}</strong>
+        </div>
+        <div>
+          <small className="muted">{t('状态')}</small>
+          <strong>{selectedAnnotation ? t(selectedAnnotation.status) : t('未标注')}</strong>
+        </div>
+        <div>
+          <small className="muted">{t('更新时间')}</small>
+          <strong>{selectedAnnotation ? formatCompactTimestamp(selectedAnnotation.updated_at, t('无')) : t('无')}</strong>
+        </div>
+      </div>
       {hasTagPreview ? (
         <div className="row gap wrap">
           {tagPreview.map((tag) => (
@@ -107,7 +125,7 @@ export default function SampleReviewWorkbench({
       ) : null}
       {hasMetadataPreview ? (
         <div className="stack tight">
-          <small className="muted">{t('关键字段')}</small>
+          <small className="muted">{t('元数据')}</small>
           <ul className="annotation-review-metadata-list">
             {metadataPreview.map(([key, value]) => (
               <li key={`sample-metadata-${key}`}>
@@ -140,16 +158,27 @@ export default function SampleReviewWorkbench({
         </div>
       ) : null}
       {!hasVisibleSummary ? <small className="muted">{t('暂无额外样本信息。')}</small> : null}
-      {selectedItemOperationalMetadataEntries.length > metadataPreview.length ? (
-        <small className="muted">
-          {t('仅显示 {count} 个字段。', { count: metadataPreview.length })}
-        </small>
-      ) : null}
-      {selectedAnnotation ? (
-        <small className="muted">
-          {t('标注更新时间')}: {formatCompactTimestamp(selectedAnnotation.updated_at, t('无'))}
-        </small>
-      ) : null}
+      <details className="workspace-disclosure" open={false}>
+        <summary>
+          <span>{t('历史记录')}</span>
+        </summary>
+        <div className="workspace-disclosure-content">
+          {latestReview ? (
+            <>
+              <div className="row gap wrap align-center">
+                <StatusTag status={latestReview.status}>{t(latestReview.status)}</StatusTag>
+                {latestReview.review_reason_code ? <Badge tone="warning">{t(latestReview.review_reason_code)}</Badge> : null}
+              </div>
+              {latestReview.review_comment ? <p className="workspace-record-summary">{latestReview.review_comment}</p> : null}
+              <small className="muted">
+                {t('复核时间')}: {formatCompactTimestamp(latestReview.created_at, t('无'))}
+              </small>
+            </>
+          ) : (
+            <small className="muted">{t('当前样本还没有历史记录。')}</small>
+          )}
+        </div>
+      </details>
     </Card>
   );
 }

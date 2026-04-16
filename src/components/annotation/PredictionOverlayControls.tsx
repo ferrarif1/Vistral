@@ -55,7 +55,6 @@ interface PredictionOverlayControlsProps {
   hasPredictionOverlay: boolean;
   showAnnotationOverlay: boolean;
   showPredictionOverlay: boolean;
-  onlyLowConfidenceCandidates: boolean;
   predictionConfidenceThreshold: string;
   predictionCandidateCount: number;
   lowConfidencePredictionCount: number;
@@ -63,14 +62,12 @@ interface PredictionOverlayControlsProps {
   predictionCandidates: PredictionCandidateView[];
   numericPredictionConfidenceThreshold: number;
   canUsePredictionInOcrEditor: boolean;
-  nextLowConfidenceQueueItemId: string;
-  hasSelectedItem: boolean;
+  canAdoptPrediction: boolean;
   onShowAnnotationOverlayChange: (value: boolean) => void;
   onShowPredictionOverlayChange: (value: boolean) => void;
   onPredictionConfidenceThresholdChange: (value: string) => void;
   onUsePredictionCandidate: (candidate: PredictionCandidateView) => void;
-  onFocusNextLowConfidence: () => void;
-  onToggleLowConfidenceTag: () => void;
+  onAdoptPredictionResults: () => void;
 }
 
 export default function PredictionOverlayControls({
@@ -80,7 +77,6 @@ export default function PredictionOverlayControls({
   hasPredictionOverlay,
   showAnnotationOverlay,
   showPredictionOverlay,
-  onlyLowConfidenceCandidates,
   predictionConfidenceThreshold,
   predictionCandidateCount,
   lowConfidencePredictionCount,
@@ -88,14 +84,12 @@ export default function PredictionOverlayControls({
   predictionCandidates,
   numericPredictionConfidenceThreshold,
   canUsePredictionInOcrEditor,
-  nextLowConfidenceQueueItemId,
-  hasSelectedItem,
+  canAdoptPrediction,
   onShowAnnotationOverlayChange,
   onShowPredictionOverlayChange,
   onPredictionConfidenceThresholdChange,
   onUsePredictionCandidate,
-  onFocusNextLowConfidence,
-  onToggleLowConfidenceTag
+  onAdoptPredictionResults
 }: PredictionOverlayControlsProps) {
   return (
     <Card as="section" className={className}>
@@ -146,11 +140,6 @@ export default function PredictionOverlayControls({
         </Badge>
         {selectedItemHasLowConfidenceTag ? <Badge tone="info">{t('低置信标记')}</Badge> : null}
       </div>
-      {onlyLowConfidenceCandidates ? (
-        <small className="muted">
-          {t('当前队列仅保留低置信样本。')}
-        </small>
-      ) : null}
       {showPredictionOverlay && predictionCandidates.length > 0 ? (
         <ul className="workspace-record-list compact prediction-candidate-list">
           {predictionCandidates.slice(0, 4).map((candidate) => {
@@ -204,26 +193,15 @@ export default function PredictionOverlayControls({
           type="button"
           variant="secondary"
           size="sm"
-          onClick={onFocusNextLowConfidence}
-          disabled={busy || !nextLowConfidenceQueueItemId}
+          onClick={onAdoptPredictionResults}
+          disabled={busy || !canAdoptPrediction}
         >
-          {t('跳到下一个低置信样本')}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onToggleLowConfidenceTag}
-          disabled={busy || !hasSelectedItem}
-        >
-          {selectedItemHasLowConfidenceTag
-            ? t('移除低置信标记')
-            : t('标记为低置信')}
+          {t('采用预测结果')}
         </Button>
       </div>
       <small className="muted">
         {hasPredictionOverlay
-          ? t('当前样本已带有预标注结果，可在这里对比。')
+          ? t('当前样本已带有预标注结果，可在这里对比或一键采用。')
           : t('先运行预标注，再在这里查看预测对比。')}
       </small>
     </Card>

@@ -185,26 +185,26 @@ Minimum actions:
 
 Current phase target:
 1. open `/datasets/:datasetId`
-2. review annotation summary and jump into a focused queue (`needs_work`, `in_review`, `rejected`, `approved`)
+2. review annotation summary and queue slices in dataset detail, then jump into one focused queue (`needs_work`, `in_review`, `rejected`, `approved`)
 3. open `/datasets/:datasetId/annotate` (optional `?version=<dataset_version_id>` keeps snapshot context during review)
-4. select dataset item directly or restore one from queue deep link
-5. queue filters (search/split/item-status/metadata/low-confidence) remain visible as active chips and can be cleared with one click
-6. metadata quick filters can prefill common triage patterns (`tag:low_confidence=true`, `inference_run_id`, top `feedback_reason`)
-7. edit OCR/detection payload
-8. save as `in_progress`/`annotated`
-9. submit `annotated -> in_review`
-10. review as `approved` or `rejected`
-11. once an item enters `in_review`, annotation payload becomes read-only in the upsert path; only the review endpoint may move it to `approved`/`rejected`
-12. when rejected, reviewer must provide `review_reason_code`; latest review reason/comment remain visible during rework until next review, and moving the item back to `in_progress` should keep the same item open inside the `needs_work` queue before any further edits
+4. land directly on one current sample with the canvas ready for editing; page first screen shows only sample identity, queue position, canvas, right-side tabs, and bottom action bar
+5. annotate current sample first; prediction compare, low-confidence context, pre-annotation, and extra metadata stay in secondary tabs
+6. save as `in_progress` when pausing work, or submit `annotated -> in_review` when current sample is ready
+7. before submit-review, client auto-saves unsaved canvas changes
+8. before previous/next sample navigation, client blocks and asks whether to save unsaved changes
+9. keyboard path remains equivalent to the primary UI path: `B/V` tool switch, `Ctrl/Cmd+S` save, `Enter` submit review, `ArrowLeft/ArrowRight` previous/next sample
+10. once an item enters `in_review`, annotation payload becomes read-only in the upsert path; only the review endpoint may move it to `approved`/`rejected`
+11. when rejected, reviewer must provide `review_reason_code`; latest review reason/comment remain visible during rework until next review, and moving the item back to `in_progress` should keep the same item open inside the `needs_work` queue before any further edits
 
 ## 5.1 Flow D1: Single-Sample Review Workbench (evolution track)
 Actor: `user` (annotator/reviewer by capability)
 
 1. open one dataset item from queue/browser
-2. inspect sample preview, current annotation payload, metadata, and latest review context in one screen
-3. compare annotation with prediction overlays when available
-4. update annotation or review decision without leaving the workbench context
-5. move to next queue item with keyboard/buttons while preserving queue focus
+2. inspect sample preview and current annotation payload in the dominant center canvas
+3. use right-side tabs to switch between `annotation`, `prediction compare`, and `sample info`
+4. compare annotation with prediction overlays only when needed, without replacing the main labeling flow
+5. update annotation or review decision without leaving the workbench context
+6. move to next queue item with keyboard/buttons while preserving queue focus
 
 ## 6. Flow E: Training Job Workflow (Phase 1 skeleton, Phase 3 runtime)
 Actor: `user`

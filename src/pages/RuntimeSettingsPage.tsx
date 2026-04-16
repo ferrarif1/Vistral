@@ -22,7 +22,7 @@ import {
   StatusTable,
   type StatusTableColumn
 } from '../components/ui/ConsolePage';
-import { Input, Select, Textarea } from '../components/ui/Field';
+import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Panel } from '../components/ui/Surface';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
@@ -30,7 +30,6 @@ import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
 
 const FRAMEWORKS: ModelFramework[] = ['paddleocr', 'doctr', 'yolo'];
-const recentMetricJobsPerFramework = 2;
 
 type RuntimeFrameworkDraft = {
   endpoint: string;
@@ -115,6 +114,12 @@ const buildDefaultRuntimeControlDraft = (): RuntimeControlDraft => ({
   python_bin: '',
   disable_simulated_train_fallback: false,
   disable_inference_fallback: false
+});
+
+const buildDefaultRuntimeConnectionModeMap = (): RuntimeConnectionModeMap => ({
+  paddleocr: 'local',
+  doctr: 'local',
+  yolo: 'local'
 });
 
 const resolveRuntimeConnectionMode = (draft: RuntimeFrameworkDraft): RuntimeConnectionMode =>
@@ -331,7 +336,11 @@ export default function RuntimeSettingsPage() {
   const [runtimeControlDraft, setRuntimeControlDraft] = useState<RuntimeControlDraft>(() =>
     buildDefaultRuntimeControlDraft()
   );
+  const [runtimeConnectionModes, setRuntimeConnectionModes] = useState<RuntimeConnectionModeMap>(
+    () => buildDefaultRuntimeConnectionModeMap()
+  );
   const runtimeConfigurationRef = useRef<HTMLDivElement | null>(null);
+  const runtimeAdvancedEditorRef = useRef<HTMLDivElement | null>(null);
   const readinessSectionRef = useRef<HTMLDivElement | null>(null);
   const [frameworkFilter, setFrameworkFilter] = useState<'all' | ModelFramework>('all');
 
@@ -414,6 +423,11 @@ export default function RuntimeSettingsPage() {
     };
     setRuntimeDrafts(nextDrafts);
     setRuntimeControlDraft(nextControls);
+    setRuntimeConnectionModes({
+      paddleocr: resolveRuntimeConnectionMode(nextDrafts.paddleocr),
+      doctr: resolveRuntimeConnectionMode(nextDrafts.doctr),
+      yolo: resolveRuntimeConnectionMode(nextDrafts.yolo)
+    });
     setRuntimeBaselineSnapshotKey(
       normalizeRuntimeSnapshot({
         frameworks: nextDrafts,
@@ -435,20 +449,16 @@ export default function RuntimeSettingsPage() {
     () => runtimeProfiles.find((profile) => profile.id === selectedRuntimeProfileId) ?? null,
     [runtimeProfiles, selectedRuntimeProfileId]
   );
-  const runtimeConnectionModes = useMemo<RuntimeConnectionModeMap>(
-    () => ({
-      paddleocr: resolveRuntimeConnectionMode(runtimeDrafts.paddleocr),
-      doctr: resolveRuntimeConnectionMode(runtimeDrafts.doctr),
-      yolo: resolveRuntimeConnectionMode(runtimeDrafts.yolo)
-    }),
-    [runtimeDrafts]
-  );
   const runtimeAllFrameworksLocalMode = FRAMEWORKS.every(
     (framework) => runtimeConnectionModes[framework] === 'local'
   );
   const runtimeModelById = useMemo(
     () => new Map(runtimeModels.map((model) => [model.id, model])),
     [runtimeModels]
+  );
+  const runtimeModelVersionById = useMemo(
+    () => new Map(runtimeModelVersions.map((version) => [version.id, version])),
+    [runtimeModelVersions]
   );
   const frameworkModelOptions = useMemo<Record<ModelFramework, RuntimeModelOption[]>>(() => {
     const result: Record<ModelFramework, RuntimeModelOption[]> = {
@@ -658,6 +668,48 @@ export default function RuntimeSettingsPage() {
         [field]: value
       }
     }));
+    if (field === 'endpoint' && value.trim()) {
+      setRuntimeConnectionModes((prev) => ({
+        ...prev,
+        [framework]: 'endpoint'
+      }));
+    }
+  };
+
+  const updateRuntimeDefaultModel = (framework: ModelFramework, modelId: string) => {
+    setRuntimeDrafts((prev) => {
+      const currentVersionId = prev[framework].default_model_version_id.trim();
+      const allowedVersionIds = new Set(
+        runtimeModelVersions
+          .filter((version) => !modelId || version.model_id === modelId)
+          .map((version) => version.id)
+      );
+      return {
+        ...prev,
+        [framework]: {
+          ...prev[framework],
+          default_model_id: modelId,
+          default_model_version_id:
+            currentVersionId && allowedVersionIds.has(currentVersionId) ? currentVersionId : ''
+        }
+      };
+    });
+  };
+
+  const updateRuntimeDefaultModelVersion = (framework: ModelFramework, versionId: string) => {
+    setRuntimeDrafts((prev) => {
+      const selectedVersion = runtimeModelVersionById.get(versionId);
+      return {
+        ...prev,
+        [framework]: {
+          ...prev[framework],
+          default_model_id: versionId
+            ? selectedVersion?.model_id ?? prev[framework].default_model_id
+            : prev[framework].default_model_id,
+          default_model_version_id: versionId
+        }
+      };
+    });
   };
 
   const updateRuntimeDraftModelApiKey = (
@@ -795,11 +847,24 @@ export default function RuntimeSettingsPage() {
     framework: ModelFramework,
     mode: RuntimeConnectionMode
   ) => {
-    setRuntimeDrafts((prev) => {
-      if (mode === 'endpoint') {
-        return prev;
+    if (mode === 'local') {
+      const currentDraft = runtimeDrafts[framework];
+      const hasRemoteConfig = Boolean(
+        currentDraft.endpoint.trim() ||
+          currentDraft.api_key.trim() ||
+          currentDraft.has_api_key ||
+          Object.keys(currentDraft.model_api_keys).some((key) => currentDraft.model_api_keys[key]?.trim()) ||
+          Object.keys(currentDraft.model_api_keys_meta).length
+      );
+      if (
+        hasRemoteConfig &&
+        !window.confirm(
+          t('Switching to local mode will clear endpoint and runtime keys. Continue?')
+        )
+      ) {
+        return;
       }
-      return {
+      setRuntimeDrafts((prev) => ({
         ...prev,
         [framework]: {
           ...prev[framework],
@@ -809,8 +874,12 @@ export default function RuntimeSettingsPage() {
           model_api_key_expires_at: {},
           model_api_key_max_calls: {}
         }
-      };
-    });
+      }));
+    }
+    setRuntimeConnectionModes((prev) => ({
+      ...prev,
+      [framework]: mode
+    }));
     if (mode === 'local') {
       setKeepExistingApiKeys(true);
     }
@@ -845,6 +914,11 @@ export default function RuntimeSettingsPage() {
         }
       };
       return next;
+    });
+    setRuntimeConnectionModes({
+      paddleocr: 'local',
+      doctr: 'local',
+      yolo: 'local'
     });
     setKeepExistingApiKeys(true);
     setRuntimeSettingsError('');
@@ -1305,12 +1379,89 @@ export default function RuntimeSettingsPage() {
     localQuickStartSteps.find((stepItem) => !stepItem.done) ?? null;
 
   const focusRuntimeConfiguration = useCallback(() => {
-    runtimeConfigurationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const target = runtimeAdvancedEditorRef.current ?? runtimeConfigurationRef.current;
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
   const focusReadinessSection = useCallback(() => {
     readinessSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
+
+  const openFrameworkEditor = useCallback(
+    (framework: ModelFramework) => {
+      setRuntimePageMode('advanced');
+      setFrameworkFilter(framework);
+      window.requestAnimationFrame(() => {
+        focusRuntimeConfiguration();
+      });
+    },
+    [focusRuntimeConfiguration]
+  );
+
+  const getRuntimeBindingEntries = useCallback(
+    (framework: ModelFramework) => {
+      const draft = runtimeDrafts[framework];
+      const entries: Array<{
+        key: string;
+        label: string;
+        description: string;
+        meta?: RuntimeApiKeyMetaView;
+      }> = [];
+      const seen = new Set<string>();
+      const bindingKeys = new Set<string>([
+        ...Object.keys(draft.model_api_keys_meta),
+        ...Object.keys(draft.model_api_keys),
+        ...Object.keys(draft.model_api_key_expires_at),
+        ...Object.keys(draft.model_api_key_max_calls)
+      ]);
+      const pushBinding = (bindingKey: string) => {
+        const normalized = bindingKey.trim();
+        if (!normalized || seen.has(normalized)) {
+          return;
+        }
+        seen.add(normalized);
+        if (normalized.startsWith('model_version:')) {
+          const versionId = normalized.slice('model_version:'.length);
+          const version = runtimeModelVersionById.get(versionId);
+          const model = version ? runtimeModelById.get(version.model_id) : null;
+          entries.push({
+            key: normalized,
+            label: t('Version-specific API key'),
+            description:
+              version && model
+                ? `${model.name} / ${version.version_name}`
+                : version?.version_name ?? versionId,
+            meta: draft.model_api_keys_meta[normalized]
+          });
+          return;
+        }
+        if (normalized.startsWith('model:')) {
+          const modelId = normalized.slice('model:'.length);
+          const model = runtimeModelById.get(modelId);
+          entries.push({
+            key: normalized,
+            label: t('Model-specific API key'),
+            description: model?.name ?? modelId,
+            meta: draft.model_api_keys_meta[normalized]
+          });
+        }
+      };
+
+      if (draft.default_model_id.trim()) {
+        bindingKeys.add(`model:${draft.default_model_id.trim()}`);
+      }
+      if (draft.default_model_version_id.trim()) {
+        bindingKeys.add(`model_version:${draft.default_model_version_id.trim()}`);
+      }
+
+      Array.from(bindingKeys)
+        .sort((left, right) => left.localeCompare(right))
+        .forEach(pushBinding);
+
+      return entries;
+    },
+    [runtimeDrafts, runtimeModelById, runtimeModelVersionById, t]
+  );
 
   const renderLocalQuickStartAction = useCallback(
     (variant: 'secondary' | 'ghost' = 'secondary') => {
@@ -1520,7 +1671,7 @@ export default function RuntimeSettingsPage() {
               onClick={(event) => {
                 event.stopPropagation();
                 setFrameworkFilter(framework);
-                focusRuntimeConfiguration();
+                openFrameworkEditor(framework);
               }}
             >
               {t('Edit')}
@@ -1546,8 +1697,8 @@ export default function RuntimeSettingsPage() {
       checking,
       describeErrorKind,
       formatTimestamp,
-      focusRuntimeConfiguration,
       frameworkFilter,
+      openFrameworkEditor,
       refresh,
       runtimeConnectionModes,
       runtimeDrafts,
@@ -1556,24 +1707,7 @@ export default function RuntimeSettingsPage() {
   );
 
   void [
-    Input,
-    Textarea,
-    recentMetricJobsPerFramework,
     resolveRuntimeApiKeyExpiryStatus,
-    runtimeModelOptionsLoading,
-    runtimeModelOptionsError,
-    frameworkModelOptions,
-    frameworkVersionOptions,
-    updateRuntimeDraftModelApiKeyExpiresAt,
-    updateRuntimeDraftModelApiKeyMaxCalls,
-    generateAndApplyFrameworkApiKey,
-    generateAndApplyModelBindingApiKey,
-    revokeRuntimeApiKey,
-    rotateRuntimeApiKey,
-    setRuntimeFrameworkMode,
-    updateRuntimeControlDraft,
-    clearRuntimeSettingsConfig,
-    autoConfigureRuntimeSettingsConfig,
     unreachableCount,
     runtimeReadinessBadgeTone
   ];
@@ -1948,6 +2082,13 @@ export default function RuntimeSettingsPage() {
                     >
                       <div className="stack tight">
                         <div className="row gap wrap align-center">
+                          <Badge tone={runtimeReadinessBadgeTone}>
+                            {runtimeReadiness.status === 'ready'
+                              ? t('Ready')
+                              : runtimeReadiness.status === 'degraded'
+                                ? t('Degraded')
+                                : t('Not ready')}
+                          </Badge>
                           <Badge tone={runtimeReadinessErrorCount > 0 ? 'danger' : 'success'}>
                             {t('Errors')}: {runtimeReadinessErrorCount}
                           </Badge>
@@ -2118,15 +2259,567 @@ export default function RuntimeSettingsPage() {
                     emptyDescription={t('No framework matches the current filter.')}
                   />
                 </SectionCard>
-                <details className="workspace-details">
-                  <summary>{t('Other setup paths')} · {t('profiles')} / {t('manual overrides')}</summary>
-                  <SectionCard
-                    title={t('Advanced setup')}
-                    description={t('Keep profile activation and manual overrides here.')}
-                  >
-                    <small className="muted">{t('Use this lane only when the guided setup is not enough.')}</small>
-                  </SectionCard>
-                </details>
+                <SectionCard
+                  title={t('Editing form')}
+                  description={t('Edit the form below. Leave API Key blank to keep the saved key.')}
+                  actions={
+                    <div className="row gap wrap">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void saveRuntimeSettingsConfig()}
+                        disabled={
+                          runtimeSettingsLoading ||
+                          runtimeSettingsSaving ||
+                          runtimeSettingsClearing ||
+                          runtimeSettingsAutoConfiguring
+                        }
+                      >
+                        {runtimeSettingsSaving ? t('Saving...') : t('Save runtime settings')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void refreshRuntimeSettings()}
+                        disabled={
+                          runtimeSettingsLoading ||
+                          runtimeSettingsSaving ||
+                          runtimeSettingsClearing ||
+                          runtimeSettingsAutoConfiguring
+                        }
+                      >
+                        {runtimeSettingsLoading ? t('Loading...') : t('Reload settings')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void clearRuntimeSettingsConfig()}
+                        disabled={
+                          runtimeSettingsLoading ||
+                          runtimeSettingsSaving ||
+                          runtimeSettingsClearing ||
+                          runtimeSettingsAutoConfiguring
+                        }
+                      >
+                        {runtimeSettingsClearing ? t('Clearing...') : t('Clear saved settings')}
+                      </Button>
+                    </div>
+                  }
+                >
+                  <div ref={runtimeAdvancedEditorRef} className="stack">
+                    {runtimeModelOptionsError ? (
+                      <InlineAlert
+                        tone="danger"
+                        title={t('Runtime model options unavailable')}
+                        description={runtimeModelOptionsError}
+                      />
+                    ) : null}
+                    {runtimeModelOptionsLoading ? (
+                      <small className="muted">{t('Loading runtime model options...')}</small>
+                    ) : null}
+                    <Panel as="section" className="workspace-record-item stack tight" tone="soft">
+                      <div className="row between gap wrap align-center">
+                        <strong>{t('Local execution controls')}</strong>
+                        <Badge tone={runtimeHasUnsavedChanges ? 'warning' : 'neutral'}>
+                          {runtimeHasUnsavedChanges ? t('Unsaved edits') : t('Saved draft')}
+                        </Badge>
+                      </div>
+                      <small className="muted">
+                        {t('Update Python path, fallback guards, and key reuse before saving.')}
+                      </small>
+                      <div className="workspace-form-grid">
+                        <label className="stack tight">
+                          <small className="muted">{t('Local Python executable')}</small>
+                          <Input
+                            value={runtimeControlDraft.python_bin}
+                            onChange={(event) =>
+                              updateRuntimeControlDraft('python_bin', event.target.value)
+                            }
+                            placeholder={runtimeRecommendedLocalPythonBin}
+                          />
+                        </label>
+                        <label className="stack tight">
+                          <small className="muted">{t('Saved snapshot')}</small>
+                          <small className="muted">
+                            {runtimeSettingsUpdatedAt
+                              ? `${t('Updated')}: ${formatTimestamp(runtimeSettingsUpdatedAt)}`
+                              : t('No saved settings yet.')}
+                          </small>
+                        </label>
+                        <label className="workspace-checkbox-row workspace-form-span-2">
+                          <Checkbox
+                            checked={keepExistingApiKeys}
+                            onChange={(event) => setKeepExistingApiKeys(event.target.checked)}
+                          />
+                          <span>{t('Blank API Key means save/test will keep using the saved key.')}</span>
+                        </label>
+                        <label className="workspace-checkbox-row">
+                          <Checkbox
+                            checked={runtimeControlDraft.disable_simulated_train_fallback}
+                            onChange={(event) =>
+                              updateRuntimeControlDraft(
+                                'disable_simulated_train_fallback',
+                                event.target.checked
+                              )
+                            }
+                          />
+                          <span>{t('Disable simulated train fallback')}</span>
+                        </label>
+                        <label className="workspace-checkbox-row">
+                          <Checkbox
+                            checked={runtimeControlDraft.disable_inference_fallback}
+                            onChange={(event) =>
+                              updateRuntimeControlDraft(
+                                'disable_inference_fallback',
+                                event.target.checked
+                              )
+                            }
+                          />
+                          <span>{t('Disable inference fallback')}</span>
+                        </label>
+                      </div>
+                      <div className="row gap wrap">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void autoConfigureRuntimeSettingsConfig(false)}
+                          disabled={
+                            runtimeSettingsLoading ||
+                            runtimeSettingsSaving ||
+                            runtimeSettingsClearing ||
+                            runtimeSettingsAutoConfiguring
+                          }
+                        >
+                          {runtimeSettingsAutoConfiguring ? t('Applying...') : t('Auto-match endpoints')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void autoConfigureRuntimeSettingsConfig(true)}
+                          disabled={
+                            runtimeSettingsLoading ||
+                            runtimeSettingsSaving ||
+                            runtimeSettingsClearing ||
+                            runtimeSettingsAutoConfiguring
+                          }
+                        >
+                          {t('Overwrite endpoints')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void refresh()}
+                          disabled={checking}
+                        >
+                          {checking ? t('Checking...') : t('Refresh frameworks')}
+                        </Button>
+                      </div>
+                    </Panel>
+
+                    {visibleFrameworks.map((framework) => {
+                      const draft = runtimeDrafts[framework];
+                      const mode = runtimeConnectionModes[framework];
+                      const connectivity = checkByFramework.get(framework)?.source ?? 'not_configured';
+                      const modelOptions = frameworkModelOptions[framework];
+                      const versionOptions = frameworkVersionOptions[framework];
+                      const bindingEntries = getRuntimeBindingEntries(framework);
+
+                      return (
+                        <Panel
+                          key={framework}
+                          as="section"
+                          className="workspace-record-item stack"
+                          tone="soft"
+                        >
+                          <div className="row between gap wrap align-center">
+                            <div className="stack tight">
+                              <strong>{t(framework)}</strong>
+                              <small className="muted">
+                                {mode === 'local'
+                                  ? t('Run on this machine')
+                                  : t('Call remote runtime')}
+                              </small>
+                            </div>
+                            <div className="row gap wrap align-center">
+                              <Badge
+                                tone={
+                                  connectivity === 'reachable'
+                                    ? 'success'
+                                    : connectivity === 'unreachable'
+                                      ? 'danger'
+                                      : 'neutral'
+                                }
+                              >
+                                {connectivity === 'reachable'
+                                  ? t('reachable')
+                                  : connectivity === 'unreachable'
+                                    ? t('unreachable')
+                                    : t('not configured')}
+                              </Badge>
+                              <Badge tone={mode === 'local' ? 'info' : 'warning'}>
+                                {mode === 'local' ? t('Local mode') : t('Endpoint mode')}
+                              </Badge>
+                              {bindingEntries.some((entry) => entry.meta?.has_api_key) ? (
+                                <Badge tone="info">
+                                  {t('Saved bindings')}:{' '}
+                                  {bindingEntries.filter((entry) => entry.meta?.has_api_key).length}
+                                </Badge>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div className="row gap wrap">
+                            <Button
+                              type="button"
+                              variant={mode === 'local' ? 'secondary' : 'ghost'}
+                              size="sm"
+                              onClick={() => setRuntimeFrameworkMode(framework, 'local')}
+                              disabled={
+                                runtimeSettingsLoading ||
+                                runtimeSettingsSaving ||
+                                runtimeSettingsClearing ||
+                                runtimeSettingsAutoConfiguring
+                              }
+                            >
+                              {t('Local mode')}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant={mode === 'endpoint' ? 'secondary' : 'ghost'}
+                              size="sm"
+                              onClick={() => setRuntimeFrameworkMode(framework, 'endpoint')}
+                              disabled={
+                                runtimeSettingsLoading ||
+                                runtimeSettingsSaving ||
+                                runtimeSettingsClearing ||
+                                runtimeSettingsAutoConfiguring
+                              }
+                            >
+                              {t('Endpoint mode')}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void refresh(framework)}
+                              disabled={checking}
+                            >
+                              {checking && frameworkFilter === framework ? t('Checking...') : t('Check')}
+                            </Button>
+                          </div>
+
+                          <div className="workspace-form-grid">
+                            <label className="stack tight">
+                              <small className="muted">{t('Default model')}</small>
+                              <Select
+                                value={draft.default_model_id}
+                                onChange={(event) =>
+                                  updateRuntimeDefaultModel(framework, event.target.value)
+                                }
+                              >
+                                <option value="">{t('No default model')}</option>
+                                {modelOptions.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                            </label>
+                            <label className="stack tight">
+                              <small className="muted">{t('Default model version')}</small>
+                              <Select
+                                value={draft.default_model_version_id}
+                                onChange={(event) =>
+                                  updateRuntimeDefaultModelVersion(framework, event.target.value)
+                                }
+                              >
+                                <option value="">{t('No default version')}</option>
+                                {versionOptions.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                            </label>
+                            {mode === 'endpoint' ? (
+                              <>
+                                <label className="stack tight workspace-form-span-2">
+                                  <small className="muted">{t('Endpoint URL')}</small>
+                                  <Input
+                                    value={draft.endpoint}
+                                    onChange={(event) =>
+                                      updateRuntimeDraft(framework, 'endpoint', event.target.value)
+                                    }
+                                    placeholder="http://127.0.0.1:9001"
+                                  />
+                                  <small className="muted">
+                                    {t('Call remote runtime when endpoint is configured.')}
+                                  </small>
+                                </label>
+                                <label className="stack tight workspace-form-span-2">
+                                  <small className="muted">{t('Framework API key')}</small>
+                                  <Input
+                                    type="password"
+                                    value={draft.api_key}
+                                    onChange={(event) =>
+                                      updateRuntimeDraft(framework, 'api_key', event.target.value)
+                                    }
+                                    placeholder={
+                                      draft.has_api_key
+                                        ? t('Leave API Key blank to keep using the saved key.')
+                                        : ''
+                                    }
+                                  />
+                                  <small className="muted">
+                                    {draft.has_api_key
+                                      ? t('Stored key: {key}', { key: draft.api_key_masked })
+                                      : t('No saved key yet. Input API key once to start managed editing.')}
+                                  </small>
+                                </label>
+                              </>
+                            ) : null}
+                            <label className="stack tight">
+                              <small className="muted">{t('Local model path')}</small>
+                              <Input
+                                value={draft.local_model_path}
+                                onChange={(event) =>
+                                  updateRuntimeDraft(framework, 'local_model_path', event.target.value)
+                                }
+                                placeholder={t('Optional local model artifact path')}
+                              />
+                            </label>
+                            <label className="stack tight workspace-form-span-2">
+                              <small className="muted">{t('Local train command')}</small>
+                              <Textarea
+                                rows={3}
+                                value={draft.local_train_command}
+                                onChange={(event) =>
+                                  updateRuntimeDraft(
+                                    framework,
+                                    'local_train_command',
+                                    event.target.value
+                                  )
+                                }
+                                placeholder={t('Optional local training command')}
+                              />
+                            </label>
+                            <label className="stack tight workspace-form-span-2">
+                              <small className="muted">{t('Local predict command')}</small>
+                              <Textarea
+                                rows={3}
+                                value={draft.local_predict_command}
+                                onChange={(event) =>
+                                  updateRuntimeDraft(
+                                    framework,
+                                    'local_predict_command',
+                                    event.target.value
+                                  )
+                                }
+                                placeholder={t('Optional local prediction command')}
+                              />
+                            </label>
+                          </div>
+
+                          {mode === 'endpoint' ? (
+                            <div className="stack tight">
+                              <div className="row gap wrap">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => generateAndApplyFrameworkApiKey(framework)}
+                                  disabled={
+                                    runtimeSettingsLoading ||
+                                    runtimeSettingsSaving ||
+                                    runtimeSettingsClearing ||
+                                    runtimeSettingsAutoConfiguring
+                                  }
+                                >
+                                  {t('Generate key')}
+                                </Button>
+                                {draft.has_api_key ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => rotateRuntimeApiKey(framework)}
+                                    disabled={runtimeSettingsSaving}
+                                  >
+                                    {t('Rotate saved key')}
+                                  </Button>
+                                ) : null}
+                                {draft.has_api_key ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => revokeRuntimeApiKey(framework)}
+                                    disabled={runtimeSettingsSaving}
+                                  >
+                                    {t('Revoke saved key')}
+                                  </Button>
+                                ) : null}
+                              </div>
+
+                              {bindingEntries.length > 0 ? (
+                                <details className="workspace-details">
+                                  <summary>{t('Model and version keys')}</summary>
+                                  <div className="stack" style={{ marginTop: '0.75rem' }}>
+                                    {bindingEntries.map((entry) => {
+                                      const draftValue = draft.model_api_keys[entry.key] ?? '';
+                                      const expiresAtValue =
+                                        draft.model_api_key_expires_at[entry.key] ?? '';
+                                      const maxCallsValue =
+                                        draft.model_api_key_max_calls[entry.key] ?? '';
+                                      return (
+                                        <Panel
+                                          key={entry.key}
+                                          as="section"
+                                          className="workspace-record-item compact stack tight"
+                                          tone="soft"
+                                        >
+                                          <div className="row between gap wrap align-center">
+                                            <div className="stack tight">
+                                              <strong>{entry.label}</strong>
+                                              <small className="muted">{entry.description}</small>
+                                            </div>
+                                            <Badge
+                                              tone={
+                                                entry.meta?.has_api_key
+                                                  ? 'success'
+                                                  : draftValue.trim()
+                                                    ? 'info'
+                                                    : 'neutral'
+                                              }
+                                            >
+                                              {entry.meta?.has_api_key
+                                                ? t('Saved')
+                                                : draftValue.trim()
+                                                  ? t('Unsaved edits')
+                                                  : t('Missing')}
+                                            </Badge>
+                                          </div>
+                                          <div className="workspace-form-grid">
+                                            <label className="stack tight workspace-form-span-2">
+                                              <small className="muted">{t('API Key')}</small>
+                                              <Input
+                                                type="password"
+                                                value={draftValue}
+                                                onChange={(event) =>
+                                                  updateRuntimeDraftModelApiKey(
+                                                    framework,
+                                                    entry.key,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                placeholder={
+                                                  entry.meta?.has_api_key
+                                                    ? t('Leave API Key blank to keep using the saved key.')
+                                                    : ''
+                                                }
+                                              />
+                                            </label>
+                                            <label className="stack tight">
+                                              <small className="muted">{t('Expires at (optional)')}</small>
+                                              <Input
+                                                value={expiresAtValue}
+                                                onChange={(event) =>
+                                                  updateRuntimeDraftModelApiKeyExpiresAt(
+                                                    framework,
+                                                    entry.key,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                placeholder="2026-12-31T00:00:00Z"
+                                              />
+                                            </label>
+                                            <label className="stack tight">
+                                              <small className="muted">{t('Max calls (optional)')}</small>
+                                              <Input
+                                                value={maxCallsValue}
+                                                inputMode="numeric"
+                                                onChange={(event) =>
+                                                  updateRuntimeDraftModelApiKeyMaxCalls(
+                                                    framework,
+                                                    entry.key,
+                                                    event.target.value
+                                                  )
+                                                }
+                                              />
+                                            </label>
+                                          </div>
+                                          <small className="muted">
+                                            {entry.meta?.has_api_key
+                                              ? t('Stored key: {key}', {
+                                                  key: entry.meta.api_key_masked
+                                                })
+                                              : t('No saved key yet. Input API key once to start managed editing.')}
+                                          </small>
+                                          <div className="row gap wrap">
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() =>
+                                                generateAndApplyModelBindingApiKey(
+                                                  framework,
+                                                  entry.key
+                                                )
+                                              }
+                                              disabled={runtimeSettingsSaving}
+                                            >
+                                              {t('Generate key')}
+                                            </Button>
+                                            {entry.meta?.has_api_key ? (
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() =>
+                                                  rotateRuntimeApiKey(framework, entry.key)
+                                                }
+                                                disabled={runtimeSettingsSaving}
+                                              >
+                                                {t('Rotate saved key')}
+                                              </Button>
+                                            ) : null}
+                                            {entry.meta?.has_api_key ? (
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() =>
+                                                  revokeRuntimeApiKey(framework, entry.key)
+                                                }
+                                                disabled={runtimeSettingsSaving}
+                                              >
+                                                {t('Revoke saved key')}
+                                              </Button>
+                                            ) : null}
+                                          </div>
+                                        </Panel>
+                                      );
+                                    })}
+                                  </div>
+                                </details>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <small className="muted">
+                              {t('Local mode ignores remote endpoint and API key fields.')}
+                            </small>
+                          )}
+                        </Panel>
+                      );
+                    })}
+                  </div>
+                </SectionCard>
               </div>
             )}
 

@@ -640,6 +640,49 @@
   max-width: 100%;
 }
 
+.annotation-focus-page {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.annotation-focus-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: 16px 18px;
+}
+
+.annotation-focus-header__left,
+.annotation-focus-header__right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.annotation-focus-header__right {
+  justify-content: flex-end;
+}
+
+.annotation-focus-header__center {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.annotation-focus-header__title {
+  font-size: clamp(18px, 2.2vw, 24px);
+  line-height: 1.2;
+}
+
+.annotation-focus-header__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .annotation-studio-workbench {
   min-height: clamp(620px, 76vh, 980px);
   min-width: 0;
@@ -648,7 +691,7 @@
 }
 
 .annotation-studio-workbench .workspace-workbench-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 28%);
 }
 
 .annotation-studio-workbench--expanded .workspace-workbench-grid {
@@ -665,6 +708,7 @@
   display: grid;
   gap: var(--space-4);
   padding: 20px;
+  min-height: min(78vh, 920px);
 }
 
 .annotation-canvas-shell__header {
@@ -678,6 +722,19 @@
 .annotation-ocr-panel {
   display: grid;
   gap: var(--space-3);
+}
+
+.annotation-tool-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.annotation-inline-prompt {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
 }
 
 .annotation-selected-box-card {
@@ -734,6 +791,25 @@
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
 }
 
+.annotation-command-bar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.annotation-command-bar__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.annotation-command-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .annotation-action-groups {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -762,6 +838,17 @@
 
 .annotation-sidebar-tabs > * {
   width: 100%;
+}
+
+.annotation-sample-info-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-2);
+}
+
+.annotation-sample-info-list strong {
+  display: block;
+  margin-top: 2px;
 }
 
 .workspace-workbench {
@@ -1291,9 +1378,22 @@
     grid-template-columns: 1fr;
   }
 
+  .annotation-focus-header {
+    grid-template-columns: 1fr;
+  }
+
+  .annotation-focus-header__right {
+    justify-content: flex-start;
+  }
+
   .annotation-studio-queue,
   .annotation-studio-workbench {
     min-height: unset;
+  }
+
+  .annotation-command-bar__summary,
+  .annotation-command-bar__actions {
+    align-items: stretch;
   }
 
   .workspace-overview-signal-grid {
@@ -1301,7 +1401,7 @@
   }
 }
 
-@media (max-width: 1728px) {
+@media (max-width: 1200px) {
   .annotation-studio-workbench .workspace-workbench-grid {
     grid-template-columns: 1fr;
   }

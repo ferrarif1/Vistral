@@ -8,10 +8,8 @@ import {
   useState,
   type MouseEvent
 } from 'react';
+import { Badge } from './ui/Badge';
 import { useI18n } from '../i18n/I18nProvider';
-import { Button } from './ui/Button';
-import { Input } from './ui/Field';
-import { Card } from './ui/Surface';
 
 export interface AnnotationBox {
   id: string;
@@ -22,14 +20,21 @@ export interface AnnotationBox {
   label: string;
 }
 
+export type AnnotationCanvasToolMode = 'draw' | 'select';
+
 interface AnnotationCanvasProps {
-  title: string;
+  title?: string;
   filename: string;
   imageUrl?: string | null;
   boxes: AnnotationBox[];
+  predictionBoxes?: AnnotationBox[];
   defaultLabel: string;
+  toolMode?: AnnotationCanvasToolMode;
+  showPredictionOverlay?: boolean;
   onChange: (boxes: AnnotationBox[]) => void;
   onSelectionChange?: (box: AnnotationBox | null) => void;
+  onBoxCreate?: (box: AnnotationBox) => void;
+  onInteractionStart?: () => void;
   disabled?: boolean;
   width?: number;
   height?: number;
@@ -87,20 +92,60 @@ const normalizeRect = (start: Point, end: Point) => {
 const nextBoxId = (): string => `box-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 const MIN_BOX_SIZE = 8;
 
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
+};
+
+const cloneBox = (box: AnnotationBox): AnnotationBox => ({ ...box });
+
+const toPredictionStyleBox = (box: AnnotationBox): AnnotationBox => ({
+  ...box,
+  label: box.label || '预测'
+});
+
+const renderBox = (
+  box: AnnotationBox,
+  className: string,
+  extraProps?: { 'aria-hidden'?: boolean }
+) => (
+  <div
+    key={box.id}
+    className={className}
+    style={{
+      left: box.x,
+      top: box.y,
+      width: box.width,
+      height: box.height
+    }}
+    {...extraProps}
+  >
+    <span>{box.label}</span>
+  </div>
+);
+
 const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProps>(function AnnotationCanvas(
-{
-  title,
-  filename,
-  imageUrl = null,
-  boxes,
-  defaultLabel,
-  onChange,
-  onSelectionChange,
-  disabled,
-  width = 700,
-  height = 380
-}: AnnotationCanvasProps,
-ref
+  {
+    filename,
+    imageUrl = null,
+    boxes,
+    predictionBoxes = [],
+    defaultLabel,
+    toolMode = 'draw',
+    showPredictionOverlay = false,
+    onChange,
+    onSelectionChange,
+    onBoxCreate,
+    onInteractionStart,
+    disabled,
+    width = 700,
+    height = 420
+  }: AnnotationCanvasProps,
+  ref
 ) {
   const { t } = useI18n();
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -113,18 +158,28 @@ ref
     [boxes, selectedBoxId]
   );
   const showImage = Boolean(imageUrl) && !imageLoadFailed;
+  const visiblePredictionBoxes = useMemo(
+    () => predictionBoxes.map(toPredictionStyleBox),
+    [predictionBoxes]
+  );
 
   useEffect(() => {
     setImageLoadFailed(false);
   }, [imageUrl]);
 
   useEffect(() => {
-    onSelectionChange?.(selectedBox);
-  }, [onSelectionChange, selectedBox]);
+    if (!selectedBoxId) {
+      return;
+    }
 
-  const eventToPoint = (event: MouseEvent<HTMLDivElement>): Point | null => {
-    return pointFromClient(event.clientX, event.clientY);
-  };
+    if (!boxes.some((item) => item.id === selectedBoxId)) {
+      setSelectedBoxId(null);
+    }
+  }, [boxes, selectedBoxId]);
+
+  useEffect(() => {
+    onSelectionChange?.(selectedBox ? cloneBox(selectedBox) : null);
+  }, [onSelectionChange, selectedBox]);
 
   const pointFromClient = (clientX: number, clientY: number): Point | null => {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -138,12 +193,15 @@ ref
     };
   };
 
+  const eventToPoint = (event: MouseEvent<HTMLDivElement>): Point | null =>
+    pointFromClient(event.clientX, event.clientY);
+
   const commitBox = useCallback(
     (boxId: string, patch: Partial<AnnotationBox>) => {
-    onChange(
-      boxes.map((item) =>
-        item.id === boxId
-          ? {
+      onChange(
+        boxes.map((item) =>
+          item.id === boxId
+            ? {
                 ...item,
                 ...patch
               }
@@ -208,8 +266,14 @@ ref
     });
   };
 
-  const beginDraw = (event: MouseEvent<HTMLDivElement>) => {
+  const beginStageInteraction = (event: MouseEvent<HTMLDivElement>) => {
     if (disabled) {
+      return;
+    }
+
+    if (toolMode === 'select') {
+      setSelectedBoxId(null);
+      setInteraction(null);
       return;
     }
 
@@ -218,6 +282,7 @@ ref
       return;
     }
 
+    onInteractionStart?.();
     setSelectedBoxId(null);
     setInteraction({
       type: 'drawing',
@@ -226,7 +291,7 @@ ref
     });
   };
 
-  const moveDraw = (event: MouseEvent<HTMLDivElement>) => {
+  const updateInteraction = (event: MouseEvent<HTMLDivElement>) => {
     if (!interaction || disabled) {
       return;
     }
@@ -252,7 +317,7 @@ ref
     updateResizingBox(interaction, point);
   };
 
-  const finishDraw = () => {
+  const finishInteraction = () => {
     if (!interaction || disabled) {
       setInteraction(null);
       return;
@@ -281,6 +346,7 @@ ref
 
     onChange([...boxes, created]);
     setSelectedBoxId(created.id);
+    onBoxCreate?.(cloneBox(created));
   };
 
   const removeSelected = useCallback(() => {
@@ -302,14 +368,38 @@ ref
     () => ({
       deleteSelectedBox: removeSelected,
       clearAllBoxes: clearAll,
-      getSelectedBox: () => selectedBox
+      getSelectedBox: () => (selectedBox ? cloneBox(selectedBox) : null)
     }),
-    [removeSelected, clearAll, selectedBox]
+    [clearAll, removeSelected, selectedBox]
   );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (disabled || !selectedBoxId) {
+      if (disabled || isEditableTarget(event.target)) {
+        return;
+      }
+
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedBoxId) {
+        event.preventDefault();
+        removeSelected();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (interaction?.type === 'drawing') {
+          event.preventDefault();
+          setInteraction(null);
+          return;
+        }
+
+        if (selectedBoxId) {
+          event.preventDefault();
+          setSelectedBoxId(null);
+        }
+        return;
+      }
+
+      if (!selectedBoxId || !event.shiftKey) {
         return;
       }
 
@@ -318,16 +408,7 @@ ref
         return;
       }
 
-      const target = event.target as HTMLElement | null;
-      const tagName = target?.tagName?.toLowerCase();
-      const isEditable =
-        target?.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select';
-
-      if (isEditable) {
-        return;
-      }
-
-      const step = event.shiftKey ? 10 : 1;
+      const step = 8;
       switch (event.key) {
         case 'ArrowUp':
           event.preventDefault();
@@ -353,12 +434,6 @@ ref
             x: Number(clamp(current.x + step, 0, width - current.width).toFixed(1))
           });
           break;
-        case 'Delete':
-        case 'Backspace':
-          event.preventDefault();
-          onChange(boxes.filter((item) => item.id !== selectedBoxId));
-          setSelectedBoxId(null);
-          break;
         default:
           break;
       }
@@ -366,43 +441,21 @@ ref
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [boxes, commitBox, disabled, height, onChange, selectedBoxId, width]);
-
-  const updateSelected = (patch: Partial<AnnotationBox>) => {
-    if (!selectedBoxId) {
-      return;
-    }
-
-    onChange(
-      boxes.map((item) =>
-        item.id === selectedBoxId
-          ? {
-              ...item,
-              ...patch
-            }
-          : item
-      )
-    );
-  };
+  }, [boxes, commitBox, disabled, height, interaction?.type, removeSelected, selectedBoxId, width]);
 
   const previewRect =
     interaction?.type === 'drawing' ? normalizeRect(interaction.start, interaction.current) : null;
 
   return (
-    <Card as="section">
-      <div className="row between gap wrap align-center">
-        <h3>{t(title)}</h3>
-        <span className="muted">{t('拖动画框，点击框体即可编辑。')}</span>
-      </div>
-
+    <div className="annotation-canvas-surface">
       <div
         ref={stageRef}
-        className="annotation-canvas-stage"
+        className={`annotation-canvas-stage annotation-canvas-stage--${toolMode}`}
         style={{ width, height }}
-        onMouseDown={beginDraw}
-        onMouseMove={moveDraw}
-        onMouseUp={finishDraw}
-        onMouseLeave={finishDraw}
+        onMouseDown={beginStageInteraction}
+        onMouseMove={updateInteraction}
+        onMouseUp={finishInteraction}
+        onMouseLeave={finishInteraction}
       >
         {showImage ? (
           <img
@@ -416,6 +469,14 @@ ref
         <div className={`annotation-canvas-bg${showImage ? ' hidden' : ''}`}>
           <strong>{filename}</strong>
         </div>
+
+        {showPredictionOverlay
+          ? visiblePredictionBoxes.map((box) =>
+              renderBox(box, 'annotation-canvas-box prediction', {
+                'aria-hidden': true
+              })
+            )
+          : null}
 
         {boxes.map((box) => (
           <div
@@ -431,11 +492,14 @@ ref
               if (disabled) {
                 return;
               }
+
               event.stopPropagation();
               const point = eventToPoint(event);
               if (!point) {
                 return;
               }
+
+              onInteractionStart?.();
               setSelectedBoxId(box.id);
               setInteraction({
                 type: 'moving',
@@ -446,14 +510,12 @@ ref
             }}
           >
             <span>{box.label}</span>
-            {selectedBoxId === box.id ? (
-              <>
-                {(['nw', 'ne', 'sw', 'se'] as ResizeHandle[]).map((handle) => (
-                  <Button
+            {selectedBoxId === box.id
+              ? (['nw', 'ne', 'sw', 'se'] as ResizeHandle[]).map((handle) => (
+                  <button
                     key={handle}
                     type="button"
                     className={`annotation-canvas-handle ${handle}`}
-                    unstyled
                     onMouseDown={(event) => {
                       if (disabled) {
                         return;
@@ -465,6 +527,7 @@ ref
                         return;
                       }
 
+                      onInteractionStart?.();
                       setInteraction({
                         type: 'resizing',
                         boxId: box.id,
@@ -473,11 +536,10 @@ ref
                         startBox: box
                       });
                     }}
-                    disabled={disabled}
+                    aria-label={t('调整选中框')}
                   />
-                ))}
-              </>
-            ) : null}
+                ))
+              : null}
           </div>
         ))}
 
@@ -494,62 +556,28 @@ ref
         ) : null}
       </div>
 
-      <div className="row gap wrap">
-        <Button variant="secondary" size="sm" onClick={removeSelected} disabled={disabled || !selectedBoxId}>
-          {t('删除选中框')}
-        </Button>
-        <Button variant="ghost" size="sm" onClick={clearAll} disabled={disabled || boxes.length === 0}>
-          {t('清空全部框')}
-        </Button>
-      </div>
-
-      {selectedBox ? (
-        <div className="annotation-box-editor">
-          <label>
-            {t('标签')}
-            <Input
-              value={selectedBox.label}
-              onChange={(event) => updateSelected({ label: event.target.value })}
-              disabled={disabled}
-            />
-          </label>
-          <label>
-            X
-            <Input
-              value={selectedBox.x}
-              onChange={(event) => updateSelected({ x: Number(event.target.value) || 0 })}
-              disabled={disabled}
-            />
-          </label>
-          <label>
-            Y
-            <Input
-              value={selectedBox.y}
-              onChange={(event) => updateSelected({ y: Number(event.target.value) || 0 })}
-              disabled={disabled}
-            />
-          </label>
-          <label>
-            {t('宽度')}
-            <Input
-              value={selectedBox.width}
-              onChange={(event) => updateSelected({ width: Number(event.target.value) || 0 })}
-              disabled={disabled}
-            />
-          </label>
-          <label>
-            {t('高度')}
-            <Input
-              value={selectedBox.height}
-              onChange={(event) => updateSelected({ height: Number(event.target.value) || 0 })}
-              disabled={disabled}
-            />
-          </label>
+      <div className="annotation-canvas-status">
+        <small className="muted">
+          {toolMode === 'draw'
+            ? t('框选模式：拖动画布创建新框，点击已有框继续调整。')
+            : t('选择模式：点击框体编辑，按 B 切回框选。')}
+        </small>
+        <div className="row gap wrap align-center">
+          <Badge tone={toolMode === 'draw' ? 'info' : 'neutral'}>
+            {toolMode === 'draw' ? t('框选') : t('选择')}
+          </Badge>
+          {showPredictionOverlay && visiblePredictionBoxes.length > 0 ? (
+            <Badge tone="neutral">{t('预测')}: {visiblePredictionBoxes.length}</Badge>
+          ) : null}
+          {selectedBox ? (
+            <Badge tone="neutral">{t('已选中')}: {selectedBox.label}</Badge>
+          ) : (
+            <Badge tone="neutral">{t('未选中框')}</Badge>
+          )}
+          {selectedBox ? <Badge tone="neutral">{t('Shift + 方向键微调')}</Badge> : null}
         </div>
-      ) : (
-        <small className="muted">{t('未选中框。')}</small>
-      )}
-    </Card>
+      </div>
+    </div>
   );
 });
 

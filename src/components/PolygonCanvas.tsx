@@ -144,7 +144,7 @@ export default function PolygonCanvas({
 
   const completePolygon = () => {
     if (draftPoints.length < 3) {
-      setError(t('Polygon requires at least 3 points.'));
+      setError(t('至少需要 3 个点才能完成多边形。'));
       return;
     }
 
@@ -242,7 +242,7 @@ export default function PolygonCanvas({
     <Card as="section">
       <div className="row between gap wrap align-center">
         <h3>{t(title)}</h3>
-        <span className="muted">{t('Click to add points, then complete polygon. Drag vertices to adjust.')}</span>
+        <span className="muted">{t('点击画布添加点，完成后可拖动顶点微调。')}</span>
       </div>
 
       <div
@@ -321,37 +321,37 @@ export default function PolygonCanvas({
 
       <div className="row gap wrap">
         <Button onClick={completePolygon} variant="secondary" size="sm" disabled={disabled || draftPoints.length < 3}>
-          {t('Complete Polygon')}
+          {t('完成多边形')}
         </Button>
         <Button onClick={clearDraft} variant="ghost" size="sm" disabled={disabled || draftPoints.length === 0}>
-          {t('Clear Draft Points')}
+          {t('清空草稿点')}
         </Button>
         <Button onClick={removeSelected} variant="secondary" size="sm" disabled={disabled || !selectedPolygonId}>
-          {t('Delete Selected Polygon')}
+          {t('删除选中多边形')}
         </Button>
         <Button onClick={clearAll} variant="ghost" size="sm" disabled={disabled || polygons.length === 0}>
-          {t('Clear All Polygons')}
+          {t('清空全部多边形')}
         </Button>
       </div>
 
       <div className="polygon-meta-grid">
         <label>
-          {t('New Polygon Label')}
+          {t('新多边形标签')}
           <Input value={draftLabel} onChange={(event) => setDraftLabel(event.target.value)} disabled={disabled} />
         </label>
 
         <label>
-          {t('Selected Polygon Label')}
+          {t('选中多边形标签')}
           <Input
             value={selectedPolygon?.label ?? ''}
             onChange={(event) => updateSelectedPolygon({ label: event.target.value })}
             disabled={disabled || !selectedPolygon}
-            placeholder={t('Select polygon to edit label')}
+            placeholder={t('先选择一个多边形')}
           />
         </label>
       </div>
 
-      {error ? <StateBlock variant="error" title={t('Polygon Error')} description={error} /> : null}
+      {error ? <StateBlock variant="error" title={t('多边形错误')} description={error} /> : null}
     </Card>
   );
 }

@@ -258,6 +258,64 @@ Rules:
   - `npm run typecheck`
   - `npm run lint`
   - `npm run build`
+
+## 2026-04-16 12:35 (Asia/Shanghai)
+- context: 标注工作台已按“单样本、画布优先、右侧三标签、底部固定动作条”方向完成一轮重构；被新的 Runtime 设置功能闭环问题打断，需要先切去修复 `/settings/runtime` 中“编辑不可用”的真实交互缺口。
+- done:
+  - 已完成标注页合同与实现对齐：
+    - `docs/prd.md`
+    - `docs/ia.md`
+    - `docs/flows.md`
+    - `docs/annotation-workflow.md`
+  - 已完成标注页前端重构：
+    - 轻量页头 + 当前样本上下文
+    - 画布主区 + 右侧 `标注 / 预测对比 / 样本信息` Tab
+    - 底部固定操作条
+    - 全屏、快捷键、自动保存后提交复核、未保存切样拦截
+    - 预测对比与复核上下文降级
+  - 已完成基础验证：
+    - `npm run typecheck`
+    - `npm run lint`
+    - `npm run build`
+- next:
+  1. 以训练/标注工程师视角继续回归标注页，检查是否还有“看得到但不能操作”的功能断点。
+  2. 处理标注页剩余体验债，例如重复动作、分割编辑撤销粒度、状态反馈一致性。
+  3. 若下一轮继续做标注完整性测试，补充对应文档记录与验收结论。
+- risks:
+  - 标注页虽已完成主重构，但仍需一轮真实使用路径回归，避免存在隐藏的交互断点。
+  - 当前优先级已切到 Runtime 设置页，标注页剩余问题尚未完全闭环。
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+
+## 2026-04-16 14:25 (Asia/Shanghai)
+- context: 用户在 `/settings/runtime` 页面反馈“点了编辑没用，哪里都不能编辑”；本轮转为验证运行时设置页的真实功能闭环，而不是仅做视觉整理。
+- done:
+  - 已确认问题根因：`RuntimeSettingsPage.tsx` 中保留了 `编辑` 按钮与框架清单，但真正的编辑表单已被重构过程中移除，导致按钮只有筛选/滚动效果，没有可修改字段。
+  - 已补回 Runtime 设置高级编辑区，并串起完整闭环：
+    - 框架级编辑表单（默认模型、默认版本、endpoint、本地模型路径、本地训练/预测命令）
+    - 本地/远端模式切换
+    - 框架级 API key 输入、生成、轮换、撤销
+    - 模型级 / 版本级 API key 绑定编辑
+    - Python 路径、fallback 开关、已保存 key 复用开关
+    - 保存、重载、清空、自动匹配 endpoint、刷新检查
+  - 已补一轮 Runtime 页面中文词条，减少运行时设置页中英混排。
+  - 已完成验证：
+    - `npm run lint`
+    - `npm run build`
+    - `npm run smoke:runtime-settings-persistence`
+- next:
+  1. 继续以训练工程师视角巡检其它高频页，优先检查“按钮存在但未接真实动作”的断点。
+  2. 回看训练任务页、训练详情页、推理验证页的动作闭环与中文一致性。
+  3. 若继续做整站真用性回归，按页面记录剩余缺口与验证结果。
+- risks:
+  - Runtime 设置页已闭环，但全站仍未完成系统性的“真操作可用性”回归。
+  - 运行时设置页新增了更多真实编辑能力，后续仍建议补一轮浏览器手测，确认不同模式切换时的文案与视觉节奏。
+- verification:
+  - `npm run lint`
+  - `npm run build`
+  - `npm run smoke:runtime-settings-persistence`
   - `npm run smoke:runtime-settings-persistence`
   - `npm run smoke:real-closure`
 - risks:

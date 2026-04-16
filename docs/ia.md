@@ -118,28 +118,24 @@ Define executable route and page structure for the AI-native conversation worksp
   - item browser filters should include at minimum search, split, item status, annotation queue status, and metadata/tag hints
   - dataset detail also surfaces annotation summary cards and direct queue links into annotation workspace (`needs_work`, `in_review`, `rejected`, `approved`)
 - `/datasets/:datasetId/annotate`
-  - sample review workbench layout (sample + annotation + review context + metadata in one workspace)
+  - single-sample annotation workbench layout with one current sample as the only first-screen primary task
   - supports optional `?version=<dataset_version_id>` so dataset-detail snapshot context can stay visible while reviewing queues
-  - page-level onboarding card should clarify the review workflow (`select -> annotate -> submit/review -> continue queue`)
-  - the main workspace and queue-empty states should mirror the first incomplete review step with one explicit next-action card
-  - onboarding should expose direct links back to dataset detail and forward to scoped inference lane
-  - inline onboarding on this page should stay compact by default; deeper guidance belongs in the persistent `Page tips` floating entry instead of occupying the main canvas lane
+  - this route is an exception to the heavier onboarding-card pattern: first screen should stay operational, while deeper guidance moves into shortcut help / secondary entry points
   - default page structure should stay focused:
-    - left queue rail for item selection and filters
-    - center work surface for preview/canvas/editor + primary annotation actions
-    - right inspector for current-sample summary, prediction compare, and review actions
-  - queue filters should be layered:
-    - common filters (queue lane, search, split) stay visible
-    - lower-frequency filters (item status, metadata/tag expressions) should live behind a collapsed "more filters" control
+    - lightweight top header with `back to dataset`, dataset/version/sample identity, queue position, previous/next, full-screen, and shortcut help
+    - center split work area with canvas as the dominant visual surface
+    - right inspector with exactly three tabs: `annotation`, `prediction compare`, `sample info`
+    - fixed bottom action bar with `undo`, `redo`, `save in progress`, `submit review`, `previous`, `next`
+  - queue filtering belongs to dataset detail / sample browser; annotation page should only keep current queue position plus previous/next sample navigation
+  - review controls should not occupy first screen unless the current sample status is `in_review`
+  - prediction compare, low-confidence context, and pre-annotation actions must stay behind the right-side secondary tabs or overflow actions
   - OCR editing should prioritize the simplest action first:
     - line text input + add action stay visible
     - optional controls such as confidence and region binding should be demoted behind a compact disclosure
-  - annotation actions should be grouped by intent instead of appearing as one flat button row:
-    - keep-editing actions (`undo`, `save in progress`)
-    - move-forward actions (`mark annotated`, `submit review`)
-  - the right-side support area should open with a compact review-context summary first, while full queue focus, session history, and radar detail remain expandable
-  - the current-sample summary should also absorb the latest review conclusion (status / reason / comment) so annotators do not need to compare two separate cards for the same sample
+  - new-region labeling should minimize clicks: after creating a new region, class selection should surface immediately
+  - the current-sample summary should absorb the latest review conclusion (status / reason / comment) so annotators do not need to compare two separate cards for the same sample
   - secondary context (for example shortcut sheets, review-session history, low-confidence radar, and workspace return points) should be collapsed or demoted by default so first-time users are not forced to parse every tool at once
+  - shared app navigation should auto-collapse on this route to maximize canvas width, while still allowing manual re-expand
   - user-facing copy in this workspace should avoid raw enum/status ids where a plain-language label is available
   - detection box + OCR text annotation
   - submit-review and approve/reject actions

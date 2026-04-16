@@ -97,12 +97,27 @@ Vistral must provide one closed-loop platform where engineers can:
 - polygon/segmentation
 - OCR text input/correction
 - save/undo/continue editing
+- single-sample focused workspace: one current sample, one primary job, no parallel queue/review/filter modules competing with the canvas
+- canvas-first layout: lightweight header, large center canvas, right-side secondary tabs, fixed bottom action bar
+- primary operator path must stay obvious within 3 seconds: `annotate -> save / submit -> next sample`
+- bottom action bar keeps only one primary forward action (`submit review` or contextual review decision)
+- duplicated actions are not allowed in multiple page regions with the same semantics
+- annotation workspace must support keyboard shortcuts at minimum:
+  - `B` draw box
+  - `V` select/edit
+  - `Delete` delete selected region
+  - `Ctrl/Cmd+S` save in progress
+  - `ArrowLeft / ArrowRight` previous / next sample
+  - `Enter` submit review
+- full-screen annotation mode is required
 - status flow: `unannotated -> in_progress -> annotated -> in_review -> approved/rejected`
 
 ### FR-008 Pre-Annotation and Review
 - run pre-annotation with selected model version
 - manual correction and review sampling
 - reject/rework path with audit notes
+- prediction comparison, low-confidence triage, pre-annotation actions, and extra sample metadata must be secondary surfaces and cannot displace the annotation canvas from first-screen focus
+- review actions should only take primary space when the current sample is actually in `in_review`; otherwise the annotation workspace stays focused on labeling
 
 ### FR-009 Training Jobs
 - create training job
