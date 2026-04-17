@@ -1211,13 +1211,21 @@ export default function DatasetDetailPage() {
             ? buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)
             : '/training/jobs'
         };
+  const handleNextDatasetAction = () => {
+    if ('to' in nextDatasetAction && nextDatasetAction.to) {
+      navigate(nextDatasetAction.to);
+      return;
+    }
+
+    nextDatasetAction.onClick?.();
+  };
 
   return (
     <WorkspacePage>
       <PageHeader
         eyebrow={t('Dataset Lane')}
         title={dataset.name}
-        description={t('Check dataset readiness, samples, and version snapshots in one place.')}
+        description={t('Check readiness first, then open samples or versions.')}
         meta={
           <div className="row gap wrap align-center">
             <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
@@ -1226,15 +1234,20 @@ export default function DatasetDetailPage() {
           </div>
         }
         primaryAction={{
-          label: t('Open Annotation Workspace'),
-          onClick: () => {
-            navigate(prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`);
-          }
+          label: nextDatasetAction.label,
+          onClick: handleNextDatasetAction
         }}
         secondaryActions={
           <>
             <ButtonLink to="/datasets" variant="ghost" size="sm">
               {t('Back to Datasets')}
+            </ButtonLink>
+            <ButtonLink
+              to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+              variant="ghost"
+              size="sm"
+            >
+              {t('Open Annotation Workspace')}
             </ButtonLink>
           </>
         }
@@ -1286,77 +1299,8 @@ export default function DatasetDetailPage() {
         main={
           <div className="workspace-main-stack">
             <SectionCard
-              title={t('Dataset overview')}
-              description={t('Status, progress, and the next action.')}
-            >
-              <DetailList
-                items={[
-                  { label: t('Task Type'), value: t(dataset.task_type) },
-                  { label: t('Last updated'), value: formatCompactTimestamp(dataset.updated_at, t('n/a')) },
-                  { label: t('Visible samples'), value: filteredSampleItems.length },
-                  { label: t('Classes'), value: dataset.label_schema.classes.length }
-                ]}
-              />
-              {dataset.description ? <small className="muted">{dataset.description}</small> : null}
-              <ActionBar
-                primary={
-                  <ButtonLink
-                    to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
-                    variant="secondary"
-                    size="sm"
-                  >
-                    {t('Open Annotation Workspace')}
-                  </ButtonLink>
-                }
-                secondary={
-                  <Button type="button" variant="ghost" size="sm" onClick={focusUploadSection}>
-                    {t('Jump to Files')}
-                  </Button>
-                }
-                tertiary={
-                  preferredTrainingVersion ? (
-                    <ButtonLink
-                      to={buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)}
-                      variant="ghost"
-                      size="sm"
-                    >
-                      {t('Open Training Jobs')}
-                    </ButtonLink>
-                  ) : null
-                }
-              />
-            </SectionCard>
-
-            <div ref={uploadSectionRef}>
-              <AttachmentUploader
-                title={t('Dataset files')}
-                items={attachments}
-                onUpload={uploadDatasetFile}
-                onUploadFiles={uploadDatasetFiles}
-                contentUrlBuilder={api.attachmentContentUrl}
-                onDelete={deleteAttachment}
-                emptyDescription={t('Upload images or archives. Files stay visible for this dataset context.')}
-                uploadButtonLabel={t('Upload Dataset File')}
-                disabled={busy}
-                headerActions={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      void refreshAttachmentSection();
-                    }}
-                    disabled={busy || sectionRefreshing === 'attachments'}
-                  >
-                    {sectionRefreshing === 'attachments' ? t('Refreshing...') : t('Refresh')}
-                  </Button>
-                }
-              />
-            </div>
-
-            <SectionCard
-              title={t('Sample browser')}
-              description={t('Filter and edit samples here; annotation editing stays in the workspace.')}
+              title={t('Current samples')}
+              description={t('Search, narrow, and open the focused queue.')}
               actions={
                 <Button
                   type="button"
@@ -1366,19 +1310,19 @@ export default function DatasetDetailPage() {
                     void refreshItemSection();
                   }}
                   disabled={busy || sectionRefreshing === 'items'}
-                >
-                  {sectionRefreshing === 'items' ? t('Refreshing...') : t('Refresh')}
-                </Button>
+              >
+                {sectionRefreshing === 'items' ? t('Refreshing...') : t('Refresh')}
+              </Button>
               }
             >
               <small className="muted">
-                {t('Ready files: {count}', { count: readyCount })} · {t('Filtered samples')}: {filteredSampleItems.length}
+                {t('Ready files: {count}', { count: readyCount })} · {t('Visible samples')}: {filteredSampleItems.length}
               </small>
               {items.length === 0 ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('No Items')}
-                  description={t('Upload files first, then sample browsing and versioning will become available.')}
+                  <StateBlock
+                    variant="empty"
+                    title={t('No Items')}
+                    description={t('Upload files first.')}
                   extra={
                     <Button type="button" variant="secondary" size="sm" onClick={focusUploadSection}>
                       {t('Jump to Files')}
@@ -1449,8 +1393,8 @@ export default function DatasetDetailPage() {
             </SectionCard>
 
             <SectionCard
-              title={t('Version snapshots')}
-              description={t('Select the active snapshot for training, review, or validation.')}
+              title={t('Versions')}
+              description={t('Choose one snapshot for training, review, or validation.')}
             >
               <DatasetVersionRail
                 t={t}
@@ -1480,15 +1424,42 @@ export default function DatasetDetailPage() {
               />
             </SectionCard>
 
+            <div ref={uploadSectionRef}>
+              <AttachmentUploader
+                title={t('Files')}
+                items={attachments}
+                onUpload={uploadDatasetFile}
+                onUploadFiles={uploadDatasetFiles}
+                contentUrlBuilder={api.attachmentContentUrl}
+                onDelete={deleteAttachment}
+                emptyDescription={t('Upload files. They stay visible here.')}
+                uploadButtonLabel={t('Upload Dataset File')}
+                disabled={busy}
+                headerActions={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      void refreshAttachmentSection();
+                    }}
+                    disabled={busy || sectionRefreshing === 'attachments'}
+                  >
+                    {sectionRefreshing === 'attachments' ? t('Refreshing...') : t('Refresh')}
+                  </Button>
+                }
+              />
+            </div>
+
             <div id="dataset-workflow">
               <AdvancedSection
-                title={t('Advanced dataset operations')}
-                description={t('Split, import/export, and reference actions stay collapsed.')}
+                title={t('Advanced')}
+                description={t('Split, import/export, and reference items stay collapsed.')}
               >
                 <div className="stack">
                   <SectionCard
-                    title={t('Dataset workflow')}
-                    description={t('Prepare split ratios and version snapshots here.')}
+                    title={t('Split and version')}
+                    description={t('Set split ratios and create a snapshot.')}
                   >
                     <div className="workspace-form-grid">
                       <label>
@@ -1522,7 +1493,7 @@ export default function DatasetDetailPage() {
 
                   <SectionCard
                     title={t('Import / Export')}
-                    description={t('Import or export annotation files without leaving the dataset lane.')}
+                    description={t('Import or export annotations.')}
                   >
                     <div className="stack">
                       <label>
@@ -1580,7 +1551,7 @@ export default function DatasetDetailPage() {
                     <div className="stack">
                       <h4>{t('Reference items')}</h4>
                       <small className="muted">
-                        {t('Create metadata-only items when a file binary has not been uploaded yet.')}
+                        {t('Create metadata-only items when needed.')}
                       </small>
                       <label>
                         {t('Reference Filename')}
@@ -1639,12 +1610,13 @@ export default function DatasetDetailPage() {
         }
         side={
           <div className="workspace-inspector-rail">
-            <SectionCard
-              title={t('Current status')}
-              description={t('Readiness and the next action.')}
+          <SectionCard
+            title={t('Current status')}
+            description={t('Readiness and next move.')}
             >
               <DetailList
                 items={[
+                  { label: t('Next step'), value: nextDatasetAction.title },
                   { label: t('Task Type'), value: t(dataset.task_type) },
                   { label: t('Last updated'), value: formatCompactTimestamp(dataset.updated_at, t('n/a')) },
                   { label: t('Ready files'), value: readyCount },
@@ -1656,27 +1628,14 @@ export default function DatasetDetailPage() {
                         ? t('All items')
                         : sampleQueueFilter === 'needs_work'
                           ? t('Needs Work')
-                          : t(sampleQueueFilter)
+                      : t(sampleQueueFilter)
                   }
                 ]}
               />
-              {dataset.description ? <small className="muted">{dataset.description}</small> : null}
-              <InlineAlert
-                tone={nextDatasetAction.tone}
-                title={nextDatasetAction.title}
-                description={nextDatasetAction.description}
-                actions={
-                  nextDatasetAction.to ? (
-                    <ButtonLink to={nextDatasetAction.to} variant="secondary" size="sm">
-                      {nextDatasetAction.label}
-                    </ButtonLink>
-                  ) : (
-                    <Button type="button" variant="secondary" size="sm" onClick={nextDatasetAction.onClick}>
-                      {nextDatasetAction.label}
-                    </Button>
-                  )
-                }
-              />
+              <div className="stack tight">
+                {dataset.description ? <small className="muted">{dataset.description}</small> : null}
+                <small className="muted">{nextDatasetAction.description}</small>
+              </div>
               <ActionBar
                 secondary={
                   <Button type="button" variant="ghost" size="sm" onClick={focusWorkflowPanel}>

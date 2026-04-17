@@ -4,15 +4,10 @@ import SettingsTabs from '../components/settings/SettingsTabs';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
-import {
-  ActionBar,
-  DetailList,
-  InlineAlert,
-  PageHeader,
-  SectionCard
-} from '../components/ui/ConsolePage';
+import { DetailList, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
 import { Checkbox, Input } from '../components/ui/Field';
-import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
+import { WorkspacePage } from '../components/ui/WorkspacePage';
+import AdvancedSection from '../components/AdvancedSection';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import {
@@ -29,21 +24,21 @@ const resolveConnectionAdvice = (
 ): string => {
   const lower = message.toLowerCase();
   if (lower.includes('(401') || lower.includes('unauthorized') || lower.includes('invalid api key')) {
-    return t('API key appears invalid or expired. Re-copy key and retry.');
+    return t('API key may be invalid. Re-copy it before retrying.');
   }
   if (lower.includes('(403') || lower.includes('forbidden')) {
-    return t('Current key may not access this model. Try gpt-4o-mini first.');
+    return t('Current key may not access this model.');
   }
   if (lower.includes('(429') || lower.includes('rate limit') || lower.includes('quota')) {
-    return t('Rate limit reached. Wait and retry, or switch to a lower-cost model.');
+    return t('Rate limit hit. Retry later or switch to a cheaper model.');
   }
   if (lower.includes('(404') || lower.includes('not found')) {
-    return t('Endpoint or model not found. Check Base URL and model name.');
+    return t('Endpoint or model not found. Check the base URL and model name.');
   }
   if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('etimedout')) {
-    return t('Connection timed out. Retry later or use a more stable network.');
+    return t('Connection timed out. Try again later.');
   }
-  return t('Apply ChatAnywhere preset and test with gpt-4o-mini.');
+  return t('Apply a preset before testing.');
 };
 
 const buildEditableForm = (current: LlmConfigView): LlmConfig => ({
@@ -148,7 +143,7 @@ export default function LlmSettingsPage() {
 
     if (!next.base_url || !next.model) {
       setStatus({ variant: 'error', text: t('Base URL and model are required.') });
-      setConnectionAdvice(t('Apply ChatAnywhere preset and test with gpt-4o-mini.'));
+      setConnectionAdvice(t('Apply a preset before testing.'));
       return;
     }
 
@@ -157,7 +152,7 @@ export default function LlmSettingsPage() {
         variant: 'error',
         text: t('Enable mode requires an API key. Please input key at least once.')
       });
-      setConnectionAdvice(t('API key appears invalid or expired. Re-copy key and retry.'));
+      setConnectionAdvice(t('API key may be invalid. Re-copy it before retrying.'));
       return;
     }
 
@@ -212,9 +207,9 @@ export default function LlmSettingsPage() {
     if (!configForTest.api_key && !useStoredApiKey) {
       setStatus({
         variant: 'error',
-        text: t('Connection test requires API key input or a saved key.')
+        text: t('Testing requires an input key or a saved key.')
       });
-      setConnectionAdvice(t('API key appears invalid or expired. Re-copy key and retry.'));
+      setConnectionAdvice(t('API key may be invalid. Re-copy it before retrying.'));
       return;
     }
 
@@ -255,12 +250,12 @@ export default function LlmSettingsPage() {
         <PageHeader
           eyebrow={t('Settings')}
           title={t('LLM Settings')}
-          description={t('Configure one provider in a clear four-step flow.')}
+          description={t('Pick a preset first, then fill the fields.')}
         />
         <StateBlock
           variant="loading"
           title={t('Loading Settings')}
-          description={t('Fetching current LLM settings.')}
+          description={t('Load the current configuration.')}
         />
       </WorkspacePage>
     );
@@ -272,7 +267,7 @@ export default function LlmSettingsPage() {
       <PageHeader
         eyebrow={t('Settings')}
         title={t('LLM Settings')}
-        description={t('Complete one clear task: configure provider access for chat usage.')}
+        description={t('Configure, test, then enable.')}
         primaryAction={{
           label: t('Save and enable'),
           onClick: () => {
@@ -290,183 +285,151 @@ export default function LlmSettingsPage() {
         />
       ) : null}
 
-      <WorkspaceWorkbench
-        main={
-          <div className="workspace-main-stack">
-            <SectionCard
-              title={t('Configure provider')}
-              description={t('Start from the recommended preset, then fill Base URL, API Key, Model, and Temperature in one linear flow.')}
-              actions={
-                <div className="row gap wrap align-center">
-                  <Badge tone="info">{t('Provider')}: chatanywhere</Badge>
-                  <small className="muted">{t('OpenAI-compatible preset only.')}</small>
-                </div>
-              }
-            >
-              <ActionBar
-                primary={
-                  <Button type="button" onClick={applyChatAnywherePreset} disabled={busy}>
-                    {t('Apply ChatAnywhere preset')}
-                  </Button>
-                }
-                secondary={
-                  <div className="row gap wrap">
-                    {CHATANYWHERE_MODEL_PRESETS.map((model) => (
-                      <Button
-                        key={model}
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => applyRecommendedModel(model)}
-                        disabled={busy}
-                      >
-                        {t('Use {model}', { model })}
-                      </Button>
-                    ))}
-                  </div>
-                }
-              />
-              <div className="workspace-form-grid">
-                <label className="workspace-form-span-2">
-                  {t('Base URL')}
-                  <Input
-                    value={form.base_url}
-                    onChange={(event) => update('base_url', event.target.value)}
-                    placeholder="https://api.chatanywhere.tech/v1"
-                  />
-                  {!hasBaseUrl ? <small className="muted">{t('Base URL is required.')}</small> : null}
-                </label>
-
-                <label className="workspace-form-span-2">
-                  {t('API Key')}
-                  <Input
-                    type="password"
-                    value={form.api_key}
-                    onChange={(event) => update('api_key', event.target.value)}
-                    placeholder="sk-..."
-                  />
-                  <small className="muted">
-                    {hasTypedApiKey
-                      ? t('Typed key will be used for test/save.')
-                      : hasApiKey
-                        ? t('Leave blank to reuse the saved key.')
-                        : t('Enter one key to finish setup.')}
-                  </small>
-                </label>
-
-                <label>
-                  {t('Model')}
-                  <Input
-                    value={form.model}
-                    onChange={(event) => update('model', event.target.value)}
-                    placeholder="gpt-4o-mini"
-                  />
-                  {!hasModel ? <small className="muted">{t('Model is required.')}</small> : null}
-                </label>
-
-                <label>
-                  {t('Temperature (0-2)')}
-                  <Input
-                    type="number"
-                    value={form.temperature}
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    onChange={(event) => update('temperature', Number(event.target.value))}
-                  />
-                </label>
-              </div>
-
-              <div className="row gap wrap align-center">
-                <label className="workspace-checkbox-row">
-                  <Checkbox
-                    checked={form.enabled}
-                    onChange={(event) => update('enabled', event.target.checked)}
-                  />
-                  <span>{t('Enable custom LLM in conversation workspace')}</span>
-                </label>
-                {hasTypedApiKey ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={discardTypedApiKey} disabled={busy}>
-                    {t('Discard typed key')}
-                  </Button>
-                ) : null}
-              </div>
-              {requiresKeyWhenEnabled ? (
-                <InlineAlert
-                  tone="warning"
-                  description={t('Enable mode requires API key input or an already saved key.')}
-                />
-              ) : null}
-            </SectionCard>
-
-            <SectionCard
-              title={t('Verify connection')}
-              description={t('Test endpoint, key, and model before saving. Use the page header action after the check turns green.')}
-            >
-              <ActionBar
-                primary={
-                  <Button type="button" onClick={testConnection} disabled={!canTest}>
-                    {testing ? t('Testing...') : t('Test connection')}
-                  </Button>
-                }
-                secondary={
-                  connectionVerified ? (
-                    <Badge tone="success">{t('Connection verified')}</Badge>
-                  ) : (
-                    <Badge tone="neutral">{t('Not verified')}</Badge>
-                  )
-                }
-              />
-              {connectionAdvice ? (
-                <small className="muted">{connectionAdvice}</small>
-              ) : null}
-            </SectionCard>
-
-            <details className="workspace-details">
-              <summary>{t('Danger zone')}</summary>
-              <div className="stack tight">
-                <small className="muted">
-                  {t('Only use this when you want to wipe the saved provider configuration.')}
-                </small>
-                <ActionBar
-                  secondary={
-                    <Button type="button" variant="danger" onClick={clear} disabled={busy}>
-                      {t('Clear saved settings')}
-                    </Button>
-                  }
-                />
-              </div>
-            </details>
+      <div className="workspace-main-stack">
+        <SectionCard
+          title={t('Preset and settings')}
+          description={t('Apply a preset, then fill base URL, key, model, and temperature.')}
+          actions={
+            <div className="row gap wrap align-center">
+              <Badge tone="info">{t('OpenAI-compatible')}</Badge>
+              <small className="muted">{t('ChatAnywhere preset')}</small>
+            </div>
+          }
+        >
+          <div className="row gap wrap align-center">
+            <Button type="button" onClick={applyChatAnywherePreset} disabled={busy}>
+              {t('Apply preset')}
+            </Button>
+            <div className="row gap wrap">
+              {CHATANYWHERE_MODEL_PRESETS.map((model) => (
+                <Button
+                  key={model}
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => applyRecommendedModel(model)}
+                  disabled={busy}
+                >
+                  {t('Use {model}', { model })}
+                </Button>
+              ))}
+            </div>
           </div>
-        }
-        side={
-          <div className="workspace-inspector-rail">
-            <details className="workspace-details">
-              <summary className="row between gap wrap align-center">
-                <span>{t('Saved settings')}</span>
-                <Badge tone={hasUnsavedChanges ? 'warning' : 'neutral'}>
-                  {hasUnsavedChanges ? t('Unsaved') : t('Saved')}
-                </Badge>
-              </summary>
-              <SectionCard
-                title={t('Saved settings snapshot')}
-                description={t('Open only when you need to compare saved values.')}
-              >
-                <DetailList
-                  items={[
-                    { label: t('Mode'), value: savedEnabled ? t('enabled') : t('disabled') },
-                    { label: t('Base URL'), value: savedBaseUrl },
-                    { label: t('Model'), value: savedModel },
-                    { label: t('Temperature'), value: savedTemperature },
-                    { label: t('Stored key'), value: hasApiKey ? apiKeyMasked : t('not set') },
-                    { label: t('Pending changes'), value: hasUnsavedChanges ? t('Yes') : t('No') }
-                  ]}
-                />
-              </SectionCard>
-            </details>
+          <div className="workspace-form-grid">
+            <label className="workspace-form-span-2">
+              {t('Base URL')}
+              <Input
+                value={form.base_url}
+                onChange={(event) => update('base_url', event.target.value)}
+                placeholder="https://api.chatanywhere.tech/v1"
+              />
+              {!hasBaseUrl ? <small className="muted">{t('Base URL is required.')}</small> : null}
+            </label>
+
+            <label className="workspace-form-span-2">
+              {t('API Key')}
+              <Input
+                type="password"
+                value={form.api_key}
+                onChange={(event) => update('api_key', event.target.value)}
+                placeholder="sk-..."
+              />
+              <small className="muted">
+                {hasTypedApiKey
+                  ? t('Typed key will be used for test/save.')
+                  : hasApiKey
+                    ? t('Leave blank to reuse the saved key.')
+                    : t('Enter one key to finish setup.')}
+              </small>
+            </label>
+
+            <label>
+              {t('Model')}
+              <Input
+                value={form.model}
+                onChange={(event) => update('model', event.target.value)}
+                placeholder="gpt-4o-mini"
+              />
+              {!hasModel ? <small className="muted">{t('Model is required.')}</small> : null}
+            </label>
+
+            <label>
+              {t('Temperature (0-2)')}
+              <Input
+                type="number"
+                value={form.temperature}
+                min={0}
+                max={2}
+                step={0.1}
+                onChange={(event) => update('temperature', Number(event.target.value))}
+              />
+            </label>
           </div>
-        }
-      />
+
+          <div className="row gap wrap align-center">
+            <label className="workspace-checkbox-row">
+              <Checkbox
+                checked={form.enabled}
+                onChange={(event) => update('enabled', event.target.checked)}
+              />
+              <span>{t('Enable custom LLM')}</span>
+            </label>
+            {hasTypedApiKey ? (
+              <Button type="button" variant="ghost" size="sm" onClick={discardTypedApiKey} disabled={busy}>
+                {t('Discard typed key')}
+              </Button>
+            ) : null}
+          </div>
+          {requiresKeyWhenEnabled ? <InlineAlert tone="warning" description={t('Enable mode requires an API key or a saved key.')} /> : null}
+        </SectionCard>
+
+        <SectionCard title={t('Test connection')} description={t('Save before testing endpoint, key, and model.')}>
+          <div className="row gap wrap align-center">
+            <Button type="button" onClick={testConnection} disabled={!canTest}>
+              {testing ? t('Testing...') : t('Test connection')}
+            </Button>
+            <Badge tone={connectionVerified ? 'success' : 'neutral'}>
+              {connectionVerified ? t('Connection verified') : t('Not verified')}
+            </Badge>
+          </div>
+          {connectionAdvice ? <small className="muted">{connectionAdvice}</small> : null}
+        </SectionCard>
+
+        <AdvancedSection
+          title={t('Saved settings and danger zone')}
+          description={t('Only compare or clear when needed.')}
+        >
+          <SectionCard
+            title={t('Saved settings snapshot')}
+            description={t('Open only when you need to compare.')}
+            actions={
+              <Badge tone={hasUnsavedChanges ? 'warning' : 'neutral'}>
+                {hasUnsavedChanges ? t('Unsaved') : t('Saved')}
+              </Badge>
+            }
+          >
+            <DetailList
+              items={[
+                { label: t('Mode'), value: savedEnabled ? t('enabled') : t('disabled') },
+                { label: t('Base URL'), value: savedBaseUrl },
+                { label: t('Model'), value: savedModel },
+                { label: t('Temperature'), value: savedTemperature },
+                { label: t('Stored key'), value: hasApiKey ? apiKeyMasked : t('not set') },
+                { label: t('Pending changes'), value: hasUnsavedChanges ? t('Yes') : t('No') }
+              ]}
+            />
+          </SectionCard>
+
+          <SectionCard
+            title={t('Danger zone')}
+            description={t('Use only when you need to clear the saved configuration.')}
+          >
+            <Button type="button" variant="danger" onClick={clear} disabled={busy}>
+              {t('Clear saved settings')}
+            </Button>
+          </SectionCard>
+        </AdvancedSection>
+      </div>
     </WorkspacePage>
   );
 }

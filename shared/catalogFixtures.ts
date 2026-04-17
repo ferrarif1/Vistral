@@ -5,7 +5,10 @@ import type {
   TrainingJobRecord
 } from './domain';
 
-const curatedFoundationModelNames = new Set(['Road Damage Detector', 'Invoice OCR Assistant']);
+const curatedFoundationModelNames = new Set([
+  'General Object Detector Foundation',
+  'License Plate OCR Foundation'
+]);
 const retiredSeedModelNames = new Set(['Factory PPE Checker']);
 
 const modelFixtureNamePatterns = [

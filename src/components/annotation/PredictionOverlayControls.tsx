@@ -19,33 +19,33 @@ const formatPredictionExtra = (candidate: PredictionCandidateView, t: TranslateF
   const rawExtra = candidate.extra.trim();
   if (candidate.kind === 'ocr_line') {
     if (candidate.regionId && candidate.regionId.trim()) {
-      return t('绑定区域 {id}', { id: candidate.regionId.trim() });
+      return t('Bound region {id}', { id: candidate.regionId.trim() });
     }
-    return t('未绑定区域');
+    return t('No linked region');
   }
   if (candidate.kind === 'box') {
-    return rawExtra || t('框');
+    return rawExtra || t('Box');
   }
   if (candidate.kind === 'rotated_box') {
     if (rawExtra === 'obb') {
-      return t('旋转框');
+      return t('Rotated Boxes');
     }
     if (rawExtra.startsWith('angle ')) {
-      return t('角度 {value}', { value: rawExtra.slice('angle '.length) });
+      return t('Angle {value}', { value: rawExtra.slice('angle '.length) });
     }
-    return rawExtra || t('旋转框');
+    return rawExtra || t('Rotated Boxes');
   }
   if (candidate.kind === 'polygon') {
     const pointsMatch = rawExtra.match(/^(\d+)\s+pts$/);
     if (pointsMatch) {
-      return t('{count} 个点', { count: Number(pointsMatch[1]) });
+      return t('{count} points', { count: Number(pointsMatch[1]) });
     }
-    return rawExtra || t('多边形');
+    return rawExtra || t('Polygons');
   }
   if (candidate.kind === 'label') {
-    return t('分类标签');
+    return t('Label');
   }
-  return rawExtra || t('无');
+  return rawExtra || t('none');
 };
 
 interface PredictionOverlayControlsProps {
@@ -58,7 +58,6 @@ interface PredictionOverlayControlsProps {
   predictionConfidenceThreshold: string;
   predictionCandidateCount: number;
   lowConfidencePredictionCount: number;
-  selectedItemHasLowConfidenceTag: boolean;
   predictionCandidates: PredictionCandidateView[];
   numericPredictionConfidenceThreshold: number;
   canUsePredictionInOcrEditor: boolean;
@@ -80,7 +79,6 @@ export default function PredictionOverlayControls({
   predictionConfidenceThreshold,
   predictionCandidateCount,
   lowConfidencePredictionCount,
-  selectedItemHasLowConfidenceTag,
   predictionCandidates,
   numericPredictionConfidenceThreshold,
   canUsePredictionInOcrEditor,
@@ -95,15 +93,10 @@ export default function PredictionOverlayControls({
     <Card as="section" className={className}>
       <div className="row between gap wrap align-center">
         <div className="stack tight">
-          <h3>{t('预测对比')}</h3>
-          <small className="muted">
-            {hasPredictionOverlay
-              ? t('对比预标注结果和当前标注。')
-              : t('当前样本还没有可对比的预测结果。')}
-          </small>
+          <h3>{t('Prediction Compare')}</h3>
         </div>
         <Badge tone={hasPredictionOverlay ? 'info' : 'neutral'}>
-          {hasPredictionOverlay ? t('预测已就绪') : t('暂无预测')}
+          {hasPredictionOverlay ? t('On') : t('Off')}
         </Badge>
       </div>
       <div className="stack tight">
@@ -112,7 +105,7 @@ export default function PredictionOverlayControls({
             checked={showAnnotationOverlay}
             onChange={(event) => onShowAnnotationOverlayChange(event.target.checked)}
           />
-          <span>{t('显示标注层')}</span>
+          <span>{t('Show canvas')}</span>
         </label>
         <label className="row gap wrap align-center">
           <Checkbox
@@ -120,11 +113,11 @@ export default function PredictionOverlayControls({
             onChange={(event) => onShowPredictionOverlayChange(event.target.checked)}
             disabled={!hasPredictionOverlay}
           />
-          <span>{t('显示预测层')}</span>
+          <span>{t('Show prediction')}</span>
         </label>
       </div>
       <label>
-        {t('置信度阈值')}
+        {t('Threshold')}
         <Input
           value={predictionConfidenceThreshold}
           onChange={(event) => onPredictionConfidenceThresholdChange(event.target.value)}
@@ -133,77 +126,79 @@ export default function PredictionOverlayControls({
       </label>
       <div className="row gap wrap">
         <Badge tone="neutral">
-          {t('可见候选')}: {predictionCandidateCount}
+          {t('Candidates')}: {predictionCandidateCount}
         </Badge>
         <Badge tone={lowConfidencePredictionCount > 0 ? 'warning' : 'neutral'}>
-          {t('低置信候选')}: {lowConfidencePredictionCount}
+          {t('Low confidence')}: {lowConfidencePredictionCount}
         </Badge>
-        {selectedItemHasLowConfidenceTag ? <Badge tone="info">{t('低置信标记')}</Badge> : null}
       </div>
       {showPredictionOverlay && predictionCandidates.length > 0 ? (
-        <ul className="workspace-record-list compact prediction-candidate-list">
-          {predictionCandidates.slice(0, 4).map((candidate) => {
-            const isLowConfidence =
-              candidate.confidence !== null && candidate.confidence < numericPredictionConfidenceThreshold;
+        <details className="workspace-disclosure" open={false}>
+          <summary>
+            <span>{t('Top candidates')}</span>
+            <Badge tone="neutral">{predictionCandidates.length}</Badge>
+          </summary>
+          <div className="workspace-disclosure-content">
+            <ul className="workspace-record-list compact prediction-candidate-list">
+              {predictionCandidates.slice(0, 3).map((candidate) => {
+                const isLowConfidence =
+                  candidate.confidence !== null && candidate.confidence < numericPredictionConfidenceThreshold;
 
-            return (
-              <Panel
-                key={candidate.id}
-                as="li"
-                className={`workspace-record-item compact prediction-candidate-item${isLowConfidence ? ' low-confidence' : ''}`}
-                tone="soft"
-              >
-                <div className="row between gap wrap align-center">
-                  <strong className="line-clamp-1">{candidate.title}</strong>
-                  {candidate.confidence !== null ? (
-                    <Badge tone={isLowConfidence ? 'warning' : 'info'}>
-                      {candidate.confidence.toFixed(2)}
-                    </Badge>
-                  ) : (
-                    <Badge tone="neutral">{t('无')}</Badge>
-                  )}
-                </div>
-                <small className="muted">
-                  {formatPredictionExtra(candidate, t)}
-                  {isLowConfidence ? ` · ${t('低于阈值')}` : ''}
-                </small>
-                {canUsePredictionInOcrEditor && candidate.kind === 'ocr_line' ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => onUsePredictionCandidate(candidate)}
-                    disabled={busy}
+                return (
+                  <Panel
+                    key={candidate.id}
+                    as="li"
+                    className={`workspace-record-item compact prediction-candidate-item${isLowConfidence ? ' low-confidence' : ''}`}
+                    tone="soft"
                   >
-                    {t('应用到 OCR')}
-                  </Button>
-                ) : null}
-              </Panel>
-            );
-          })}
-        </ul>
+                    <div className="row between gap wrap align-center">
+                      <strong className="line-clamp-1">{candidate.title}</strong>
+                      {candidate.confidence !== null ? (
+                        <Badge tone={isLowConfidence ? 'warning' : 'info'}>
+                          {candidate.confidence.toFixed(2)}
+                        </Badge>
+                      ) : (
+                        <Badge tone="neutral">{t('No confidence')}</Badge>
+                      )}
+                    </div>
+                    <small className="muted">
+                      {formatPredictionExtra(candidate, t)}
+                      {isLowConfidence ? ` · ${t('below threshold')}` : ''}
+                    </small>
+                    {canUsePredictionInOcrEditor && candidate.kind === 'ocr_line' ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onUsePredictionCandidate(candidate)}
+                        disabled={busy}
+                      >
+                        {t('Apply to OCR')}
+                      </Button>
+                    ) : null}
+                  </Panel>
+                );
+              })}
+            </ul>
+          </div>
+        </details>
       ) : null}
-      {showPredictionOverlay && predictionCandidates.length > 4 ? (
-        <small className="muted">
-          {t('仅显示前 {count} 个候选。', { count: 4 })}
-        </small>
-      ) : null}
-      <div className="workspace-button-stack">
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={onAdoptPredictionResults}
-          disabled={busy || !canAdoptPrediction}
-        >
-          {t('采用预测结果')}
-        </Button>
-      </div>
-      <small className="muted">
-        {hasPredictionOverlay
-          ? t('当前样本已带有预标注结果，可在这里对比或一键采用。')
-          : t('先运行预标注，再在这里查看预测对比。')}
-      </small>
+      <details className="workspace-disclosure">
+        <summary>
+          <span>{t('Actions')}</span>
+        </summary>
+        <div className="workspace-disclosure-content">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onAdoptPredictionResults}
+            disabled={busy || !canAdoptPrediction}
+          >
+            {t('Use predictions')}
+          </Button>
+        </div>
+      </details>
     </Card>
   );
 }

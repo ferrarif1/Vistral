@@ -94,15 +94,11 @@ function ModelInventoryRow({
         <Badge tone="neutral">
           {t('Visibility')}: {t(model.visibility)}
         </Badge>
-        <Badge tone="info">
-          {t('Created')}: {formatCompactTimestamp(model.created_at)}
-        </Badge>
         {canAdminDelete && isProtectedFoundationModel ? (
           <Badge tone="info">{t('This curated base model stays available as a training foundation.')}</Badge>
         ) : null}
         {authenticitySummary ? <Badge tone={authenticitySummary.tone}>{authenticitySummary.label}</Badge> : null}
       </div>
-      {authenticitySummary?.hint ? <small className="muted">{authenticitySummary.hint}</small> : null}
     </Panel>
   );
 }

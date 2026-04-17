@@ -24,7 +24,7 @@ export default function SettingsTabs() {
       <div className="stack tight">
         <strong>{t('Settings')}</strong>
         <small className="muted">
-          {t('Pick one task at a time. Primary settings stay above, advanced templates stay below.')}
+          {t('Pick one task at a time. Primary settings stay above, templates stay below.')}
         </small>
       </div>
 
@@ -44,7 +44,7 @@ export default function SettingsTabs() {
       </nav>
 
       <div className="stack tight">
-        <small className="muted">{t('Advanced')}</small>
+        <small className="muted">{t('Reference')}</small>
         <nav className="settings-surface-tabs" aria-label={t('Advanced settings')}>
           {advancedTabs.map((tab) => (
             <NavLink

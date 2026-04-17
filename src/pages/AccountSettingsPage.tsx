@@ -402,8 +402,8 @@ export default function AccountSettingsPage() {
         title={t('Account Settings')}
         description={
           isAdmin
-            ? t('Primary task: manage your own account. Admin tools are grouped as a secondary lane.')
-            : t('Primary task: view your account and rotate your password.')
+            ? t('Take care of your own account first, then open admin tools.')
+            : t('Start with your own account and password.')
         }
         primaryAction={{
           label: loading || refreshing ? t('Refreshing...') : t('Refresh'),
@@ -414,13 +414,6 @@ export default function AccountSettingsPage() {
           },
           disabled: loading || refreshing || passwordSaving || creatingUser
         }}
-        secondaryActions={
-          isAdmin ? (
-            <Button type="button" variant="secondary" size="sm" onClick={() => setCreateDrawerOpen(true)}>
-              {t('Create account')}
-            </Button>
-          ) : undefined
-        }
       />
 
       {loadError && !authRequired ? (
@@ -445,7 +438,7 @@ export default function AccountSettingsPage() {
         <StateBlock
           variant="empty"
           title={t('Login to manage account settings')}
-          description={t('Sign in to change password or access admin account tools.')}
+          description={t('You must sign in to change passwords or use admin tools.')}
           extra={
             <ButtonLink to="/auth/login" variant="secondary">
               {t('Login')}
@@ -458,7 +451,7 @@ export default function AccountSettingsPage() {
             <div className="workspace-main-stack">
               <SectionCard
                 title={t('My account')}
-                description={t('User-facing identity context only.')}
+                description={t('Current account only.')}
               >
                 <DetailList
                   items={[
@@ -479,7 +472,7 @@ export default function AccountSettingsPage() {
 
               <SectionCard
                 title={t('Change password')}
-                description={t('All authenticated users can rotate their own password here.')}
+                description={t('All signed-in users can change their password.')}
               >
                 <form className="stack" onSubmit={submitPasswordChange}>
                   <div className="workspace-form-grid">
@@ -549,12 +542,10 @@ export default function AccountSettingsPage() {
                     </Badge>
                   </summary>
                   <div className="stack tight">
-                    <small className="muted">
-                      {t('Directory and governance actions stay collapsed until you need them.')}
-                    </small>
+                    <small className="muted">{t('Directory and governance actions stay collapsed by default.')}</small>
                     <SectionCard
                       title={t('Account directory')}
-                      description={t('Search, filter, and manage accounts from one table-first view.')}
+                      description={t('Search, filter, and manage accounts.')}
                     >
                       <FilterToolbar
                         filters={
@@ -648,7 +639,7 @@ export default function AccountSettingsPage() {
               <div className="workspace-inspector-rail">
                 <SectionCard
                   title={t('Administrator tools')}
-                  description={t('Keep governance actions secondary to your own account tasks.')}
+                  description={t('Governance actions stay secondary.')}
                 >
                   <DetailList
                     items={[
@@ -662,6 +653,11 @@ export default function AccountSettingsPage() {
                     primary={
                       <Button type="button" variant="secondary" size="sm" onClick={() => setDirectoryExpanded((prev) => !prev)}>
                         {directoryExpanded ? t('Hide directory') : t('Open directory')}
+                      </Button>
+                    }
+                    secondary={
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setCreateDrawerOpen(true)}>
+                        {t('Create account')}
                       </Button>
                     }
                   />
@@ -682,7 +678,7 @@ export default function AccountSettingsPage() {
         <div className="stack">
           <SectionCard
             title={t('Create account')}
-            description={t('Admin-only provisioning. This does not interrupt user self-service flow.')}
+            description={t('Admins only.')}
           >
             <form className="stack" onSubmit={submitCreateUser}>
               <div className="workspace-form-grid">
@@ -764,7 +760,7 @@ export default function AccountSettingsPage() {
         open={Boolean(selectedUser)}
         onClose={() => setSelectedUserId(null)}
         title={selectedUser ? selectedUser.username : t('Account detail')}
-        description={t('Reset password and status actions are isolated here to reduce accidental operations.')}
+        description={t('Password resets and status changes live here.')}
       >
         {selectedUser ? (
           <>
@@ -791,7 +787,7 @@ export default function AccountSettingsPage() {
 
             <SectionCard
               title={t('Reset password')}
-              description={t('Set a temporary password, then share securely with the account owner.')}
+              description={t('Set a temporary password before handoff.')}
             >
               <label>
                 {t('New temporary password')}
@@ -818,7 +814,7 @@ export default function AccountSettingsPage() {
 
             <SectionCard
               title={t('Status action')}
-              description={t('Dangerous account status changes require explicit confirmation.')}
+              description={t('Status changes require confirmation.')}
             >
               {selectedUserCannotDisable ? (
                 <InlineAlert
@@ -838,7 +834,7 @@ export default function AccountSettingsPage() {
                     <Input
                       value={disableReasonDraft}
                       onChange={(event) => setDisableReasonDraft(event.target.value)}
-                      placeholder={t('For example: Access paused during security review.')}
+                      placeholder={t('For example: pause access for a security review.')}
                     />
                   </label>
                   <ActionBar
@@ -849,7 +845,7 @@ export default function AccountSettingsPage() {
                         disabled={selectedUserCannotDisable || !canSubmitDisableReason}
                         onClick={() => requestStatusChange(selectedUser, 'disabled')}
                       >
-                        {t('Review disable action')}
+                        {t('Disable account')}
                       </Button>
                     }
                   />
@@ -858,12 +854,12 @@ export default function AccountSettingsPage() {
                 <ActionBar
                   primary={
                     <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={statusUpdatingBusy}
-                      onClick={() => requestStatusChange(selectedUser, 'active')}
-                    >
-                      {t('Review reactivation')}
+                    type="button"
+                    variant="secondary"
+                    disabled={statusUpdatingBusy}
+                    onClick={() => requestStatusChange(selectedUser, 'active')}
+                  >
+                      {t('Reactivate account')}
                     </Button>
                   }
                 />

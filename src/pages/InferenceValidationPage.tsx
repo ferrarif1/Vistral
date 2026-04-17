@@ -9,7 +9,6 @@ import type {
 } from '../../shared/domain';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
-import StepIndicator from '../components/StepIndicator';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { ActionBar, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
@@ -75,7 +74,6 @@ export default function InferenceValidationPage() {
     [t]
   );
   const [searchParams] = useSearchParams();
-  const steps = useMemo(() => [t('Input'), t('Run'), t('Feedback')], [t]);
   const [versions, setVersions] = useState<ModelVersionRecord[]>([]);
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
@@ -185,11 +183,6 @@ export default function InferenceValidationPage() {
     [versions, selectedVersionId]
   );
   const versionsById = useMemo(() => new Map(versions.map((version) => [version.id, version])), [versions]);
-  const datasetsById = useMemo(() => new Map(datasets.map((dataset) => [dataset.id, dataset])), [datasets]);
-  const attachmentById = useMemo(
-    () => new Map(attachments.map((attachment) => [attachment.id, attachment])),
-    [attachments]
-  );
 
   const selectedRunSummary = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
@@ -203,10 +196,6 @@ export default function InferenceValidationPage() {
   const selectedRunVersion = useMemo(
     () => (selectedRun ? versionsById.get(selectedRun.model_version_id) ?? null : null),
     [selectedRun, versionsById]
-  );
-  const selectedRunInputAttachment = useMemo(
-    () => (selectedRun ? attachmentById.get(selectedRun.input_attachment_id) ?? null : null),
-    [attachmentById, selectedRun]
   );
   const feedbackTaskType = useMemo(
     () => selectedRun?.task_type ?? selectedVersion?.task_type ?? null,
@@ -292,28 +281,28 @@ export default function InferenceValidationPage() {
 
     const title =
       sourceKind === 'runtime'
-        ? t('Runtime Bridge Active')
+        ? t('Runtime output active')
         : sourceKind === 'local_command' && runnerMode === 'real'
-          ? t('Local Runner Active')
+          ? t('Local runner active')
           : sourceKind === 'local_command'
-            ? t('Local runner degraded mode')
-              : t('Degraded output active');
+            ? t('Local fallback output')
+            : t('Fallback output active');
     const description =
       sourceKind === 'runtime'
-        ? t('Prediction output is coming from configured runtime endpoint.')
+        ? t('Output comes from the configured runtime endpoint.')
         : sourceKind === 'local_command' && runnerMode === 'real'
-          ? t('Prediction output is coming from local framework runner and version-bound artifact when available.')
+          ? t('Output comes from the local runner and version artifact.')
           : sourceKind === 'local_command'
             ? fallbackReason
-              ? t('Prediction output is coming from built-in degraded runner because real framework execution is unavailable: {reason}', {
+              ? t('Built-in fallback runner used: {reason}', {
                   reason: formatFallbackReasonLabel(fallbackReason)
                 })
-              : t('Prediction output is coming from built-in degraded runner because real framework execution is unavailable.')
+              : t('Built-in fallback runner used.')
               : fallbackReason
-                ? t('Using degraded output because runtime or local execution failed: {reason}', {
+                ? t('Fallback output used: {reason}', {
                     reason: formatFallbackReasonLabel(fallbackReason)
                   })
-                : t('Using degraded output because runtime endpoint is unavailable.');
+                : t('Fallback output used.');
     const variant: 'success' | 'error' | 'empty' =
       sourceKind === 'runtime' || (sourceKind === 'local_command' && runnerMode === 'real')
         ? 'success'
@@ -322,7 +311,7 @@ export default function InferenceValidationPage() {
           : 'empty';
 
     return {
-      displaySourceLabel: inferredReality.fallback ? t('Degraded mode') : t('Real execution'),
+      displaySourceLabel: inferredReality.fallback ? t('Fallback output') : t('Real output'),
       title,
       description,
       variant
@@ -379,35 +368,23 @@ export default function InferenceValidationPage() {
     if (selectedRunFallbackWarning) {
       return {
         tone: 'danger' as const,
-        title: t('Current output is degraded and not from real OCR recognition'),
+        title: t('Current result is not real OCR'),
         description: selectedRunFallbackWarning.reason
-          ? `${t('Degradation reason')}: ${formatFallbackReasonLabel(selectedRunFallbackWarning.reason)}`
-          : t('Fix runtime or local prediction command configuration before using this result for business decisions.')
+          ? `${t('Fallback reason')}: ${formatFallbackReasonLabel(selectedRunFallbackWarning.reason)}`
+          : t('Fix Runtime or local command settings first.')
       };
     }
 
     if (selectedRunHasEmptyOcrResult) {
       return {
         tone: 'warning' as const,
-        title: t('No text recognized or this run produced no real OCR output'),
-        description: t('Check runtime or local command configuration and retry.')
+        title: t('No OCR text recognized'),
+        description: t('Check Runtime or the local command and try again.')
       };
     }
 
     return null;
   }, [formatFallbackReasonLabel, selectedRunFallbackWarning, selectedRunHasEmptyOcrResult, t]);
-
-  const step = useMemo(() => {
-    if (!selectedRun) {
-      return 0;
-    }
-
-    if (selectedRun.feedback_dataset_id) {
-      return 2;
-    }
-
-    return 1;
-  }, [selectedRun]);
 
   const readyAttachmentCount = useMemo(
     () => attachments.filter((attachment) => attachment.status === 'ready').length,
@@ -421,8 +398,8 @@ export default function InferenceValidationPage() {
     if (runtimeLoading) {
       return {
         tone: 'info' as const,
-        title: t('Checking runtime'),
-        description: t('Checking whether validation can use a reachable endpoint or local runner.')
+        title: t('Checking Runtime'),
+        description: t('Checking readiness.')
       };
     }
 
@@ -430,7 +407,7 @@ export default function InferenceValidationPage() {
       return {
         tone: 'success' as const,
         title: t('Runtime ready'),
-        description: t('At least one framework is reachable. You can run validation now.')
+        description: t('At least one framework is available.')
       };
     }
 
@@ -438,14 +415,14 @@ export default function InferenceValidationPage() {
       return {
         tone: 'warning' as const,
         title: t('Runtime configured'),
-        description: t('The endpoint or local command is not reachable yet.')
+        description: t('Configured, but not reachable yet.')
       };
     }
 
     return {
       tone: 'warning' as const,
       title: t('Runtime not configured'),
-      description: t('Choose local mode or set a runtime endpoint before running validation.')
+      description: t('Choose local mode or an endpoint first.')
     };
   }, [runtimeChecks, runtimeLoading, t]);
 
@@ -564,7 +541,7 @@ export default function InferenceValidationPage() {
 
   const runInference = async () => {
     if (!selectedVersion || !selectedAttachmentId) {
-      setFeedback({ variant: 'error', text: t('Select model version and ready attachment first.') });
+      setFeedback({ variant: 'error', text: t('Select a version and a ready input first.') });
       return;
     }
 
@@ -578,10 +555,7 @@ export default function InferenceValidationPage() {
         task_type: selectedVersion.task_type
       });
 
-      setFeedback({
-        variant: 'success',
-        text: t('Inference completed. The latest run is now selected below.')
-      });
+      setFeedback({ variant: 'success', text: t('Inference complete.') });
       await loadAll('manual');
       setSelectedRunId(created.id);
       await refreshSelectedRunDetail(created.id);
@@ -594,14 +568,14 @@ export default function InferenceValidationPage() {
 
   const sendFeedback = async () => {
     if (!selectedRun || !selectedDatasetId) {
-      setFeedback({ variant: 'error', text: t('Run inference and select dataset before feedback.') });
+      setFeedback({ variant: 'error', text: t('Run inference first, then choose a dataset.') });
       return;
     }
 
     if (!selectedFeedbackDataset || selectedFeedbackDataset.task_type !== selectedRun.task_type) {
       setFeedback({
         variant: 'error',
-        text: t('Feedback target dataset task type must match inference task type.')
+        text: t('Feedback dataset task type must match.')
       });
       return;
     }
@@ -616,7 +590,7 @@ export default function InferenceValidationPage() {
         reason: feedbackReason
       });
 
-      setFeedback({ variant: 'success', text: t('Sample feedback sent to dataset.') });
+      setFeedback({ variant: 'success', text: t('Sample routed back.') });
       await loadAll('manual');
       await refreshSelectedRunDetail(selectedRun.id);
     } catch (error) {
@@ -630,9 +604,9 @@ export default function InferenceValidationPage() {
     return (
       <WorkspacePage>
         <PageHeader
-        eyebrow={t('Validation Lane')}
+        eyebrow={t('Validation')}
         title={t('Inference Validation')}
-        description={t('Run one validation pass and route failures back to data.')}
+        description={t('Run once, then route failures back.')}
           primaryAction={{
             label: refreshing ? t('Refreshing...') : t('Refresh'),
             onClick: () => {
@@ -643,7 +617,6 @@ export default function InferenceValidationPage() {
             disabled: busy || refreshing
           }}
         />
-        <StepIndicator steps={steps} current={step} />
         <StateBlock variant="loading" title={t('Loading Validation Workspace')} description={t('Preparing resources.')} />
       </WorkspacePage>
     );
@@ -652,13 +625,12 @@ export default function InferenceValidationPage() {
   return (
     <WorkspacePage>
       <PageHeader
-        eyebrow={t('Validation Lane')}
+        eyebrow={t('Validation')}
         title={t('Inference Validation')}
-        description={t('Run one input, inspect the result, and route failures back to data.')}
+        description={t('Run one sample, inspect the result, then route it back.')}
         meta={
           <div className="row gap wrap align-center">
             <Badge tone="neutral">{t('Ready inputs')}: {readyAttachmentCount}</Badge>
-            <Badge tone={runtimeSummary.tone}>{runtimeSummary.title}</Badge>
           </div>
         }
         primaryAction={{
@@ -669,7 +641,6 @@ export default function InferenceValidationPage() {
           disabled: busy || refreshing || !selectedVersionId || !selectedAttachmentId
         }}
         />
-      <StepIndicator steps={steps} current={step} />
 
       {feedback ? (
         <InlineAlert
@@ -678,6 +649,7 @@ export default function InferenceValidationPage() {
           description={feedback.text}
         />
       ) : null}
+
       {runtimeSummary.tone === 'success' ? null : (
         <InlineAlert
           tone={runtimeSummary.tone}
@@ -685,59 +657,26 @@ export default function InferenceValidationPage() {
           description={runtimeSummary.description}
           actions={
             <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-              {t('Open Runtime Settings')}
+              {t('Open Runtime')}
             </ButtonLink>
           }
         />
       )}
-      {selectedRunNotice ? (
-        <InlineAlert
-          tone={selectedRunNotice.tone}
-          title={selectedRunNotice.title}
-          description={selectedRunNotice.description}
-        />
-      ) : null}
 
       <WorkspaceWorkbench
         toolbar={
           <Card as="section" className="workspace-toolbar-card">
             <div className="workspace-toolbar-head">
               <div className="workspace-toolbar-copy">
-                <h3>{t('Validation Controls')}</h3>
-                <small className="muted">{t('Choose one version and one ready input, then run.')}</small>
+                <h3>{t('Inputs')}</h3>
+                <small className="muted">{t('Select a version and a ready input.')}</small>
               </div>
             </div>
-
-            {versions.length === 0 ? (
-              <StateBlock
-                variant="empty"
-                title={t('No Model Versions Yet')}
-                description={t('Register or train a model version first.')}
-                extra={
-                  <ButtonLink to="/models/versions" variant="secondary" size="sm">
-                    {t('Open Model Versions')}
-                  </ButtonLink>
-                }
-              />
-            ) : readyAttachmentCount === 0 ? (
-              <StateBlock
-                variant="empty"
-                title={t('No Ready Inputs Yet')}
-                description={t('Upload one ready input before running inference.')}
-                extra={
-                  <small className="muted">
-                    {t('Use the uploader below, then run again from this page.')}
-                  </small>
-                }
-              />
-            ) : (
-              <div className="workspace-filter-grid">
+            <div className="workspace-filter-grid">
+              {versions.length > 0 ? (
                 <label className="stack tight">
                   <small className="muted">{t('Model Version')}</small>
-                  <Select
-                    value={selectedVersionId}
-                    onChange={(event) => setSelectedVersionId(event.target.value)}
-                  >
+                  <Select value={selectedVersionId} onChange={(event) => setSelectedVersionId(event.target.value)}>
                     {versions.map((version) => (
                       <option key={version.id} value={version.id}>
                         {version.version_name} ({t(version.task_type)} / {t(version.framework)})
@@ -745,6 +684,8 @@ export default function InferenceValidationPage() {
                     ))}
                   </Select>
                 </label>
+              ) : null}
+              {readyAttachmentCount > 0 ? (
                 <label className="stack tight">
                   <small className="muted">{t('Input Attachment')}</small>
                   <Select
@@ -760,31 +701,37 @@ export default function InferenceValidationPage() {
                       ))}
                   </Select>
                 </label>
-                <label className="stack tight">
-                  <small className="muted">{t('Select Run')}</small>
-                  <Select
-                    value={selectedRun?.id ?? ''}
-                    onChange={(event) => setSelectedRunId(event.target.value)}
-                    disabled={runs.length === 0}
-                  >
-                    {runs.length === 0 ? (
-                      <option value="">{t('No Runs Yet')}</option>
-                    ) : (
-                      runs.map((run) => (
-                        <option key={run.id} value={run.id}>
-                          {describeRun(run)} · {formatCompactTimestamp(run.updated_at, t('n/a'))} · {t(run.status)}
-                        </option>
-                      ))
-                    )}
-                  </Select>
-                </label>
-              </div>
-            )}
-
+              ) : null}
+              {versions.length === 0 || readyAttachmentCount === 0 ? (
+                <small className="muted">
+                  {t('Add a version and one ready input to enable validation.')}
+                </small>
+              ) : null}
+            </div>
           </Card>
         }
         main={
           <div className="workspace-main-stack">
+            {versions.length === 0 ? (
+              <StateBlock
+                variant="empty"
+                title={t('No versions yet')}
+                description={t('Add a version first.')}
+                extra={
+                  <ButtonLink to="/models/versions" variant="secondary" size="sm">
+                    {t('Open Versions')}
+                  </ButtonLink>
+                }
+              />
+            ) : readyAttachmentCount === 0 ? (
+              <StateBlock
+                variant="empty"
+                title={t('No ready inputs yet')}
+                description={t('Upload one ready input first.')}
+                extra={<small className="muted">{t('Try again after upload.')}</small>}
+              />
+            ) : null}
+
             <div ref={inputUploaderRef}>
               <AttachmentUploader
                 title={t('Inference Inputs')}
@@ -793,7 +740,7 @@ export default function InferenceValidationPage() {
                 onUploadFiles={uploadInputFiles}
                 contentUrlBuilder={api.attachmentContentUrl}
                 onDelete={removeInput}
-                emptyDescription={t('Upload image inputs for inference validation.')}
+                emptyDescription={t('Upload an image to validate it.')}
                 uploadButtonLabel={t('Upload Inference Input')}
                 disabled={busy}
               />
@@ -802,8 +749,8 @@ export default function InferenceValidationPage() {
             <div ref={latestOutputRef}>
               <Card as="article">
                 <WorkspaceSectionHeader
-                  title={t('Latest Inference Output')}
-                  description={t('Review execution status, preview, and normalized output.')}
+                  title={t('Run result')}
+                  description={t('Review status and normalized output.')}
                   actions={
                     selectedRun ? (
                       <Button
@@ -822,67 +769,57 @@ export default function InferenceValidationPage() {
                 {!selectedRun ? (
                   <StateBlock
                     variant="empty"
-                    title={t('No Runs Yet')}
-                    description={t('Run inference once to inspect output and feedback routing.')}
-                    extra={
-                      <small className="muted">
-                        {t('Choose a version and a ready input above, then run.')}
-                      </small>
-                    }
+                    title={t('No runs yet')}
+                    description={t('Run once to see a result.')}
+                    extra={<small className="muted">{t('Choose a version and input above first.')}</small>}
                   />
                 ) : (
                   <>
                     {selectedRunError ? (
                       <StateBlock variant="error" title={t('Run detail unavailable')} description={selectedRunError} />
                     ) : null}
-                    <small className="muted">
-                      {t('Run {runId} · Task {task} · Framework {framework}', {
-                        runId: selectedRunVersion?.version_name ?? t('Recent run'),
-                        task: t(selectedRun.task_type),
-                        framework: t(selectedRun.framework)
-                      })}
-                    </small>
-                    <small className="muted">
-                      {t('Last updated')}: {formatCompactTimestamp(selectedRun.updated_at, t('n/a'))}
-                    </small>
                     <div className="row gap wrap">
                       <Badge tone="neutral">
-                        {t('Execution Status')}: {runtimeInsight?.displaySourceLabel ?? t('Unknown execution')}
+                        {t('Run')}: {selectedRunVersion?.version_name ?? t('Recent run')}
                       </Badge>
-                      {attachmentById.get(selectedRun.input_attachment_id) ? (
-                        <Badge tone="info">
-                          {t('Input Attachment')}: {selectedRunInputAttachment?.filename}
-                        </Badge>
-                      ) : null}
-                      {selectedRun.feedback_dataset_id ? (
-                        <Badge tone="neutral">
-                          {t('Target Dataset')}:{' '}
-                          {datasetsById.get(selectedRun.feedback_dataset_id)?.name ??
-                            t('Selected dataset record unavailable')}
-                        </Badge>
-                      ) : null}
+                      <Badge tone="neutral">
+                        {t('Updated')}: {formatCompactTimestamp(selectedRun.updated_at, t('n/a'))}
+                      </Badge>
+                      <Badge tone="neutral">
+                        {t('Task')}: {t(selectedRun.task_type)}
+                      </Badge>
+                      <Badge tone="neutral">
+                        {t('Framework')}: {t(selectedRun.framework)}
+                      </Badge>
+                      <Badge tone="info">
+                        {t('Execution')}: {runtimeInsight?.displaySourceLabel ?? t('Unknown execution')}
+                      </Badge>
                     </div>
                     <StateBlock
                       variant={runtimeInsight?.variant ?? 'empty'}
-                      title={runtimeInsight?.title ?? t('Degraded output active')}
+                      title={runtimeInsight?.title ?? t('Fallback output active')}
                       description={
                         runtimeInsight?.description ??
-                        t('Using degraded output because runtime endpoint is unavailable.')
+                        t('Runtime is unavailable, showing fallback output.')
                       }
                     />
+                    {selectedRunNotice ? (
+                      <InlineAlert
+                        tone={selectedRunNotice.tone}
+                        title={selectedRunNotice.title}
+                        description={selectedRunNotice.description}
+                      />
+                    ) : null}
                     <Suspense
                       fallback={
                         <StateBlock
                           variant="loading"
                           title={t('Loading')}
-                          description={t('Preparing prediction visualization.')}
+                          description={t('Preparing result preview.')}
                         />
                       }
                     >
-                      <PredictionVisualizer
-                        output={selectedRun.normalized_output}
-                        imageUrl={selectedRunPreviewUrl}
-                      />
+                      <PredictionVisualizer output={selectedRun.normalized_output} imageUrl={selectedRunPreviewUrl} />
                     </Suspense>
                     <details className="workspace-details">
                       <summary>{t('Raw output (advanced)')}</summary>
@@ -908,31 +845,29 @@ export default function InferenceValidationPage() {
             <div ref={feedbackPanelRef}>
               <SectionCard
                 title={t('Feedback')}
-                description={t('Send one failed sample to a matching dataset.')}
+                description={t('Route the sample back to a matching dataset.')}
               >
                 {!selectedRun ? (
                   <StateBlock
                     variant="empty"
-                    title={t('No Runs Yet')}
-                    description={t('Run inference to inspect outputs.')}
+                    title={t('No runs yet')}
+                    description={t('Run inference first.')}
                   />
                 ) : datasets.length === 0 ? (
                   <StateBlock
                     variant="empty"
-                    title={t('No Datasets Yet')}
-                    description={t('Create or import a dataset before sending failure samples back.')}
+                    title={t('No datasets yet')}
+                    description={t('Create or import a dataset first.')}
                   />
                 ) : feedbackDatasets.length === 0 ? (
                   <StateBlock
                     variant="empty"
-                    title={t('No Matching Datasets')}
-                    description={t('Create a dataset with task type {taskType} before sending feedback from this run.', {
-                      taskType: feedbackTaskType ? t(feedbackTaskType) : t('unknown')
-                    })}
+                    title={t('No matching datasets')}
+                    description={t('Create a dataset with the same task type first.')}
                   />
                 ) : feedbackTaskType ? (
                   <small className="muted">
-                    {t('Only datasets with task {taskType} are shown for feedback.', {
+                    {t('Only datasets with task type {taskType} are shown.', {
                       taskType: t(feedbackTaskType)
                     })}
                   </small>
@@ -957,11 +892,11 @@ export default function InferenceValidationPage() {
                 <details className="workspace-details">
                   <summary>{t('Feedback reason')}</summary>
                   <label>
-                    {t('Feedback Reason')}
+                    {t('Reason')}
                     <Input
                       value={feedbackReason}
                       onChange={(event) => setFeedbackReason(event.target.value)}
-                      placeholder={t('for example: missing_detection')}
+                      placeholder={t('For example: missing_detection')}
                     />
                   </label>
                 </details>
@@ -980,9 +915,33 @@ export default function InferenceValidationPage() {
                 />
                 {selectedRun ? (
                   <small className="muted">
-                    {t('The annotation link keeps queue scope and run metadata in sync.')}
+                    {t('The link includes queue and run metadata.')}
                   </small>
                 ) : null}
+              </SectionCard>
+
+              <SectionCard
+                title={t('Recent runs')}
+                description={t('Switch the active result without re-running inference.')}
+              >
+                <label className="stack tight">
+                  <small className="muted">{t('Select run')}</small>
+                  <Select
+                    value={selectedRun?.id ?? ''}
+                    onChange={(event) => setSelectedRunId(event.target.value)}
+                    disabled={runs.length === 0}
+                  >
+                    {runs.length === 0 ? (
+                      <option value="">{t('No runs yet')}</option>
+                    ) : (
+                      runs.map((run) => (
+                        <option key={run.id} value={run.id}>
+                          {describeRun(run)} · {formatCompactTimestamp(run.updated_at, t('n/a'))} · {t(run.status)}
+                        </option>
+                      ))
+                    )}
+                  </Select>
+                </label>
               </SectionCard>
             </div>
           </div>

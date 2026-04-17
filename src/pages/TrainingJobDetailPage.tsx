@@ -8,7 +8,6 @@ import type {
   RuntimeSettingsView
 } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
-import StepIndicator from '../components/StepIndicator';
 import VirtualList from '../components/VirtualList';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
@@ -25,15 +24,6 @@ import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
 import { bucketRuntimeFallbackReason, runtimeFallbackReasonLabelKey } from '../utils/runtimeFallbackReason';
-
-const STATUS_STEPS: Array<TrainingJobRecord['status']> = [
-  'draft',
-  'queued',
-  'preparing',
-  'running',
-  'evaluating',
-  'completed'
-];
 
 const METRIC_CHART_WIDTH = 300;
 const METRIC_CHART_HEIGHT = 120;
@@ -209,14 +199,6 @@ export default function TrainingJobDetailPage() {
     }
   );
 
-  const stepIndex = useMemo(() => {
-    if (!job) {
-      return 0;
-    }
-
-    const index = STATUS_STEPS.indexOf(job.status);
-    return index >= 0 ? index : STATUS_STEPS.length - 1;
-  }, [job]);
   const datasetsById = useMemo(
     () => new Map(datasets.map((dataset) => [dataset.id, dataset])),
     [datasets]
@@ -440,12 +422,12 @@ export default function TrainingJobDetailPage() {
     return (
       <WorkspacePage>
         <PageHeader
-          eyebrow={t('Training Detail')}
-          title={t('Training Job Detail')}
-          description={t('Review status, logs, and metrics for the selected run.')}
+        eyebrow={t('Training detail')}
+        title={t('Job detail')}
+        description={t('Review status, logs, and metrics for the selected training run.')}
           secondaryActions={
             <ButtonLink to="/training/jobs" variant="ghost" size="sm">
-              {t('Jobs List')}
+              {t('Back to jobs')}
             </ButtonLink>
           }
         />
@@ -458,16 +440,16 @@ export default function TrainingJobDetailPage() {
     return (
       <WorkspacePage>
         <PageHeader
-          eyebrow={t('Training Detail')}
-          title={t('Training Job Detail')}
-          description={t('Review status, logs, and metrics for the selected run.')}
+        eyebrow={t('Training detail')}
+        title={t('Job detail')}
+        description={t('Review status, logs, and metrics for the selected training run.')}
           secondaryActions={
             <ButtonLink to="/training/jobs" variant="ghost" size="sm">
-              {t('Jobs List')}
+              {t('Back to jobs')}
             </ButtonLink>
           }
         />
-        <StateBlock variant="loading" title={t('Loading')} description={t('Fetching detail.')} />
+        <StateBlock variant="loading" title={t('Loading')} description={t('Fetching job detail.')} />
       </WorkspacePage>
     );
   }
@@ -476,12 +458,12 @@ export default function TrainingJobDetailPage() {
     return (
       <WorkspacePage>
         <PageHeader
-          eyebrow={t('Training Detail')}
-          title={t('Training Job Detail')}
-          description={t('Review status, logs, and metrics for the selected run.')}
+        eyebrow={t('Training detail')}
+        title={t('Job detail')}
+        description={t('Review status, logs, and metrics for the selected training run.')}
           secondaryActions={
             <ButtonLink to="/training/jobs" variant="ghost" size="sm">
-              {t('Jobs List')}
+              {t('Back to jobs')}
             </ButtonLink>
           }
         />
@@ -498,24 +480,24 @@ export default function TrainingJobDetailPage() {
   const queryScopedVersionId = (searchParams.get('version') ?? '').trim();
   const scopedDatasetId = queryScopedDatasetId || job.dataset_id;
   const scopedVersionId = queryScopedVersionId || job.dataset_version_id;
-  const datasetDisplayName = linkedDataset?.name ?? t('Selected dataset record unavailable');
+  const datasetDisplayName = linkedDataset?.name ?? t('Dataset record unavailable');
   const scopedJobsPath = buildScopedTrainingJobsPath(scopedDatasetId, scopedVersionId);
   const scopedInferencePath = buildScopedInferencePath(scopedDatasetId, scopedVersionId);
-  const versionSnapshotLabel = job.dataset_version_id ? t('Version bound') : t('Version pending');
-  const executionTargetLabel = job.execution_target === 'worker' ? t('Worker lane') : t('Control-plane lane');
+  const versionSnapshotLabel = job.dataset_version_id ? t('Version set') : t('Version pending');
+  const executionTargetLabel = job.execution_target === 'worker' ? t('Worker lane') : t('Control plane');
   const describeSelectedWorker = (
     executionTarget: TrainingJobRecord['execution_target'],
     workerId: string | null
   ) => {
     if (executionTarget === 'control_plane') {
-      return t('Local execution lane');
+      return t('Local lane');
     }
 
     if (workerId) {
-      return t('Worker assigned');
+      return t('Worker set');
     }
 
-    return t('Awaiting worker assignment');
+    return t('Worker pending');
   };
   const latestUpdateLabel = formatCompactTimestamp(job.updated_at, t('n/a'));
   const executionInsight = deriveTrainingExecutionInsight({
@@ -527,9 +509,9 @@ export default function TrainingJobDetailPage() {
     executionInsight.reality === 'real'
       ? t('Real execution')
       : executionInsight.reality === 'template'
-        ? t('Degraded execution')
+        ? t('Fallback')
         : executionInsight.reality === 'simulated'
-          ? t('Degraded execution')
+          ? t('Fallback')
           : t('Needs verification');
   const formatFallbackReasonLabel = (reason: string | null | undefined): string =>
     t(runtimeFallbackReasonLabelKey(bucketRuntimeFallbackReason(reason)));
@@ -540,49 +522,6 @@ export default function TrainingJobDetailPage() {
       job.scheduler_decision?.selected_worker_id ||
       (job.scheduler_decision?.excluded_worker_ids.length ?? 0) > 0
   );
-  const nextActionBanner = (() => {
-    const isTerminal = ['completed', 'failed', 'cancelled'].includes(job.status);
-
-    if (isTerminal && executionInsight.showWarning) {
-      return {
-        tone: 'warning' as const,
-        title: t('Verify this run before registration'),
-        description: t('The run finished, but the evidence is still degraded or incomplete. Open Runtime Settings before publishing.'),
-        action: (
-          <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-            {t('Open Runtime Settings')}
-          </ButtonLink>
-        )
-      };
-    }
-
-    if (job.status === 'completed') {
-      return {
-        tone: 'success' as const,
-        title: t('Run completed successfully'),
-        description: t('Next step: validate inference or register a model version with this snapshot.'),
-        action: (
-          <ButtonLink to={scopedInferencePath} variant="secondary" size="sm">
-            {t('Validate Inference')}
-          </ButtonLink>
-        )
-      };
-    }
-
-    if (job.status === 'failed' || job.status === 'cancelled') {
-      return {
-        tone: 'danger' as const,
-        title: t('Run ended early'),
-        description: t('Use logs and metrics to understand the failure, then retry when the environment is ready.')
-      };
-    }
-
-    return {
-      tone: 'info' as const,
-      title: t('Run is still in progress'),
-      description: t('Keep the evidence panels visible and refresh when the job changes state.')
-    };
-  })();
   const refreshDetail = () => {
     load('manual')
       .then(() => setFeedback(null))
@@ -592,20 +531,14 @@ export default function TrainingJobDetailPage() {
   return (
     <WorkspacePage>
       <PageHeader
-        eyebrow={t('Training Detail')}
+        eyebrow={t('Training detail')}
         title={job.name}
-        description={t('Inspect run status, evidence, and artifact readiness.')}
+        description={t('Track readiness, metrics, worker delivery, and artifact handoff for this training run.')}
         meta={
           <div className="row gap wrap align-center">
             <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-            <Badge tone={job.dataset_version_id ? 'info' : 'warning'}>
-              {t('Version snapshot')}: {versionSnapshotLabel}
-            </Badge>
-            <Badge tone={job.execution_target === 'worker' ? 'info' : 'warning'}>
-              {t('Execution target')}: {executionTargetLabel}
-            </Badge>
             <Badge tone={artifactAttachmentId ? 'success' : 'neutral'}>
-              {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('pending')}
+              {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('Pending')}
             </Badge>
           </div>
         }
@@ -617,27 +550,16 @@ export default function TrainingJobDetailPage() {
         secondaryActions={
           <>
             <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
-              {t('Jobs List')}
+              {t('Back to jobs')}
             </ButtonLink>
           </>
         }
       />
 
-      <StepIndicator
-        steps={[t('Draft'), t('Queued'), t('Preparing'), t('Running'), t('Evaluating'), t('Completed')]}
-        current={stepIndex}
-      />
-      <InlineAlert
-        tone={nextActionBanner.tone}
-        title={nextActionBanner.title}
-        description={nextActionBanner.description}
-        actions={nextActionBanner.action}
-      />
-
       {feedback ? (
         <InlineAlert
           tone={feedback.variant === 'success' ? 'success' : 'danger'}
-          title={feedback.variant === 'success' ? t('Completed') : t('Failed')}
+          title={feedback.variant === 'success' ? t('Done') : t('Failed')}
           description={feedback.text}
         />
       ) : null}
@@ -645,8 +567,8 @@ export default function TrainingJobDetailPage() {
       {isInterrupted && !feedback ? (
         <InlineAlert
           tone="danger"
-          title={t('Training Interrupted')}
-          description={t('Job is currently {status}. Retry from this page when ready.', {
+          title={t('Interrupted')}
+          description={t('Job is {status}. Retry from here when ready.', {
             status: t(job.status)
           })}
         />
@@ -657,10 +579,8 @@ export default function TrainingJobDetailPage() {
           <Card as="section" className="workspace-toolbar-card">
             <div className="workspace-toolbar-head">
               <div className="workspace-toolbar-copy">
-                <h3>{t('Run Controls')}</h3>
-                <small className="muted">
-                  {t('Use this strip for run control and evidence export only.')}
-                </small>
+                <h3>{t('Primary actions')}</h3>
+                <small className="muted">{t('Cancel or retry this run.')}</small>
               </div>
               <div className="workspace-toolbar-actions">
                 {canCancel ? (
@@ -673,21 +593,26 @@ export default function TrainingJobDetailPage() {
                     {t('Retry')}
                   </Button>
                 ) : null}
-                {artifactAttachmentId ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={downloadArtifact}>
-                    {t('Download Artifact')}
-                  </Button>
-                ) : null}
               </div>
             </div>
+            {artifactAttachmentId ? (
+              <details className="workspace-details">
+                <summary>{t('More actions')}</summary>
+                <div className="workspace-disclosure-content">
+                  <Button type="button" variant="ghost" size="sm" onClick={downloadArtifact}>
+                    {t('Download artifact')}
+                  </Button>
+                </div>
+              </details>
+            ) : null}
           </Card>
         }
         main={
           <div className="workspace-main-stack">
             <Card as="section" className="stack">
               <WorkspaceSectionHeader
-                title={t('Run Summary')}
-                description={t('Dataset scope, launch state, and artifact readiness.')}
+                title={t('Run summary')}
+                description={t('Dataset, base model, and artifact status.')}
               />
               <DetailList
                 items={[
@@ -695,28 +620,59 @@ export default function TrainingJobDetailPage() {
                   { label: t('Dataset'), value: datasetDisplayName },
                   { label: t('Base model'), value: job.base_model },
                   { label: t('Version snapshot'), value: versionSnapshotLabel },
-                  { label: t('Execution target'), value: executionTargetLabel },
+                  { label: t('Lane'), value: executionTargetLabel },
                   {
                     label: t('Artifact'),
                     value: artifactAttachmentId ? (
                       <div className="row gap wrap align-center">
                         <Badge tone="success">{t('Ready')}</Badge>
                         <Button type="button" variant="ghost" size="sm" onClick={downloadArtifact}>
-                          {t('Download Artifact')}
+                          {t('Download artifact')}
                         </Button>
                       </div>
                     ) : (
-                      t('pending')
+                      t('Pending')
                     )
                   }
                 ]}
               />
-              <small className="muted">{t('Deeper traces and exports stay in the side panel.')}</small>
+              {job.status === 'completed' ? (
+                <InlineAlert
+                  tone={executionInsight.showWarning ? 'warning' : 'success'}
+                  title={
+                    executionInsight.showWarning ? t('Verify before publishing') : t('Training complete')
+                  }
+                  description={
+                    executionInsight.showWarning
+                      ? t('The run is complete, but the evidence is not complete yet.')
+                      : t('Next you can validate inference or register a version.')
+                  }
+                  actions={
+                    executionInsight.showWarning ? (
+                      <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                        {t('Open runtime settings')}
+                      </ButtonLink>
+                    ) : (
+                      <ButtonLink to={scopedInferencePath} variant="secondary" size="sm">
+                        {t('Validate inference')}
+                      </ButtonLink>
+                    )
+                  }
+                />
+              ) : job.status === 'failed' || job.status === 'cancelled' ? (
+                <InlineAlert
+                  tone="danger"
+                  title={t('Run ended early')}
+                  description={t('Review logs and metrics before retrying.')}
+                />
+              ) : (
+                <small className="muted">{t('Refresh again when status changes.')}</small>
+              )}
             </Card>
 
             <SectionCard
               title={t('Run evidence')}
-              description={t('Switch between overview, metrics, and logs.')}
+              description={t('Artifacts, metrics, and logs.')}
               actions={
                 <div className="row gap wrap">
                   <Button
@@ -725,7 +681,7 @@ export default function TrainingJobDetailPage() {
                     size="sm"
                     onClick={() => setEvidenceView('overview')}
                   >
-                    {t('Overview')}
+                    {t('Summary')}
                   </Button>
                   <Button
                     type="button"
@@ -751,10 +707,12 @@ export default function TrainingJobDetailPage() {
                   {artifactSummary ? (
                     <Panel className="stack tight" tone="soft">
                       <div className="row gap wrap">
-                        <Badge tone="neutral">{t('Runner mode')}: {artifactSummary.mode || t('pending')}</Badge>
+                        <Badge tone="neutral">
+                          {t('Runner mode')}: {artifactSummary.mode || t('Pending')}
+                        </Badge>
                         {artifactSummary.training_performed !== null ? (
                           <Badge tone={artifactSummary.training_performed ? 'success' : 'warning'}>
-                            {t('Training performed')}: {artifactSummary.training_performed ? t('yes') : t('no')}
+                            {t('Training')}: {artifactSummary.training_performed ? t('Yes') : t('No')}
                           </Badge>
                         ) : null}
                         {artifactSummary.sampled_items !== null ? (
@@ -778,35 +736,25 @@ export default function TrainingJobDetailPage() {
                       ) : null}
                       {artifactSummary.fallback_reason ? (
                         <small className="muted">
-                          {t('Degradation reason')}: {formatFallbackReasonLabel(artifactSummary.fallback_reason)}
+                          {t('Fallback reason')}: {formatFallbackReasonLabel(artifactSummary.fallback_reason)}
                         </small>
                       ) : null}
                     </Panel>
                   ) : null}
                   {latestMetrics.length === 0 ? (
-                    <StateBlock
-                      variant="empty"
-                      title={t('No Metrics Yet')}
-                      description={t('Metrics appear after evaluation or when the runtime returns them.')}
-                    />
+                    <small className="muted">{t('No metrics yet.')}</small>
                   ) : (
-                    <div className="row gap wrap">
-                      {latestMetrics.map((metric) => (
-                        <Badge key={metric.id} tone="neutral">
-                          {metric.metric_name}: {metric.metric_value.toFixed(4)} · {t('step')} {metric.step}
-                        </Badge>
-                      ))}
-                    </div>
+                    <small className="muted">
+                      {t('{count} metrics ready.', { count: latestMetrics.length })}
+                    </small>
                   )}
                   {trimmedLogExcerpt ? (
                     <Panel className="stack tight" tone="soft">
-                      <strong>{t('Latest log summary')}</strong>
+                      <strong>{t('Latest logs')}</strong>
                       <pre className="code-block">{trimmedLogExcerpt}</pre>
                     </Panel>
                   ) : (
-                    <small className="muted">
-                      {t('No short log summary is available yet. Open Logs for the full output.')}
-                    </small>
+                    <small className="muted">{t('No log summary yet.')}</small>
                   )}
                 </div>
               ) : evidenceView === 'metrics' ? (
@@ -820,14 +768,10 @@ export default function TrainingJobDetailPage() {
                       ))}
                     </div>
                   ) : (
-                    <StateBlock
-                      variant="empty"
-                      title={t('No Metrics Yet')}
-                      description={t('Metrics appear after evaluation or when the runtime returns them.')}
-                    />
+                    <small className="muted">{t('No metrics yet.')}</small>
                   )}
                   <details className="workspace-details">
-                    <summary>{t('Metric Timeline')}</summary>
+                    <summary>{t('Metric timeline')}</summary>
                     {shouldVirtualizeMetricTimeline ? (
                       <VirtualList
                         items={metricTimeline}
@@ -894,20 +838,9 @@ export default function TrainingJobDetailPage() {
                 </div>
               ) : (
                 <div className="stack">
-                  <small className="muted">
-                    {t('Latest execution logs are shown here with optional backfill for earlier lines.')}
-                  </small>
+                  <small className="muted">{t('Logs live here.')}</small>
                   {logs.length === 0 ? (
-                    <StateBlock
-                      variant="empty"
-                      title={t('No Logs Yet')}
-                      description={t('Logs will appear after the selected executor starts preparing or running the job.')}
-                      extra={
-                        <small className="muted">
-                          {t('If the job is still queued, wait for scheduler dispatch or inspect runtime/worker readiness from settings.')}
-                        </small>
-                      }
-                    />
+                    <small className="muted">{t('No logs yet.')}</small>
                   ) : (
                     <div className="stack tight">
                       {hiddenLogCount > 0 ? (
@@ -933,10 +866,7 @@ export default function TrainingJobDetailPage() {
         side={
           <div className="workspace-inspector-rail">
             <Card as="section" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Run Inspector')}
-                description={t('Selected run identity and current execution state.')}
-              />
+              <WorkspaceSectionHeader title={t('Inspector')} description={t('Job snapshot.') } />
               <Panel as="section" className="stack tight" tone="soft">
                 <div className="row between gap wrap align-center">
                   <strong>{job.name}</strong>
@@ -947,197 +877,202 @@ export default function TrainingJobDetailPage() {
                   <Badge tone="neutral">{t(job.framework)}</Badge>
                   <Badge tone="info">{describeSelectedWorker(job.execution_target, job.scheduled_worker_id)}</Badge>
                   <Badge tone={executionInsight.reality === 'real' ? 'success' : 'warning'}>
-                    {t('Result authenticity')}: {executionRealityLabel}
+                    {t('Result')}: {executionRealityLabel}
                   </Badge>
                 </div>
                 <small className="muted">
-                  {t('Execution mode')}: {t(job.execution_mode)} · {t('Last updated')}: {latestUpdateLabel}
+                  {t('Mode')}: {t(job.execution_mode)} · {t('Updated')}: {latestUpdateLabel}
                 </small>
               </Panel>
+            </Card>
+
+            <SectionCard
+              title={t('Runtime')}
+              description={t('Python path and readiness.')}
+              actions={
+                <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
+                  {t('Open runtime settings')}
+                </ButtonLink>
+              }
+            >
               {!runtimeSettingsLoading ? (
                 runtimeSettingsError ? (
                   <InlineAlert
                     tone="warning"
-                    title={t('Runtime settings unavailable')}
-                    description={t('Open Runtime Settings before using this run for publishing.')}
+                    title={t('Runtime unavailable')}
+                    description={t('Go to Runtime settings.')}
                     actions={
                       <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                        {t('Open Runtime Settings')}
+                        {t('Open runtime settings')}
                       </ButtonLink>
                     }
                   />
                 ) : (
                   <Panel className="stack tight" tone="soft">
                     <div className="row between gap wrap align-center">
-                      <strong>{t('Runtime')}</strong>
-                      <Badge tone={runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback ? 'success' : 'warning'}>
+                      <strong>{t('Status')}</strong>
+                      <Badge
+                        tone={
+                          runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback
+                            ? 'success'
+                            : 'warning'
+                        }
+                      >
                         {runtimeDisableSimulatedTrainFallback || runtimeDisableInferenceFallback
-                          ? t('Ready to publish')
-                          : t('Review runtime')}
+                          ? t('Ready')
+                          : t('Review')}
                       </Badge>
                     </div>
                     <div className="row gap wrap align-center">
-                      <Badge tone="neutral">{t('Python')}: {runtimePythonBin || t('platform default')}</Badge>
+                      <Badge tone="neutral">
+                        {t('Python')}: {runtimePythonBin || t('default path')}
+                      </Badge>
                     </div>
-                    <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                      {t('Open Runtime Settings')}
-                    </ButtonLink>
                   </Panel>
                 )
               ) : null}
-            </Card>
-            <SectionCard
-              title={t('Advanced execution diagnostics')}
-              description={t('Scheduler history and exports stay here.')}
-              actions={
-                <div className="row gap wrap">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={downloadMetricsJson}
-                    disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
-                  >
-                    {exportingMetrics ? t('Exporting...') : t('Metrics JSON')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={downloadMetricsCsv}
-                    disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
-                  >
-                    {exportingMetricsCsv ? t('Exporting...') : t('Metrics CSV')}
-                  </Button>
-                </div>
-              }
-            >
-              {job.scheduler_decision ? (
-                <div className="stack tight">
-                  <Panel className="stack tight" tone="soft">
-                    <div className="row between align-center wrap">
-                      <strong>{t('Scheduler decision')}</strong>
-                      <small className="muted">
-                        {formatCompactTimestamp(job.scheduler_decision.decided_at, t('n/a'))}
-                      </small>
-                    </div>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {t('Trigger')}: {t(job.scheduler_decision.trigger)}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('Attempt')}: {job.scheduler_decision.attempt}
-                      </Badge>
-                      <Badge tone={job.scheduler_decision.execution_target === 'worker' ? 'info' : 'warning'}>
-                        {t('Target')}: {t(job.scheduler_decision.execution_target)}
-                      </Badge>
-                      <Badge
-                        tone={
-                          job.scheduler_decision.execution_target === 'worker' &&
-                          job.scheduler_decision.selected_worker_id
-                            ? 'info'
-                            : job.scheduler_decision.execution_target === 'control_plane'
-                              ? 'warning'
-                              : 'neutral'
-                        }
-                      >
-                        {t('Selected worker')}:{' '}
-                        {describeSelectedWorker(
-                          job.scheduler_decision.execution_target,
-                          job.scheduler_decision.selected_worker_id
-                        )}
-                      </Badge>
-                    </div>
-                    <small className="muted">{job.scheduler_decision.note}</small>
-                  </Panel>
-                  <details className="workspace-details">
-                    <summary>{t('Scheduler score breakdown')}</summary>
-                    <div className="row gap wrap">
-                      <Badge tone="neutral">
-                        {t('Score')}: {job.scheduler_decision.selected_worker_score?.toFixed(4) ?? t('n/a')}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('Load')}: {job.scheduler_decision.selected_worker_load_component?.toFixed(4) ?? t('n/a')}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('Penalty')}: {job.scheduler_decision.selected_worker_health_penalty?.toFixed(4) ?? t('n/a')}
-                      </Badge>
-                      <Badge tone="neutral">
-                        {t('Capability bonus')}:
-                        {job.scheduler_decision.selected_worker_capability_bonus?.toFixed(4) ?? t('n/a')}
-                      </Badge>
-                    </div>
-                  </details>
-                  {schedulerDecisionHistory.length > 1 ? (
-                    <details className="workspace-details">
-                      <summary>
-                        {t('Scheduler history')} ({schedulerDecisionHistory.length})
-                      </summary>
-                      <div className="stack tight">
-                        {schedulerDecisionHistory.map((decision, index) => (
-                          <Panel
-                            key={`${decision.decided_at}-${decision.trigger}-${decision.attempt}-${index}`}
-                            tone="soft"
-                            className="stack tight"
-                          >
-                            <div className="row between align-center wrap">
-                              <strong>
-                                {t(decision.trigger)} · {t('Attempt')} {decision.attempt}
-                              </strong>
-                              <small className="muted">
-                                {formatCompactTimestamp(decision.decided_at, t('n/a'))}
-                              </small>
-                            </div>
-                            <div className="row gap wrap">
-                              <Badge tone={decision.execution_target === 'worker' ? 'info' : 'warning'}>
-                                {t('Target')}: {t(decision.execution_target)}
-                              </Badge>
-                              <Badge tone="neutral">
-                                {t('Selected worker')}:{' '}
-                                {describeSelectedWorker(decision.execution_target, decision.selected_worker_id)}
-                              </Badge>
-                            </div>
-                            <small className="muted">{decision.note}</small>
-                          </Panel>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  {hasTechnicalContext ? (
-                    <details className="workspace-details">
-                      <summary>{t('Technical context')}</summary>
-                      <div className="stack tight">
-                        {job.scheduler_decision.selected_worker_id ? (
-                          <small className="muted">
-                            {t('Worker ID: {id}', { id: job.scheduler_decision.selected_worker_id })}
-                          </small>
-                        ) : null}
-                        {job.scheduler_decision.excluded_worker_ids.length > 0 ? (
-                          <small className="muted">
-                            {t('Excluded worker IDs: {ids}', {
-                              ids: job.scheduler_decision.excluded_worker_ids.join(', ')
-                            })}
-                          </small>
-                        ) : null}
-                        {artifactSummary?.primary_model_path ? (
-                          <small className="muted">
-                            {t('Primary model path')}: {artifactSummary.primary_model_path}
-                          </small>
-                        ) : null}
-                        {workspaceDir ? (
-                          <small className="muted">
-                            {t('Workspace')}: {workspaceDir}
-                          </small>
-                        ) : null}
-                      </div>
-                    </details>
-                  ) : null}
-                </div>
-              ) : (
-                <small className="muted">{t('Scheduler update not available yet.')}</small>
-              )}
             </SectionCard>
 
+            <SectionCard
+              title={t('Advanced diagnostics')}
+              description={t('Scheduler history, technical paths, and exports.')}
+            >
+              <div className="stack tight">
+                <details className="workspace-details">
+                  <summary>{t('Exports')}</summary>
+                  <div className="row gap wrap">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={downloadMetricsJson}
+                      disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
+                    >
+                      {exportingMetrics ? t('Exporting...') : t('Metrics JSON')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={downloadMetricsCsv}
+                      disabled={exportingMetrics || exportingMetricsCsv || metrics.length === 0}
+                    >
+                      {exportingMetricsCsv ? t('Exporting...') : t('Metrics CSV')}
+                    </Button>
+                  </div>
+                </details>
+
+                {job.scheduler_decision ? (
+                  <details className="workspace-details">
+                    <summary>{t('Scheduler')}</summary>
+                    <div className="stack tight">
+                      <Panel className="stack tight" tone="soft">
+                        <div className="row between align-center wrap">
+                          <strong>{t('Scheduler')}</strong>
+                          <small className="muted">
+                            {formatCompactTimestamp(job.scheduler_decision.decided_at, t('n/a'))}
+                          </small>
+                        </div>
+                        <div className="row gap wrap">
+                          <Badge tone="neutral">
+                            {t('Trigger')}: {t(job.scheduler_decision.trigger)}
+                          </Badge>
+                          <Badge tone="neutral">
+                            {t('Attempt')}: {job.scheduler_decision.attempt}
+                          </Badge>
+                          <Badge tone={job.scheduler_decision.execution_target === 'worker' ? 'info' : 'warning'}>
+                            {t('Lane')}: {t(job.scheduler_decision.execution_target)}
+                          </Badge>
+                          <Badge
+                            tone={
+                              job.scheduler_decision.execution_target === 'worker' &&
+                              job.scheduler_decision.selected_worker_id
+                                ? 'info'
+                                : job.scheduler_decision.execution_target === 'control_plane'
+                                  ? 'warning'
+                                  : 'neutral'
+                            }
+                          >
+                            {t('Worker')}:{' '}
+                            {describeSelectedWorker(
+                              job.scheduler_decision.execution_target,
+                              job.scheduler_decision.selected_worker_id
+                            )}
+                          </Badge>
+                        </div>
+                        <small className="muted">{job.scheduler_decision.note}</small>
+                      </Panel>
+                      {schedulerDecisionHistory.length > 1 ? (
+                        <details className="workspace-details">
+                          <summary>
+                            {t('Previous checks')} ({schedulerDecisionHistory.length})
+                          </summary>
+                          <div className="stack tight">
+                            {schedulerDecisionHistory.map((decision, index) => (
+                              <Panel
+                                key={`${decision.decided_at}-${decision.trigger}-${decision.attempt}-${index}`}
+                                tone="soft"
+                                className="stack tight"
+                              >
+                                <div className="row between align-center wrap">
+                                  <strong>
+                                    {t(decision.trigger)} · {t('Attempt')} {decision.attempt}
+                                  </strong>
+                                  <small className="muted">
+                                    {formatCompactTimestamp(decision.decided_at, t('n/a'))}
+                                  </small>
+                                </div>
+                                <div className="row gap wrap">
+                                  <Badge tone={decision.execution_target === 'worker' ? 'info' : 'warning'}>
+                                    {t('Target')}: {t(decision.execution_target)}
+                                  </Badge>
+                                  <Badge tone="neutral">
+                                    {t('Selected worker')}:{' '}
+                                    {describeSelectedWorker(decision.execution_target, decision.selected_worker_id)}
+                                  </Badge>
+                                </div>
+                                <small className="muted">{decision.note}</small>
+                              </Panel>
+                            ))}
+                          </div>
+                        </details>
+                      ) : null}
+                      {hasTechnicalContext ? (
+                        <details className="workspace-details">
+                          <summary>{t('Paths')}</summary>
+                          <div className="stack tight">
+                            {job.scheduler_decision.selected_worker_id ? (
+                              <small className="muted">
+                                {t('Worker ID: {id}', { id: job.scheduler_decision.selected_worker_id })}
+                              </small>
+                            ) : null}
+                            {job.scheduler_decision.excluded_worker_ids.length > 0 ? (
+                              <small className="muted">
+                                {t('Excluded worker IDs: {ids}', {
+                                  ids: job.scheduler_decision.excluded_worker_ids.join(', ')
+                                })}
+                              </small>
+                            ) : null}
+                            {artifactSummary?.primary_model_path ? (
+                              <small className="muted">
+                                {t('Primary model path')}: {artifactSummary.primary_model_path}
+                              </small>
+                            ) : null}
+                            {workspaceDir ? (
+                              <small className="muted">
+                                {t('Workspace')}: {workspaceDir}
+                              </small>
+                            ) : null}
+                          </div>
+                        </details>
+                      ) : null}
+                    </div>
+                  </details>
+                ) : (
+                  <small className="muted">{t('No scheduling update yet.')}</small>
+                )}
+              </div>
+            </SectionCard>
           </div>
         }
       />

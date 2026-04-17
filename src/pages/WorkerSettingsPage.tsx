@@ -291,13 +291,6 @@ export default function WorkerSettingsPage() {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  const openCreateWorkerRegistry = () => {
-    setEditingWorkerId(null);
-    setWorkerRegistryDraft(buildDefaultWorkerRegistryDraft());
-    setWorkerRegistryError('');
-    setWorkerRegistryOpen(true);
-  };
-
   const openEditWorkerRegistry = useCallback((worker: TrainingWorkerNodeView) => {
     setEditingWorkerId(worker.id);
     setWorkerRegistryDraft(buildWorkerRegistryDraftFromWorker(worker));
@@ -713,8 +706,8 @@ export default function WorkerSettingsPage() {
   );
   const workerPageDescription =
     workerView === 'inventory'
-      ? t('Inventory-first worker operations: review capacity, heartbeat, and maintenance in one place.')
-      : t('Pairing-first worker operations: generate onboarding sessions and complete callback validation.');
+      ? t('Inventory first, maintenance second.')
+      : t('Generate pairing first, then validate the callback.');
   const workerHeaderMeta = useMemo(
     () => (
       <div className="row gap wrap align-center">
@@ -792,21 +785,21 @@ export default function WorkerSettingsPage() {
           <div className="workspace-main-stack">
             {workerView === 'inventory' ? (
               <SectionCard
-                title={t('Worker inventory')}
-                description={t('Table-first worker operations: capacity, heartbeat, and scheduling controls.')}
+              title={t('Worker inventory')}
+                description={t('View inventory first, then status and capacity.')}
                 actions={<Badge tone="neutral">{t('Total')}: {workers.length}</Badge>}
               >
                 {workersLoading ? (
                   <StateBlock
                     variant="loading"
                     title={t('Loading Workers')}
-                    description={t('Collecting worker status and recent activity.')}
+                    description={t('Load worker status.')}
                   />
                 ) : workersAccessDenied ? (
                   <StateBlock
                     variant="empty"
                     title={t('Admin only')}
-                    description={t('Worker management is visible to administrators only.')}
+                    description={t('Admins only.')}
                   />
                 ) : (
                   <StatusTable
@@ -814,7 +807,7 @@ export default function WorkerSettingsPage() {
                     rows={workers}
                     getRowKey={(worker) => worker.id}
                     emptyTitle={t('No workers')}
-                    emptyDescription={t('No training workers are currently registered in the control plane.')}
+                    emptyDescription={t('There are no workers in the control plane yet.')}
                     onRowClick={(worker) => setSelectedWorkerId(worker.id)}
                   />
                 )}
@@ -822,20 +815,20 @@ export default function WorkerSettingsPage() {
             ) : (
               <SectionCard
                 title={t('Worker pairing sessions')}
-                description={t('Generate and verify worker onboarding sessions from one table-first view.')}
+                description={t('Generate and verify pairing sessions.')}
                 actions={<Badge tone={pendingBootstrapCount > 0 ? 'warning' : 'neutral'}>{t('Sessions')}: {bootstrapSessions.length}</Badge>}
               >
                 {bootstrapSessionsLoading ? (
                   <StateBlock
                     variant="loading"
                     title={t('Loading pairing sessions')}
-                    description={t('Collecting recent worker bootstrap commands and states.')}
+                    description={t('Load pairing sessions.')}
                   />
                 ) : bootstrapSessionsAccessDenied ? (
                   <StateBlock
                     variant="empty"
                     title={t('Admin only')}
-                    description={t('Worker onboarding sessions are visible to administrators only.')}
+                    description={t('Admins only.')}
                   />
                 ) : (
                   <StatusTable
@@ -843,7 +836,7 @@ export default function WorkerSettingsPage() {
                     rows={bootstrapSessions}
                     getRowKey={(session) => session.id}
                     emptyTitle={t('No pairing sessions')}
-                    emptyDescription={t('Create an Add Worker session to generate a startup command and pairing token.')}
+                    emptyDescription={t('Create a session to generate a start command.')}
                   />
                 )}
               </SectionCard>
@@ -855,31 +848,21 @@ export default function WorkerSettingsPage() {
             <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
                 title={t('Next step')}
-                description={t('Keep the rail short. Pairing and registry actions live in drawers.')}
+                description={t('Pairing, registration, and maintenance live in drawers.')}
               />
+              <small className="muted">
+                {workerView === 'inventory' ? t('Inventory first.') : t('Pairing first.')}
+              </small>
               <div className="row gap wrap">
-                <Button type="button" onClick={() => setWorkerOnboardingOpen(true)}>
-                  {t('Open Add Worker')}
-                </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={workerView === 'inventory' ? () => setWorkerView('pairing') : () => setWorkerView('inventory')}
+                  onClick={() => setWorkerView(workerView === 'inventory' ? 'pairing' : 'inventory')}
                 >
                   {workerView === 'inventory' ? t('Go to Pairing') : t('Go to Inventory')}
                 </Button>
               </div>
-              {workerView === 'inventory' ? (
-                <Button type="button" variant="ghost" size="sm" onClick={openCreateWorkerRegistry}>
-                  {t('Register Existing Worker')}
-                </Button>
-              ) : null}
-              <small className="muted">
-                {workerView === 'inventory'
-                  ? t('Use the drawer for pairing or registry work so the inventory lane stays table-first.')
-                  : t('Pairing stays in the drawer so the inventory lane remains table-first.')}
-              </small>
             </Card>
           </div>
         }
@@ -889,7 +872,7 @@ export default function WorkerSettingsPage() {
         open={Boolean(selectedWorker)}
         onClose={() => setSelectedWorkerId(null)}
         title={selectedWorker ? selectedWorker.name : t('Worker detail')}
-        description={t('Inspect worker status and apply targeted updates without leaving the list.')}
+        description={t('Inspect status and make targeted updates.')}
         actions={
           selectedWorker ? (
             <>
@@ -941,7 +924,7 @@ export default function WorkerSettingsPage() {
             />
             <SectionCard
               title={t('Worker operations')}
-              description={t('Use this order: edit identity, reconfigure callback, then adjust scheduling state.')}
+              description={t('Update info first, then callback and status.')}
             >
               <ActionBar
                 primary={
@@ -964,9 +947,7 @@ export default function WorkerSettingsPage() {
               <details className="workspace-details">
                 <summary>{t('Maintenance actions')}</summary>
                 <div className="stack tight">
-                  <small className="muted">
-                    {t('Scheduling state changes are available here when the worker needs a temporary pause or re-enable.')}
-                  </small>
+                  <small className="muted">{t('Pause or resume lives here.')}</small>
                   <ActionBar
                     primary={
                       <Button
@@ -1013,7 +994,7 @@ export default function WorkerSettingsPage() {
 
             <SectionCard
               title={t('Danger zone')}
-              description={t('Remove worker only when it has no in-flight jobs. This operation requires confirmation.')}
+              description={t('Delete only when there are no jobs in flight, and confirm first.')}
             >
               <ActionBar
                 primary={
@@ -1045,7 +1026,7 @@ export default function WorkerSettingsPage() {
         <div className="stack">
           <WorkspaceSectionHeader
             title={t('Add Worker')}
-            description={t('Generate startup commands, then complete pairing from worker-local setup page.')}
+            description={t('Generate the start command, then pair from the local page.')}
             actions={
               <Button type="button" variant="ghost" size="sm" onClick={() => setWorkerOnboardingOpen(false)}>
                 {t('Close')}
@@ -1057,7 +1038,7 @@ export default function WorkerSettingsPage() {
             steps={[t('Configure'), t('Start Worker'), t('Finish Pairing')]}
             current={onboardingStep}
             title={t('Worker onboarding')}
-            caption={t('Worker settings flow')}
+            caption={t('Pairing flow')}
           />
 
           {copyMessage ? <StateBlock variant="success" title={t('Clipboard')} description={copyMessage} /> : null}
@@ -1068,7 +1049,7 @@ export default function WorkerSettingsPage() {
           <Card as="section">
             <WorkspaceSectionHeader
               title={t('Bootstrap draft')}
-              description={t('Docker-first by default. These fields define generated startup templates.')}
+              description={t('Default to Docker, then generate a template.')}
             />
 
             <label>
@@ -1183,9 +1164,9 @@ export default function WorkerSettingsPage() {
             </div>
 
             <Panel tone="soft" className="stack tight">
-              <strong>{t('Worker access preview')}</strong>
+              <strong>{t('Access preview')}</strong>
               <small className="muted">
-                {t('endpoint hint')}: {onboardingPreviewEndpoint ?? t('to be confirmed in /setup')}
+                {t('endpoint hint')}: {onboardingPreviewEndpoint ?? t('Pending /setup confirmation')}
               </small>
               <small className="muted">
                 {t('Setup URL')}: {onboardingPreviewSetupUrl}
@@ -1216,9 +1197,9 @@ export default function WorkerSettingsPage() {
           {activeBootstrapSession ? (
             <>
               <Card as="section" className="stack tight">
-                <WorkspaceSectionHeader
-                  title={t('Current pairing session')}
-                  description={t('Use this session token/URL to finish worker pairing.')}
+              <WorkspaceSectionHeader
+                title={t('Current pairing session')}
+                  description={t('Use token and URL to finish pairing.')}
                   actions={
                     <StatusTag status={workerBootstrapStatusTone(activeBootstrapSession.status)}>
                       {t(activeBootstrapSession.status)}
@@ -1317,8 +1298,8 @@ export default function WorkerSettingsPage() {
 
               <Card as="section" className="stack tight">
               <WorkspaceSectionHeader
-                title={t('Docker startup command')}
-                description={t('Recommended path for remote workers.')}
+                title={t('Docker command')}
+                description={t('Remote workers only.')}
                   actions={
                     <Button
                       type="button"
@@ -1335,8 +1316,8 @@ export default function WorkerSettingsPage() {
 
               <Card as="section" className="stack tight">
               <WorkspaceSectionHeader
-                title={t('Script startup alternative')}
-                description={t('Use this if the host already has repository scripts.')}
+                title={t('Script command')}
+                description={t('Script environment only.')}
                   actions={
                     <Button
                       type="button"
@@ -1355,7 +1336,7 @@ export default function WorkerSettingsPage() {
             <StateBlock
               variant="empty"
               title={t('Create a pairing session')}
-              description={t('Generate one session first. Then the drawer shows the command and token.')}
+              description={t('Generate a session, then review the command and token.')}
             />
           )}
         </div>
@@ -1368,16 +1349,16 @@ export default function WorkerSettingsPage() {
         className="runtime-worker-drawer"
         title={workerRegistryTitle}
       >
-        <div className="stack">
-          <div className="workspace-section-header">
-            <div className="stack tight">
-              <h3>{workerRegistryTitle}</h3>
-              <small className="muted">
-                {editingWorker
-                  ? t('Adjust endpoint, scheduler status, or capacity without leaving worker settings.')
-                  : t('Manually register an existing worker endpoint when guided pairing is not required.')}
-              </small>
-            </div>
+              <div className="stack">
+                <div className="workspace-section-header">
+                  <div className="stack tight">
+                    <h3>{workerRegistryTitle}</h3>
+                    <small className="muted">
+                      {editingWorker
+                        ? t('Update endpoint, status, or capacity.')
+                        : t('Register an existing worker manually.')}
+                    </small>
+                  </div>
             <Button type="button" variant="ghost" size="sm" onClick={() => setWorkerRegistryOpen(false)}>
               {t('Close')}
             </Button>
@@ -1492,7 +1473,7 @@ export default function WorkerSettingsPage() {
                 placeholder="framework:yolo, task:detection"
               />
               <small className="muted">
-                {t('Use comma or line breaks, for example framework:yolo and task:detection.')}
+                {t('Use commas or line breaks, for example framework:yolo, task:detection.')}
               </small>
             </label>
 
@@ -1509,7 +1490,7 @@ export default function WorkerSettingsPage() {
                 rows={4}
                 placeholder={'ip=10.10.0.22\nzone=rack-b'}
               />
-              <small className="muted">{t('One key=value pair per line.')}</small>
+              <small className="muted">{t('One key=value per line.')}</small>
             </label>
 
             <ActionBar

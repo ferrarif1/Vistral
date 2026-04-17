@@ -317,7 +317,7 @@ const mergeHistoryWithConversations = (
       const existing = previousById.get(item.id);
       return {
         id: item.id,
-        title: item.title || existing?.title || 'New chat',
+        title: item.title || existing?.title || '新建会话',
         updated_at: item.updated_at || item.created_at,
         pinned: existing?.pinned ?? false
       };
@@ -333,7 +333,7 @@ const mergeHistoryWithConversations = (
 const buildHistoryTitle = (message: string): string => {
   const trimmed = message.trim();
   if (!trimmed) {
-    return 'New chat';
+    return '新建会话';
   }
   return trimmed.length > 40 ? `${trimmed.slice(0, 40)}...` : trimmed;
 };
@@ -1282,7 +1282,7 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                           </div>
                           {actionMetadata.missing_fields.length > 0 ? (
                             <div className="stack tight">
-                              <small className="muted">{t('Missing Information')}</small>
+                              <small className="muted">{t('Missing info')}</small>
                               <div className="chat-message-action-tags">
                                 {actionMetadata.missing_fields.map((field) => (
                                   <span key={`${message.id}-missing-${field}`} className="chat-message-action-tag">
@@ -1294,7 +1294,7 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                           ) : null}
                           {Object.keys(actionMetadata.collected_fields).length > 0 ? (
                             <div className="stack tight">
-                              <small className="muted">{t('Collected Information')}</small>
+                              <small className="muted">{t('Collected info')}</small>
                               <ul className="chat-message-action-details">
                                 {Object.entries(actionMetadata.collected_fields).map(([field, value]) => (
                                   <li key={`${message.id}-collected-${field}`}>
@@ -1327,7 +1327,7 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                           {actionHref ? (
                             <div className="row gap wrap">
                               <ButtonLink className="chat-action-btn" variant="secondary" size="sm" to={actionHref}>
-                                {t('Open Result')}
+                                {t('Open result')}
                               </ButtonLink>
                             </div>
                           ) : null}
@@ -1372,7 +1372,7 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                             className="chat-action-btn"
                             variant="secondary"
                             size="sm"
-                            onClick={() => onQuoteMessage(`Analyze further: ${message.content}`)}
+                            onClick={() => onQuoteMessage(`继续分析：${message.content}`)}
                             type="button"
                           >
                             {t('Quote')}
@@ -1592,7 +1592,7 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
             })}
           </ul>
           <div className="chat-simple-selected-inline-meta">
-            <small className="muted">{t('Draft attachments are shown only while composing this message.')}</small>
+            <small className="muted">{t('Draft attachments only appear in the current message.')}</small>
             {hasPendingSelectedAttachments ? (
               <small className="muted">{t('Wait for selected files to finish processing before sending.')}</small>
             ) : null}
@@ -1612,7 +1612,7 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
                 onClick={onOpenUploadFileDialog}
                 disabled={uploading || sending}
               >
-                {uploading ? t('Working...') : t('Upload photos and files')}
+                {uploading ? t('Processing...') : t('Upload files')}
               </Button>
               <Button
                 type="button"
@@ -1636,8 +1636,8 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
               </Button>
             </div>
             <small className="muted chat-simple-attachment-toolbar-summary">
-              {t('Attachments:')} {attachments.length} · {t('{count} selected', { count: selectedAttachmentCount })} ·{' '}
-              {t('Ready: {count}', { count: attachmentStatusSummary.ready })}
+              {t('Attachments:')} {attachments.length} · {t('Selected {count}', { count: selectedAttachmentCount })} ·{' '}
+              {t('Ready {count}', { count: attachmentStatusSummary.ready })}
             </small>
           </div>
           <small className="muted chat-simple-attachment-toolbar-summary">
@@ -2452,7 +2452,7 @@ export default function ConversationPage() {
       if (!conversation) {
         const modelId = selectedModelId || models[0]?.id;
         if (!modelId) {
-          throw new Error('No available model found for this account.');
+          throw new Error(t('No available model found for this account.'));
         }
 
         const started = await api.startConversation({
@@ -2617,7 +2617,7 @@ export default function ConversationPage() {
         const existing = previous.find((item) => item.id === detail.conversation.id);
         const next: LocalChatHistoryItem = {
           id: detail.conversation.id,
-          title: detail.conversation.title || existing?.title || 'New chat',
+          title: detail.conversation.title || existing?.title || '新建会话',
           updated_at: detail.conversation.updated_at || detail.conversation.created_at,
           pinned: existing?.pinned ?? false
         };
@@ -3249,7 +3249,7 @@ export default function ConversationPage() {
     models.length > 0 &&
     Boolean(input.trim());
   const renderConversationTitle = useCallback(
-    (title: string) => (title === 'New chat' ? t('New chat') : title),
+    (title: string) => (title === 'New conversation' ? t('New conversation') : title),
     [t]
   );
   const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
@@ -3319,8 +3319,8 @@ export default function ConversationPage() {
                 size="icon"
                 onClick={startNewConversation}
                 disabled={sending || authRequired}
-                aria-label={t('+ New chat')}
-                title={t('+ New chat')}
+                aria-label={t('New conversation')}
+                title={t('New conversation')}
               >
                 +
               </Button>
@@ -3400,7 +3400,7 @@ export default function ConversationPage() {
                 <div className="chat-user-summary">
                   <div className="chat-user-avatar">{getInitials()}</div>
                   <div className="stack tight">
-                    <strong>{t('guest')}</strong>
+                    <strong>{t('Guest')}</strong>
                     <small className="muted">{t('Login')}</small>
                   </div>
                 </div>
@@ -3422,8 +3422,8 @@ export default function ConversationPage() {
             size="icon"
             onClick={startNewConversation}
             disabled={authRequired}
-            aria-label={t('+ New chat')}
-            title={t('+ New chat')}
+                aria-label={t('New conversation')}
+                title={t('New conversation')}
           >
             +
           </Button>
@@ -3534,9 +3534,9 @@ export default function ConversationPage() {
         <footer className="chat-composer-wrap">
           {authRequired ? (
             <section className="chat-composer-panel chat-guest-panel">
-              <strong>{t('Conversation actions are unavailable after logout.')}</strong>
+              <strong>{t('Signing out disables conversation actions.')}</strong>
               <small className="muted">
-                {t('Use Login to reopen your chat workspace. Ask an administrator to provision another account if needed.')}
+                {t('Use Login to reopen the workspace. Ask an admin to create another account if needed.')}
               </small>
             </section>
           ) : (
@@ -3580,8 +3580,8 @@ export default function ConversationPage() {
                   size="icon"
                   onClick={toggleAttachmentTray}
                   disabled={sending || loading || authRequired}
-                  aria-label={attachmentListExpanded ? t('Hide') : t('Attachment options')}
-                  title={attachmentListExpanded ? t('Hide') : t('Attachment options')}
+                  aria-label={attachmentListExpanded ? t('Collapse') : t('Attachments')}
+                  title={attachmentListExpanded ? t('Collapse') : t('Attachments')}
                   aria-expanded={attachmentListExpanded}
                   >
                     <span className="chat-simple-plus-icon" aria-hidden="true">

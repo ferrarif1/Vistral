@@ -89,8 +89,8 @@ export default function DatasetVersionRail({
     <>
       <Card as="section">
         <WorkspaceSectionHeader
-          title={t('Version Operations')}
-          description={t('Select one snapshot as the active version context for downstream actions.')}
+          title={t('Selected version')}
+          description={t('Use one snapshot as the active context for training, review, or validation.')}
         />
         {!selectedVersion ? (
           <StateBlock
@@ -127,20 +127,29 @@ export default function DatasetVersionRail({
                 <ButtonLink size="sm" variant="secondary" to={buildTrainingPath(selectedVersion.id)}>
                   {t('Train from this version')}
                 </ButtonLink>
-                <ButtonLink
-                  size="sm"
-                  variant="ghost"
-                  to={buildReviewPath(selectedVersion.id, preferredReviewQueueForSelectedVersion)}
-                >
-                  {t('Open Review Queue')}
-                </ButtonLink>
-                <ButtonLink size="sm" variant="ghost" to={buildJobsPath(selectedVersion.id)}>
-                  {t('Open version jobs')}
-                </ButtonLink>
-                  <ButtonLink size="sm" variant="ghost" to={buildInferencePath(selectedVersion.id)}>
-                    {t('Validate inference')}
-                  </ButtonLink>
+              </div>
+              <details className="workspace-disclosure">
+                <summary>
+                  <span>{t('More actions')}</span>
+                </summary>
+                <div className="workspace-disclosure-content">
+                  <div className="row gap wrap">
+                    <ButtonLink
+                      size="sm"
+                      variant="ghost"
+                      to={buildReviewPath(selectedVersion.id, preferredReviewQueueForSelectedVersion)}
+                    >
+                      {t('Open review queue')}
+                    </ButtonLink>
+                    <ButtonLink size="sm" variant="ghost" to={buildJobsPath(selectedVersion.id)}>
+                      {t('Open version jobs')}
+                    </ButtonLink>
+                    <ButtonLink size="sm" variant="ghost" to={buildInferencePath(selectedVersion.id)}>
+                      {t('Validate inference')}
+                    </ButtonLink>
+                  </div>
                 </div>
+              </details>
               <details className="dataset-version-delta">
                 <summary>{t('Compare with previous version')}</summary>
                 {selectedVersionComparison && baselineVersion ? (
@@ -180,9 +189,7 @@ export default function DatasetVersionRail({
             </Panel>
             {!selectedVersionLaunchReady ? (
               <small className="muted">
-                {t(
-                  'Launch readiness requires dataset ready status, train split > 0, and annotation coverage > 0.'
-                )}
+                {t('Launch readiness requires dataset ready, train split > 0, and annotation coverage > 0.')}
               </small>
             ) : null}
           </div>
@@ -263,15 +270,24 @@ export default function DatasetVersionRail({
                     <ButtonLink size="sm" variant="secondary" to={buildTrainingPath(version.id)}>
                       {t('Train')}
                     </ButtonLink>
-                    <ButtonLink size="sm" variant="ghost" to={buildReviewPath(version.id, 'needs_work')}>
-                      {t('Review')}
-                    </ButtonLink>
-                    <ButtonLink size="sm" variant="ghost" to={buildJobsPath(version.id)}>
-                      {t('Jobs')}
-                    </ButtonLink>
-                    <ButtonLink size="sm" variant="ghost" to={buildInferencePath(version.id)}>
-                      {t('Validate')}
-                    </ButtonLink>
+                    <details className="workspace-disclosure">
+                      <summary>
+                        <span>{t('More actions')}</span>
+                      </summary>
+                      <div className="workspace-disclosure-content">
+                        <div className="row gap wrap">
+                          <ButtonLink size="sm" variant="ghost" to={buildReviewPath(version.id, 'needs_work')}>
+                            {t('Review')}
+                          </ButtonLink>
+                          <ButtonLink size="sm" variant="ghost" to={buildJobsPath(version.id)}>
+                            {t('Jobs')}
+                          </ButtonLink>
+                          <ButtonLink size="sm" variant="ghost" to={buildInferencePath(version.id)}>
+                            {t('Validate')}
+                          </ButtonLink>
+                        </div>
+                      </div>
+                    </details>
                   </div>
                 )
               }

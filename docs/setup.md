@@ -160,8 +160,8 @@ Persistence-related env vars (prototype):
 - `VISTRAL_DOCTR_PRESEEDED_MODELS_DIR` (default `.data/runtime-models/doctr-preseed`; optional local directory for preseeded docTR model files copied into `DOCTR_CACHE_DIR/models` before warmup)
 - `VISTRAL_DOCTR_PRESEEDED_MODELS_URLS` (optional comma-separated model file URLs for pre-seeding docTR cache in restricted networks)
 - `ULTRALYTICS_CONFIG_DIR` (default `.data/runtime-models/ultralytics`; persisted Ultralytics cache/config root)
-- `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK` (`1` means fail fast when local train runner command is missing/unavailable; no simulated fallback)
-- `VISTRAL_DISABLE_INFERENCE_FALLBACK` (`1` means fail fast when runtime/local predict would return template/fallback output)
+- `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK` (`1` by default in the app runtime; set explicitly to `0` only if you intentionally want compatibility fallback when the local train runner command is missing/unavailable)
+- `VISTRAL_DISABLE_INFERENCE_FALLBACK` (`1` by default in the app runtime; set explicitly to `0` only if you intentionally want template/fallback prediction output)
 - bundled runner templates under `scripts/local-runners/` are used by default when explicit local command env vars are not set
 - `VISTRAL_RUNTIME_AUTO_POPULATE_LOCAL_COMMANDS` (default `1`; auto-fills blank runtime local command fields with bundled templates in Runtime Settings/readiness)
 - `VISTRAL_RUNTIME_AUTO_ENDPOINT_CANDIDATES_JSON` (optional JSON object to override/append endpoint probe candidates used by runtime auto-config, for example `{"yolo":["http://10.0.0.5:9394/predict"]}`)

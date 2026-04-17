@@ -226,7 +226,7 @@ export default function ProfessionalConsolePage() {
       snapshot
         ? [...snapshot.myModels]
             .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))
-            .slice(0, 6)
+            .slice(0, 4)
         : [],
     [snapshot]
   );
@@ -237,7 +237,7 @@ export default function ProfessionalConsolePage() {
             .filter(
               (attachment) => attachment.status === 'uploading' || attachment.status === 'processing'
             )
-            .slice(0, 6)
+            .slice(0, 4)
         : [],
     [snapshot]
   );
@@ -277,7 +277,7 @@ export default function ProfessionalConsolePage() {
     const groups: ConsoleActionGroup[] = [
       {
         title: t('Build & Ship'),
-        description: t('Move from draft creation to registered model versions with less context switching.'),
+        description: t('Move from draft to version.'),
         links: [
           { to: '/models/create', label: t('Create New Model') },
           { to: '/models/my-models', label: t('Manage My Models') },
@@ -286,7 +286,7 @@ export default function ProfessionalConsolePage() {
       },
       {
         title: t('Data & Run'),
-        description: t('Open datasets, training queue, and validation workflow.'),
+        description: t('Open data, training, and validation.'),
         links: [
           { to: '/datasets', label: t('Manage Datasets') },
           { to: '/training/jobs', label: t('Open Training Jobs') },
@@ -298,7 +298,7 @@ export default function ProfessionalConsolePage() {
     if (snapshot?.user.role === 'admin') {
       groups.push({
         title: t('Admin & Audit'),
-        description: t('Review approvals, audit trails, and verification evidence.'),
+        description: t('Review approvals and audit trails.'),
         links: [
           { to: '/admin/models/pending', label: t('Review Approval Queue') },
           { to: '/admin/audit', label: t('View Audit Logs') },
@@ -342,7 +342,7 @@ export default function ProfessionalConsolePage() {
       <PageHeader
         eyebrow={t('Workspace')}
         title={t('Professional Console')}
-        description={t('Focus on one priority lane, then jump into the dedicated workspace to complete it.')}
+        description={t('Focus on one priority lane, then jump in.')}
         meta={
           snapshot ? (
             <div className="row gap wrap align-center">
@@ -401,8 +401,8 @@ export default function ProfessionalConsolePage() {
       ) : !snapshot ? (
         <StateBlock
           variant="empty"
-          title={t('No Snapshot')}
-          description={t('This overview fills itself after you create data, run training, or save runtime settings.')}
+        title={t('No Snapshot')}
+          description={t('It fills itself after data, training, or runtime work.')}
           extra={
             <div className="row gap wrap">
               <ButtonLink to="/datasets" variant="secondary" size="sm">
@@ -421,7 +421,7 @@ export default function ProfessionalConsolePage() {
               tone="warning"
               title={t('Execution quality warnings detected')}
               description={t(
-                'Training degraded outputs: {trainingCount}; inference degraded outputs: {inferenceCount}. Review dedicated pages before publishing.',
+                'Training degraded outputs: {trainingCount}; inference degraded outputs: {inferenceCount}. Check the dedicated pages before publishing.',
                 {
                   trainingCount: nonRealTrainingCount,
                   inferenceCount: fallbackInferenceCount
@@ -461,7 +461,7 @@ export default function ProfessionalConsolePage() {
                 <Card as="article">
                   <WorkspaceSectionHeader
                     title={t('Main Work Queue')}
-                    description={t('Handle one priority lane first, then continue in the linked dedicated page.')}
+                    description={t('Handle one priority lane, then continue in the linked page.')}
                   />
 
                   {priorityMode === 'idle' ? (
@@ -483,7 +483,7 @@ export default function ProfessionalConsolePage() {
                   ) : (
                     <ul className="workspace-record-list compact">
                       {priorityMode === 'approval'
-                        ? pendingApprovals.slice(0, 6).map((approval) => {
+                        ? pendingApprovals.slice(0, 4).map((approval) => {
                             const model = modelIndex.get(approval.model_id);
                             return (
                               <Panel key={approval.id} as="li" className="workspace-record-item compact" tone="soft">
@@ -554,7 +554,7 @@ export default function ProfessionalConsolePage() {
                 <Card as="article">
                   <WorkspaceSectionHeader
                     title={t('Workflow Lanes')}
-                    description={t('Open the dedicated workspace for each task domain.')}
+                    description={t('Open the dedicated page for each task.')}
                   />
                   <div className="workspace-action-grid">
                     {actionGroups.map((group) => (

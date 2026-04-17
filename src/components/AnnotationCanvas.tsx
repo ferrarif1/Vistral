@@ -536,7 +536,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
                         startBox: box
                       });
                     }}
-                    aria-label={t('调整选中框')}
+                    aria-label={t('Adjust selected box')}
                   />
                 ))
               : null}
@@ -559,22 +559,22 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
       <div className="annotation-canvas-status">
         <small className="muted">
           {toolMode === 'draw'
-            ? t('框选模式：拖动画布创建新框，点击已有框继续调整。')
-            : t('选择模式：点击框体编辑，按 B 切回框选。')}
+            ? t('Draw mode: drag to create a box. Click a box to edit.')
+            : t('Select mode: click a box to edit. Press B to draw.')}
         </small>
         <div className="row gap wrap align-center">
           <Badge tone={toolMode === 'draw' ? 'info' : 'neutral'}>
-            {toolMode === 'draw' ? t('框选') : t('选择')}
+            {toolMode === 'draw' ? t('Draw') : t('Select')}
           </Badge>
           {showPredictionOverlay && visiblePredictionBoxes.length > 0 ? (
-            <Badge tone="neutral">{t('预测')}: {visiblePredictionBoxes.length}</Badge>
+            <Badge tone="neutral">{t('Prediction')}: {visiblePredictionBoxes.length}</Badge>
           ) : null}
           {selectedBox ? (
-            <Badge tone="neutral">{t('已选中')}: {selectedBox.label}</Badge>
+            <Badge tone="neutral">{t('Selected')}: {selectedBox.label}</Badge>
           ) : (
-            <Badge tone="neutral">{t('未选中框')}</Badge>
+            <Badge tone="neutral">{t('No selection')}</Badge>
           )}
-          {selectedBox ? <Badge tone="neutral">{t('Shift + 方向键微调')}</Badge> : null}
+          {selectedBox ? <Badge tone="neutral">{t('Shift + arrow keys to nudge')}</Badge> : null}
         </div>
       </div>
     </div>

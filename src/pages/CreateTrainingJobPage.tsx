@@ -3,11 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { DatasetRecord, DatasetVersionRecord, RequirementTaskDraft } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
-import StepIndicator from '../components/StepIndicator';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { InlineAlert, PageHeader } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
+import ProgressStepper from '../components/ui/ProgressStepper';
 import { Card, Panel } from '../components/ui/Surface';
 import {
   WorkspacePage,
@@ -57,24 +57,9 @@ export default function CreateTrainingJobPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const steps = useMemo(() => [t('Task'), t('Dataset'), t('Params'), t('Review')], [t]);
-  const stepTitles = useMemo(
-    () => [t('Step 1. Task and Framework'), t('Step 2. Dataset and Base Model'), t('Step 3. Core Params'), t('Step 4. Review')],
-    [t]
-  );
-  const stepDescriptions = useMemo(
-    () => [
-      t('Define the run identity, task type, and framework family.'),
-      t('Choose the dataset, version hint, and base model source.'),
-      t('Set the core hyperparameters and only open advanced values when needed.'),
-      t('Review the final training configuration before launch.')
-    ],
-    [t]
-  );
 
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetVersions, setDatasetVersions] = useState<DatasetVersionRecord[]>([]);
-  const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [taskType, setTaskType] = useState<'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>('ocr');
   const [framework, setFramework] = useState<TrainingFramework>('paddleocr');
@@ -102,7 +87,9 @@ export default function CreateTrainingJobPage() {
   const preferredDatasetAppliedRef = useRef(false);
   const preferredVersionAppliedRef = useRef(false);
   const jobNameInputRef = useRef<HTMLInputElement | null>(null);
+  const datasetSelectRef = useRef<HTMLSelectElement | null>(null);
   const datasetVersionSelectRef = useRef<HTMLSelectElement | null>(null);
+  const paramsEpochsInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -121,7 +108,6 @@ export default function CreateTrainingJobPage() {
             setTaskType(preferredDataset.task_type);
           }
           setDatasetId(preferredDataset.id);
-          setStep((current) => (current < 1 ? 1 : current));
           return;
         }
 
@@ -297,86 +283,102 @@ export default function CreateTrainingJobPage() {
     !runtimeSettingsError &&
     strictLaunchGateReady &&
     paramsReady;
-  const canAdvanceFromCurrentStep =
-    step === 0
-      ? Boolean(name.trim())
-      : step === 1
-        ? Boolean(selectedDatasetVersion)
-        : step === 2
-          ? paramsReady
-          : false;
-  const launchReadinessBanner = useMemo(() => {
-    if (loading || versionsLoading) {
-      return null;
-    }
+  const launchCheckpoints = useMemo(() => {
+    const runtimeState = runtimeSettingsLoading
+      ? ('pending' as const)
+      : runtimeSettingsError
+        ? ('blocked' as const)
+        : runtimeDisableSimulatedTrainFallback || nonStrictLaunchConfirmed
+          ? ('ready' as const)
+          : ('blocked' as const);
 
-    if (!selectedDataset) {
-      return {
-        tone: 'info' as const,
-        title: t('Pick a dataset first'),
-        description: t('Training starts from a fixed dataset snapshot. Choose one dataset, then bind a version and launch.')
-      };
-    }
-
-    if (!selectedDatasetVersion) {
-      return {
-        tone: 'warning' as const,
-        title: t('Choose a dataset version snapshot'),
-        description: t('Launch is blocked until you bind an explicit dataset version with train split and annotation coverage.')
-      };
-    }
-
-    if (!datasetStatusReady || !datasetVersionHasTrainSplit || !datasetVersionHasAnnotationCoverage) {
-      return {
-        tone: 'warning' as const,
-        title: t('Dataset snapshot is not ready yet'),
-        description: t('Fix dataset status, train split, or annotation coverage before you create the run.')
-      };
-    }
-
-    if (!paramsReady) {
-      return {
-        tone: 'warning' as const,
-        title: t('Training params need attention'),
-        description: t('Resolve the highlighted numeric issues before continuing.')
-      };
-    }
-
-    if (runtimeSettingsError) {
-      return {
-        tone: 'danger' as const,
-        title: t('Runtime safety status is unavailable'),
-        description: t('Open Runtime Settings and resolve the runtime guard before launching training.')
-      };
-    }
-
-    if (!runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed) {
-      return {
-        tone: 'warning' as const,
-        title: t('Confirm risk before launch'),
-        description: t('This run can still fall back to degraded output. Confirm the risk acknowledgement on the right.')
-      };
-    }
-
-    return {
-      tone: 'success' as const,
-      title: t('Ready to create training job'),
-      description: t('The dataset snapshot, launch gate, and core params are ready. Review once, then create the job.')
-    };
+    return [
+      {
+        key: 'name',
+        label: t('Run name'),
+        state: name.trim() ? ('ready' as const) : ('blocked' as const),
+        detail: name.trim() || t('Add a short run name.'),
+        action: () => jobNameInputRef.current?.focus()
+      },
+      {
+        key: 'snapshot',
+        label: t('Data snapshot'),
+        state: launchReady ? ('ready' as const) : ('blocked' as const),
+        detail: selectedDatasetVersion
+          ? [selectedDataset?.name, selectedDatasetVersion.version_name].filter(Boolean).join(' · ')
+          : t('Choose a dataset and version first.'),
+        action: () => {
+          if (!datasetId) {
+            datasetSelectRef.current?.focus();
+            return;
+          }
+          datasetVersionSelectRef.current?.focus();
+        }
+      },
+      {
+        key: 'params',
+        label: t('Core params'),
+        state: paramsReady ? ('ready' as const) : ('blocked' as const),
+        detail: paramsReady ? t('Core values look valid.') : paramValidationIssues[0] ?? t('Fix the numeric values.'),
+        action: () => paramsEpochsInputRef.current?.focus()
+      },
+      {
+        key: 'runtime',
+        label: t('Runtime guard'),
+        state: runtimeState,
+        detail: runtimeSettingsLoading
+          ? t('Checking Runtime...')
+          : runtimeSettingsError
+            ? t('Go fix it in Runtime settings.')
+            : runtimeDisableSimulatedTrainFallback
+              ? t('Strict fallback is enabled.')
+              : t('Confirm the risk to continue.'),
+        action: runtimeSettingsError
+          ? () => navigate('/settings/runtime')
+          : !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed
+            ? () => setNonStrictLaunchConfirmed(true)
+            : null
+      }
+    ];
   }, [
-    datasetStatusReady,
-    datasetVersionHasAnnotationCoverage,
-    datasetVersionHasTrainSplit,
-    loading,
+    datasetId,
+    launchReady,
+    name,
+    navigate,
     nonStrictLaunchConfirmed,
+    paramsReady,
+    paramValidationIssues,
     runtimeDisableSimulatedTrainFallback,
     runtimeSettingsError,
-    paramsReady,
+    runtimeSettingsLoading,
     selectedDataset,
     selectedDatasetVersion,
-    t,
-    versionsLoading
+    t
   ]);
+  const blockedLaunchCheckpoints = launchCheckpoints.filter((item) => item.state !== 'ready');
+  const nextLaunchCheckpoint = blockedLaunchCheckpoints[0] ?? null;
+  const launchStatusDescription =
+    runtimeSettingsLoading && blockedLaunchCheckpoints.length > 0
+      ? t('Runtime is still loading.')
+      : blockedLaunchCheckpoints.length === 0
+        ? t('Snapshot, params, and Runtime are ready.')
+        : t('{count} check(s) still need attention.', { count: blockedLaunchCheckpoints.length });
+  const launchStatusAction =
+    nextLaunchCheckpoint?.action && nextLaunchCheckpoint.state !== 'pending'
+      ? {
+          label:
+            nextLaunchCheckpoint.key === 'name'
+              ? t('Focus run name')
+              : nextLaunchCheckpoint.key === 'snapshot'
+                ? t('Focus snapshot')
+                : nextLaunchCheckpoint.key === 'params'
+                  ? t('Focus params')
+                  : nextLaunchCheckpoint.key === 'runtime' && runtimeSettingsError
+                    ? t('Open Runtime Settings')
+                    : t('Confirm risk'),
+          onClick: nextLaunchCheckpoint.action
+        }
+      : null;
 
   const taskFrameworkOptions = useMemo(() => {
     if (taskType === 'ocr') {
@@ -384,20 +386,6 @@ export default function CreateTrainingJobPage() {
     }
     return ['yolo'] as const;
   }, [taskType]);
-
-  const nextStep = () => {
-    if (step < steps.length - 1) {
-      setStep((value) => value + 1);
-      setFeedback(null);
-    }
-  };
-
-  const previousStep = () => {
-    if (step > 0) {
-      setStep((value) => value - 1);
-      setFeedback(null);
-    }
-  };
 
   const submit = async () => {
     if (!name.trim()) {
@@ -421,7 +409,7 @@ export default function CreateTrainingJobPage() {
     }
 
     if (!datasetStatusReady) {
-      setFeedback({ variant: 'error', text: t('Selected dataset must be ready before creating a training job.') });
+      setFeedback({ variant: 'error', text: t('Selected dataset must be ready before creating a run.') });
       return;
     }
 
@@ -438,7 +426,7 @@ export default function CreateTrainingJobPage() {
     if (runtimeSettingsError) {
       setFeedback({
         variant: 'error',
-        text: t('Runtime safety status is unavailable. Resolve runtime settings before creating this training job.')
+        text: t('Runtime safety status is unavailable. Resolve runtime settings before creating this run.')
       });
       return;
     }
@@ -446,7 +434,7 @@ export default function CreateTrainingJobPage() {
     if (!runtimeSettingsLoading && !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed) {
       setFeedback({
         variant: 'error',
-        text: t('Runtime safety guard is off. Confirm risk acknowledgment before creating this training job.')
+        text: t('Runtime safety guard is off. Confirm risk acknowledgment before creating this run.')
       });
       return;
     }
@@ -519,376 +507,37 @@ export default function CreateTrainingJobPage() {
     }
   };
 
-  const runChecklist = [
-    {
-      label: t('Job name'),
-      done: Boolean(name.trim()),
-      hint: name.trim() || t('Name this run.')
-    },
-    {
-      label: t('Dataset'),
-      done: Boolean(selectedDataset),
-      hint: selectedDataset
-        ? `${selectedDataset.name} · ${t(selectedDataset.status)}`
-        : t('Match the task type first.')
-    },
-    {
-      label: t('Dataset Version'),
-      done: Boolean(selectedDatasetVersion),
-      hint: selectedDatasetVersion
-        ? `${selectedDatasetVersion.version_name} · ${t('train')} ${selectedDatasetVersion.split_summary.train} · ${formatCoveragePercent(selectedDatasetVersion.annotation_coverage)}`
-        : t('Choose one fixed snapshot.')
-    },
-    {
-      label: t('Launch readiness'),
-      done: launchReady,
-      hint: selectedDatasetVersion
-        ? t('Dataset, split, and coverage are checked.')
-        : t('Launch readiness appears after a snapshot is selected.')
-    },
-    {
-      label: t('Training params'),
-      done: paramsReady,
-      hint: paramsReady
-        ? t('Core params checked.')
-        : paramValidationIssues[0] ?? t('Fix the training params before launch.')
-    },
-    {
-      label: t('Runtime safety guard'),
-      done: strictLaunchGateReady && !runtimeSettingsLoading && !runtimeSettingsError,
-      hint: runtimeSettingsLoading
-        ? t('Checking runtime guard...')
-        : runtimeSettingsError
-          ? t('Fix Runtime settings first.')
-          : runtimeDisableSimulatedTrainFallback
-            ? t('Guard is active.')
-            : nonStrictLaunchConfirmed
-              ? t('Risk confirmed.')
-              : t('Confirm risk to continue.')
-    }
-  ];
-  const blockingChecklist = runChecklist.filter((item) => !item.done);
-  const checklistPreview = blockingChecklist.length > 0 ? blockingChecklist : runChecklist;
-  const renderStage = () => {
-    if (step === 0) {
-      return (
-        <Card className="stack">
-          <div className="stack tight">
-            <h3>{stepTitles[step]}</h3>
-            <small className="muted">{stepDescriptions[step]}</small>
-          </div>
-          <div className="workspace-form-grid">
-            <label className="workspace-form-span-2">
-              {t('Training Job Name')}
-              <Input ref={jobNameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
-            </label>
-            <label>
-              {t('Task Type')}
-              <Select
-                value={taskType}
-                onChange={(event) =>
-                  setTaskType(
-                    event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
-                  )
-                }
-              >
-                {taskTypeOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {t(option)}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label>
-              {t('Framework')}
-              <Select
-                value={framework}
-                onChange={(event) => setFramework(event.target.value as 'paddleocr' | 'doctr' | 'yolo')}
-              >
-                {taskFrameworkOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {t(option)}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          </div>
-        </Card>
-      );
-    }
-
-    if (step === 1) {
-      return (
-        <Card className="stack">
-          <div className="stack tight">
-            <h3>{stepTitles[step]}</h3>
-            <small className="muted">{stepDescriptions[step]}</small>
-          </div>
-          {filteredDatasets.length === 0 ? (
-            <StateBlock
-              variant="empty"
-              title={t('No Matching Dataset')}
-              description={t('Create dataset for selected task type first.')}
-              extra={
-                <div className="row gap wrap">
-                  <ButtonLink to="/datasets" variant="secondary" size="sm">
-                    {t('Open Datasets')}
-                  </ButtonLink>
-                </div>
-              }
-            />
-          ) : null}
-          <div className="workspace-form-grid">
-            <label className="workspace-form-span-2">
-              {t('Dataset')}
-              <Select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
-                {filteredDatasets.map((dataset) => (
-                  <option key={dataset.id} value={dataset.id}>
-                    {dataset.name} ({t(dataset.status)})
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label>
-              {t('Dataset Version')}
-              <Select
-                ref={datasetVersionSelectRef}
-                value={datasetVersionId}
-                onChange={(event) => setDatasetVersionId(event.target.value)}
-                disabled={!selectedDataset || versionsLoading || datasetVersions.length === 0}
-              >
-                <option value="">
-                  {versionsLoading ? t('Loading dataset versions...') : t('Select a dataset version')}
-                </option>
-                {datasetVersions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.version_name} · {t('train')} {version.split_summary.train} ·{' '}
-                    {formatCoveragePercent(version.annotation_coverage)}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label>
-              {t('Base Model')}
-              <Select
-                value={baseModel}
-                onChange={(event) => setBaseModel(event.target.value)}
-              >
-                {baseModelOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          </div>
-          <small className="muted">
-            {t('Base model options are curated for future fine-tuning and keep only essential foundation choices.')}
-          </small>
-          {selectedDataset && datasetVersions.length === 0 && !versionsLoading ? (
-            <StateBlock
-              variant="empty"
-              title={t('No Dataset Version')}
-              description={t('Create a dataset version snapshot before launching training.')}
-              extra={
-                <ButtonLink to={`/datasets/${selectedDataset.id}`} variant="secondary" size="sm">
-                  {t('Open Detail')}
-                </ButtonLink>
-              }
-            />
-          ) : null}
-          {selectedDatasetVersion ? (
-            <ul className="workspace-record-list compact">
-              <li className="workspace-record-item compact">
-                <div className="row between gap wrap">
-                  <strong>{t('Dataset version snapshot')}</strong>
-                  <StatusTag status={launchReady ? 'ready' : 'draft'}>
-                    {launchReady ? t('Ready') : t('draft')}
-                  </StatusTag>
-                </div>
-                <small className="muted">{selectedDatasetVersion.version_name}</small>
-              </li>
-              <li className="workspace-record-item compact">
-                <div className="row between gap wrap">
-                  <strong>{t('Split summary')}</strong>
-                  <Badge tone="info">
-                    {t('train')}: {selectedDatasetVersion.split_summary.train}
-                  </Badge>
-                </div>
-                <small className="muted">
-                  {t('train')} {selectedDatasetVersion.split_summary.train} · {t('val')} {selectedDatasetVersion.split_summary.val} ·
-                  {t('test')} {selectedDatasetVersion.split_summary.test} · {t('unassigned')} {selectedDatasetVersion.split_summary.unassigned}
-                </small>
-              </li>
-              <li className="workspace-record-item compact">
-                <div className="row between gap wrap">
-                  <strong>{t('Annotation coverage')}</strong>
-                  <Badge tone={datasetVersionHasAnnotationCoverage ? 'success' : 'warning'}>
-                    {Math.round(selectedDatasetVersion.annotation_coverage * 100)}%
-                  </Badge>
-                </div>
-                <small className="muted">
-                  {t('Training uses an explicit dataset version snapshot so this run stays reproducible.')}
-                </small>
-              </li>
-              <li className="workspace-record-item compact">
-                <div className="row between gap wrap">
-                  <strong>{t('Launch readiness checks')}</strong>
-                  <StatusTag status={launchReady ? 'ready' : 'draft'}>
-                    {launchReady ? t('Ready') : t('draft')}
-                  </StatusTag>
-                </div>
-                <small className="muted">
-                  {t('Dataset ready {datasetReady} · train split {trainReady} · coverage {coverageReady}', {
-                    datasetReady: t(datasetStatusReady ? 'ready' : 'draft'),
-                    trainReady: t(datasetVersionHasTrainSplit ? 'ready' : 'draft'),
-                    coverageReady: t(datasetVersionHasAnnotationCoverage ? 'ready' : 'draft')
-                  })}
-                </small>
-              </li>
-            </ul>
-          ) : null}
-        </Card>
-      );
-    }
-
-    if (step === 2) {
-      return (
-        <section className="stack">
-          <Card className="stack">
-            <div className="stack tight">
-              <h3>{stepTitles[step]}</h3>
-              <small className="muted">{stepDescriptions[step]}</small>
-            </div>
-            <div className="three-col">
-              <label>
-                {t('Epochs')}
-                <Input
-                  value={epochs}
-                  inputMode="numeric"
-                  onChange={(event) => setEpochs(event.target.value)}
-                />
-              </label>
-              <label>
-                {t('Batch Size')}
-                <Input
-                  value={batchSize}
-                  inputMode="numeric"
-                  onChange={(event) => setBatchSize(event.target.value)}
-                />
-              </label>
-              <label>
-                {t('Learning Rate')}
-                <Input
-                  value={learningRate}
-                  inputMode="decimal"
-                  onChange={(event) => setLearningRate(event.target.value)}
-                />
-              </label>
-            </div>
-            {!paramsReady ? (
-              <InlineAlert
-                tone="warning"
-                title={t('Training params need attention')}
-                description={paramValidationIssues.join(' ')}
-              />
-            ) : (
-              <small className="muted">{t('Core params checked.')}</small>
-            )}
-          </Card>
-
-          <AdvancedSection>
-            <label>
-              {t('Warmup Ratio')}
-              <Input
-                value={warmupRatio}
-                inputMode="decimal"
-                onChange={(event) => setWarmupRatio(event.target.value)}
-              />
-            </label>
-            <label>
-              {t('Weight Decay')}
-              <Input
-                value={weightDecay}
-                inputMode="decimal"
-                onChange={(event) => setWeightDecay(event.target.value)}
-              />
-            </label>
-          </AdvancedSection>
-        </section>
-      );
-    }
-
-    return (
-      <Card className="stack">
-        <div className="stack tight">
-          <h3>{stepTitles[step]}</h3>
-          <small className="muted">{stepDescriptions[step]}</small>
-        </div>
-        <ul className="workspace-record-list compact">
-          <li className="workspace-record-item compact">
-            <div className="row between gap wrap">
-              <strong>{name || t('Unnamed job')}</strong>
-              <StatusTag status="info">{t(framework)}</StatusTag>
-            </div>
-            <small className="muted">
-              {t('Task')}: {t(taskType)}
-            </small>
-          </li>
-          <li className="workspace-record-item compact">
-            <div className="row between gap wrap">
-              <strong>{t('Dataset')}</strong>
-              <StatusTag status={selectedDataset?.status ?? 'draft'}>
-                {selectedDataset ? t(selectedDataset.status) : t('N/A')}
-              </StatusTag>
-            </div>
-            <small className="muted">
-              {selectedDataset?.name ?? t('N/A')} · {t('Dataset Version')}: {selectedDatasetVersion?.version_name ?? t('N/A')}
-            </small>
-          </li>
-          <li className="workspace-record-item compact">
-            <div className="row between gap wrap">
-              <strong>{t('Params')}</strong>
-              <StatusTag status="info">{epochs}</StatusTag>
-            </div>
-            <small className="muted">
-              {t('Epochs')}: {epochs} · {t('Batch Size')}: {batchSize} · {t('Learning Rate')}: {learningRate}
-            </small>
-          </li>
-        </ul>
-        {!runtimeSettingsLoading && !runtimeSettingsError && !runtimeDisableSimulatedTrainFallback ? (
-          <Panel as="section" className="workspace-record-item compact" tone="soft">
-            <div className="stack tight">
-              <strong>{t('Runtime guard needs confirmation')}</strong>
-              <small className="muted">
-                {t('Confirm the risk if this launch may fall back to degraded output.')}
-              </small>
-            </div>
-            <label className="row gap wrap align-center">
-              <input
-                type="checkbox"
-                className="ui-checkbox"
-                checked={nonStrictLaunchConfirmed}
-                onChange={(event) => setNonStrictLaunchConfirmed(event.target.checked)}
-              />
-              <span>{t('I understand the risk')}</span>
-            </label>
-          </Panel>
-        ) : null}
-      </Card>
-    );
-  };
+  const wizardStep = !name.trim()
+    ? 0
+    : !selectedDataset || !selectedDatasetVersion
+      ? 1
+      : !paramsReady
+        ? 2
+        : !submitReady
+          ? 3
+          : 3;
 
   return (
     <WorkspacePage>
       <PageHeader
-        eyebrow={t('Training Job Builder')}
-        title={t('Create Training Job')}
-        description={t('Create one training run from a fixed dataset snapshot.')}
+        eyebrow={t('Training Run')}
+        title={t('Create Training Run')}
+        description={t('Create a run from one fixed snapshot.')}
+        primaryAction={{
+          label: submitting ? t('Submitting...') : t('Create Training Run'),
+          onClick: () => {
+            void submit();
+          },
+          disabled: submitting || loading || versionsLoading || !submitReady
+        }}
+        secondaryActions={
+          <ButtonLink to="/datasets" variant="ghost" size="sm">
+            {t('Open datasets')}
+          </ButtonLink>
+        }
         meta={
           <div className="row gap wrap align-center">
-            <Badge tone="neutral">{t('Step')}: {step + 1}/{steps.length}</Badge>
-            <Badge tone="info">{t('Matching datasets')}: {filteredDatasets.length}</Badge>
+            <Badge tone="info">{t('Task')}: {t(taskType)}</Badge>
             <Badge tone={snapshotPrefilledFromLink ? 'success' : 'neutral'}>
               {t('Snapshot prefill')}: {snapshotPrefilledFromLink ? t('Ready') : t('N/A')}
             </Badge>
@@ -917,17 +566,24 @@ export default function CreateTrainingJobPage() {
         }
       />
 
+      <ProgressStepper
+        steps={[t('Run identity'), t('Dataset snapshot'), t('Core params'), t('Review and launch')]}
+        current={wizardStep}
+        title={t('Launch steps')}
+        caption={t('Fill them in order.')}
+      />
+
       {loading ? (
-        <StateBlock variant="loading" title={t('Preparing')} description={t('Loading dataset options.')} />
+        <StateBlock variant="loading" title={t('Preparing')} description={t('Loading data.')} />
       ) : null}
 
       {snapshotPrefilledFromLink ? (
         <StateBlock
           variant="success"
-          title={t('Snapshot preselected from dataset detail')}
+          title={t('Snapshot prefilled')}
           description={preferredVersionId
-            ? t('Dataset and version snapshot were prefilled. You can launch directly after readiness review.')
-            : t('Dataset was prefilled. Choose a version snapshot, then continue launch review.')}
+            ? t('Dataset and version are prefilled. Confirm to launch.')
+            : t('Dataset is prefilled. Pick a version next.')}
         />
       ) : null}
 
@@ -938,159 +594,309 @@ export default function CreateTrainingJobPage() {
           description={feedback.text}
         />
       ) : null}
-      {launchReadinessBanner ? (
-        <InlineAlert
-          tone={launchReadinessBanner.tone}
-          title={launchReadinessBanner.title}
-          description={launchReadinessBanner.description}
-          actions={
-            !selectedDataset ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => setStep(1)}>
-                {t('Go to dataset step')}
-              </Button>
-            ) : !selectedDatasetVersion ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  setStep(1);
-                  window.setTimeout(() => datasetVersionSelectRef.current?.focus(), 50);
-                }}
-              >
-                {t('Select version')}
-              </Button>
-            ) : runtimeSettingsError ? (
-              <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
-                {t('Open Runtime Settings')}
-              </ButtonLink>
-            ) : !paramsReady ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => setStep(2)}>
-                {t('Go to params step')}
-              </Button>
-            ) : !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => setStep(3)}>
-                {t('Review risk')}
-              </Button>
-            ) : null
-          }
-        />
-      ) : null}
       <WorkspaceWorkbench
-        toolbar={
-          <Card as="section" className="workspace-toolbar-card">
-            <div className="workspace-toolbar-head">
-              <div className="workspace-toolbar-copy">
-                <h3>{t('Flow controls')}</h3>
-                <small className="muted">{stepDescriptions[step]}</small>
-              </div>
-              <div className="workspace-toolbar-actions">
-                <Button type="button" variant="secondary" onClick={previousStep} disabled={step === 0 || submitting} size="sm">
-                  {t('Back')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={nextStep}
-                  disabled={
-                    step === steps.length - 1 || submitting || loading || !canAdvanceFromCurrentStep
-                  }
-                  size="sm"
-                >
-                  {t('Next')}
-                </Button>
-                <Button
-                  type="button"
-                  onClick={submit}
-                  disabled={step !== steps.length - 1 || submitting || loading || versionsLoading || !submitReady}
-                  size="sm"
-                >
-                  {submitting ? t('Submitting...') : t('Create Training Job')}
-                </Button>
-              </div>
-            </div>
-          </Card>
-        }
         main={
-            <div className="workspace-main-stack">
-              <Card as="article">
-                <WorkspaceSectionHeader
-                  title={t('Launch step')}
-                description={stepTitles[step]}
-                actions={<StatusTag status="info">{`${step + 1}/${steps.length}`}</StatusTag>}
+          <div className="workspace-main-stack training-launch-stack">
+            <Card as="article" className="stack">
+              <WorkspaceSectionHeader
+                title={t('1. Run identity')}
+                description={t('Name it first, then choose task and framework.')}
+                actions={<Badge tone="neutral">{taskType.toUpperCase()}</Badge>}
               />
-              <small className="muted">{stepDescriptions[step]}</small>
-              <StepIndicator steps={steps} current={step} />
+              <div className="workspace-form-grid">
+                <label className="workspace-form-span-2">
+                  {t('Run Name')}
+                  <Input ref={jobNameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
+                </label>
+                <label>
+                  {t('Task Type')}
+                  <Select
+                    value={taskType}
+                    onChange={(event) =>
+                      setTaskType(
+                        event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
+                      )
+                    }
+                  >
+                    {taskTypeOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {t(option)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <label>
+                  {t('Framework')}
+                  <Select
+                    value={framework}
+                    onChange={(event) => setFramework(event.target.value as 'paddleocr' | 'doctr' | 'yolo')}
+                  >
+                    {taskFrameworkOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {t(option)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              </div>
             </Card>
-            {renderStage()}
-            <AdvancedSection
-              title={t('Optional task sketch')}
-              description={t('Use this only when you want the system to suggest a training shape from prose. It is not required to launch training.')}
-            >
-              <label>
-                {t('Requirement Description')}
-                <Textarea
-                  value={requirementDescription}
-                  onChange={(event) => setRequirementDescription(event.target.value)}
-                  rows={4}
-                  placeholder={t('Example: detect train body defects or read train serial number')}
+
+            <Card as="article" className="stack">
+              <WorkspaceSectionHeader
+                title={t('2. Dataset snapshot')}
+                description={t('Choose the dataset, then lock the snapshot.')}
+                actions={
+                  selectedDatasetVersion ? (
+                    <StatusTag status={launchReady ? 'ready' : 'draft'}>
+                      {launchReady ? t('Ready') : t('Review')}
+                    </StatusTag>
+                  ) : null
+                }
+              />
+              {filteredDatasets.length === 0 ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('No matching dataset')}
+                    description={t('Create a dataset for this task type first.')}
+                  extra={
+                    <div className="row gap wrap">
+                      <ButtonLink to="/datasets" variant="secondary" size="sm">
+                        {t('Open Datasets')}
+                      </ButtonLink>
+                    </div>
+                  }
                 />
-              </label>
-              <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
-                {drafting ? t('Generating...') : t('Generate Task Draft')}
-              </Button>
-              {taskDraft ? (
-                <div className="stack tight">
-                  <div className="workspace-keyline-list">
-                    <div className="workspace-keyline-item">
-                      <span>{t('Task Type')}</span>
-                      <strong>{t(taskDraft.task_type)}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Framework')}</span>
-                      <strong>{t(taskDraft.recommended_framework)}</strong>
-                    </div>
-                    <div className="workspace-keyline-item">
-                      <span>{t('Labels')}</span>
-                      <strong>{taskDraft.label_hints.length}</strong>
-                    </div>
-                  </div>
-                  <small className="muted">{taskDraft.rationale}</small>
+              ) : null}
+              <div className="workspace-form-grid">
+                <label className="workspace-form-span-2">
+                  {t('Dataset')}
+                  <Select ref={datasetSelectRef} value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
+                    {filteredDatasets.map((dataset) => (
+                      <option key={dataset.id} value={dataset.id}>
+                        {dataset.name} ({t(dataset.status)})
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <label>
+                  {t('Dataset Version')}
+                  <Select
+                    ref={datasetVersionSelectRef}
+                    value={datasetVersionId}
+                    onChange={(event) => setDatasetVersionId(event.target.value)}
+                    disabled={!selectedDataset || versionsLoading || datasetVersions.length === 0}
+                  >
+                    <option value="">
+                      {versionsLoading ? t('Loading versions...') : t('Pick a version')}
+                    </option>
+                    {datasetVersions.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        {version.version_name} · {t('train')} {version.split_summary.train} ·{' '}
+                        {formatCoveragePercent(version.annotation_coverage)}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <label>
+                  {t('Base Model')}
+                  <Select value={baseModel} onChange={(event) => setBaseModel(event.target.value)}>
+                    {baseModelOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              </div>
+              <Panel className="stack tight" tone="soft">
+                <div className="row gap wrap align-center">
+                  <Badge tone="neutral">{selectedDataset?.name ?? t('Dataset')}</Badge>
+                  <Badge tone="info">{selectedDatasetVersion!.version_name}</Badge>
+                  <Badge tone={datasetVersionHasTrainSplit ? 'success' : 'warning'}>
+                    {t('Train')}: {selectedDatasetVersion!.split_summary.train}
+                  </Badge>
+                  <Badge tone={datasetVersionHasAnnotationCoverage ? 'success' : 'warning'}>
+                    {t('Coverage')}: {formatCoveragePercent(selectedDatasetVersion!.annotation_coverage)}
+                  </Badge>
                 </div>
+                  <small className="muted">{t('Launch uses only this snapshot.')}</small>
+              </Panel>
+              {selectedDataset && datasetVersions.length === 0 && !versionsLoading ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('No dataset version')}
+                  description={t('Create a dataset version snapshot first.')}
+                  extra={
+                    <ButtonLink to={`/datasets/${selectedDataset.id}`} variant="secondary" size="sm">
+                      {t('Open Detail')}
+                    </ButtonLink>
+                  }
+                />
+              ) : null}
+            </Card>
+
+            <Card as="article" className="stack">
+              <WorkspaceSectionHeader
+                title={t('3. Core params')}
+                description={t('Keep the core params visible.')}
+                actions={
+                  paramsReady ? (
+                    <Badge tone="success">{t('Ready')}</Badge>
+                  ) : (
+                    <Badge tone="warning">{t('Needs review')}</Badge>
+                  )
+                }
+              />
+              <div className="three-col">
+                <label>
+                  {t('Epochs')}
+                  <Input
+                    ref={paramsEpochsInputRef}
+                    value={epochs}
+                    inputMode="numeric"
+                    onChange={(event) => setEpochs(event.target.value)}
+                  />
+                </label>
+                <label>
+                  {t('Batch Size')}
+                  <Input value={batchSize} inputMode="numeric" onChange={(event) => setBatchSize(event.target.value)} />
+                </label>
+                <label>
+                  {t('Learning Rate')}
+                  <Input
+                    value={learningRate}
+                    inputMode="decimal"
+                    onChange={(event) => setLearningRate(event.target.value)}
+                  />
+                </label>
+              </div>
+              {!paramsReady ? (
+                <InlineAlert
+                  tone="warning"
+                  title={t('Params need attention')}
+                  description={paramValidationIssues.join(' ')}
+                />
               ) : (
-                <small className="muted">
-                  {t('Optional helper only. A real training launch still depends on dataset, snapshot, and readiness checks.')}
-                </small>
+                <small className="muted">{t('Core params checked.')}</small>
               )}
-            </AdvancedSection>
+              <AdvancedSection
+                title={t('Advanced helper')}
+                description={t('Use only when you need draft suggestions.')}
+              >
+                <div className="three-col">
+                  <label>
+                    {t('Warmup Ratio')}
+                    <Input
+                      value={warmupRatio}
+                      inputMode="decimal"
+                      onChange={(event) => setWarmupRatio(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    {t('Weight Decay')}
+                    <Input
+                      value={weightDecay}
+                      inputMode="decimal"
+                      onChange={(event) => setWeightDecay(event.target.value)}
+                    />
+                  </label>
+                </div>
+                  <label>
+                    {t('Requirement')}
+                    <Textarea
+                      value={requirementDescription}
+                      onChange={(event) => setRequirementDescription(event.target.value)}
+                      rows={4}
+                      placeholder={t('For example: detect vehicle defects or read a vehicle number')}
+                    />
+                  </label>
+                  <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
+                    {drafting ? t('Generating...') : t('Draft from requirement')}
+                  </Button>
+                {taskDraft ? (
+                  <div className="stack tight">
+                    <div className="workspace-keyline-list">
+                      <div className="workspace-keyline-item">
+                        <span>{t('Task Type')}</span>
+                        <strong>{t(taskDraft.task_type)}</strong>
+                      </div>
+                      <div className="workspace-keyline-item">
+                        <span>{t('Framework')}</span>
+                        <strong>{t(taskDraft.recommended_framework)}</strong>
+                      </div>
+                      <div className="workspace-keyline-item">
+                        <span>{t('Labels')}</span>
+                        <strong>{taskDraft.label_hints.length}</strong>
+                      </div>
+                    </div>
+                    <small className="muted">{taskDraft.rationale}</small>
+                  </div>
+                ) : (
+                  <small className="muted">
+                    {t('This is only a helper. Launch still depends on the snapshot and checks.')}
+                  </small>
+                )}
+              </AdvancedSection>
+            </Card>
+
+            {feedback ? (
+              <StateBlock
+                variant={feedback.variant}
+                title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
+                description={feedback.text}
+              />
+            ) : null}
           </div>
         }
         side={
           <div className="workspace-inspector-rail">
             <Card as="article" className="workspace-inspector-card">
               <div className="row between gap wrap align-center">
-                <h3>{t('Next checkpoint')}</h3>
-                <Badge tone={blockingChecklist.length > 0 ? 'warning' : 'success'}>
-                  {runChecklist.length - blockingChecklist.length}/{runChecklist.length}
-                </Badge>
+                <h3>{t('Next step')}</h3>
+                <StatusTag status={blockedLaunchCheckpoints.length === 0 ? 'ready' : 'draft'}>
+                  {blockedLaunchCheckpoints.length === 0 ? t('Ready') : t('Needs review')}
+                </StatusTag>
               </div>
               <small className="muted">
-                {blockingChecklist.length > 0 ? t('Only unresolved blockers are shown.') : t('Launch is ready.')}
+                {launchStatusDescription}
               </small>
-              <div className="workspace-keyline-list">
-                {checklistPreview.slice(0, 2).map((item) => (
-                  <div key={item.label} className="workspace-keyline-item">
-                    <span>{item.label}</span>
-                    <small>{item.done ? t('Ready') : t('Pending')}</small>
-                  </div>
-                ))}
-                {blockingChecklist.length > 2 ? (
-                  <div className="workspace-keyline-item">
-                    <span>{t('More blockers')}</span>
-                    <small>{t('{count} remaining', { count: blockingChecklist.length - 2 })}</small>
-                  </div>
-                ) : null}
-              </div>
+              {launchStatusAction ? (
+                <div className="row gap wrap align-center">
+                  <Button type="button" variant="secondary" size="sm" onClick={launchStatusAction.onClick}>
+                    {launchStatusAction.label}
+                  </Button>
+                  {nextLaunchCheckpoint?.key === 'runtime' &&
+                  !runtimeSettingsLoading &&
+                  !runtimeSettingsError &&
+                  !runtimeDisableSimulatedTrainFallback ? (
+                    <label className="row gap wrap align-center">
+                      <input
+                        type="checkbox"
+                        className="ui-checkbox"
+                        checked={nonStrictLaunchConfirmed}
+                        onChange={(event) => setNonStrictLaunchConfirmed(event.target.checked)}
+                      />
+                      <span>{t('Confirm risk')}</span>
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
+              {nextLaunchCheckpoint ? (
+                <small className="muted">
+                  {nextLaunchCheckpoint.label}: {nextLaunchCheckpoint.state === 'ready' ? t('Ready') : nextLaunchCheckpoint.detail}
+                </small>
+              ) : null}
+              <details className="workspace-details">
+                <summary>{t('All checks')}</summary>
+                <div className="workspace-keyline-list">
+                  {launchCheckpoints.map((item) => (
+                    <div key={item.key} className="workspace-keyline-item">
+                      <span>{item.label}</span>
+                      <small>{item.state === 'ready' ? t('Ready') : item.detail}</small>
+                    </div>
+                  ))}
+                </div>
+              </details>
             </Card>
           </div>
         }

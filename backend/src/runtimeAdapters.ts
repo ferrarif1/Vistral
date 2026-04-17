@@ -471,16 +471,16 @@ const resolveRuntimeControlSettings = (): {
   const fallback = runtimeSettings.updated_at
     ? {
         python_bin: '',
-        disable_simulated_train_fallback: false,
-        disable_inference_fallback: false
+        disable_simulated_train_fallback: true,
+        disable_inference_fallback: true
       }
     : {
         python_bin: (process.env.VISTRAL_PYTHON_BIN ?? process.env.PYTHON_BIN ?? '').trim(),
         disable_simulated_train_fallback: parseBooleanFlag(
           process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
-          false
+          true
         ),
-        disable_inference_fallback: parseBooleanFlag(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, false)
+        disable_inference_fallback: parseBooleanFlag(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, true)
       };
   const controls = runtimeSettings.controls ?? fallback;
   return {

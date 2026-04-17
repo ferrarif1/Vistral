@@ -24,6 +24,25 @@ Rules:
   - ...
 ```
 
+## 2026-04-17 11:39 (CST)
+- context: Continue the frontend IA/UX refactor with `TrainingJobsPage` already improved; now收训练详情、模型版本、推理验证三条相关页的首屏噪音，保持“单页单主任务”一致性。
+- done:
+  - Confirmed `TrainingJobsPage` is already biased toward the active job and its drawer/keyboard navigation is in place.
+  - Reviewed `TrainingJobDetailPage`, `ModelVersionsPage`, and `InferenceValidationPage` structure for remaining first-screen clutter.
+  - Re-read product/IA/flow contracts to keep the console pages aligned with the single-primary-job rule.
+- next:
+  1. Trim `TrainingJobDetailPage` so run evidence is the main surface and scheduler/runtime diagnostics move deeper.
+  2. Reduce `InferenceValidationPage` first-screen competition between inputs, result, runtime summary, and feedback.
+  3. Keep `ModelVersionsPage` comparison/register flow legible without reintroducing duplicate summary blocks.
+  4. Re-run typecheck/build after the UI pass.
+- risks:
+  - These pages already carry a lot of business context; aggressive consolidation could hide important evidence if we over-collapsify.
+  - Translation strings are mixed across EN source keys and Chinese UI expectations, so wording changes need to stay consistent with `t()`.
+- verification:
+  - `npm run typecheck`
+  - `npm run build`
+  - Browser walkthrough on `/training/jobs/:jobId`, `/models/versions`, and `/inference/validate`
+
 ## 2026-04-03 19:00 (Asia/Shanghai)
 - context: Continue realification round on existing pages/APIs; interrupted by new conversation requests.
 - done:
@@ -218,6 +237,29 @@ Rules:
   - Chart currently renders raw values without smoothing/outlier treatment.
 - verification:
   - `npm run typecheck`
+
+## 2026-04-17 00:10 (CST)
+- context: Continue frontend usability cleanup on settings/training surfaces; user wants the product to feel smooth and low-noise.
+- done:
+  - Training jobs list page now exposes KPI summary separately and removed duplicate queue stats from filter toolbar.
+  - Training job detail page now keeps runtime diagnostics in one secondary panel and reduces repeated metric/status copy.
+  - Account settings page moved admin create-account action out of the top header and back into the administrator tools lane.
+  - Settings tabs copy now frames runtime templates as reference material instead of equal-tier navigation.
+  - Current workspace builds/typecheck/lint are passing and the web container has been rebuilt.
+- next:
+  1. Continue trimming `RuntimeSettingsPage` first-screen noise so setup/readiness/advanced are clearly separated.
+  2. Reduce `LlmSettingsPage` repeated status blocks and keep the linear flow visible.
+  3. Review `WorkerSettingsPage` for any remaining duplicated capacity/paired-state summaries.
+  4. Rebuild `vistral-web` again after UI edits if browser still shows cached assets.
+- risks:
+  - `RuntimeSettingsPage` remains the heaviest settings page and still has a lot of advanced content; needs careful simplification to avoid regressing operator workflows.
+  - Browser cache can make the old assets appear even after successful rebuilds.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+  - `DOCKER_BUILDKIT=0 docker compose build --no-cache vistral-web`
+  - `docker compose up -d vistral-web`
 
 ## 2026-04-10 04:20 (Asia/Shanghai)
 - context: Runtime 图形化配置进行中；被“直接验证当前是否已真正支持模型训练与验证”这一新任务打断。
@@ -1537,3 +1579,34 @@ Rules:
   - completed: `npm run -s lint`
   - completed: `npm run -s build`
   - pending (runtime task): docker image rebuild + in-container OCR import + runtime readiness + inference validation checks
+
+## 2026-04-17 00:00 (Asia/Shanghai)
+- date_time: 2026-04-17 00:00 (Asia/Shanghai)
+- context: Continue the remaining UX cleanup pass on settings pages, with focus on making `/settings/runtime` and `/settings/llm` feel linear and non-operational.
+- done:
+  - Refactored `src/pages/RuntimeSettingsPage.tsx` into a clearer page structure:
+    - path chooser
+    - framework inventory
+    - readiness summary
+    - collapsed advanced runtime controls
+  - Refactored `src/pages/LlmSettingsPage.tsx` into a linear setup flow:
+    - preset and settings
+    - connection test
+    - advanced saved snapshot / danger zone
+  - Kept existing APIs, routing, permissions, and i18n untouched.
+  - Verified locally:
+    - `npm run typecheck`
+    - `npm run lint`
+    - `npm run build`
+- next:
+  1. Rebuild and restart the frontend container so the browser picks up the new bundle.
+  2. If the runtime shell still feels dense in-browser, continue with Worker / Training page polish.
+  3. Confirm the settings pages no longer show the old repeated header/KPI/side-rail pattern.
+- risks:
+  - Docker rebuild was blocked in the current shell because the Docker daemon/socket was not reachable, so the browser may still show an older container bundle until rebuilt on a machine with Docker access.
+  - Runtime remains intentionally feature-complete inside the advanced section; if this still feels heavy, the next iteration should split the manual framework editor further.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+  - `docker compose build --no-cache vistral-web` (blocked in this shell due Docker daemon/socket access)

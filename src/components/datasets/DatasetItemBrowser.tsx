@@ -155,85 +155,6 @@ export default function DatasetItemBrowser({
               </option>
             ))}
           </Select>
-          <Select
-            value={queueFilter}
-            onChange={(event) =>
-              onQueueFilterChange(event.target.value as 'all' | 'needs_work' | 'in_review' | 'rejected' | 'approved')
-            }
-          >
-            <option value="all">{t('All queues')}</option>
-            <option value="needs_work">{t('Needs Work')}</option>
-            <option value="in_review">{t('in_review')}</option>
-            <option value="rejected">{t('rejected')}</option>
-            <option value="approved">{t('approved')}</option>
-          </Select>
-          <Select
-            value={reviewReasonFilter}
-            onChange={(event) =>
-              onReviewReasonFilterChange(
-                event.target.value as
-                  | 'all'
-                  | 'box_mismatch'
-                  | 'label_error'
-                  | 'text_error'
-                  | 'missing_object'
-                  | 'polygon_issue'
-                  | 'other'
-              )
-            }
-          >
-            <option value="all">{t('All review reasons')}</option>
-            <option value="box_mismatch">{t('box_mismatch')}</option>
-            <option value="label_error">{t('label_error')}</option>
-            <option value="text_error">{t('text_error')}</option>
-            <option value="missing_object">{t('missing_object')}</option>
-            <option value="polygon_issue">{t('polygon_issue')}</option>
-            <option value="other">{t('other')}</option>
-          </Select>
-          <Input
-            value={metadataFilter}
-            onChange={(event) => onMetadataFilterChange(event.target.value)}
-            placeholder={t('Filter metadata/tag (supports key=value)')}
-          />
-        </div>
-        <div className="dataset-item-browser-actions">
-          <div className="row gap wrap">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={onSelectAllFiltered}
-              disabled={busy || filteredItems.length === 0 || allFilteredItemsSelected}
-            >
-              {t('Select all filtered')}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={onClearSelected}
-              disabled={busy || selectedCount === 0}
-            >
-              {t('Clear selection')}
-            </Button>
-            <ButtonLink to={openFilteredQueuePath} variant="ghost" size="sm">
-              {t('Open filtered queue in annotation workspace')}
-            </ButtonLink>
-          </div>
-          <div className="row gap wrap">
-            {sampleViewModes.map((mode) => (
-              <Button
-                key={`sample-view-${mode}`}
-                type="button"
-                variant={viewMode === mode ? 'secondary' : 'ghost'}
-                size="sm"
-                onClick={() => onViewModeChange(mode)}
-                disabled={busy}
-              >
-                {mode === 'grid' ? t('Grid view') : t('List view')}
-              </Button>
-            ))}
-          </div>
         </div>
         <div className="dataset-item-browser-actions">
           <div className="dataset-item-browser-active-filters">
@@ -252,22 +173,111 @@ export default function DatasetItemBrowser({
               <small className="muted">{t('No active filters')}</small>
             )}
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onClearFilters}
-            disabled={busy || !hasActiveFilters}
-          >
-            {t('Clear filters')}
-          </Button>
+          <div className="row gap wrap">
+            {selectedCount > 0 ? <Badge tone="info">{t('Selected')}: {selectedCount}</Badge> : null}
+            <ButtonLink to={openFilteredQueuePath} variant="secondary" size="sm">
+              {t('Open focused queue')}
+            </ButtonLink>
+            {sampleViewModes.map((mode) => (
+              <Button
+                key={`sample-view-${mode}`}
+                type="button"
+                variant={viewMode === mode ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => onViewModeChange(mode)}
+                disabled={busy}
+              >
+                {mode === 'grid' ? t('Grid view') : t('List view')}
+              </Button>
+            ))}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onClearFilters}
+              disabled={busy || !hasActiveFilters}
+            >
+              {t('Clear filters')}
+            </Button>
+          </div>
         </div>
       </Panel>
 
       <AdvancedSection
-        title={t('Curation tools')}
-        description={t('Batch updates and saved filter views stay collapsed until you need them.')}
+        title={t('Refine and curate')}
+        description={t('Queue filters, metadata hints, saved views, and batch updates stay collapsed until needed.')}
       >
+        <Panel as="section" className="stack tight" tone="soft">
+          <div className="dataset-item-browser-toolbar compact">
+            <Select
+              value={queueFilter}
+              onChange={(event) =>
+                onQueueFilterChange(event.target.value as 'all' | 'needs_work' | 'in_review' | 'rejected' | 'approved')
+              }
+            >
+              <option value="all">{t('All queues')}</option>
+              <option value="needs_work">{t('Needs Work')}</option>
+              <option value="in_review">{t('in_review')}</option>
+              <option value="rejected">{t('rejected')}</option>
+              <option value="approved">{t('approved')}</option>
+            </Select>
+            <Select
+              value={reviewReasonFilter}
+              onChange={(event) =>
+                onReviewReasonFilterChange(
+                  event.target.value as
+                    | 'all'
+                    | 'box_mismatch'
+                    | 'label_error'
+                    | 'text_error'
+                    | 'missing_object'
+                    | 'polygon_issue'
+                    | 'other'
+                )
+              }
+            >
+              <option value="all">{t('All review reasons')}</option>
+              <option value="box_mismatch">{t('box_mismatch')}</option>
+              <option value="label_error">{t('label_error')}</option>
+              <option value="text_error">{t('text_error')}</option>
+              <option value="missing_object">{t('missing_object')}</option>
+              <option value="polygon_issue">{t('polygon_issue')}</option>
+              <option value="other">{t('other')}</option>
+            </Select>
+            <Input
+              value={metadataFilter}
+              onChange={(event) => onMetadataFilterChange(event.target.value)}
+              placeholder={t('Metadata / tag filter')}
+            />
+          </div>
+          <div className="row between gap wrap">
+            <small className="muted">
+              {selectedCount > 0
+                ? t('Selected samples: {count}', { count: selectedCount })
+                : t('No samples selected')}
+            </small>
+            <div className="row gap wrap">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={onSelectAllFiltered}
+                disabled={busy || filteredItems.length === 0 || allFilteredItemsSelected}
+              >
+                {t('Select all filtered')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onClearSelected}
+                disabled={busy || selectedCount === 0}
+              >
+                {t('Clear selection')}
+              </Button>
+            </div>
+          </div>
+        </Panel>
         <Panel as="section" className="stack tight" tone="soft">
           {batchActionBar}
         </Panel>

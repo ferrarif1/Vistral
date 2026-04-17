@@ -245,8 +245,8 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - `YOLO_LOCAL_PREDICT_COMMAND`, `PADDLEOCR_LOCAL_PREDICT_COMMAND`, `DOCTR_LOCAL_PREDICT_COMMAND`
   - optional bundled-runner python override: `VISTRAL_PYTHON_BIN` (fallbacks: `PYTHON_BIN`, then platform default `python3`/`python`)
   - command timeout: `LOCAL_RUNNER_TIMEOUT_MS`
-  - strict non-simulated train fallback switch: `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK=1` (fail fast when local runner command is missing/unavailable)
-  - strict non-fallback inference switch: `VISTRAL_DISABLE_INFERENCE_FALLBACK=1` (runtime/local predict must return real output; template/fallback outputs are rejected)
+  - strict non-simulated train fallback switch: `VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK=1` by default in app runtime; set `0` only if you intentionally want compatibility fallback when the local runner command is missing/unavailable
+  - strict non-fallback inference switch: `VISTRAL_DISABLE_INFERENCE_FALLBACK=1` by default in app runtime; set `0` only if you intentionally want template/fallback prediction output
   - optional real-runner switch: `VISTRAL_RUNNER_ENABLE_REAL=auto` (default auto-try; set `0` to force template mode)
   - optional real-runner hints:
     - `PADDLEOCR_LOCAL_MODEL_PATH`

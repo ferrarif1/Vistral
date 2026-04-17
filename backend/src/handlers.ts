@@ -477,8 +477,8 @@ const parseRuntimeBoolean = (value: string | undefined, fallback = false): boole
 
 const emptyRuntimeControlConfig: RuntimeSettingsRecord['controls'] = {
   python_bin: '',
-  disable_simulated_train_fallback: false,
-  disable_inference_fallback: false
+  disable_simulated_train_fallback: true,
+  disable_inference_fallback: true
 };
 
 const runtimeDefaultPythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
@@ -514,9 +514,9 @@ const getEnvRuntimeControlConfig = (): RuntimeSettingsRecord['controls'] => ({
   python_bin: resolveRuntimeDefaultPythonBin(),
   disable_simulated_train_fallback: parseRuntimeBoolean(
     process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
-    false
+    true
   ),
-  disable_inference_fallback: parseRuntimeBoolean(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, false)
+  disable_inference_fallback: parseRuntimeBoolean(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, true)
 });
 
 const runtimeAutoEndpointDefaults: Record<ModelFramework, string[]> = {

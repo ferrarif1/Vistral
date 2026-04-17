@@ -3,7 +3,7 @@ import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, User } from '.
 import ModelInventory from '../components/models/ModelInventory';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { FilterToolbar, InlineAlert, PageHeader } from '../components/ui/ConsolePage';
+import { FilterToolbar, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
 import { Card } from '../components/ui/Surface';
 import {
@@ -11,6 +11,7 @@ import {
   WorkspaceSectionHeader,
   WorkspaceWorkbench
 } from '../components/ui/WorkspacePage';
+import { isCuratedFoundationModelName } from '../../shared/catalogFixtures';
 import { buildModelAuthenticityCountsById } from '../features/modelAuthenticity';
 import { deriveTrainingExecutionInsight, type TrainingExecutionInsight } from '../features/trainingExecutionInsight';
 import { useI18n } from '../i18n/I18nProvider';
@@ -282,6 +283,13 @@ export default function ModelsExplorePage() {
       }).length,
     [filteredModels, modelAuthenticityCountsById]
   );
+  const readyToUsePublishedModels = useMemo(
+    () =>
+      sortedModels.filter(
+        (model) => model.status === 'published' && isCuratedFoundationModelName(model.name)
+      ),
+    [sortedModels]
+  );
   const hasActiveFilters =
     searchText.trim().length > 0 ||
     statusFilter !== 'all' ||
@@ -406,6 +414,39 @@ export default function ModelsExplorePage() {
         }
         main={
           <div className="workspace-main-stack">
+            {readyToUsePublishedModels.length > 0 ? (
+              <SectionCard
+                title={t('Ready for use')}
+                description={t('Approved or published models that are ready for downstream use.')}
+              >
+                <div className="workspace-form-grid">
+                  {readyToUsePublishedModels.map((model) => (
+                    <Card key={model.id} as="article" className="workspace-record-item stack tight" tone="soft">
+                      <div className="row between gap wrap align-center">
+                        <div className="stack tight">
+                          <strong>{model.name}</strong>
+                          <small className="muted">{model.description}</small>
+                        </div>
+                        <Badge tone="success">{t('published')}</Badge>
+                      </div>
+                      <div className="row gap wrap">
+                        <Badge tone="info">{t(model.model_type)}</Badge>
+                        <Badge tone="neutral">{t(model.metadata.framework ?? 'n/a')}</Badge>
+                      </div>
+                      <div className="row gap wrap">
+                        <ButtonLink to="/inference/validate" variant="secondary" size="sm">
+                          {t('Open Validation')}
+                        </ButtonLink>
+                        <ButtonLink to="/models/versions" variant="ghost" size="sm">
+                          {t('Review versions')}
+                        </ButtonLink>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </SectionCard>
+            ) : null}
+
             <ModelInventory
               title={t('Visible Model Inventory')}
               description={t(

@@ -12,19 +12,19 @@ const normalizeMetadataToken = (value: string): string =>
     .trim();
 
 const formatMetadataLabel = (key: string, t: TranslateFn): string => {
-  switch (key.trim().toLowerCase()) {
+    switch (key.trim().toLowerCase()) {
     case 'inference_run_id':
-      return t('推理任务');
+      return t('Inference run');
     case 'feedback_reason':
-      return t('反馈原因');
+      return t('Feedback reason');
     case 'source_attachment_id':
-      return t('源附件');
+      return t('Source attachment');
     case 'import_source_attachment_id':
-      return t('导入附件');
+      return t('Imported attachment');
     case 'original_filename':
-      return t('原始文件名');
+      return t('Original filename');
     case 'source':
-      return t('来源');
+      return t('Source');
     default:
       return normalizeMetadataToken(key);
   }
@@ -34,15 +34,15 @@ const formatMetadataValue = (key: string, value: string, t: TranslateFn): string
   const normalizedKey = key.trim().toLowerCase();
   const normalizedValue = value.trim();
   if (!normalizedValue) {
-    return t('无');
+    return t('none');
   }
 
   if (normalizedValue === 'true') {
-    return t('是');
+    return t('Yes');
   }
 
   if (normalizedValue === 'false') {
-    return t('否');
+    return t('No');
   }
 
   if (normalizedKey === 'source' || normalizedKey === 'feedback_reason') {
@@ -71,21 +71,17 @@ export default function SampleReviewWorkbench({
   selectedItemOperationalMetadataEntries,
   className
 }: SampleReviewWorkbenchProps) {
-  const metadataPreview = selectedItemOperationalMetadataEntries.slice(0, 6);
-  const tagPreview = selectedItemTagEntries.slice(0, 4);
+  const metadataPreview = selectedItemOperationalMetadataEntries.slice(0, 4);
+  const tagPreview = selectedItemTagEntries.slice(0, 3);
   const showItemStatus = selectedItem?.status && selectedItem.status !== 'ready';
   const showAnnotationSource = selectedAnnotation?.source && selectedAnnotation.source !== 'manual';
-  const hasMetadataPreview = metadataPreview.length > 0;
-  const hasTagPreview = tagPreview.length > 0;
   const latestReview = selectedAnnotation?.latest_review ?? null;
-  const hasVisibleSummary = hasTagPreview || hasMetadataPreview || Boolean(latestReview);
 
   return (
     <Card as="section" className={className}>
       <div className="row between gap wrap align-center">
         <div className="stack tight">
-          <h3>{t('样本信息')}</h3>
-          <small className="muted">{selectedFilename}</small>
+          <h3>{t('Sample info')}</h3>
         </div>
         {selectedAnnotation ? (
           <Badge tone="info">{t(selectedAnnotation.status)}</Badge>
@@ -98,87 +94,79 @@ export default function SampleReviewWorkbench({
       </div>
       <div className="annotation-sample-info-list">
         <div>
-          <small className="muted">{t('文件名')}</small>
+          <small className="muted">{t('File')}</small>
           <strong>{selectedFilename}</strong>
         </div>
         <div>
-          <small className="muted">{t('数据集切分')}</small>
-          <strong>{selectedItem ? t(selectedItem.split) : t('无')}</strong>
+          <small className="muted">{t('Split')}</small>
+          <strong>{selectedItem ? t(selectedItem.split) : t('none')}</strong>
         </div>
         <div>
-          <small className="muted">{t('状态')}</small>
-          <strong>{selectedAnnotation ? t(selectedAnnotation.status) : t('未标注')}</strong>
+          <small className="muted">{t('Status')}</small>
+          <strong>{selectedAnnotation ? t(selectedAnnotation.status) : t('Unannotated')}</strong>
         </div>
         <div>
-          <small className="muted">{t('更新时间')}</small>
-          <strong>{selectedAnnotation ? formatCompactTimestamp(selectedAnnotation.updated_at, t('无')) : t('无')}</strong>
+          <small className="muted">{t('Updated')}</small>
+          <strong>{selectedAnnotation ? formatCompactTimestamp(selectedAnnotation.updated_at, t('none')) : t('none')}</strong>
         </div>
       </div>
-      {hasTagPreview ? (
-        <div className="row gap wrap">
-          {tagPreview.map((tag) => (
-            <Badge key={`sample-tag-${tag}`} tone="neutral">
-              #{tag}
+      {tagPreview.length > 0 || metadataPreview.length > 0 ? (
+        <details className="workspace-disclosure" open={false}>
+          <summary>
+            <span>{t('More details')}</span>
+            <Badge tone="neutral">
+              {tagPreview.length + metadataPreview.length}
             </Badge>
-          ))}
-        </div>
-      ) : null}
-      {hasMetadataPreview ? (
-        <div className="stack tight">
-          <small className="muted">{t('元数据')}</small>
-          <ul className="annotation-review-metadata-list">
-            {metadataPreview.map(([key, value]) => (
-              <li key={`sample-metadata-${key}`}>
-                <strong>{formatMetadataLabel(key, t)}</strong>: {formatMetadataValue(key, String(value), t)}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {latestReview ? (
-        <div className="annotation-review-inline-summary stack tight">
-          <small className="muted">{t('最近复核')}</small>
-          <div className="row gap wrap align-center">
-            <StatusTag status={latestReview.status}>{t(latestReview.status)}</StatusTag>
-            {latestReview.review_reason_code ? <Badge tone="warning">{t(latestReview.review_reason_code)}</Badge> : null}
-            {latestReview.quality_score !== null ? (
-              <Badge tone="info">
-                {t('质量分')}: {latestReview.quality_score.toFixed(2)}
-              </Badge>
+          </summary>
+          <div className="workspace-disclosure-content stack">
+            {tagPreview.length > 0 ? (
+              <div className="row gap wrap">
+                {tagPreview.map((tag) => (
+                  <Badge key={`sample-tag-${tag}`} tone="neutral">
+                    #{tag}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
+            {metadataPreview.length > 0 ? (
+              <ul className="annotation-review-metadata-list">
+                {metadataPreview.map(([key, value]) => (
+                  <li key={`sample-metadata-${key}`}>
+                    <strong>{formatMetadataLabel(key, t)}</strong>: {formatMetadataValue(key, String(value), t)}
+                  </li>
+                ))}
+              </ul>
             ) : null}
           </div>
-          {latestReview.review_comment ? (
-            <p className="workspace-record-summary">{latestReview.review_comment}</p>
-          ) : (
-            <small className="muted">{t('暂无复核备注。')}</small>
-          )}
-          <small className="muted">
-            {t('复核时间')}: {formatCompactTimestamp(latestReview.created_at, t('无'))}
-          </small>
-        </div>
+        </details>
       ) : null}
-      {!hasVisibleSummary ? <small className="muted">{t('暂无额外样本信息。')}</small> : null}
-      <details className="workspace-disclosure" open={false}>
-        <summary>
-          <span>{t('历史记录')}</span>
-        </summary>
-        <div className="workspace-disclosure-content">
-          {latestReview ? (
-            <>
-              <div className="row gap wrap align-center">
-                <StatusTag status={latestReview.status}>{t(latestReview.status)}</StatusTag>
-                {latestReview.review_reason_code ? <Badge tone="warning">{t(latestReview.review_reason_code)}</Badge> : null}
-              </div>
-              {latestReview.review_comment ? <p className="workspace-record-summary">{latestReview.review_comment}</p> : null}
-              <small className="muted">
-                {t('复核时间')}: {formatCompactTimestamp(latestReview.created_at, t('无'))}
-              </small>
-            </>
-          ) : (
-            <small className="muted">{t('当前样本还没有历史记录。')}</small>
-          )}
-        </div>
-      </details>
+      {latestReview ? (
+        <details className="workspace-disclosure" open={false}>
+          <summary>
+            <span>{t('History')}</span>
+            <Badge tone="neutral">{formatCompactTimestamp(latestReview.created_at, t('none'))}</Badge>
+          </summary>
+          <div className="workspace-disclosure-content">
+            <div className="row gap wrap align-center">
+              <StatusTag status={latestReview.status}>{t(latestReview.status)}</StatusTag>
+              {latestReview.review_reason_code ? <Badge tone="warning">{t(latestReview.review_reason_code)}</Badge> : null}
+              {latestReview.quality_score !== null ? (
+                <Badge tone="info">
+                  {t('Quality Score')}: {latestReview.quality_score.toFixed(2)}
+                </Badge>
+              ) : null}
+            </div>
+            {latestReview.review_comment ? (
+              <p className="workspace-record-summary">{latestReview.review_comment}</p>
+            ) : (
+              <small className="muted">{t('No comment yet.')}</small>
+            )}
+            <small className="muted">
+              {t('Reviewed at')}: {formatCompactTimestamp(latestReview.created_at, t('none'))}
+            </small>
+          </div>
+        </details>
+      ) : null}
     </Card>
   );
 }

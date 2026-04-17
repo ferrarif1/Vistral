@@ -250,7 +250,7 @@ export default function DatasetsPage() {
       <PageHeader
         eyebrow={t('Dataset Workbench')}
         title={t('Datasets')}
-        description={t('Browse dataset inventory and open one dataset at a time.')}
+        description={t('Browse one dataset at a time.')}
         primaryAction={{
           label: t('Create Dataset'),
           onClick: focusCreatePanel
@@ -280,10 +280,8 @@ export default function DatasetsPage() {
           <Card as="section" className="workspace-toolbar-card">
             <div className="workspace-toolbar-head">
               <div className="workspace-toolbar-copy">
-                <h3>{t('Dataset Controls')}</h3>
-                <small className="muted">
-                  {t('Search, segment, and refresh the dataset inventory from one stable control strip.')}
-                </small>
+                <h3>{t('Filters')}</h3>
+                <small className="muted">{t('Search and narrow the inventory.')}</small>
               </div>
               <div className="workspace-toolbar-actions">
                 <Button
@@ -383,32 +381,32 @@ export default function DatasetsPage() {
           <div className="workspace-main-stack">
             <Card as="article">
               <WorkspaceSectionHeader
-                title={t('Dataset Inventory')}
-                description={t('Select one dataset to inspect details in the right inspector.')}
+              title={t('Dataset Inventory')}
+                description={t('Select one dataset to inspect it.')}
               />
 
               {loading ? (
                 <StateBlock variant="loading" title={t('Loading Datasets')} description={t('Fetching dataset inventory.')} />
               ) : filteredDatasets.length === 0 ? (
-                <StateBlock
-                  variant="empty"
-                  title={t('No Datasets')}
-                  description={
-                    hasActiveFilters
-                      ? t('No datasets match current filters. Try adjusting search or filter conditions.')
-                      : t('Create your first dataset here to start upload, split, and version preparation.')
-                  }
-                  extra={
-                    hasActiveFilters ? (
-                      <small className="muted">
-                        {t('Clear search or filter chips to reveal the full dataset inventory again.')}
-                      </small>
-                    ) : (
-                      <small className="muted">
-                        {t('Use the create panel on the right to start the first dataset.')}
-                      </small>
-                    )
-                  }
+                  <StateBlock
+                    variant="empty"
+                    title={t('No Datasets')}
+                    description={
+                      hasActiveFilters
+                      ? t('No datasets match the current filters.')
+                      : t('Create your first dataset to start upload and versioning.')
+                    }
+                    extra={
+                      hasActiveFilters ? (
+                        <small className="muted">
+                        {t('Clear filters to see the full inventory.')}
+                        </small>
+                      ) : (
+                        <small className="muted">
+                        {t('Use the create panel on the right.')}
+                        </small>
+                      )
+                    }
                 />
               ) : viewMode === 'grid' ? (
                 <div className="dataset-catalog-grid">
@@ -438,14 +436,14 @@ export default function DatasetsPage() {
             <Card as="article" className="workspace-inspector-card">
               <WorkspaceSectionHeader
                 title={t('Selected Dataset')}
-                description={t('Inspector panel for the current dataset selection.')}
+                description={t('Current dataset summary.')}
               />
 
               {!selectedDataset ? (
                 <StateBlock
                   variant="empty"
                   title={t('No selection')}
-                  description={t('Select one dataset from the inventory to inspect and continue.')}
+                  description={t('Select a dataset from the inventory.')}
                 />
               ) : (
                 <>
@@ -481,7 +479,7 @@ export default function DatasetsPage() {
               <div className="workspace-disclosure-content">
                 <WorkspaceSectionHeader
                   title={t('Create Dataset')}
-                  description={t('Create a new dataset in the side panel when you need one.')}
+                  description={t('Create a new dataset here.')}
                 />
 
                 <div className="workspace-form-grid">

@@ -124,9 +124,9 @@ const buildDefaultRuntimeControlSettingsFromEnv = (): RuntimeSettingsRecord['con
   python_bin: resolveRuntimeDefaultPythonBin(),
   disable_simulated_train_fallback: parseRuntimeBoolean(
     process.env.VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK,
-    false
+    true
   ),
-  disable_inference_fallback: parseRuntimeBoolean(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, false)
+  disable_inference_fallback: parseRuntimeBoolean(process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK, true)
 });
 
 const buildDefaultRuntimeSettingsFromEnv = (): RuntimeSettingsRecord => ({
@@ -243,8 +243,8 @@ export const userPasswordHashes: Record<string, string> = {
 export const models: ModelRecord[] = [
   {
     id: 'm-1',
-    name: 'Road Damage Detector',
-    description: 'Detects road cracks from photos.',
+    name: 'General Object Detector',
+    description: 'Detects people, vehicles, and common objects from photos.',
     model_type: 'detection',
     owner_user_id: 'u-1',
     visibility: 'workspace',
@@ -255,8 +255,8 @@ export const models: ModelRecord[] = [
   },
   {
     id: 'm-2',
-    name: 'Invoice OCR Assistant',
-    description: 'Extracts invoice text and fields.',
+    name: 'License Plate OCR Assistant',
+    description: 'Reads vehicle license plates from photos.',
     model_type: 'ocr',
     owner_user_id: 'u-1',
     visibility: 'workspace',
@@ -619,13 +619,55 @@ const replaceArray = <T>(target: T[], incoming: T[]): void => {
   target.splice(0, target.length, ...incoming);
 };
 
+const normalizeSeedModelRecord = (model: ModelRecord): ModelRecord => {
+  if (model.id === 'm-1') {
+    return {
+      ...model,
+      name: 'General Object Detector',
+      description: 'Detects people, vehicles, and common objects from photos.'
+    };
+  }
+  if (model.id === 'm-2') {
+    return {
+      ...model,
+      name: 'License Plate OCR Assistant',
+      description: 'Reads vehicle license plates from photos.'
+    };
+  }
+  if (model.id === 'm-foundation-yolo') {
+    return {
+      ...model,
+      name: 'General Object Detector Foundation',
+      description: 'Curated foundation model baseline for people and vehicle detection workflows.',
+      metadata: {
+        ...(model.metadata ?? {}),
+        framework: 'yolo',
+        foundation: 'true'
+      }
+    };
+  }
+  if (model.id === 'm-foundation-ocr') {
+    return {
+      ...model,
+      name: 'License Plate OCR Foundation',
+      description: 'Curated foundation model baseline for license plate OCR workflows.',
+      metadata: {
+        ...(model.metadata ?? {}),
+        framework: 'paddleocr',
+        foundation: 'true'
+      }
+    };
+  }
+  return model;
+};
+
 const buildMinimalFoundationModels = (): ModelRecord[] => {
   const timestamp = now();
   return [
     {
       id: 'm-foundation-yolo',
-      name: 'Road Damage Detector',
-      description: 'Curated foundation model baseline for detection workflows.',
+      name: 'General Object Detector Foundation',
+      description: 'Curated foundation model baseline for people and vehicle detection workflows.',
       model_type: 'detection',
       owner_user_id: 'u-1',
       visibility: 'workspace',
@@ -636,8 +678,8 @@ const buildMinimalFoundationModels = (): ModelRecord[] => {
     },
     {
       id: 'm-foundation-ocr',
-      name: 'Invoice OCR Assistant',
-      description: 'Curated foundation model baseline for OCR workflows.',
+      name: 'License Plate OCR Foundation',
+      description: 'Curated foundation model baseline for license plate OCR workflows.',
       model_type: 'ocr',
       owner_user_id: 'u-1',
       visibility: 'workspace',
@@ -652,13 +694,7 @@ const buildMinimalFoundationModels = (): ModelRecord[] => {
 const applyMinimalBootstrapState = (): void => {
   const foundationModels = models
     .filter((model) => isCuratedFoundationModelName(model.name))
-    .map((model) => ({
-      ...model,
-      metadata: {
-        ...(model.metadata ?? {}),
-        foundation: 'true'
-      }
-    }));
+    .map((model) => normalizeSeedModelRecord(model));
   const nextModels =
     foundationModels.length > 0 ? foundationModels : buildMinimalFoundationModels();
 
@@ -1474,7 +1510,7 @@ export const loadPersistedAppState = async (): Promise<void> => {
       Object.assign(userPasswordHashes, state.userPasswordHashes);
     }
     if (Array.isArray(state.models)) {
-      replaceArray(models, state.models);
+      replaceArray(models, state.models.map(normalizeSeedModelRecord));
     }
     if (Array.isArray(state.conversations)) {
       replaceArray(conversations, state.conversations);

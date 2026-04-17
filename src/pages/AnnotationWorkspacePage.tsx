@@ -744,10 +744,10 @@ export default function AnnotationWorkspacePage() {
 
   const selectedFilename = useMemo(() => {
     if (!selectedItem) {
-      return t('尚未选择样本');
+      return t('No sample selected');
     }
 
-    return attachmentById.get(selectedItem.attachment_id)?.filename ?? t('文件不可用');
+    return attachmentById.get(selectedItem.attachment_id)?.filename ?? t('File unavailable');
   }, [attachmentById, selectedItem, t]);
   const selectedAttachmentPreviewUrl = useMemo(() => {
     if (!selectedItem) {
@@ -808,7 +808,7 @@ export default function AnnotationWorkspacePage() {
     [pushCanvasHistory, selectedBox]
   );
   useEffect(() => {
-    const fallbackLabel = labelChoices[0] ?? t('默认类别');
+    const fallbackLabel = labelChoices[0] ?? t('Default label');
     setPreferredBoxLabel((current) => {
       if (!current) {
         return fallbackLabel;
@@ -832,6 +832,9 @@ export default function AnnotationWorkspacePage() {
     }
   }, [annotationSidebarTab, selectedBox]);
   useEffect(() => {
+    setAnnotationSidebarTab('annotation');
+  }, [selectedItemId]);
+  useEffect(() => {
     if (!selectedBox) {
       return;
     }
@@ -849,17 +852,17 @@ export default function AnnotationWorkspacePage() {
   }, [boxes, pendingLabelAssignmentBoxId]);
   const queuePositionSummary = useMemo(() => {
     if (selectedQueueIndex >= 0) {
-      return t('队列位置 {current} / {total}', {
+      return t('Queue {current}/{total}', {
         current: selectedQueueIndex + 1,
         total: filteredItems.length
       });
     }
 
     if (filteredItems.length > 0) {
-      return t('当前队列未选中样本');
+      return t('Queue item not selected');
     }
 
-    return t('可见样本 {visible} / {total}', {
+    return t('Samples {visible}/{total}', {
       visible: filteredItems.length,
       total: items.length
     });
@@ -889,9 +892,8 @@ export default function AnnotationWorkspacePage() {
       ),
     [numericPredictionConfidenceThreshold, predictionCandidates]
   );
-  const currentVersionLabel = scopedDatasetVersionId || t('未锁定版本');
+  const currentVersionLabel = scopedDatasetVersionId || t('Unlocked');
   const canUsePredictionInOcrEditor = dataset?.task_type === 'ocr' && !isEditLocked;
-  const selectedItemHasLowConfidenceTag = Boolean(selectedItem?.metadata['tag:low_confidence']);
   const predictionCandidateCount = useMemo(() => {
     if (!showPredictionOverlay || !hasPredictionOverlay) {
       return 0;
@@ -1151,7 +1153,7 @@ export default function AnnotationWorkspacePage() {
       }
       setQueueToast({
         variant: 'info',
-        text: t('已将预测文本载入 OCR 编辑器，可继续调整后再添加。')
+        text: t('Prediction loaded into OCR editor.')
       });
     },
     [boxes, t]
@@ -1179,8 +1181,8 @@ export default function AnnotationWorkspacePage() {
         variant: 'info',
         text:
           labelChoices.length > 1
-            ? t('新框已创建，请直接选择类别。')
-            : t('新框已创建，可继续调整位置或尺寸。')
+            ? t('New box created. Choose a class right away.')
+            : t('New box created. Keep adjusting position or size.')
       });
     },
     [labelChoices.length, t]
@@ -1198,19 +1200,19 @@ export default function AnnotationWorkspacePage() {
     setPendingLabelAssignmentBoxId('');
     setQueueToast({
       variant: 'success',
-      text: t('已采用预测结果，可继续微调后再提交复核。')
+      text: t('Prediction applied. Keep editing.')
     });
   }, [hasPredictionOverlay, pushCanvasHistory, restoreCanvasSnapshot, selectedAnnotation, t]);
 
   const addOcrLine = () => {
     if (!lineText.trim()) {
-      setFeedback({ variant: 'error', text: t('OCR 文本不能为空。') });
+      setFeedback({ variant: 'error', text: t('OCR line text cannot be empty.') });
       return;
     }
 
     const confidence = Number(lineConfidence);
     if (Number.isNaN(confidence)) {
-      setFeedback({ variant: 'error', text: t('OCR 置信度必须是有效数字。') });
+      setFeedback({ variant: 'error', text: t('OCR confidence must be a valid number.') });
       return;
     }
 
@@ -1255,8 +1257,8 @@ export default function AnnotationWorkspacePage() {
           variant: 'success',
           text:
             status === 'annotated'
-              ? t('已保存当前标注。')
-              : t('已保存为进行中。')
+              ? t('Saved.')
+              : t('Saved as in progress.')
         });
         return true;
       } catch (error) {
@@ -1284,7 +1286,7 @@ export default function AnnotationWorkspacePage() {
       }
 
       if (!hasDraftContent) {
-        setFeedback({ variant: 'error', text: t('请先完成当前样本标注，再提交复核。') });
+        setFeedback({ variant: 'error', text: t('Add annotations before submit.') });
         return;
       }
 
@@ -1293,7 +1295,7 @@ export default function AnnotationWorkspacePage() {
       }
 
       if (selectedAnnotation?.status === 'rejected') {
-        setFeedback({ variant: 'error', text: t('请先将当前样本退回到进行中，再继续提交复核。') });
+        setFeedback({ variant: 'error', text: t('Reopen rejected sample first.') });
         return;
       }
 
@@ -1315,14 +1317,14 @@ export default function AnnotationWorkspacePage() {
         }
 
         if (!annotationId) {
-          throw new Error(t('当前样本还没有可提交的标注结果。'));
+          throw new Error(t('Nothing to submit yet.'));
         }
 
         await api.submitAnnotationForReview(datasetId, annotationId);
         await load('manual');
         setQueueToast({
           variant: 'success',
-          text: t('已提交复核，可继续处理下一张。')
+          text: t('Submitted for review. Moved to next item.')
         });
       } catch (error) {
         setFeedback({ variant: 'error', text: (error as Error).message });
@@ -1350,7 +1352,7 @@ export default function AnnotationWorkspacePage() {
       }
 
       if (status === 'rejected' && !reviewReasonCode) {
-        setFeedback({ variant: 'error', text: t('请先选择退回原因。') });
+        setFeedback({ variant: 'error', text: t('Reject reason is required for reject actions.') });
         return;
       }
 
@@ -1367,7 +1369,7 @@ export default function AnnotationWorkspacePage() {
         await load('manual');
         setQueueToast({
           variant: 'success',
-          text: status === 'approved' ? t('已通过当前样本。') : t('已退回当前样本。')
+          text: status === 'approved' ? t('Approve sample') : t('Send back for fixes')
         });
       } catch (error) {
         setFeedback({ variant: 'error', text: (error as Error).message });
@@ -1392,7 +1394,7 @@ export default function AnnotationWorkspacePage() {
       }
 
       if (hasUnsavedCanvasChanges) {
-        const shouldSave = window.confirm(t('当前样本还有未保存改动。先保存为进行中，再切换吗？'));
+        const shouldSave = window.confirm(t('Unsaved changes. Save before switching?'));
         if (!shouldSave) {
           return false;
         }
@@ -1520,7 +1522,7 @@ export default function AnnotationWorkspacePage() {
       return;
     }
 
-    const shouldContinue = window.confirm(t('将为当前数据集生成或更新预标注结果，是否继续？'));
+    const shouldContinue = window.confirm(t('Generate or update pre-annotation results for this dataset?'));
     if (!shouldContinue) {
       return;
     }
@@ -1535,7 +1537,7 @@ export default function AnnotationWorkspacePage() {
       );
       setQueueToast({
         variant: 'success',
-        text: t('预标注完成：新增 {created} 条，更新 {updated} 条。', {
+        text: t('Pre-labeling done: {created} created, {updated} updated.', {
           created: result.created,
           updated: result.updated
         })
@@ -1571,7 +1573,7 @@ export default function AnnotationWorkspacePage() {
         )
       );
       focusWorkspaceItem('needs_work', selectedItem.id);
-      setQueueToast({ variant: 'success', text: t('已退回到进行中，可继续编辑。') });
+      setQueueToast({ variant: 'success', text: t('Reopened rejected sample.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -1608,19 +1610,19 @@ export default function AnnotationWorkspacePage() {
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
             <ButtonLink to="/datasets" variant="ghost" size="sm">
-              {t('返回数据集')}
+              {t('Back to dataset')}
             </ButtonLink>
           </div>
           <div className="annotation-focus-header__center">
-            <small className="workspace-eyebrow">{t('标注工作台')}</small>
-            <strong className="annotation-focus-header__title">{t('标注工作台')}</strong>
+            <small className="workspace-eyebrow">{t('Annotation workspace')}</small>
+            <strong className="annotation-focus-header__title">{t('Annotation workspace')}</strong>
             <div className="annotation-focus-header__meta">
-              <Badge tone="neutral">{t('当前样本')}: {t('未选择')}</Badge>
+              <Badge tone="neutral">{t('Current sample')}: {t('Not selected')}</Badge>
             </div>
           </div>
           <div className="annotation-focus-header__right" />
         </Card>
-        <StateBlock variant="error" title={t('缺少数据集 ID')} description={t('请从数据集详情页打开标注工作台。')} />
+        <StateBlock variant="error" title={t('Missing dataset ID')} description={t('Please open the annotation workspace from a dataset detail page.')} />
       </WorkspacePage>
     );
   }
@@ -1631,19 +1633,19 @@ export default function AnnotationWorkspacePage() {
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
             <ButtonLink to={`/datasets/${datasetId}`} variant="ghost" size="sm">
-              {t('返回数据集')}
+              {t('Back to dataset')}
             </ButtonLink>
           </div>
           <div className="annotation-focus-header__center">
-            <small className="workspace-eyebrow">{t('标注工作台')}</small>
-            <strong className="annotation-focus-header__title">{t('正在准备标注工作台')}</strong>
+            <small className="workspace-eyebrow">{t('Annotation workspace')}</small>
+            <strong className="annotation-focus-header__title">{t('Preparing annotation workspace.')}</strong>
             <div className="annotation-focus-header__meta">
-              <Badge tone="neutral">{t('当前样本')}: {t('加载中')}</Badge>
+              <Badge tone="neutral">{t('Current sample')}: {t('Loading')}</Badge>
             </div>
           </div>
           <div className="annotation-focus-header__right" />
         </Card>
-        <StateBlock variant="loading" title={t('加载中')} description={t('正在准备标注环境。')} />
+        <StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation workspace.')} />
       </WorkspacePage>
     );
   }
@@ -1654,33 +1656,33 @@ export default function AnnotationWorkspacePage() {
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
             <ButtonLink to="/datasets" variant="ghost" size="sm">
-              {t('返回数据集')}
+              {t('Back to dataset')}
             </ButtonLink>
           </div>
           <div className="annotation-focus-header__center">
-            <small className="workspace-eyebrow">{t('标注工作台')}</small>
-            <strong className="annotation-focus-header__title">{t('当前数据集不可用')}</strong>
+            <small className="workspace-eyebrow">{t('Annotation workspace')}</small>
+            <strong className="annotation-focus-header__title">{t('Current dataset unavailable')}</strong>
             <div className="annotation-focus-header__meta">
-              <Badge tone="warning">{t('当前样本')}: {t('不可用')}</Badge>
+              <Badge tone="warning">{t('Current sample')}: {t('Unavailable')}</Badge>
             </div>
           </div>
           <div className="annotation-focus-header__right" />
         </Card>
-        <StateBlock variant="error" title={t('未找到数据集')} description={t('请求的数据集已不可用。')} />
+        <StateBlock variant="error" title={t('Dataset not found')} description={t('The requested dataset is no longer available.')} />
       </WorkspacePage>
     );
   }
 
   const annotationTabs = (
     <div className="annotation-sidebar" role="presentation">
-      <div className="annotation-sidebar-tabs" role="tablist" aria-label={t('标注侧栏')}>
+      <div className="annotation-sidebar-tabs" role="tablist" aria-label={t('Annotation tools')}>
         <Button
           type="button"
           size="sm"
           variant={annotationSidebarTab === 'annotation' ? 'secondary' : 'ghost'}
           onClick={() => setAnnotationSidebarTab('annotation')}
         >
-          {t('标注')}
+          {t('Label')}
         </Button>
         <Button
           type="button"
@@ -1688,7 +1690,7 @@ export default function AnnotationWorkspacePage() {
           variant={annotationSidebarTab === 'prediction' ? 'secondary' : 'ghost'}
           onClick={() => setAnnotationSidebarTab('prediction')}
         >
-          {t('预测对比')}
+          {t('Compare')}
         </Button>
         <Button
           type="button"
@@ -1696,31 +1698,31 @@ export default function AnnotationWorkspacePage() {
           variant={annotationSidebarTab === 'sample' ? 'secondary' : 'ghost'}
           onClick={() => setAnnotationSidebarTab('sample')}
         >
-          {t('样本信息')}
+          {t('Info')}
         </Button>
       </div>
 
-      {annotationSidebarTab === 'annotation' ? (
+          {annotationSidebarTab === 'annotation' ? (
         <Card as="section" className="workspace-inspector-card">
-          <div className="stack tight">
-            <div className="row between gap wrap align-center">
-              <h3>{t('标注')}</h3>
+            <div className="stack tight">
+              <div className="row between gap wrap align-center">
+              <h3>{t('Label')}</h3>
               <Badge tone={canvasMode === 'draw' ? 'info' : 'neutral'}>
-                {canvasMode === 'draw' ? t('框选模式') : t('选择模式')}
+                {canvasMode === 'draw' ? t('B') : t('V')}
               </Badge>
             </div>
-            <small className="muted">{t('先在画布完成当前样本标注，再保存或提交复核。')}</small>
+            <small className="muted">{t('Draw, edit, delete.')}</small>
           </div>
           {dataset.task_type !== 'segmentation' ? (
             <>
-              <div className="annotation-tool-toggle" role="group" aria-label={t('标注工具')}>
+              <div className="annotation-tool-toggle" role="group" aria-label={t('Annotation tools')}>
                 <Button
                   type="button"
                   size="sm"
                   variant={canvasMode === 'draw' ? 'secondary' : 'ghost'}
                   onClick={() => setCanvasMode('draw')}
                 >
-                  {t('B 框选')}
+                  {t('B')}
                 </Button>
                 <Button
                   type="button"
@@ -1728,26 +1730,24 @@ export default function AnnotationWorkspacePage() {
                   variant={canvasMode === 'select' ? 'secondary' : 'ghost'}
                   onClick={() => setCanvasMode('select')}
                 >
-                  {t('V 选择')}
+                  {t('V')}
                 </Button>
               </div>
               <div className="stack tight">
                 <div className="row between gap wrap align-center">
-                  <small className="muted">{t('类别')}</small>
-                  <Badge tone="neutral">
-                    {t('默认类别')}: {preferredBoxLabel || labelChoices[0] || t('默认类别')}
-                  </Badge>
+                  <small className="muted">{t('Active label')}</small>
+                  <Badge tone="neutral">{preferredBoxLabel || labelChoices[0] || t('None')}</Badge>
                 </div>
                 {pendingLabelSelectionActive ? (
                   <Panel as="section" tone="accent" className="annotation-inline-prompt">
-                    <strong>{t('新框类别')}</strong>
-                    <span>{t('刚创建了一个新框，选择类别后可继续调整。')}</span>
+                    <strong>{t('Assign label')}</strong>
+                    <span>{t('Choose a label for the new region, then keep editing the canvas.')}</span>
                   </Panel>
                 ) : null}
                 <div className="row gap wrap">
                   {(labelChoices.length > 0
                     ? labelChoices
-                    : [t('默认类别')]).map((label) => (
+                    : [t('Current label')]).map((label) => (
                     <Button
                       key={label}
                       type="button"
@@ -1760,11 +1760,10 @@ export default function AnnotationWorkspacePage() {
                     </Button>
                   ))}
                 </div>
-                <small className="muted">{t('选中框后点类别即可应用；新建框会沿用上次使用的标签。')}</small>
               </div>
               <div className="annotation-selected-box-card">
                 <div className="row between gap wrap align-center">
-                  <strong>{t('当前选中框属性')}</strong>
+                  <strong>{t('Selected region')}</strong>
                   <Button
                     type="button"
                     variant="ghost"
@@ -1772,75 +1771,73 @@ export default function AnnotationWorkspacePage() {
                     onClick={() => annotationCanvasRef.current?.deleteSelectedBox()}
                     disabled={busy || !selectedBox}
                   >
-                    {t('删除选中框')}
+                    {t('Delete region')}
                   </Button>
                 </div>
                 {selectedBox ? (
                   <div className="annotation-selected-box-grid">
                     <div>
-                      <small className="muted">{t('标签')}</small>
+                      <small className="muted">{t('Label')}</small>
                       <strong>{selectedBox.label}</strong>
                     </div>
                     <div>
-                      <small className="muted">{t('坐标')}</small>
+                      <small className="muted">{t('Coordinates')}</small>
                       <strong>
                         {Math.round(selectedBox.x)}, {Math.round(selectedBox.y)}
                       </strong>
                     </div>
                     <div>
-                      <small className="muted">{t('尺寸')}</small>
+                      <small className="muted">{t('Size')}</small>
                       <strong>
                         {Math.round(selectedBox.width)} × {Math.round(selectedBox.height)}
                       </strong>
                     </div>
                   </div>
                 ) : (
-                  <small className="muted">{t('先在画布里选中一个框。')}</small>
+                  <small className="muted">{t('Select a region to keep editing.')}</small>
                 )}
               </div>
             </>
           ) : (
             <div className="annotation-selected-box-card">
               <div className="row between gap wrap align-center">
-                <strong>{t('多边形标注')}</strong>
-                <Badge tone="info">{t('多边形')}: {polygons.length}</Badge>
+                <strong>{t('Annotation Canvas')}</strong>
+                <Badge tone="info">{t('Polygons')}: {polygons.length}</Badge>
               </div>
-              <small className="muted">{t('在画布点击添加点，完成后可拖动顶点继续调整。')}</small>
             </div>
           )}
           {dataset.task_type === 'ocr' ? (
             <div className="annotation-ocr-panel">
               <div className="stack tight">
                 <div className="row between gap wrap align-center">
-                  <strong>{t('OCR 文本')}</strong>
-                  <Badge tone="neutral">{t('文本行')}: {ocrLines.length}</Badge>
+                  <strong>{t('OCR')}</strong>
+                  <Badge tone="neutral">{t('OCR text lines')}: {ocrLines.length}</Badge>
                 </div>
-                <small className="muted">{t('先添加文本行，再继续区域微调。')}</small>
               </div>
               <div className="annotation-ocr-entry-row">
                 <label className="annotation-ocr-entry-main">
-                  {t('文本')}
+                  {t('Text')}
                   <Input value={lineText} onChange={(event) => setLineText(event.target.value)} disabled={busy || isEditLocked} />
                 </label>
                 <Button onClick={addOcrLine} variant="secondary" size="sm" disabled={busy || isEditLocked}>
-                  {t('添加')}
+                  {t('Add OCR Line')}
                 </Button>
               </div>
               <details className="workspace-disclosure" open={showOcrAdvancedFields} onToggle={(event) => setShowOcrAdvancedFields(event.currentTarget.open)}>
                 <summary>
-                  <span>{t('高级')}</span>
-                  {lineRegionId || lineConfidence.trim() !== '0.9' ? <Badge tone="info">{t('已配置')}</Badge> : null}
+                  <span>{t('Advanced')}</span>
+                  {lineRegionId || lineConfidence.trim() !== '0.9' ? <Badge tone="info">{t('Configured')}</Badge> : null}
                 </summary>
                 <div className="workspace-disclosure-content">
                   <div className="annotation-ocr-grid">
                     <label>
-                      {t('置信度')}
+                      {t('Confidence')}
                       <Input value={lineConfidence} onChange={(event) => setLineConfidence(event.target.value)} placeholder="0.90" disabled={busy || isEditLocked} />
                     </label>
                     <label>
-                      {t('绑定区域')}
+                      {t('Linked region')}
                       <Select value={lineRegionId} onChange={(event) => setLineRegionId(event.target.value)} disabled={busy || isEditLocked}>
-                        <option value="">{t('不绑定')}</option>
+                        <option value="">{t('Unbound region')}</option>
                         {boxes.map((box) => (
                           <option key={box.id} value={box.id}>
                             {box.label}
@@ -1858,35 +1855,35 @@ export default function AnnotationWorkspacePage() {
                       <div className="row between gap wrap align-center">
                         <strong className="line-clamp-2">{line.text}</strong>
                         <Button onClick={() => removeOcrLine(line.id)} variant="ghost" size="sm" disabled={busy || isEditLocked}>
-                          {t('删除')}
+                          {t('Delete')}
                         </Button>
                       </div>
                       <div className="row gap wrap">
                         <Badge tone="neutral">
-                          {t('置信度')}: {line.confidence.toFixed(2)}
+                          {t('Confidence')}: {line.confidence.toFixed(2)}
                         </Badge>
-                        {line.region_id ? <Badge tone="neutral">{t('区域')}: {line.region_id}</Badge> : <Badge tone="neutral">{t('未绑定区域')}</Badge>}
+                        {line.region_id ? <Badge tone="neutral">{t('region')}: {line.region_id}</Badge> : <Badge tone="neutral">{t('Unbound region')}</Badge>}
                       </div>
                     </Panel>
                   ))}
                 </ul>
               ) : (
-                <small className="muted">{t('还没有 OCR 文本。')}</small>
+                <small className="muted">{t('No OCR lines yet')}</small>
               )}
             </div>
           ) : null}
           <details className="workspace-disclosure" open={showShortcutGuide} onToggle={(event) => setShowShortcutGuide(event.currentTarget.open)}>
             <summary>
-              <span>{t('快捷键')}</span>
+              <span>{t('Shortcuts')}</span>
             </summary>
             <div className="workspace-disclosure-content">
               <div className="annotation-shortcut-grid">
-                <div><Badge tone="neutral">B</Badge><small>{t('框选模式')}</small></div>
-                <div><Badge tone="neutral">V</Badge><small>{t('选择模式')}</small></div>
-                <div><Badge tone="neutral">Delete</Badge><small>{t('删除选中框')}</small></div>
-                <div><Badge tone="neutral">Ctrl/Cmd + S</Badge><small>{t('保存为进行中')}</small></div>
-                <div><Badge tone="neutral">Enter</Badge><small>{t('提交复核')}</small></div>
-                <div><Badge tone="neutral">← / →</Badge><small>{t('上一张 / 下一张')}</small></div>
+                <div><Badge tone="neutral">B</Badge><small>{t('Draw')}</small></div>
+                <div><Badge tone="neutral">V</Badge><small>{t('Select / edit')}</small></div>
+                <div><Badge tone="neutral">Delete</Badge><small>{t('Delete region')}</small></div>
+                <div><Badge tone="neutral">Ctrl/Cmd + S</Badge><small>{t('Save draft')}</small></div>
+                <div><Badge tone="neutral">Enter</Badge><small>{t('Submit')}</small></div>
+                <div><Badge tone="neutral">← / →</Badge><small>{t('Previous / next')}</small></div>
               </div>
             </div>
           </details>
@@ -1905,7 +1902,6 @@ export default function AnnotationWorkspacePage() {
             predictionConfidenceThreshold={predictionConfidenceThreshold}
             predictionCandidateCount={predictionCandidateCount}
             lowConfidencePredictionCount={lowConfidencePredictionCount}
-            selectedItemHasLowConfidenceTag={selectedItemHasLowConfidenceTag}
             predictionCandidates={predictionCandidates}
             numericPredictionConfidenceThreshold={numericPredictionConfidenceThreshold}
             canUsePredictionInOcrEditor={canUsePredictionInOcrEditor}
@@ -1918,12 +1914,11 @@ export default function AnnotationWorkspacePage() {
           />
           <details className="workspace-disclosure" open={false}>
             <summary>
-              <span>{t('预标注')}</span>
+              <span>{t('Pre-annotation')}</span>
             </summary>
             <div className="workspace-disclosure-content">
-              <small className="muted">{t('先选择模型版本，再批量生成或更新当前数据集的预测草稿。')}</small>
               <label className="stack tight annotation-workspace-model-select">
-                <small className="muted">{t('模型版本')}</small>
+                <small className="muted">{t('Model version')}</small>
                 <Select value={selectedModelVersionId} onChange={(event) => setSelectedModelVersionId(event.target.value)}>
                   {modelVersions.map((version) => (
                     <option key={version.id} value={version.id}>
@@ -1934,7 +1929,7 @@ export default function AnnotationWorkspacePage() {
               </label>
               <div className="row gap wrap">
                 <Button onClick={runPreAnnotation} variant="secondary" size="sm" disabled={busy || items.length === 0 || modelVersions.length === 0}>
-                  {t('运行预标注')}
+                {t('Run pre-annotation')}
                 </Button>
                 <Button
                   type="button"
@@ -1947,7 +1942,7 @@ export default function AnnotationWorkspacePage() {
                   }}
                   disabled={busy || refreshing}
                 >
-                  {refreshing ? t('刷新中...') : t('刷新')}
+                {refreshing ? t('Refreshing...') : t('Refresh')}
                 </Button>
               </div>
             </div>
@@ -1968,24 +1963,23 @@ export default function AnnotationWorkspacePage() {
           />
           {selectedAnnotation?.status === 'in_review' ? (
             <Card as="section" className="workspace-inspector-card">
-              <div className="annotation-review-panel">
-                <div className="stack tight">
-                  <h3>{t('复核')}</h3>
-                  <small className="muted">{t('当前样本已进入复核，只显示通过 / 退回。')}</small>
-                </div>
-                <div className="row gap wrap">
-                  <Button onClick={() => void reviewAnnotation('approved')} variant="secondary" size="sm" disabled={busy}>
-                    {t('通过')}
-                  </Button>
-                  <Button onClick={() => void reviewAnnotation('rejected')} variant="danger" size="sm" disabled={busy}>
-                    {t('退回')}
-                  </Button>
-                </div>
-                <label>
-                  {t('退回原因')}
-                  <Select
-                    ref={reviewReasonSelectRef}
-                    value={reviewReasonCode}
+                <div className="annotation-review-panel">
+                  <div className="stack tight">
+                  <h3>{t('Review')}</h3>
+                  </div>
+                  <div className="row gap wrap">
+                    <Button onClick={() => void reviewAnnotation('approved')} variant="secondary" size="sm" disabled={busy}>
+                      {t('Approve')}
+                    </Button>
+                    <Button onClick={() => void reviewAnnotation('rejected')} variant="danger" size="sm" disabled={busy}>
+                      {t('Reject')}
+                    </Button>
+                  </div>
+                  <label>
+                  {t('Reason')}
+                    <Select
+                      ref={reviewReasonSelectRef}
+                      value={reviewReasonCode}
                     onChange={(event) => setReviewReasonCode(event.target.value as AnnotationReviewReasonCode)}
                   >
                     {reviewReasonOptions.map((option) => (
@@ -1996,7 +1990,7 @@ export default function AnnotationWorkspacePage() {
                   </Select>
                 </label>
                 <label>
-                  {t('复核备注')}
+                  {t('Comment')}
                   <Textarea value={reviewComment} rows={3} onChange={(event) => setReviewComment(event.target.value)} />
                 </label>
               </div>
@@ -2005,7 +1999,7 @@ export default function AnnotationWorkspacePage() {
           {selectedAnnotation?.status === 'rejected' ? (
             <Card as="section" className="workspace-inspector-card">
               <Button onClick={moveRejectedToProgress} variant="ghost" size="sm" disabled={busy}>
-                {t('退回重新编辑')}
+                {t('Reopen rejected sample')}
               </Button>
             </Card>
           ) : null}
@@ -2018,24 +2012,10 @@ export default function AnnotationWorkspacePage() {
     <div className="annotation-main-stack">
       {selectedItem ? (
         <Card as="section" className="annotation-canvas-shell">
-          <div className="annotation-canvas-shell__header">
-            <div className="stack tight">
-              <small className="muted">{t('当前样本')}</small>
-              <strong className="line-clamp-1">{selectedFilename}</strong>
-            </div>
-            <div className="row gap wrap align-center">
-              <Badge tone="neutral">{t(dataset.task_type)}</Badge>
-              <Badge tone="neutral">{t('当前版本')}: {currentVersionLabel}</Badge>
-              {selectedItem ? <Badge tone="neutral">{t(selectedItem.split)}</Badge> : null}
-              {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : <Badge tone="warning">{t('未标注')}</Badge>}
-              {selectedItemHasLowConfidenceTag ? <Badge tone="warning">{t('低置信')}</Badge> : null}
-            </div>
-          </div>
-
           {dataset.task_type === 'segmentation' ? (
-            <Suspense fallback={<StateBlock variant="loading" title={t('加载中')} description={t('正在准备多边形画布。')} />}>
+            <Suspense fallback={<StateBlock variant="loading" title={t('Loading')} description={t('Preparing polygon canvas.')} />}>
               <PolygonCanvas
-                title={t('分割多边形')}
+                title={t('Segmentation Polygon Canvas')}
                 filename={selectedFilename}
                 imageUrl={selectedAttachmentPreviewUrl}
                 polygons={polygons}
@@ -2044,15 +2024,15 @@ export default function AnnotationWorkspacePage() {
               />
             </Suspense>
           ) : (
-            <Suspense fallback={<StateBlock variant="loading" title={t('加载中')} description={t('正在准备画布。')} />}>
+            <Suspense fallback={<StateBlock variant="loading" title={t('Loading')} description={t('Preparing annotation canvas.')} />}>
               <AnnotationCanvas
                 ref={annotationCanvasRef}
-                title={t('标注画布')}
+                title={t('Annotation Canvas')}
                 filename={selectedFilename}
                 imageUrl={selectedAttachmentPreviewUrl}
                 boxes={canvasBoxes}
                 predictionBoxes={predictionOverlayBoxes}
-                defaultLabel={preferredBoxLabel || labelChoices[0] || t('默认类别')}
+                defaultLabel={preferredBoxLabel || labelChoices[0] || t('Default label')}
                 toolMode={canvasMode}
                 showPredictionOverlay={showPredictionOverlay && hasPredictionOverlay}
                 onChange={handleBoxesChange}
@@ -2066,7 +2046,7 @@ export default function AnnotationWorkspacePage() {
         </Card>
       ) : (
         <Card as="section" className="annotation-canvas-shell">
-          <StateBlock variant="empty" title={t('当前队列暂无样本')} description={t('返回数据集调整队列后，再回到这里继续标注。')} />
+              <StateBlock variant="empty" title={t('No sample yet')} description={t('Go to dataset detail to switch queues.')}/>
         </Card>
       )}
     </div>
@@ -2078,16 +2058,23 @@ export default function AnnotationWorkspacePage() {
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
             <ButtonLink size="sm" variant="ghost" to={`/datasets/${dataset.id}`}>
-              {t('返回数据集')}
+              {t('Back to dataset')}
             </ButtonLink>
           </div>
           <div className="annotation-focus-header__center">
-            <small className="workspace-eyebrow">{t('标注工作台')}</small>
+            <small className="workspace-eyebrow">{t('Annotation workspace')}</small>
             <strong className="annotation-focus-header__title">{dataset.name}</strong>
+            <small className="muted">
+              {t('Sample {sample}', {
+                sample: selectedFilename || t('Not selected')
+              })}
+            </small>
             <div className="annotation-focus-header__meta">
-              <Badge tone="neutral">{t('当前版本')}: {currentVersionLabel}</Badge>
-              <Badge tone="neutral">{t('当前样本')}: {selectedFilename}</Badge>
+              <Badge tone="neutral">
+                {t('Version')}: {currentVersionLabel}
+              </Badge>
               <Badge tone="info">{queuePositionSummary}</Badge>
+              {selectedAnnotation ? <Badge tone="neutral">{t(selectedAnnotation.status)}</Badge> : <Badge tone="warning">{t('Unannotated')}</Badge>}
             </div>
           </div>
           <div className="annotation-focus-header__right">
@@ -2098,7 +2085,7 @@ export default function AnnotationWorkspacePage() {
               onClick={() => void focusAdjacentQueueItem(-1)}
               disabled={busy || !canMoveToPreviousQueueItem}
             >
-              {t('上一张')}
+              {t('Prev')}
             </Button>
             <Button
               type="button"
@@ -2107,7 +2094,7 @@ export default function AnnotationWorkspacePage() {
               onClick={() => void focusAdjacentQueueItem(1)}
               disabled={busy || !canMoveToNextQueueItem}
             >
-              {t('下一张')}
+              {t('Next')}
             </Button>
             <Button
               type="button"
@@ -2117,7 +2104,7 @@ export default function AnnotationWorkspacePage() {
                 void toggleCanvasExpand();
               }}
             >
-              {isCanvasExpanded ? t('退出全屏') : t('全屏')}
+              {isCanvasExpanded ? t('Exit full screen') : t('Expand')}
             </Button>
             <Button
               type="button"
@@ -2128,7 +2115,7 @@ export default function AnnotationWorkspacePage() {
                 setShowShortcutGuide((current) => !current);
               }}
             >
-              {t('快捷键帮助')}
+              {t('Keys')}
             </Button>
           </div>
         </Card>
@@ -2140,7 +2127,7 @@ export default function AnnotationWorkspacePage() {
         ) : null}
 
         {feedback?.variant === 'error' ? (
-          <InlineAlert tone="danger" title={t('操作失败')} description={feedback.text} />
+        <InlineAlert tone="danger" title={t('Action failed')} description={feedback.text} />
         ) : null}
 
         <WorkspaceWorkbench
@@ -2151,34 +2138,31 @@ export default function AnnotationWorkspacePage() {
 
         <Card as="section" className="annotation-bottom-actions annotation-command-bar">
           <div className="annotation-command-bar__summary">
-            <div className="stack tight">
-              <strong>{t('当前样本操作')}</strong>
-              <small className="muted">{t('先标注，再保存或提交复核，最后切到下一张。')}</small>
-            </div>
-            <div className="row gap wrap align-center">
-              {selectedAnnotation ? <Badge tone="info">{t(selectedAnnotation.status)}</Badge> : <Badge tone="warning">{t('未标注')}</Badge>}
-              {hasUnsavedCanvasChanges ? <Badge tone="warning">{t('未保存')}</Badge> : <Badge tone="neutral">{t('已同步')}</Badge>}
+            <div className="row gap wrap align-center annotation-command-bar__status">
+              {hasUnsavedCanvasChanges ? (
+                <Badge tone="warning">{t('Unsaved changes')}</Badge>
+              ) : (
+                <Badge tone="neutral">{t('No unsaved changes')}</Badge>
+              )}
             </div>
           </div>
           <div className="annotation-command-bar__actions">
-            <Button onClick={undoLast} variant="ghost" size="sm" disabled={busy || canvasUndoStackRef.current.length === 0}>
-              {t('撤销')}
-            </Button>
-            <Button onClick={redoLast} variant="ghost" size="sm" disabled={busy || canvasRedoStackRef.current.length === 0}>
-              {t('重做')}
-            </Button>
-            <Button onClick={() => void focusAdjacentQueueItem(-1)} variant="ghost" size="sm" disabled={busy || !canMoveToPreviousQueueItem}>
-              {t('上一张')}
-            </Button>
-            <Button onClick={() => void focusAdjacentQueueItem(1)} variant="ghost" size="sm" disabled={busy || !canMoveToNextQueueItem}>
-              {t('下一张')}
-            </Button>
-            <Button onClick={() => void saveAnnotation('in_progress')} variant="secondary" size="sm" disabled={!canSaveInProgress}>
-              {t('保存为进行中')}
-            </Button>
-            <Button onClick={() => void submitCurrentForReview()} variant="primary" size="sm" disabled={!canSubmitForReview}>
-              {t('提交复核')}
-            </Button>
+            <div className="row gap wrap annotation-command-bar__secondary-actions">
+              <Button onClick={undoLast} variant="ghost" size="sm" disabled={busy || canvasUndoStackRef.current.length === 0}>
+                {t('Undo')}
+              </Button>
+              <Button onClick={redoLast} variant="ghost" size="sm" disabled={busy || canvasRedoStackRef.current.length === 0}>
+                {t('Redo')}
+              </Button>
+              <Button onClick={() => void saveAnnotation('in_progress')} variant="secondary" size="sm" disabled={!canSaveInProgress}>
+                {t('Save draft')}
+              </Button>
+            </div>
+            <div className="row gap wrap annotation-command-bar__primary-actions">
+              <Button onClick={() => void submitCurrentForReview()} variant="primary" size="sm" disabled={!canSubmitForReview}>
+                {t('Submit review')}
+              </Button>
+            </div>
           </div>
         </Card>
       </div>

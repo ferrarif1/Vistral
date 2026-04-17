@@ -57,28 +57,28 @@ const sampleInputByFramework: Record<ModelFramework, Record<string, unknown>> = 
 
 const sampleOutputByFramework: Record<ModelFramework, Record<string, unknown>> = {
   paddleocr: {
-    image: { filename: 'invoice-sample.jpg', width: 1280, height: 720 },
+    image: { filename: 'license-plate-sample.jpg', width: 1280, height: 720 },
     lines: [
-      { text: 'TEMPLATE_OCR_LINE_1', confidence: 0.95 },
-      { text: 'TEMPLATE_OCR_LINE_2', confidence: 0.92 }
+      { text: '沪A12345', confidence: 0.98 },
+      { text: '停车场入口', confidence: 0.91 }
     ],
     words: [
-      { text: 'TEMPLATE', confidence: 0.96 },
-      { text: 'OCR', confidence: 0.93 }
+      { text: '沪A12345', confidence: 0.99 },
+      { text: '入口', confidence: 0.95 }
     ]
   },
   doctr: {
-    image: { filename: 'invoice-sample.jpg', width: 1280, height: 720 },
+    image: { filename: 'license-plate-sample.jpg', width: 1280, height: 720 },
     ocr: {
-      lines: [{ text: 'TEMPLATE_OCR_LINE_1', confidence: 0.94 }],
-      words: [{ text: 'TEMPLATE', confidence: 0.91 }]
+      lines: [{ text: '沪A12345', confidence: 0.97 }],
+      words: [{ text: '沪A12345', confidence: 0.95 }]
     }
   },
   yolo: {
-    image: { filename: 'defect-sample.jpg', width: 1280, height: 720 },
+    image: { filename: 'traffic-sample.jpg', width: 1280, height: 720 },
     boxes: [
-      { x: 180, y: 210, width: 170, height: 110, label: 'TEMPLATE_DETECTION_OBJECT', score: 0.91 },
-      { x: 540, y: 360, width: 200, height: 120, label: 'TEMPLATE_DETECTION_OBJECT', score: 0.87 }
+      { x: 180, y: 210, width: 170, height: 110, label: 'person', score: 0.91 },
+      { x: 540, y: 360, width: 200, height: 120, label: 'vehicle', score: 0.87 }
     ]
   }
 };
@@ -196,7 +196,7 @@ export default function RuntimeTemplatesPage() {
 
             <Card as="section" className="workspace-record-item stack tight" tone="soft">
               <div className="row between gap wrap align-center">
-                <h3>{t('Prediction response example (expected minimum fields)')}</h3>
+                <h3>{t('Prediction response example')}</h3>
                 <Button type="button" variant="ghost" size="sm" onClick={() => void copyText(t('Prediction response example'), responseSnippet)}>
                   {t('Copy')}
                 </Button>
