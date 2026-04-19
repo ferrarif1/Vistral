@@ -116,14 +116,11 @@ export default function PredictionOverlayControls({
           <span>{t('Show prediction')}</span>
         </label>
       </div>
-      <label>
-        {t('Threshold')}
-        <Input
-          value={predictionConfidenceThreshold}
-          onChange={(event) => onPredictionConfidenceThresholdChange(event.target.value)}
-          placeholder="0.50"
-        />
-      </label>
+      <small className="muted">
+        {hasPredictionOverlay
+          ? t('Use overlay toggles and the threshold to keep the list focused.')
+          : t('No prediction source')}
+      </small>
       <div className="row gap wrap">
         <Badge tone="neutral">
           {t('Candidates')}: {predictionCandidateCount}
@@ -132,6 +129,21 @@ export default function PredictionOverlayControls({
           {t('Low confidence')}: {lowConfidencePredictionCount}
         </Badge>
       </div>
+      <details className="workspace-disclosure">
+        <summary>
+          <span>{t('Advanced')}</span>
+        </summary>
+        <div className="workspace-disclosure-content">
+          <label>
+            {t('Threshold')}
+            <Input
+              value={predictionConfidenceThreshold}
+              onChange={(event) => onPredictionConfidenceThresholdChange(event.target.value)}
+              placeholder="0.50"
+            />
+          </label>
+        </div>
+      </details>
       {showPredictionOverlay && predictionCandidates.length > 0 ? (
         <details className="workspace-disclosure" open={false}>
           <summary>

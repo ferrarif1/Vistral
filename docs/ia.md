@@ -99,6 +99,9 @@ Define executable route and page structure for the AI-native conversation worksp
 - shared overview layout with persistent version-registration actions and completed-job follow-up
 - page-level onboarding card should explain how to move from completed training evidence to version registration and lineage inspection follow-up
 - the main workspace and version-inventory empty/selection-empty states should also mirror the first incomplete versioning step with one explicit next-action card
+- completed training detail pages can deep-link here with a prefilled job so registration starts from the finished run, while model selection still stays explicit
+- when a completed job has no owned model matching its task type, the registration surface should surface a direct model-draft creation path prefilled to that task type instead of silently defaulting to an unrelated model
+- model-draft creation opened from a completed run should keep the version-registration handoff visible so the operator can return with the same job context
 
 ### 3.6 Dataset Domain
 - `/datasets`
@@ -159,11 +162,14 @@ Define executable route and page structure for the AI-native conversation worksp
   - detail: status, logs, metrics, and artifact readiness for one run
   - scheduler history, raw fallback reasons, and technical identifiers should stay in advanced disclosure by default
   - first screen should prioritize evidence inspection (status/logs/metrics/artifacts), while cross-domain next steps stay as lightweight links
+  - completed runs should expose a direct version-registration handoff into `/models/versions` with the job context prefilled
+  - when no owned model matches the completed job's task type, the detail page should also expose a direct model-draft creation path prefilled to that task type
 
 ### 3.8 Inference Validation Domain
 - `/inference/validate`
 - runtime readiness summary only (reachable / unreachable / not configured) with link to `/settings/runtime` for full diagnostics/configuration
 - supports optional dataset/version scope context via query params (`?dataset=<id>&version=<id>`) from dataset-detail snapshot actions
+- also accepts direct model-version prefill via `?modelVersion=<id>` for validation links coming from chat or other action cards
 - onboarding card should explain the validation-to-feedback loop in plain language and keep follow-up links to scoped dataset/annotation lanes visible
 - the main workspace and key empty states (`No Model Versions Yet`, `No Ready Inputs Yet`, `No Runs Yet`) should mirror the first incomplete validation step with one explicit next-action card
 - upload image

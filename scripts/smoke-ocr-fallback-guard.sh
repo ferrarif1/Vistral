@@ -163,6 +163,7 @@ PADDLEOCR_LOCAL_PREDICT_COMMAND="nonexistent_ocr_predict_command_for_guard" \
 YOLO_RUNTIME_ENDPOINT="" \
 YOLO_LOCAL_PREDICT_COMMAND="nonexistent_yolo_predict_command_for_guard" \
 VISTRAL_BASH_PATH="/nonexistent/vistral-bash" \
+VISTRAL_DISABLE_INFERENCE_FALLBACK=0 \
 npm run dev:api >"$API_LOG" 2>&1 &
 API_PID=$!
 
@@ -346,11 +347,11 @@ if [[ "$conversation_assistant_summary" != *"回退/模板结果"* \
 fi
 
 echo "[smoke-ocr-fallback-guard] verifying frontend warning contract markers"
-if ! rg -n "Current output is degraded and not from real OCR recognition|当前结果为(回退/模板结果|降级输出)，不是真实 OCR 识别" src/pages/InferenceValidationPage.tsx >/dev/null; then
+if ! rg -n "Current result is not real output|Current output is degraded and not from real OCR recognition|当前结果为(回退/模板结果|降级输出)，不是真实 OCR 识别" src/pages/InferenceValidationPage.tsx >/dev/null; then
   echo "[smoke-ocr-fallback-guard] missing fallback warning text in frontend"
   exit 1
 fi
-if ! rg -n "No text recognized or this run produced no real OCR output|未识别到文本 / 本次运行未产生真实 OCR 结果" src/pages/InferenceValidationPage.tsx >/dev/null; then
+if ! rg -n "No OCR text recognized|No text recognized or this run produced no real OCR output|未识别到文本 / 本次运行未产生真实 OCR 结果" src/pages/InferenceValidationPage.tsx >/dev/null; then
   echo "[smoke-ocr-fallback-guard] missing empty-ocr warning text in frontend"
   exit 1
 fi

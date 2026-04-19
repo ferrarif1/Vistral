@@ -35,6 +35,10 @@ export const deriveTrainingExecutionInsight = (input: {
       ? artifactSummary.fallback_reason.trim()
       : null;
   const trainingPerformed = artifactSummary?.training_performed ?? null;
+  const sampledItems =
+    typeof artifactSummary?.sampled_items === 'number' && Number.isFinite(artifactSummary.sampled_items)
+      ? artifactSummary.sampled_items
+      : 0;
   const terminal = terminalStatuses.has(input.status);
 
   if (input.executionMode === 'simulated') {
@@ -56,6 +60,15 @@ export const deriveTrainingExecutionInsight = (input: {
   }
 
   if (runnerMode === 'real' && trainingPerformed === true) {
+    return {
+      reality: 'real',
+      fallbackReason,
+      runnerMode,
+      showWarning: false
+    };
+  }
+
+  if (runnerMode === 'real_probe' && !fallbackReason && sampledItems > 0) {
     return {
       reality: 'real',
       fallbackReason,
@@ -89,4 +102,3 @@ export const deriveTrainingExecutionInsight = (input: {
     showWarning: false
   };
 };
-

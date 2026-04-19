@@ -5,11 +5,13 @@ import type {
   AnnotationWithReview,
   DatasetItemRecord,
   DatasetRecord,
+  DatasetVersionRecord,
   FileAttachment,
   ModelVersionRecord
 } from '../../shared/domain';
 import PredictionOverlayControls from '../components/annotation/PredictionOverlayControls';
 import SampleReviewWorkbench from '../components/annotation/SampleReviewWorkbench';
+import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import type {
   AnnotationBox,
   AnnotationCanvasHandle,
@@ -19,7 +21,7 @@ import type { PolygonAnnotation } from '../components/PolygonCanvas';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { InlineAlert } from '../components/ui/ConsolePage';
+import { DetailList, InlineAlert } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
@@ -27,7 +29,9 @@ import {
   annotationStatusSortWeight,
   getAnnotationByItemId,
   getItemAnnotationStatus,
+  matchesAnnotationQueue,
   normalizeAnnotationQueueFilter,
+  summarizeAnnotationQueues,
   type AnnotationQueueFilter
 } from '../features/annotationQueue';
 import { matchesMetadataFilter } from '../features/metadataFilter';
@@ -222,10 +226,47 @@ const normalizeBinaryParam = (value: string | null, fallback: boolean): boolean 
   return value === '1' || value === 'true';
 };
 
+const buildDatasetDetailPath = (datasetId: string): string => `/datasets/${datasetId}`;
+
+const buildTrainingJobCreatePath = (datasetId: string, versionId: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  searchParams.set('version', versionId);
+  return `/training/jobs/new?${searchParams.toString()}`;
+};
+
+const buildTrainingJobsPath = (datasetId: string, versionId?: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/training/jobs?${searchParams.toString()}`;
+};
+
+const buildInferenceValidationPath = (datasetId: string, versionId?: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/inference/validate?${searchParams.toString()}`;
+};
+
+const buildClosureWizardPath = (datasetId: string, versionId?: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/workflow/closure?${searchParams.toString()}`;
+};
+
 const buildAnnotationWorkspaceSignature = (payload: {
   dataset: DatasetRecord;
   items: DatasetItemRecord[];
   attachments: FileAttachment[];
+  datasetVersions: DatasetVersionRecord[];
   modelVersions: ModelVersionRecord[];
   annotations: AnnotationWithReview[];
 }): string =>
@@ -233,6 +274,7 @@ const buildAnnotationWorkspaceSignature = (payload: {
     dataset: payload.dataset,
     items: [...payload.items].sort((left, right) => left.id.localeCompare(right.id)),
     attachments: [...payload.attachments].sort((left, right) => left.id.localeCompare(right.id)),
+    datasetVersions: [...payload.datasetVersions].sort((left, right) => left.id.localeCompare(right.id)),
     modelVersions: [...payload.modelVersions].sort((left, right) => left.id.localeCompare(right.id)),
     annotations: [...payload.annotations].sort((left, right) => left.id.localeCompare(right.id))
   });
@@ -379,6 +421,7 @@ export default function AnnotationWorkspacePage() {
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+  const [datasetVersions, setDatasetVersions] = useState<DatasetVersionRecord[]>([]);
   const [modelVersions, setModelVersions] = useState<ModelVersionRecord[]>([]);
   const [annotations, setAnnotations] = useState<AnnotationWithReview[]>([]);
   const [queueFilter, setQueueFilter] = useState<AnnotationQueueFilter>(() =>
@@ -391,7 +434,7 @@ export default function AnnotationWorkspacePage() {
   const [selectedItemId, setSelectedItemId] = useState('');
   const [selectedModelVersionId, setSelectedModelVersionId] = useState('');
   const [showAnnotationOverlay, setShowAnnotationOverlay] = useState(true);
-  const [showPredictionOverlay, setShowPredictionOverlay] = useState(true);
+  const [showPredictionOverlay, setShowPredictionOverlay] = useState(false);
   const [predictionConfidenceThreshold, setPredictionConfidenceThreshold] = useState('0.50');
   const [onlyLowConfidenceCandidates, setOnlyLowConfidenceCandidates] = useState(false);
   const [showShortcutGuide, setShowShortcutGuide] = useState(false);
@@ -555,6 +598,7 @@ export default function AnnotationWorkspacePage() {
         dataset: detail.dataset,
         items: detail.items,
         attachments: detail.attachments,
+        datasetVersions: detail.versions,
         modelVersions: matchedVersions,
         annotations: annotationList
       });
@@ -564,6 +608,7 @@ export default function AnnotationWorkspacePage() {
         setDataset(detail.dataset);
         setItems(detail.items);
         setAttachments(detail.attachments);
+        setDatasetVersions(detail.versions);
         setAnnotations(annotationList);
         setModelVersions(matchedVersions);
         setSelectedModelVersionId((prev) =>
@@ -620,7 +665,7 @@ export default function AnnotationWorkspacePage() {
     setShowAnnotationOverlay((current) =>
       current === requestedShowAnnotationOverlay ? current : requestedShowAnnotationOverlay
     );
-    const requestedShowPredictionOverlay = normalizeBinaryParam(searchParams.get('pred'), true);
+    const requestedShowPredictionOverlay = normalizeBinaryParam(searchParams.get('pred'), false);
     setShowPredictionOverlay((current) =>
       current === requestedShowPredictionOverlay ? current : requestedShowPredictionOverlay
     );
@@ -651,6 +696,14 @@ export default function AnnotationWorkspacePage() {
     [attachments]
   );
   const annotationByItemId = useMemo(() => getAnnotationByItemId(annotations), [annotations]);
+  const readyFileCount = useMemo(
+    () => attachments.filter((attachment) => attachment.status === 'ready').length,
+    [attachments]
+  );
+  const annotationSummary = useMemo(
+    () => summarizeAnnotationQueues(items, annotations),
+    [annotations, items]
+  );
   const hasTransientWorkspaceState = useMemo(
     () =>
       items.some((item) => item.status === 'uploading' || item.status === 'processing') ||
@@ -892,17 +945,65 @@ export default function AnnotationWorkspacePage() {
       ),
     [numericPredictionConfidenceThreshold, predictionCandidates]
   );
-  const currentVersionLabel = scopedDatasetVersionId || t('Unlocked');
+  const selectedDatasetVersion = useMemo(
+    () => datasetVersions.find((version) => version.id === scopedDatasetVersionId) ?? null,
+    [datasetVersions, scopedDatasetVersionId]
+  );
+  const launchReadyDatasetVersions = useMemo(
+    () =>
+      datasetVersions.filter(
+        (version) =>
+          (version.split_summary.train ?? 0) > 0 && (version.annotation_coverage ?? 0) > 0
+      ),
+    [datasetVersions]
+  );
+  const latestLaunchReadyDatasetVersion = launchReadyDatasetVersions[0] ?? null;
+  const selectedDatasetVersionHasTrainSplit = (selectedDatasetVersion?.split_summary.train ?? 0) > 0;
+  const selectedDatasetVersionHasCoverage = (selectedDatasetVersion?.annotation_coverage ?? 0) > 0;
+  const selectedDatasetVersionLaunchReady = Boolean(
+    dataset?.status === 'ready' &&
+      selectedDatasetVersion &&
+      selectedDatasetVersionHasTrainSplit &&
+      selectedDatasetVersionHasCoverage
+  );
+  const preferredLaunchReadyDatasetVersion =
+    selectedDatasetVersionLaunchReady && selectedDatasetVersion
+      ? selectedDatasetVersion
+      : latestLaunchReadyDatasetVersion;
+  const preferredTrainingDatasetVersion = selectedDatasetVersion ?? datasetVersions[0] ?? null;
+  const preferredReviewQueue = useMemo(() => {
+    if (annotationSummary.needs_work > 0) {
+      return 'needs_work' as const;
+    }
+    if (annotationSummary.rejected > 0) {
+      return 'rejected' as const;
+    }
+    if (annotationSummary.in_review > 0) {
+      return 'in_review' as const;
+    }
+    return 'approved' as const;
+  }, [annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected]);
+  const currentVersionLabel = selectedDatasetVersion?.version_name ?? (scopedDatasetVersionId || t('Unlocked'));
+  const resolvedDatasetId = datasetId ?? '';
+  const datasetDetailPath = buildDatasetDetailPath(resolvedDatasetId);
+  const preferredWorkspaceVersionId = scopedDatasetVersionId || preferredTrainingDatasetVersion?.id || undefined;
+  const closureWizardPath = buildClosureWizardPath(
+    resolvedDatasetId,
+    preferredLaunchReadyDatasetVersion?.id ?? preferredTrainingDatasetVersion?.id
+  );
+  const inferenceValidationPath = buildInferenceValidationPath(
+    resolvedDatasetId,
+    preferredLaunchReadyDatasetVersion?.id ?? preferredTrainingDatasetVersion?.id
+  );
   const canUsePredictionInOcrEditor = dataset?.task_type === 'ocr' && !isEditLocked;
   const predictionCandidateCount = useMemo(() => {
-    if (!showPredictionOverlay || !hasPredictionOverlay) {
+    if (!hasPredictionOverlay) {
       return 0;
     }
     return predictionCandidates.length;
   }, [
     hasPredictionOverlay,
-    predictionCandidates.length,
-    showPredictionOverlay
+    predictionCandidates.length
   ]);
   const lowConfidencePredictionCount = lowConfidencePredictionCandidates.length;
   const canvasBoxes = showAnnotationOverlay ? boxes : [];
@@ -920,7 +1021,7 @@ export default function AnnotationWorkspacePage() {
     !['in_review', 'approved', 'rejected'].includes(selectedAnnotation?.status ?? '');
   const canSaveInProgress = Boolean(selectedItem) && !busy && !isEditLocked;
   useEffect(() => {
-    if (items.length === 0) {
+    if (items.length === 0 || filteredItems.length === 0) {
       if (selectedItemId) {
         setSelectedItemId('');
       }
@@ -934,13 +1035,12 @@ export default function AnnotationWorkspacePage() {
       (requestedItemVisible ? requestedItemId : '') ||
       (currentItemVisible ? selectedItemId : '') ||
       filteredItems[0]?.id ||
-      items[0]?.id ||
       '';
 
     if (nextSelectedItemId !== selectedItemId) {
       setSelectedItemId(nextSelectedItemId);
     }
-  }, [filteredItems, items, searchParams, selectedItemId]);
+  }, [filteredItems, items.length, searchParams, selectedItemId]);
 
   useEffect(() => {
     if (!selectedAnnotation) {
@@ -1411,6 +1511,33 @@ export default function AnnotationWorkspacePage() {
     [focusWorkspaceItem, hasUnsavedCanvasChanges, saveAnnotation, t]
   );
 
+  const findFirstQueueItemId = useCallback(
+    (filter: AnnotationQueueFilter): string => {
+      const matchedItem = queueItems.find((item) =>
+        matchesAnnotationQueue(getItemAnnotationStatus(item.id, annotationByItemId), filter)
+      );
+      return matchedItem?.id ?? queueItems[0]?.id ?? '';
+    },
+    [annotationByItemId, queueItems]
+  );
+
+  const focusQueueFilter = useCallback(
+    async (nextQueueFilter: AnnotationQueueFilter) => {
+      const nextItemId =
+        nextQueueFilter === queueFilter && selectedItemId
+          ? selectedItemId
+          : findFirstQueueItemId(nextQueueFilter);
+
+      if (!nextItemId) {
+        setQueueFilter(nextQueueFilter);
+        return;
+      }
+
+      await requestQueueItemFocus(nextQueueFilter, nextItemId);
+    },
+    [findFirstQueueItemId, queueFilter, requestQueueItemFocus, selectedItemId]
+  );
+
   const focusAdjacentQueueItem = useCallback(
     async (direction: -1 | 1) => {
       if (filteredItems.length === 0) {
@@ -1428,6 +1555,178 @@ export default function AnnotationWorkspacePage() {
     },
     [filteredItems, queueFilter, requestQueueItemFocus, selectedQueueIndex]
   );
+
+  type GuidanceAction = {
+    label: string;
+    to?: string;
+    onClick?: () => void;
+    variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  };
+  type WorkspaceGuidanceState = {
+    current: number;
+    total: number;
+    title: string;
+    description: string;
+    badgeTone: 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+    badgeLabel: string;
+    actions: GuidanceAction[];
+  };
+
+  const workspaceGuidance = useMemo<WorkspaceGuidanceState>(() => {
+    if (!dataset) {
+      return {
+        current: 1,
+        total: 4,
+        title: t('Open the dataset lane'),
+        description: t('Return to the dataset detail page first to restore the current context.'),
+        badgeTone: 'warning',
+        badgeLabel: t('Blocked'),
+        actions: [{ label: t('Back to dataset'), to: datasetDetailPath, variant: 'ghost' }]
+      };
+    }
+
+    if (readyFileCount === 0) {
+      return {
+        current: 1,
+        total: 4,
+        title: t('Upload ready files first'),
+        description: t('The annotation queue cannot close until at least one dataset file is ready.'),
+        badgeTone: 'warning',
+        badgeLabel: t('Need upload'),
+        actions: [{ label: t('Back to dataset detail'), to: datasetDetailPath }]
+      };
+    }
+
+    if (annotationSummary.needs_work > 0) {
+      return {
+        current: 2,
+        total: 4,
+        title: t('Clear unresolved annotation work'),
+        description: t('{count} samples still need manual labeling or completion before you freeze a version.', {
+          count: annotationSummary.needs_work
+        }),
+        badgeTone: 'warning',
+        badgeLabel: t('Needs work'),
+        actions: [
+          {
+            label: t('Focus needs-work queue'),
+            onClick: () => {
+              void focusQueueFilter('needs_work');
+            }
+          },
+          { label: t('Back to dataset detail'), to: datasetDetailPath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (annotationSummary.rejected > 0) {
+      return {
+        current: 2,
+        total: 4,
+        title: t('Resolve rejected samples'),
+        description: t('{count} samples were rejected and should be reopened or corrected before launch.', {
+          count: annotationSummary.rejected
+        }),
+        badgeTone: 'warning',
+        badgeLabel: t('Rejected'),
+        actions: [
+          {
+            label: t('Focus rejected queue'),
+            onClick: () => {
+              void focusQueueFilter('rejected');
+            }
+          },
+          { label: t('Back to dataset detail'), to: datasetDetailPath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (annotationSummary.in_review > 0) {
+      return {
+        current: 2,
+        total: 4,
+        title: t('Finish review decisions'),
+        description: t('{count} samples are waiting for approve or reject decisions.', {
+          count: annotationSummary.in_review
+        }),
+        badgeTone: 'info',
+        badgeLabel: t('Waiting review'),
+        actions: [
+          {
+            label: t('Focus review queue'),
+            onClick: () => {
+              void focusQueueFilter('in_review');
+            }
+          },
+          { label: t('Back to dataset detail'), to: datasetDetailPath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (datasetVersions.length === 0) {
+      return {
+        current: 3,
+        total: 4,
+        title: t('Create the first version snapshot'),
+        description: t('Annotation is stable. Freeze a dataset version so training and validation can reuse the same input scope.'),
+        badgeTone: 'info',
+        badgeLabel: t('Need version'),
+        actions: [{ label: t('Open dataset detail'), to: datasetDetailPath }]
+      };
+    }
+
+    if (!preferredLaunchReadyDatasetVersion) {
+      return {
+        current: 3,
+        total: 4,
+        title: t('Promote one version to launch-ready'),
+        description: t('Create or choose a version with train split and annotation coverage before sending it to training or validation.'),
+        badgeTone: 'info',
+        badgeLabel: t('Version check'),
+        actions: [
+          { label: t('Open dataset detail'), to: datasetDetailPath },
+          {
+            label: t('Open training jobs'),
+            to: buildTrainingJobsPath(dataset.id, preferredTrainingDatasetVersion?.id),
+            variant: 'ghost'
+          }
+        ]
+      };
+    }
+
+    return {
+      current: 4,
+      total: 4,
+      title: t('Start training, closure, or validation'),
+      description: t('Version {version} is ready for downstream training, closure verification, and inference validation.', {
+        version: preferredLaunchReadyDatasetVersion.version_name
+      }),
+      badgeTone: 'success',
+      badgeLabel: t('Launch-ready'),
+      actions: [
+        {
+          label: t('Create training job'),
+          to: buildTrainingJobCreatePath(dataset.id, preferredLaunchReadyDatasetVersion.id)
+        },
+        { label: t('Open closure wizard'), to: closureWizardPath, variant: 'secondary' },
+        { label: t('Validate inference'), to: inferenceValidationPath, variant: 'ghost' }
+      ]
+    };
+  }, [
+    annotationSummary.in_review,
+    annotationSummary.needs_work,
+    annotationSummary.rejected,
+    closureWizardPath,
+    dataset,
+    datasetDetailPath,
+    datasetVersions.length,
+    focusQueueFilter,
+    inferenceValidationPath,
+    preferredLaunchReadyDatasetVersion,
+    preferredTrainingDatasetVersion?.id,
+    readyFileCount,
+    t
+  ]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1675,6 +1974,83 @@ export default function AnnotationWorkspacePage() {
 
   const annotationTabs = (
     <div className="annotation-sidebar" role="presentation">
+      <WorkspaceNextStepCard
+        title={t('Closure handoff')}
+        description={t('Keep the next page obvious while you annotate.')}
+        stepLabel={workspaceGuidance.title}
+        stepDetail={workspaceGuidance.description}
+        current={workspaceGuidance.current}
+        total={workspaceGuidance.total}
+        badgeLabel={workspaceGuidance.badgeLabel}
+        badgeTone={workspaceGuidance.badgeTone}
+        actions={workspaceGuidance.actions.map((action) =>
+          action.to ? (
+            <ButtonLink key={action.label} to={action.to} variant={action.variant ?? 'primary'} size="sm">
+              {action.label}
+            </ButtonLink>
+          ) : (
+            <Button key={action.label} type="button" variant={action.variant ?? 'primary'} size="sm" onClick={action.onClick}>
+              {action.label}
+            </Button>
+          )
+        )}
+      />
+
+      <Card as="section" className="workspace-inspector-card">
+        <div className="stack tight">
+          <div className="row between gap wrap align-center">
+            <h3>{t('Closure snapshot')}</h3>
+            <Badge tone={preferredLaunchReadyDatasetVersion ? 'success' : 'neutral'}>
+              {preferredLaunchReadyDatasetVersion ? t('Ready to launch') : t('Still preparing')}
+            </Badge>
+          </div>
+          <small className="muted">
+            {t('Use this panel to confirm whether you should stay in annotation, go back to dataset versions, or move into training.')}
+          </small>
+        </div>
+        <DetailList
+          items={[
+            { label: t('Version scope'), value: currentVersionLabel },
+            { label: t('Ready files'), value: readyFileCount },
+            { label: t('Needs work'), value: annotationSummary.needs_work },
+            { label: t('In review'), value: annotationSummary.in_review },
+            { label: t('Rejected'), value: annotationSummary.rejected },
+            { label: t('Approved'), value: annotationSummary.approved },
+            { label: t('Dataset versions'), value: datasetVersions.length },
+            { label: t('Launch-ready versions'), value: launchReadyDatasetVersions.length },
+            {
+              label: t('Preferred training version'),
+              value: preferredLaunchReadyDatasetVersion?.version_name ?? preferredTrainingDatasetVersion?.version_name ?? '-'
+            }
+          ]}
+        />
+        <div className="row gap wrap">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              void focusQueueFilter(preferredReviewQueue);
+            }}
+          >
+            {preferredReviewQueue === 'approved' ? t('Focus approved queue') : t('Focus current queue')}
+          </Button>
+          <ButtonLink to={datasetDetailPath} variant="ghost" size="sm">
+            {t('Open dataset detail')}
+          </ButtonLink>
+          <ButtonLink to={closureWizardPath} variant="ghost" size="sm">
+            {t('Open closure wizard')}
+          </ButtonLink>
+        </div>
+        {preferredWorkspaceVersionId ? (
+          <small className="muted">
+            {t('Current queue links keep dataset version {version} in context for downstream pages.', {
+              version: currentVersionLabel
+            })}
+          </small>
+        ) : null}
+      </Card>
+
       <div className="annotation-sidebar-tabs" role="tablist" aria-label={t('Annotation tools')}>
         <Button
           type="button"
@@ -1917,34 +2293,59 @@ export default function AnnotationWorkspacePage() {
               <span>{t('Pre-annotation')}</span>
             </summary>
             <div className="workspace-disclosure-content">
-              <label className="stack tight annotation-workspace-model-select">
-                <small className="muted">{t('Model version')}</small>
-                <Select value={selectedModelVersionId} onChange={(event) => setSelectedModelVersionId(event.target.value)}>
-                  {modelVersions.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      {version.version_name} ({t(version.framework)})
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <div className="row gap wrap">
-                <Button onClick={runPreAnnotation} variant="secondary" size="sm" disabled={busy || items.length === 0 || modelVersions.length === 0}>
-                {t('Run pre-annotation')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    load('manual').catch((loadError) => {
-                      setFeedback({ variant: 'error', text: (loadError as Error).message });
-                    });
-                  }}
-                  disabled={busy || refreshing}
-                >
-                {refreshing ? t('Refreshing...') : t('Refresh')}
-                </Button>
-              </div>
+              {modelVersions.length === 0 ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('No Matching Model Version')}
+                  description={t('Register a model version with same task type before pre-annotation.')}
+                  extra={
+                    <ButtonLink to="/models/versions" variant="secondary" size="sm">
+                      {t('Open Model Versions')}
+                    </ButtonLink>
+                  }
+                />
+              ) : (
+                <>
+                  <label className="stack tight annotation-workspace-model-select">
+                    <small className="muted">{t('Model version')}</small>
+                    <Select value={selectedModelVersionId} onChange={(event) => setSelectedModelVersionId(event.target.value)}>
+                      {modelVersions.map((version) => (
+                        <option key={version.id} value={version.id}>
+                          {version.version_name} ({t(version.framework)})
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <div className="row gap wrap">
+                    <Button onClick={runPreAnnotation} variant="secondary" size="sm" disabled={busy || items.length === 0}>
+                      {t('Run pre-annotation')}
+                    </Button>
+                    <ButtonLink
+                      to={buildInferenceValidationPath(
+                        resolvedDatasetId,
+                        preferredLaunchReadyDatasetVersion?.id ?? preferredWorkspaceVersionId
+                      )}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      {t('Open validation page')}
+                    </ButtonLink>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        load('manual').catch((loadError) => {
+                          setFeedback({ variant: 'error', text: (loadError as Error).message });
+                        });
+                      }}
+                      disabled={busy || refreshing}
+                    >
+                      {refreshing ? t('Refreshing...') : t('Refresh')}
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           </details>
         </div>
@@ -2046,7 +2447,27 @@ export default function AnnotationWorkspacePage() {
         </Card>
       ) : (
         <Card as="section" className="annotation-canvas-shell">
-              <StateBlock variant="empty" title={t('No sample yet')} description={t('Go to dataset detail to switch queues.')}/>
+          <StateBlock
+            variant="empty"
+            title={t('No sample yet')}
+            description={
+              onlyLowConfidenceCandidates
+                ? t('Clear filters or switch scope.')
+                : t('Go to dataset detail to switch queues.')
+            }
+            extra={
+              onlyLowConfidenceCandidates ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setOnlyLowConfidenceCandidates(false)}
+                >
+                  {t('Clear filters')}
+                </Button>
+              ) : null
+            }
+          />
         </Card>
       )}
     </div>
@@ -2074,6 +2495,14 @@ export default function AnnotationWorkspacePage() {
                 {t('Version')}: {currentVersionLabel}
               </Badge>
               <Badge tone="info">{queuePositionSummary}</Badge>
+              <Button
+                type="button"
+                size="sm"
+                variant={onlyLowConfidenceCandidates ? 'secondary' : 'ghost'}
+                onClick={() => setOnlyLowConfidenceCandidates((current) => !current)}
+              >
+                {t('Only low-confidence')}
+              </Button>
               {selectedAnnotation ? <Badge tone="neutral">{t(selectedAnnotation.status)}</Badge> : <Badge tone="warning">{t('Unannotated')}</Badge>}
             </div>
           </div>
@@ -2105,17 +2534,6 @@ export default function AnnotationWorkspacePage() {
               }}
             >
               {isCanvasExpanded ? t('Exit full screen') : t('Expand')}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setAnnotationSidebarTab('annotation');
-                setShowShortcutGuide((current) => !current);
-              }}
-            >
-              {t('Keys')}
             </Button>
           </div>
         </Card>

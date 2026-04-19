@@ -260,6 +260,7 @@ python3 training-worker/scripts/worker-train-api.py
 Default endpoint:
 - `POST http://<worker-host>:9090/api/worker/train`
 - `POST http://<worker-host>:9090/api/worker/cancel`
+- `POST http://<worker-host>:9090/api/worker/models/pull-encrypted`
 - `GET  http://<worker-host>:9090/healthz`
 - `GET  http://<worker-host>:9090/setup`
 - `GET  http://<worker-host>:9090/api/local/setup/state`
@@ -295,6 +296,19 @@ Path safety (important for cross-machine deployment):
   - `CONTROL_PLANE_BASE_URL`
   - `TRAINING_WORKER_AUTH_TOKEN`（或 legacy shared fallback）
   - `WORKER_PACKAGE_DOWNLOAD_TIMEOUT_SECONDS`
+
+Encrypted model pull/deploy:
+- worker can pull encrypted model package from control plane public runtime API and decrypt locally:
+  - `POST /api/worker/models/pull-encrypted`
+- required request/body or env:
+  - `model_version_id`
+  - `runtime_api_key` or `WORKER_RUNTIME_PUBLIC_API_KEY`
+  - `encryption_key` or `WORKER_MODEL_DELIVERY_ENCRYPTION_KEY` (fallback to `MODEL_DELIVERY_ENCRYPTION_KEY`)
+- optional env:
+  - `WORKER_RUNTIME_PUBLIC_BASE_URL` (fallback is `${CONTROL_PLANE_BASE_URL}/api/runtime/public`)
+  - `WORKER_MODEL_STORE_ROOT` (default under worker run root)
+  - `WORKER_MODEL_PACKAGE_DOWNLOAD_TIMEOUT_SECONDS`
+- response includes deployed local model path + `deployment.json` metadata (delivery id/framework/task_type/sha256)
 
 ## 6) Start API + Heartbeat Together (recommended)
 

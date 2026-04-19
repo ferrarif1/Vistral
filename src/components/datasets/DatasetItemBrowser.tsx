@@ -175,9 +175,6 @@ export default function DatasetItemBrowser({
           </div>
           <div className="row gap wrap">
             {selectedCount > 0 ? <Badge tone="info">{t('Selected')}: {selectedCount}</Badge> : null}
-            <ButtonLink to={openFilteredQueuePath} variant="secondary" size="sm">
-              {t('Open focused queue')}
-            </ButtonLink>
             {sampleViewModes.map((mode) => (
               <Button
                 key={`sample-view-${mode}`}
@@ -257,6 +254,9 @@ export default function DatasetItemBrowser({
                 : t('No samples selected')}
             </small>
             <div className="row gap wrap">
+              <ButtonLink to={openFilteredQueuePath} variant="ghost" size="sm">
+                {t('Open focused queue')}
+              </ButtonLink>
               <Button
                 type="button"
                 variant="secondary"
@@ -278,43 +278,53 @@ export default function DatasetItemBrowser({
             </div>
           </div>
         </Panel>
-        <Panel as="section" className="stack tight" tone="soft">
-          {batchActionBar}
-        </Panel>
-        <Panel as="section" className="stack tight" tone="soft">
-          <div className="dataset-item-browser-toolbar">
-            <Select
-              value={selectedSavedViewId}
-              onChange={(event) => onSelectedSavedViewChange(event.target.value)}
-            >
-              <option value="">{t('Saved views')}</option>
-              {savedViews.map((view) => (
-                <option key={`saved-view-${view.id}`} value={view.id}>
-                  {view.name}
-                </option>
-              ))}
-            </Select>
-            <Input
-              value={savedViewNameDraft}
-              onChange={(event) => onSavedViewNameDraftChange(event.target.value)}
-              placeholder={t('Current view name')}
-            />
+        <details className="workspace-details">
+          <summary>
+            <span>{t('Batch curation')}</span>
+          </summary>
+          <div className="workspace-disclosure-content stack">
+            {batchActionBar}
           </div>
-          <div className="row gap wrap">
-            <Button type="button" variant="secondary" size="sm" onClick={onSaveCurrentView} disabled={busy}>
-              {t('Save view')}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onDeleteSavedView}
-              disabled={busy || !selectedSavedViewId}
-            >
-              {t('Delete view')}
-            </Button>
+        </details>
+        <details className="workspace-details">
+          <summary>
+            <span>{t('Saved views')}</span>
+          </summary>
+          <div className="workspace-disclosure-content stack">
+            <div className="dataset-item-browser-toolbar">
+              <Select
+                value={selectedSavedViewId}
+                onChange={(event) => onSelectedSavedViewChange(event.target.value)}
+              >
+                <option value="">{t('Saved views')}</option>
+                {savedViews.map((view) => (
+                  <option key={`saved-view-${view.id}`} value={view.id}>
+                    {view.name}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                value={savedViewNameDraft}
+                onChange={(event) => onSavedViewNameDraftChange(event.target.value)}
+                placeholder={t('Current view name')}
+              />
+            </div>
+            <div className="row gap wrap">
+              <Button type="button" variant="secondary" size="sm" onClick={onSaveCurrentView} disabled={busy}>
+                {t('Save view')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onDeleteSavedView}
+                disabled={busy || !selectedSavedViewId}
+              >
+                {t('Delete view')}
+              </Button>
+            </div>
           </div>
-        </Panel>
+        </details>
       </AdvancedSection>
 
       {filteredItems.length === 0 ? (

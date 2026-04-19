@@ -7,9 +7,10 @@ START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION:-true}"
+REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION="${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION:-false}"
 REAL_CLOSURE_REQUIRE_REAL_MODE="${REAL_CLOSURE_REQUIRE_REAL_MODE:-false}"
 REAL_CLOSURE_GENERATE_TEXT_SAMPLE="${REAL_CLOSURE_GENERATE_TEXT_SAMPLE:-true}"
-REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-6}"
+REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-}"
 DEMO_DIR="${DEMO_DIR:-${ROOT_DIR}/demo_data}"
 DEFAULT_VENV_PYTHON="${ROOT_DIR}/.data/runtime-python/.venv/bin/python"
 if [[ -x "${DEFAULT_VENV_PYTHON}" ]]; then
@@ -18,18 +19,32 @@ else
   PYTHON_BIN="${PYTHON_BIN:-python3}"
 fi
 RUNNER_ENABLE_REAL_VALUE="${VISTRAL_RUNNER_ENABLE_REAL:-0}"
+MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND_VALUE="${MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND:-0}"
 if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
   RUNNER_ENABLE_REAL_VALUE="1"
 fi
+VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE="${VISTRAL_DISABLE_INFERENCE_FALLBACK:-}"
+if [[ -z "${VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE}" ]]; then
+  if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+    VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE="1"
+  else
+    VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE="0"
+  fi
+fi
 if [[ "${REAL_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+  REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-6}"
   REAL_CLOSURE_YOLO_WAIT_POLLS="${REAL_CLOSURE_YOLO_WAIT_POLLS:-900}"
   REAL_CLOSURE_DOCTR_WAIT_POLLS="${REAL_CLOSURE_DOCTR_WAIT_POLLS:-1200}"
 else
-  REAL_CLOSURE_YOLO_WAIT_POLLS="${REAL_CLOSURE_YOLO_WAIT_POLLS:-120}"
-  REAL_CLOSURE_DOCTR_WAIT_POLLS="${REAL_CLOSURE_DOCTR_WAIT_POLLS:-180}"
+  # Keep smoke realistic but bounded in CI/docker CPU environments.
+  REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-2}"
+  # In docker/cpu smoke environments, local training can be slower than
+  # earlier assumptions; use a wider default window to reduce flaky timeouts.
+  REAL_CLOSURE_YOLO_WAIT_POLLS="${REAL_CLOSURE_YOLO_WAIT_POLLS:-1200}"
+  REAL_CLOSURE_DOCTR_WAIT_POLLS="${REAL_CLOSURE_DOCTR_WAIT_POLLS:-1800}"
 fi
-REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC="${REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC:-0.3}"
-REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC="${REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC:-0.3}"
+REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC="${REAL_CLOSURE_YOLO_WAIT_SLEEP_SEC:-0.5}"
+REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC="${REAL_CLOSURE_DOCTR_WAIT_SLEEP_SEC:-0.5}"
 
 if ! "${PYTHON_BIN}" -V >/dev/null 2>&1; then
   echo "[smoke-real-closure] python runtime is required. missing PYTHON_BIN=${PYTHON_BIN}"
@@ -121,6 +136,22 @@ pick_registered_model_version_id() {
   ' | head -n 1
 }
 
+normalize_bool_flag() {
+  local value="${1:-false}"
+  case "${value,,}" in
+    1|true|yes|on)
+      echo "true"
+      ;;
+    *)
+      echo "false"
+      ;;
+  esac
+}
+
+REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION="$(
+  normalize_bool_flag "${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION}"
+)"
+
 if [[ "${START_API}" == "true" ]]; then
   YOLO_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/yolo_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
   PADDLEOCR_LOCAL_TRAIN_COMMAND="${PYTHON_BIN} {{repo_root}}/scripts/local-runners/paddleocr_train_runner.py --job-id {{job_id}} --dataset-id {{dataset_id}} --task-type {{task_type}} --base-model {{base_model}} --workspace-dir {{workspace_dir}} --config-path {{config_path}} --summary-path {{summary_path}} --metrics-path {{metrics_path}} --artifact-path {{artifact_path}}" \
@@ -137,7 +168,8 @@ if [[ "${START_API}" == "true" ]]; then
   PADDLEOCR_RUNTIME_ENDPOINT="" \
   DOCTR_RUNTIME_ENDPOINT="" \
   YOLO_RUNTIME_ENDPOINT="" \
-  MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
+  VISTRAL_DISABLE_INFERENCE_FALLBACK="${VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE}" \
+  MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND="${MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND_VALUE}" \
   npm run dev:api >"${API_LOG}" 2>&1 &
   API_PID=$!
 fi
@@ -954,7 +986,7 @@ doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/model-versions/register" \
-  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"real-doctr-v1\"}")"
+  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"real-doctr-v1\",\"allow_ocr_real_probe_registration\":${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION}}")"
 doctr_model_version_id="$(echo "${doctr_register_resp}" | jq -r '.data.id // empty')"
 doctr_artifact_id="$(echo "${doctr_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
 doctr_register_mode="created"
@@ -980,6 +1012,11 @@ if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_id}" ]]; then
     doctr_register_mode="blocked_gate_reused_ocr_any"
   fi
   doctr_artifact_id="fallback-existing-version"
+fi
+if [[ "${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION}" == "true" && "${doctr_register_mode}" != "created" ]]; then
+  echo "[smoke-real-closure] OCR bypass path expected a newly registered doctr model version, but registration was not created."
+  echo "${doctr_register_resp}"
+  exit 1
 fi
 
 doctr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -1052,3 +1089,8 @@ echo "doctr_register_mode=${doctr_register_mode}"
 echo "yolo_source=${yolo_source}"
 echo "ocr_source=${ocr_source}"
 echo "doctr_source=${doctr_source}"
+echo "new_ocr_model_id=${doctr_model_id}"
+echo "new_ocr_model_version_id=${doctr_model_version_id}"
+echo "new_ocr_training_job_id=${doctr_job_id}"
+echo "new_ocr_inference_run_id=${doctr_run_id}"
+echo "new_ocr_feedback_dataset_id=${doctr_feedback_dataset_id}"

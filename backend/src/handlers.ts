@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { existsSync, promises as fs, statSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -24,6 +24,8 @@ import {
   messages,
   models,
   modelVersions,
+  runtimePublicInferenceInvocations,
+  runtimePublicModelPackageDeliveries,
   persistLlmConfigs,
   persistRuntimeSettings,
   runtimeSettings,
@@ -74,6 +76,7 @@ import type {
   LlmConfig,
   LlmConfigView,
   RuntimeApiKeyMetaView,
+  RuntimeApiKeyPolicy,
   RuntimeFrameworkConfig,
   RuntimeFrameworkConfigView,
   RuntimeProfileView,
@@ -86,6 +89,7 @@ import type {
   ModelVersionRecord,
   RequirementAnnotationType,
   RequirementTaskDraft,
+  RetryTrainingJobInput,
   RegisterInput,
   RenameConversationInput,
   RegisterModelVersionInput,
@@ -93,11 +97,24 @@ import type {
   ReviewAnnotationInput,
   RuntimeBootstrapAssetSnapshot,
   RuntimeConnectivityRecord,
+  RuntimeDeviceAccessIssueInput,
+  RuntimeDeviceAccessIssueResult,
+  RuntimeDeviceAccessRecord,
+  RuntimeDeviceLifecycleSnapshot,
+  RuntimeDeviceAccessRevokeInput,
+  RuntimeDeviceAccessRotateInput,
+  RuntimeDeviceAccessSnippetBundle,
+  RuntimePublicInferenceInvocationRecord,
+  RuntimePublicModelPackageDeliveryRecord,
   RuntimeReadinessFrameworkSnapshot,
   RuntimeReadinessIssue,
   RuntimeReadinessReport,
   RuntimeMetricsRetentionSummary,
   RunInferenceInput,
+  PublicEncryptedModelPackageInput,
+  PublicEncryptedModelPackageResult,
+  PublicRuntimeInferenceInput,
+  PublicRuntimeInferenceResult,
   TrainingSchedulerDecision,
   TrainingWorkerBootstrapSessionRecord,
   TrainingWorkerCompatibilitySnapshot,
@@ -163,6 +180,25 @@ const uploadStorageRoot = path.resolve(
   process.cwd(),
   (process.env.UPLOAD_STORAGE_ROOT ?? '.data/uploads').trim()
 );
+const publicRuntimeInputStorageRoot = path.resolve(
+  process.cwd(),
+  (process.env.PUBLIC_RUNTIME_INPUT_STORAGE_ROOT ?? '.data/runtime-public-inputs').trim()
+);
+const publicRuntimeInferenceMaxBytes = (() => {
+  const parsed = Number.parseInt(process.env.PUBLIC_RUNTIME_INFERENCE_MAX_BYTES ?? '10485760', 10);
+  if (!Number.isFinite(parsed) || parsed < 1024) {
+    return 10485760;
+  }
+  return parsed;
+})();
+const publicModelPackageMaxBytes = (() => {
+  const parsed = Number.parseInt(process.env.PUBLIC_MODEL_PACKAGE_MAX_BYTES ?? '67108864', 10);
+  if (!Number.isFinite(parsed) || parsed < 1024) {
+    return 67108864;
+  }
+  return parsed;
+})();
+const defaultModelDeliveryEncryptionKey = (process.env.MODEL_DELIVERY_ENCRYPTION_KEY ?? '').trim();
 const attachmentStorageDirByTarget: Record<FileAttachment['attached_to_type'], string> = {
   Conversation: 'conversation',
   Model: 'model',
@@ -242,6 +278,8 @@ const resolveMaxIdSeedFromState = (): number => {
     trainingMetrics,
     modelVersions,
     inferenceRuns,
+    runtimePublicInferenceInvocations,
+    runtimePublicModelPackageDeliveries,
     approvalRequests,
     auditLogs
   ];
@@ -423,6 +461,231 @@ const toRuntimeFrameworkConfigView = (
   has_api_key: config.api_key.length > 0,
   api_key_masked: maskApiKey(config.api_key)
 });
+
+type RuntimePublicApiKeyBinding = 'framework' | 'model' | 'model_version';
+
+type RuntimePublicApiKeyAccess = {
+  framework: ModelFramework;
+  binding: RuntimePublicApiKeyBinding;
+  binding_key: string;
+};
+
+const runtimeDeviceBindingSegment = ':device:';
+
+const buildRuntimeModelVersionDeviceBindingPrefix = (modelVersionId: string): string =>
+  `model_version:${modelVersionId}${runtimeDeviceBindingSegment}`;
+
+const isRuntimeModelVersionBindingKey = (bindingKey: string): boolean =>
+  bindingKey === 'framework' ||
+  bindingKey.startsWith('model:') ||
+  bindingKey.startsWith('model_version:');
+
+const sanitizeRuntimeDeviceName = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+
+const parseRuntimeDeviceNameFromBindingKey = (bindingKey: string): string | null => {
+  const markerIndex = bindingKey.indexOf(runtimeDeviceBindingSegment);
+  if (markerIndex < 0) {
+    return null;
+  }
+  const encoded = bindingKey.slice(markerIndex + runtimeDeviceBindingSegment.length).trim();
+  if (!encoded) {
+    return null;
+  }
+  return encoded.replace(/-/g, ' ');
+};
+
+const resolveRuntimeApiKeyCandidatesForVersion = (
+  version: ModelVersionRecord
+): Array<{
+  binding: RuntimePublicApiKeyBinding;
+  binding_key: string;
+  api_key: string;
+  policy: RuntimeApiKeyPolicy | null;
+}> => {
+  const frameworkConfig = runtimeSettings.frameworks[version.framework];
+  if (!frameworkConfig) {
+    return [];
+  }
+
+  const modelVersionBindingKey = `model_version:${version.id}`;
+  const modelBindingKey = `model:${version.model_id}`;
+  const modelVersionPolicy = frameworkConfig.model_api_key_policies[modelVersionBindingKey] ?? null;
+  const modelPolicy = frameworkConfig.model_api_key_policies[modelBindingKey] ?? null;
+  const modelVersionDeviceBindingPrefix = buildRuntimeModelVersionDeviceBindingPrefix(version.id);
+  const modelVersionDeviceBindingKeys = Array.from(
+    new Set<string>([
+      ...Object.keys(frameworkConfig.model_api_keys),
+      ...Object.keys(frameworkConfig.model_api_key_policies)
+    ])
+  )
+    .filter((bindingKey) => bindingKey.startsWith(modelVersionDeviceBindingPrefix))
+    .sort();
+
+  return [
+    {
+      binding: 'model_version' as RuntimePublicApiKeyBinding,
+      binding_key: modelVersionBindingKey,
+      api_key:
+        (modelVersionPolicy?.api_key ?? frameworkConfig.model_api_keys[modelVersionBindingKey] ?? '').trim(),
+      policy: modelVersionPolicy
+    },
+    ...modelVersionDeviceBindingKeys.map((bindingKey) => ({
+      binding: 'model_version' as RuntimePublicApiKeyBinding,
+      binding_key: bindingKey,
+      api_key:
+        (
+          frameworkConfig.model_api_key_policies[bindingKey]?.api_key ??
+          frameworkConfig.model_api_keys[bindingKey] ??
+          ''
+        ).trim(),
+      policy: frameworkConfig.model_api_key_policies[bindingKey] ?? null
+    })),
+    {
+      binding: 'model' as RuntimePublicApiKeyBinding,
+      binding_key: modelBindingKey,
+      api_key: (modelPolicy?.api_key ?? frameworkConfig.model_api_keys[modelBindingKey] ?? '').trim(),
+      policy: modelPolicy
+    },
+    {
+      binding: 'framework' as RuntimePublicApiKeyBinding,
+      binding_key: 'framework',
+      api_key: frameworkConfig.api_key.trim(),
+      policy: null
+    }
+  ].filter((entry) => Boolean(entry.api_key));
+};
+
+const assertRuntimePolicyUsable = (policy: RuntimeApiKeyPolicy, bindingKey: string): void => {
+  const nowTime = Date.now();
+  if (policy.expires_at) {
+    const expiresAtMs = Date.parse(policy.expires_at);
+    if (Number.isFinite(expiresAtMs) && expiresAtMs <= nowTime) {
+      throw new Error(`Runtime API key expired for ${bindingKey}. expires_at=${policy.expires_at}`);
+    }
+  }
+
+  if (typeof policy.max_calls === 'number' && Number.isFinite(policy.max_calls)) {
+    const maxCalls = Math.max(0, Math.floor(policy.max_calls));
+    const usedCalls =
+      typeof policy.used_calls === 'number' && Number.isFinite(policy.used_calls)
+        ? Math.max(0, Math.floor(policy.used_calls))
+        : 0;
+    if (usedCalls >= maxCalls) {
+      throw new Error(
+        `Runtime API key quota exceeded for ${bindingKey}. used_calls=${usedCalls}, max_calls=${maxCalls}`
+      );
+    }
+  }
+};
+
+const consumeRuntimePolicyUsage = async (
+  framework: ModelFramework,
+  bindingKey: string,
+  policy: RuntimeApiKeyPolicy
+): Promise<void> => {
+  const frameworkConfig = runtimeSettings.frameworks[framework];
+  if (!frameworkConfig) {
+    return;
+  }
+  const current = frameworkConfig.model_api_key_policies[bindingKey];
+  if (!current || (current.api_key ?? '').trim() !== (policy.api_key ?? '').trim()) {
+    return;
+  }
+
+  const nextUsedCalls =
+    typeof current.used_calls === 'number' && Number.isFinite(current.used_calls)
+      ? Math.max(0, Math.floor(current.used_calls)) + 1
+      : 1;
+  const maxCalls =
+    typeof current.max_calls === 'number' && Number.isFinite(current.max_calls)
+      ? Math.max(0, Math.floor(current.max_calls))
+      : null;
+
+  frameworkConfig.model_api_key_policies[bindingKey] = {
+    ...current,
+    used_calls: typeof maxCalls === 'number' ? Math.min(nextUsedCalls, maxCalls) : nextUsedCalls,
+    last_used_at: now()
+  };
+  frameworkConfig.model_api_keys = Object.fromEntries(
+    Object.entries(frameworkConfig.model_api_key_policies)
+      .map(([key, item]) => [key, (item.api_key ?? '').trim()])
+      .filter(([, value]) => Boolean(value))
+  );
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+};
+
+const resolveRuntimePublicApiKeyAccess = async (
+  version: ModelVersionRecord,
+  presentedApiKey: string
+): Promise<RuntimePublicApiKeyAccess> => {
+  const token = presentedApiKey.trim();
+  if (!token) {
+    throw new Error('Bearer runtime API key is required.');
+  }
+
+  const candidates = resolveRuntimeApiKeyCandidatesForVersion(version);
+  const matched = candidates.find((candidate) => candidate.api_key === token) ?? null;
+  if (!matched) {
+    throw new Error('Invalid runtime API key for requested model version.');
+  }
+
+  if (matched.policy) {
+    assertRuntimePolicyUsable(matched.policy, matched.binding_key);
+    await consumeRuntimePolicyUsage(version.framework, matched.binding_key, matched.policy);
+  }
+
+  return {
+    framework: version.framework,
+    binding: matched.binding,
+    binding_key: matched.binding_key
+  };
+};
+
+const decodeBase64Payload = (value: string): Buffer => {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error('image_base64 is required.');
+  }
+
+  try {
+    const decoded = Buffer.from(normalized, 'base64');
+    if (decoded.length === 0) {
+      throw new Error('image_base64 decoded to empty payload.');
+    }
+    return decoded;
+  } catch {
+    throw new Error('image_base64 must be valid base64.');
+  }
+};
+
+const deriveAesKeyFromSecret = (secret: string): Buffer =>
+  createHash('sha256').update(secret).digest();
+
+const encryptPayloadAesGcm = (
+  payload: Buffer,
+  encryptionKey: string
+): {
+  iv_base64: string;
+  tag_base64: string;
+  ciphertext_base64: string;
+} => {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', deriveAesKeyFromSecret(encryptionKey), iv);
+  const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    iv_base64: iv.toString('base64'),
+    tag_base64: tag.toString('base64'),
+    ciphertext_base64: encrypted.toString('base64')
+  };
+};
 
 const normalizeLlmConfig = (input: Partial<LlmConfig>): LlmConfig => {
   const safeTempRaw =
@@ -713,6 +976,10 @@ const normalizeRuntimeFrameworkConfig = (
       last_used_at:
         normalizeIsoDate(policyEntry?.last_used_at) ??
         normalizeIsoDate(fallbackPolicy?.last_used_at) ??
+        null,
+      issued_at:
+        normalizeIsoDate(policyEntry?.issued_at) ??
+        normalizeIsoDate(fallbackPolicy?.issued_at) ??
         null
     };
   }
@@ -7674,6 +7941,164 @@ const selectTrainingWorkerForJob = (
   };
 };
 
+const selectControlPlaneExecutionForJob = (options?: {
+  trigger?: string;
+  attempt?: number;
+  note?: string;
+  fallbackReason?: string | null;
+  excludedWorkerIds?: ReadonlySet<string>;
+}): TrainingWorkerSchedulingSelection => {
+  const decidedAt = now();
+  const note = options?.note?.trim() || 'scheduler_forced:control_plane';
+  const excludedWorkerIdList = options?.excludedWorkerIds ? Array.from(options.excludedWorkerIds) : [];
+  return {
+    execution_target: 'control_plane',
+    worker: null,
+    note,
+    decision: buildTrainingSchedulerDecision({
+      trigger: options?.trigger ?? 'schedule',
+      attempt: options?.attempt ?? 1,
+      executionTarget: 'control_plane',
+      selected: null,
+      note,
+      fallbackReason: options?.fallbackReason ?? null,
+      excludedWorkerIds: excludedWorkerIdList,
+      decidedAt
+    })
+  };
+};
+
+const selectSpecificWorkerExecutionForJob = (
+  taskType: TaskType,
+  framework: ModelFramework,
+  workerId: string,
+  options?: {
+    trigger?: string;
+    attempt?: number;
+    notePrefix?: string;
+  }
+): TrainingWorkerSchedulingSelection => {
+  const normalizedWorkerId = workerId.trim();
+  if (!normalizedWorkerId) {
+    throw new Error('worker_id is required when forcing worker dispatch.');
+  }
+
+  const worker = trainingWorkerNodes.find((item) => item.id === normalizedWorkerId) ?? null;
+  if (!worker) {
+    throw new Error(`Selected worker not found: ${normalizedWorkerId}.`);
+  }
+  if (!worker.enabled) {
+    throw new Error(`Selected worker is disabled: ${normalizedWorkerId}.`);
+  }
+  if (!worker.endpoint) {
+    throw new Error(`Selected worker endpoint is not configured: ${normalizedWorkerId}.`);
+  }
+
+  const nowMs = Date.now();
+  const effectiveStatus = resolveWorkerEffectiveStatus(worker, nowMs);
+  if (effectiveStatus !== 'online') {
+    throw new Error(`Selected worker is not online: ${normalizedWorkerId} (${effectiveStatus}).`);
+  }
+  if (!workerSupportsJob(worker, taskType, framework)) {
+    throw new Error(`Selected worker does not support this task/framework: ${normalizedWorkerId}.`);
+  }
+  const inFlight = getWorkerInFlightJobs(worker.id);
+  if (inFlight >= Math.max(1, worker.max_concurrency)) {
+    throw new Error(`Selected worker is at max concurrency: ${normalizedWorkerId}.`);
+  }
+
+  const load = computeWorkerLoadScore(worker);
+  const capabilityBonus = computeWorkerCapabilityAffinity(worker, taskType, framework);
+  const healthPenalty = computeWorkerHealthPenalty(worker.id, nowMs);
+  const score = Number(Math.max(0, load + healthPenalty - capabilityBonus).toFixed(4));
+  const note =
+    `${options?.notePrefix?.trim() || 'scheduler_forced_worker'}:${worker.id};` +
+    `score=${score};load=${load};penalty=${healthPenalty};capability_bonus=${capabilityBonus};` +
+    `in_flight=${inFlight};max=${worker.max_concurrency}`;
+  const selected: TrainingWorkerSchedulingCandidate = {
+    worker,
+    score,
+    load,
+    inFlight,
+    capabilityBonus,
+    healthPenalty
+  };
+
+  return {
+    execution_target: 'worker',
+    worker,
+    note,
+    decision: buildTrainingSchedulerDecision({
+      trigger: options?.trigger ?? 'schedule',
+      attempt: options?.attempt ?? 1,
+      executionTarget: 'worker',
+      selected,
+      note,
+      fallbackReason: null,
+      excludedWorkerIds: [],
+      decidedAt: now()
+    })
+  };
+};
+
+const resolveRequestedTrainingScheduling = (params: {
+  taskType: TaskType;
+  framework: ModelFramework;
+  requestedExecutionTarget?: TrainingJobRecord['execution_target'];
+  requestedWorkerId?: string;
+  defaultTrigger: 'create' | 'retry';
+}): {
+  requestedExecutionTarget?: TrainingJobRecord['execution_target'];
+  requestedWorkerId: string;
+  scheduling: TrainingWorkerSchedulingSelection;
+} => {
+  const requestedExecutionTarget = params.requestedExecutionTarget;
+  const requestedWorkerId = params.requestedWorkerId?.trim() ?? '';
+
+  const scheduling =
+    requestedExecutionTarget === 'control_plane'
+      ? selectControlPlaneExecutionForJob({
+          trigger: `${params.defaultTrigger}_manual_control_plane`,
+          attempt: 1,
+          note: 'scheduler_forced:control_plane',
+          fallbackReason: 'forced_control_plane'
+        })
+      : requestedWorkerId
+        ? selectSpecificWorkerExecutionForJob(
+            params.taskType,
+            params.framework,
+            requestedWorkerId,
+            {
+              trigger: `${params.defaultTrigger}_manual_worker`,
+              attempt: 1,
+              notePrefix: 'scheduler_forced_worker'
+            }
+          )
+        : requestedExecutionTarget === 'worker'
+          ? (() => {
+              const workerScheduling = selectTrainingWorkerForJob(params.taskType, params.framework, {
+                trigger: `${params.defaultTrigger}_forced_worker`,
+                attempt: 1
+              });
+              if (workerScheduling.execution_target !== 'worker' || !workerScheduling.worker) {
+                throw new Error(
+                  'Worker execution was requested but no eligible online worker is available.'
+                );
+              }
+              return workerScheduling;
+            })()
+          : selectTrainingWorkerForJob(params.taskType, params.framework, {
+              trigger: params.defaultTrigger,
+              attempt: 1
+            });
+
+  return {
+    requestedExecutionTarget,
+    requestedWorkerId,
+    scheduling
+  };
+};
+
 const resolveDispatchRetryDelayMs = (attemptIndex: number): number => {
   if (trainingWorkerDispatchRetryBaseMs <= 0) {
     return 0;
@@ -12112,9 +12537,16 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     throw new Error(validation.warnings[0] ?? 'Dataset validation failed for selected framework.');
   }
 
-  const scheduling = selectTrainingWorkerForJob(input.task_type, input.framework, {
-    trigger: 'create',
-    attempt: 1
+  const {
+    requestedExecutionTarget,
+    requestedWorkerId,
+    scheduling
+  } = resolveRequestedTrainingScheduling({
+    taskType: input.task_type,
+    framework: input.framework,
+    requestedExecutionTarget: input.execution_target,
+    requestedWorkerId: input.worker_id,
+    defaultTrigger: 'create'
   });
 
   const created: TrainingJobRecord = {
@@ -12152,6 +12584,8 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     framework: created.framework,
     task_type: created.task_type,
     dataset_version_id: created.dataset_version_id ?? '',
+    requested_execution_target: requestedExecutionTarget ?? '',
+    requested_worker_id: requestedWorkerId,
     execution_target: created.execution_target,
     scheduled_worker_id: created.scheduled_worker_id ?? '',
     scheduler_note: created.scheduler_note ?? '',
@@ -12348,7 +12782,10 @@ export async function cancelTrainingJob(jobId: string): Promise<TrainingJobRecor
   return job;
 }
 
-export async function retryTrainingJob(jobId: string): Promise<TrainingJobRecord> {
+export async function retryTrainingJob(
+  jobId: string,
+  input: RetryTrainingJobInput = {}
+): Promise<TrainingJobRecord> {
   await delay(100);
   const currentUser = findCurrentUser();
 
@@ -12375,9 +12812,16 @@ export async function retryTrainingJob(jobId: string): Promise<TrainingJobRecord
     trainingWorkerDispatchAbortByJobId.delete(job.id);
   }
 
-  const scheduling = selectTrainingWorkerForJob(job.task_type, job.framework, {
-    trigger: 'retry',
-    attempt: 1
+  const {
+    requestedExecutionTarget,
+    requestedWorkerId,
+    scheduling
+  } = resolveRequestedTrainingScheduling({
+    taskType: job.task_type,
+    framework: job.framework,
+    requestedExecutionTarget: input.execution_target,
+    requestedWorkerId: input.worker_id,
+    defaultTrigger: 'retry'
   });
   job.status = 'queued';
   job.execution_mode = 'unknown';
@@ -12387,7 +12831,15 @@ export async function retryTrainingJob(jobId: string): Promise<TrainingJobRecord
   recordTrainingSchedulerDecision(job, scheduling.decision);
   job.log_excerpt = 'Retry requested. Re-queueing with scheduler.';
   job.updated_at = now();
-  logAudit('training_job_retried', 'TrainingJob', job.id);
+  logAudit('training_job_retried', 'TrainingJob', job.id, {
+    requested_execution_target: requestedExecutionTarget ?? '',
+    requested_worker_id: requestedWorkerId,
+    execution_target: job.execution_target,
+    scheduled_worker_id: job.scheduled_worker_id ?? '',
+    scheduler_note: job.scheduler_note ?? '',
+    scheduler_decision_trigger: job.scheduler_decision?.trigger ?? '',
+    scheduler_decision_attempt: String(job.scheduler_decision?.attempt ?? '')
+  });
   scheduleTrainingLifecycle(job.id);
   return job;
 }
@@ -12434,12 +12886,27 @@ export async function registerModelVersion(
   const artifactMode = toOptionalTrimmedString(artifactSummary?.mode)?.toLowerCase() ?? null;
   const artifactFallbackReason = toOptionalTrimmedString(artifactSummary?.fallback_reason);
   const artifactTrainingPerformed = artifactSummary?.training_performed ?? null;
+  const artifactSampledItems =
+    typeof artifactSummary?.sampled_items === 'number' && Number.isFinite(artifactSummary.sampled_items)
+      ? artifactSummary.sampled_items
+      : null;
+  const realProbeEvidenceAccepted =
+    artifactMode === 'real_probe' && !artifactFallbackReason && (artifactSampledItems ?? 0) > 0;
   const localExecutionLooksNonReal =
-    artifactMode === 'template' ||
-    Boolean(artifactFallbackReason) ||
-    artifactTrainingPerformed === false;
+    !realProbeEvidenceAccepted &&
+    (artifactMode === 'template' || Boolean(artifactFallbackReason) || artifactTrainingPerformed === false);
+  const ocrRealProbeRegistrationOverrideRequested =
+    input.allow_ocr_real_probe_registration === true && job.task_type === 'ocr';
+  const localExecutionGateExempted =
+    localExecutionLooksNonReal &&
+    (allowNonRealLocalCommandModelVersionRegistration || ocrRealProbeRegistrationOverrideRequested);
+  const localExecutionExemptionReason = !localExecutionGateExempted
+    ? null
+    : allowNonRealLocalCommandModelVersionRegistration
+      ? 'env:MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND'
+      : 'request:allow_ocr_real_probe_registration';
 
-  if (localExecutionLooksNonReal && !allowNonRealLocalCommandModelVersionRegistration) {
+  if (localExecutionLooksNonReal && !localExecutionGateExempted) {
     const modeLabel = artifactMode ?? 'unknown';
     const fallbackLabel = artifactFallbackReason ?? 'none';
     const trainingPerformedLabel =
@@ -12471,6 +12938,13 @@ export async function registerModelVersion(
     status: 'registered',
     metrics_summary: metricsSummary,
     artifact_attachment_id: artifactAttachment.id,
+    registration_evidence_mode: localExecutionLooksNonReal
+      ? 'non_real_local_command'
+      : realProbeEvidenceAccepted
+        ? 'real_probe'
+        : 'real',
+    registration_gate_exempted: localExecutionGateExempted,
+    registration_gate_exemption_reason: localExecutionExemptionReason,
     created_by: currentUser.id,
     created_at: now()
   };
@@ -12478,7 +12952,10 @@ export async function registerModelVersion(
   modelVersions.unshift(version);
   logAudit('model_version_registered', 'ModelVersion', version.id, {
     model_id: model.id,
-    training_job_id: job.id
+    training_job_id: job.id,
+    registration_evidence_mode: version.registration_evidence_mode ?? 'unknown',
+    registration_gate_exempted: version.registration_gate_exempted ? 'true' : 'false',
+    registration_gate_exemption_reason: version.registration_gate_exemption_reason ?? ''
   });
 
   return version;
@@ -12572,6 +13049,248 @@ export async function runInference(input: RunInferenceInput): Promise<InferenceR
     task_type: created.task_type
   });
   return created;
+}
+
+const resolveModelVersionDeliverablePath = async (
+  version: ModelVersionRecord
+): Promise<{ filePath: string; filename: string } | null> => {
+  if (!version.artifact_attachment_id) {
+    return null;
+  }
+  const attachment = attachments.find((item) => item.id === version.artifact_attachment_id);
+  if (!attachment || attachment.status !== 'ready') {
+    return null;
+  }
+
+  const primaryPath = await resolvePrimaryModelPathFromArtifactAttachment(attachment);
+  if (primaryPath) {
+    return {
+      filePath: primaryPath,
+      filename: path.basename(primaryPath)
+    };
+  }
+
+  const stored = await findStoredAttachmentBinary(attachment);
+  if (!stored) {
+    return null;
+  }
+  return {
+    filePath: stored.file_path,
+    filename: attachment.filename
+  };
+};
+
+const recordRuntimePublicInferenceInvocation = (
+  input: Omit<RuntimePublicInferenceInvocationRecord, 'id'>
+): RuntimePublicInferenceInvocationRecord => {
+  const record: RuntimePublicInferenceInvocationRecord = {
+    ...input,
+    id: input.request_id
+  };
+  runtimePublicInferenceInvocations.unshift(record);
+  markAppStateDirty();
+  return record;
+};
+
+const recordRuntimePublicModelPackageDelivery = (
+  input: Omit<RuntimePublicModelPackageDeliveryRecord, 'id'>
+): RuntimePublicModelPackageDeliveryRecord => {
+  const record: RuntimePublicModelPackageDeliveryRecord = {
+    ...input,
+    id: input.delivery_id
+  };
+  runtimePublicModelPackageDeliveries.unshift(record);
+  markAppStateDirty();
+  return record;
+};
+
+export async function runPublicRuntimeInference(
+  input: PublicRuntimeInferenceInput,
+  bearerToken: string | null | undefined
+): Promise<PublicRuntimeInferenceResult> {
+  await delay(60);
+  const versionId = input.model_version_id.trim();
+  const version = modelVersions.find((item) => item.id === versionId);
+  if (!version) {
+    throw new Error('Model version not found.');
+  }
+  if (version.status !== 'registered') {
+    throw new Error('Model version is not registered.');
+  }
+
+  const model = models.find((item) => item.id === version.model_id);
+  if (!model) {
+    throw new Error('Model not found for selected model version.');
+  }
+
+  const access = await resolveRuntimePublicApiKeyAccess(version, bearerToken ?? '');
+
+  const taskType = (input.task_type ?? version.task_type) as TaskType;
+  if (taskType !== version.task_type) {
+    throw new Error('task_type does not match selected model version task_type.');
+  }
+
+  const imagePayload = decodeBase64Payload(input.image_base64);
+  if (imagePayload.byteLength > publicRuntimeInferenceMaxBytes) {
+    throw new Error(
+      `image payload exceeds PUBLIC_RUNTIME_INFERENCE_MAX_BYTES (${imagePayload.byteLength} > ${publicRuntimeInferenceMaxBytes}).`
+    );
+  }
+
+  const filename = sanitizeFilename((input.filename ?? '').trim() || `public-input-${Date.now()}.bin`);
+  const mimeType = (input.mime_type ?? '').trim() || guessMimeType(filename);
+  const requestId = nextId('pubir');
+  await fs.mkdir(publicRuntimeInputStorageRoot, { recursive: true });
+  const inputPath = path.join(publicRuntimeInputStorageRoot, `${requestId}__${filename}`);
+  await fs.writeFile(inputPath, imagePayload);
+
+  try {
+    const trainer = getTrainerByFramework(version.framework);
+    const modelArtifactPath = await resolveModelVersionArtifactModelPath(version);
+    const prediction = await trainer.predict({
+      modelId: model.id,
+      modelVersionId: version.id,
+      inputAttachmentId: `${requestId}::inline`,
+      filename,
+      taskType,
+      inputMimeType: mimeType,
+      inputByteSize: imagePayload.byteLength,
+      inputStoragePath: inputPath,
+      modelArtifactPath
+    });
+
+    const executionSource = resolvePredictionExecutionSource(prediction);
+    recordRuntimePublicInferenceInvocation({
+      request_id: requestId,
+      model_id: model.id,
+      model_version_id: version.id,
+      framework: version.framework,
+      task_type: taskType,
+      runtime_auth_binding: access.binding,
+      runtime_auth_binding_key: access.binding_key,
+      execution_source: executionSource,
+      filename,
+      mime_type: mimeType,
+      input_byte_size: imagePayload.byteLength,
+      created_at: now()
+    });
+    logAudit('runtime_public_inference_invoked', 'ModelVersion', version.id, {
+      request_id: requestId,
+      framework: version.framework,
+      task_type: taskType,
+      runtime_auth_binding: access.binding,
+      runtime_auth_binding_key: access.binding_key,
+      execution_source: executionSource
+    });
+
+    return {
+      request_id: requestId,
+      model_id: model.id,
+      model_version_id: version.id,
+      framework: version.framework,
+      task_type: taskType,
+      execution_source: executionSource,
+      runtime_auth_binding: access.binding,
+      runtime_auth_binding_key: access.binding_key,
+      raw_output: prediction.raw_output,
+      normalized_output: prediction
+    };
+  } finally {
+    try {
+      await fs.unlink(inputPath);
+    } catch {
+      // ignore temp cleanup errors
+    }
+  }
+}
+
+export async function downloadEncryptedModelPackageByRuntimeApiKey(
+  input: PublicEncryptedModelPackageInput,
+  bearerToken: string | null | undefined
+): Promise<PublicEncryptedModelPackageResult> {
+  await delay(60);
+  const versionId = input.model_version_id.trim();
+  const version = modelVersions.find((item) => item.id === versionId);
+  if (!version) {
+    throw new Error('Model version not found.');
+  }
+  if (version.status !== 'registered') {
+    throw new Error('Model version is not registered.');
+  }
+
+  const model = models.find((item) => item.id === version.model_id);
+  if (!model) {
+    throw new Error('Model not found for selected model version.');
+  }
+
+  const access = await resolveRuntimePublicApiKeyAccess(version, bearerToken ?? '');
+  const deliverable = await resolveModelVersionDeliverablePath(version);
+  if (!deliverable) {
+    throw new Error('Model artifact file is unavailable for this model version.');
+  }
+
+  const content = await fs.readFile(deliverable.filePath);
+  if (content.byteLength > publicModelPackageMaxBytes) {
+    throw new Error(
+      `model package exceeds PUBLIC_MODEL_PACKAGE_MAX_BYTES (${content.byteLength} > ${publicModelPackageMaxBytes}).`
+    );
+  }
+
+  const encryptionKey = (input.encryption_key ?? '').trim() || defaultModelDeliveryEncryptionKey;
+  if (!encryptionKey) {
+    throw new Error(
+      'encryption_key is required (or set MODEL_DELIVERY_ENCRYPTION_KEY on control plane).'
+    );
+  }
+  if (encryptionKey.length < 8) {
+    throw new Error('encryption_key is too short. Minimum length is 8 characters.');
+  }
+
+  const encrypted = encryptPayloadAesGcm(content, encryptionKey);
+  const deliveryId = nextId('pubpkg');
+  const generatedAt = now();
+
+  recordRuntimePublicModelPackageDelivery({
+    delivery_id: deliveryId,
+    model_id: model.id,
+    model_version_id: version.id,
+    framework: version.framework,
+    task_type: version.task_type,
+    runtime_auth_binding: access.binding,
+    runtime_auth_binding_key: access.binding_key,
+    source_filename: deliverable.filename,
+    source_byte_size: content.byteLength,
+    generated_at: generatedAt
+  });
+  logAudit('runtime_public_model_package_downloaded', 'ModelVersion', version.id, {
+    delivery_id: deliveryId,
+    framework: version.framework,
+    task_type: version.task_type,
+    runtime_auth_binding: access.binding,
+    runtime_auth_binding_key: access.binding_key,
+    source_filename: deliverable.filename,
+    source_bytes: String(content.byteLength)
+  });
+
+  return {
+    delivery_id: deliveryId,
+    model_id: model.id,
+    model_version_id: version.id,
+    framework: version.framework,
+    task_type: version.task_type,
+    runtime_auth_binding: access.binding,
+    runtime_auth_binding_key: access.binding_key,
+    source_filename: deliverable.filename,
+    source_byte_size: content.byteLength,
+    generated_at: generatedAt,
+    encryption: {
+      algorithm: 'aes-256-gcm',
+      kdf: 'sha256',
+      iv_base64: encrypted.iv_base64,
+      tag_base64: encrypted.tag_base64,
+      ciphertext_base64: encrypted.ciphertext_base64
+    }
+  };
 }
 
 export async function getInferenceRun(runId: string): Promise<InferenceRunRecord> {
@@ -13246,6 +13965,8 @@ export async function saveRuntimeSettings(input: {
           : reusedUsedCalls;
       const resolvedLastUsedAt =
         canReuseCounters && previousPolicy.last_used_at ? previousPolicy.last_used_at : null;
+      const resolvedIssuedAt =
+        canReuseCounters && previousPolicy?.issued_at ? previousPolicy.issued_at : null;
 
       mergedModelApiKeys[bindingKey] = resolvedKey;
       mergedModelApiKeyPolicies[bindingKey] = {
@@ -13253,7 +13974,8 @@ export async function saveRuntimeSettings(input: {
         expires_at: resolvedExpiresAt,
         max_calls: resolvedMaxCalls,
         used_calls: resolvedUsedCalls,
-        last_used_at: resolvedLastUsedAt
+        last_used_at: resolvedLastUsedAt,
+        issued_at: resolvedIssuedAt
       };
     }
 
@@ -13530,7 +14252,8 @@ export async function rotateRuntimeApiKey(input: {
       expires_at: previousPolicy?.expires_at ?? null,
       max_calls: previousPolicy?.max_calls ?? null,
       used_calls: 0,
-      last_used_at: null
+      last_used_at: null,
+      issued_at: now()
     };
 
     runtimeSettings.frameworks[framework] = normalizeRuntimeFrameworkConfig(
@@ -13564,6 +14287,313 @@ export async function rotateRuntimeApiKey(input: {
     api_key: generatedKey,
     settings: getCurrentRuntimeSettingsView()
   };
+}
+
+const resolveRuntimePublicBaseUrl = (): string => {
+  const explicit = (process.env.PUBLIC_RUNTIME_BASE_URL ?? '').trim();
+  if (explicit) {
+    return explicit.replace(/\/+$/g, '');
+  }
+  const host = (process.env.API_HOST ?? '127.0.0.1').trim() || '127.0.0.1';
+  const port = (process.env.API_PORT ?? '8787').trim() || '8787';
+  return `http://${host}:${port}`;
+};
+
+const buildRuntimeDeviceAccessRecord = (
+  version: ModelVersionRecord,
+  bindingKey: string
+): RuntimeDeviceAccessRecord => {
+  const frameworkConfig = runtimeSettings.frameworks[version.framework];
+  const metaByBinding = buildRuntimeModelApiKeysMeta(
+    frameworkConfig.model_api_keys,
+    frameworkConfig.model_api_key_policies
+  );
+  const meta = metaByBinding[bindingKey];
+  const fallbackMasked = maskApiKey(
+    (
+      frameworkConfig.model_api_key_policies[bindingKey]?.api_key ??
+      frameworkConfig.model_api_keys[bindingKey] ??
+      ''
+    ).trim()
+  );
+  const fallbackName = parseRuntimeDeviceNameFromBindingKey(bindingKey) ?? bindingKey;
+
+  return {
+    binding_key: bindingKey,
+    model_version_id: version.id,
+    model_id: version.model_id,
+    framework: version.framework,
+    task_type: version.task_type,
+    device_name: fallbackName,
+    has_api_key: meta?.has_api_key ?? false,
+    api_key_masked: meta?.api_key_masked ?? fallbackMasked,
+    expires_at: meta?.expires_at ?? null,
+    expires_status: meta?.expires_status ?? 'none',
+    expires_in_days: meta?.expires_in_days ?? null,
+    max_calls: meta?.max_calls ?? null,
+    used_calls: meta?.used_calls ?? 0,
+    remaining_calls: meta?.remaining_calls ?? null,
+    is_expired: meta?.is_expired ?? false,
+    issued_at:
+      runtimeSettings.frameworks[version.framework].model_api_key_policies[bindingKey]?.issued_at ?? null,
+    last_used_at: runtimeSettings.frameworks[version.framework].model_api_key_policies[bindingKey]?.last_used_at ?? null
+  };
+};
+
+const buildRuntimeDeviceAccessSnippets = (
+  version: ModelVersionRecord,
+  apiKey: string
+): RuntimeDeviceAccessSnippetBundle => {
+  const baseUrl = resolveRuntimePublicBaseUrl();
+  const inferenceEndpoint = `${baseUrl}/api/runtime/public/inference`;
+  const modelPackageEndpoint = `${baseUrl}/api/runtime/public/model-package`;
+  const sampleInferenceCurl =
+    `curl -X POST '${inferenceEndpoint}' \\\n` +
+    `  -H 'Authorization: Bearer ${apiKey}' \\\n` +
+    `  -H 'Content-Type: application/json' \\\n` +
+    `  -d '{\"model_version_id\":\"${version.id}\",\"task_type\":\"${version.task_type}\",\"filename\":\"device-input.jpg\",\"mime_type\":\"image/jpeg\",\"image_base64\":\"<base64_image>\"}'`;
+  const sampleModelPackageCurl =
+    `curl -X POST '${modelPackageEndpoint}' \\\n` +
+    `  -H 'Authorization: Bearer ${apiKey}' \\\n` +
+    `  -H 'Content-Type: application/json' \\\n` +
+    `  -d '{\"model_version_id\":\"${version.id}\",\"encryption_key\":\"<device_side_secret>\"}'`;
+
+  return {
+    inference_endpoint: inferenceEndpoint,
+    model_package_endpoint: modelPackageEndpoint,
+    sample_inference_curl: sampleInferenceCurl,
+    sample_model_package_curl: sampleModelPackageCurl
+  };
+};
+
+const resolveRuntimeDeviceBindingKey = (version: ModelVersionRecord, deviceName: string): string => {
+  const normalizedDeviceName = sanitizeRuntimeDeviceName(deviceName);
+  if (!normalizedDeviceName) {
+    throw new Error('device_name must contain at least one letter or number.');
+  }
+  const suffix = randomBytes(4).toString('hex');
+  return `${buildRuntimeModelVersionDeviceBindingPrefix(version.id)}${normalizedDeviceName}-${suffix}`;
+};
+
+const assertRuntimeDeviceAccessManagePermission = (user: User): void => {
+  if (!canManageModels(user)) {
+    throw new Error('Current account cannot manage model runtime authorization.');
+  }
+};
+
+const listRuntimeDeviceBindingKeys = (
+  version: ModelVersionRecord
+): string[] => {
+  const frameworkConfig = runtimeSettings.frameworks[version.framework];
+  const prefix = buildRuntimeModelVersionDeviceBindingPrefix(version.id);
+  return Object.keys(frameworkConfig.model_api_key_policies)
+    .filter((bindingKey) => bindingKey.startsWith(prefix))
+    .sort();
+};
+
+const normalizeRuntimePolicyExpiresAt = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error('expires_at must be a valid ISO datetime when provided.');
+  }
+  return new Date(parsed).toISOString();
+};
+
+const normalizeRuntimePolicyMaxCalls = (value: number | null | undefined): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error('max_calls must be a finite number when provided.');
+  }
+  const normalized = Math.floor(value);
+  if (normalized < 1) {
+    throw new Error('max_calls must be >= 1 when provided.');
+  }
+  return normalized;
+};
+
+const assertDeviceBindingKeyBelongsToVersion = (
+  version: ModelVersionRecord,
+  bindingKey: string
+): void => {
+  const normalized = bindingKey.trim();
+  if (!normalized) {
+    throw new Error('binding_key is required.');
+  }
+  if (!isRuntimeModelVersionBindingKey(normalized)) {
+    throw new Error('binding_key format is invalid.');
+  }
+  const expectedPrefix = buildRuntimeModelVersionDeviceBindingPrefix(version.id);
+  if (!normalized.startsWith(expectedPrefix)) {
+    throw new Error('binding_key does not belong to selected model_version_id.');
+  }
+};
+
+export async function listRuntimeDeviceAccess(modelVersionId: string): Promise<RuntimeDeviceAccessRecord[]> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertRuntimeDeviceAccessManagePermission(currentUser);
+  const version = assertModelVersionAccess(modelVersionId.trim(), currentUser);
+
+  return listRuntimeDeviceBindingKeys(version).map((bindingKey) =>
+    buildRuntimeDeviceAccessRecord(version, bindingKey)
+  );
+}
+
+export async function getRuntimeDeviceLifecycle(
+  modelVersionId: string
+): Promise<RuntimeDeviceLifecycleSnapshot> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertRuntimeDeviceAccessManagePermission(currentUser);
+  const version = assertModelVersionAccess(modelVersionId.trim(), currentUser);
+
+  return {
+    model_version_id: version.id,
+    public_inference_invocations: runtimePublicInferenceInvocations
+      .filter((record) => record.model_version_id === version.id)
+      .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+      .slice(0, 12),
+    model_package_deliveries: runtimePublicModelPackageDeliveries
+      .filter((record) => record.model_version_id === version.id)
+      .sort((left, right) => Date.parse(right.generated_at) - Date.parse(left.generated_at))
+      .slice(0, 12)
+  };
+}
+
+export async function issueRuntimeDeviceAccess(
+  input: RuntimeDeviceAccessIssueInput
+): Promise<RuntimeDeviceAccessIssueResult> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertRuntimeDeviceAccessManagePermission(currentUser);
+  const version = assertModelVersionAccess(input.model_version_id.trim(), currentUser);
+  const frameworkConfig = runtimeSettings.frameworks[version.framework];
+  if (!frameworkConfig) {
+    throw new Error('Runtime framework config not found for selected model version.');
+  }
+
+  const bindingKey = resolveRuntimeDeviceBindingKey(version, input.device_name);
+  const expiresAt = normalizeRuntimePolicyExpiresAt(input.expires_at ?? null);
+  const maxCalls = normalizeRuntimePolicyMaxCalls(input.max_calls ?? null);
+  const apiKey = `vsk_${randomBytes(24).toString('base64url')}`;
+
+  frameworkConfig.model_api_keys[bindingKey] = apiKey;
+  frameworkConfig.model_api_key_policies[bindingKey] = {
+    api_key: apiKey,
+    expires_at: expiresAt,
+    max_calls: maxCalls,
+    used_calls: 0,
+    last_used_at: null,
+    issued_at: now()
+  };
+  runtimeSettings.active_profile_id = 'saved';
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  const record = buildRuntimeDeviceAccessRecord(version, bindingKey);
+  const snippets = buildRuntimeDeviceAccessSnippets(version, apiKey);
+  logAudit('runtime_device_access_issued', 'ModelVersion', version.id, {
+    binding_key: bindingKey,
+    framework: version.framework,
+    task_type: version.task_type,
+    issued_by: currentUser.id
+  });
+
+  return {
+    record,
+    api_key: apiKey,
+    snippets
+  };
+}
+
+export async function rotateRuntimeDeviceAccess(
+  input: RuntimeDeviceAccessRotateInput
+): Promise<RuntimeDeviceAccessIssueResult> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertRuntimeDeviceAccessManagePermission(currentUser);
+  const version = assertModelVersionAccess(input.model_version_id.trim(), currentUser);
+  const frameworkConfig = runtimeSettings.frameworks[version.framework];
+  if (!frameworkConfig) {
+    throw new Error('Runtime framework config not found for selected model version.');
+  }
+
+  const bindingKey = input.binding_key.trim();
+  assertDeviceBindingKeyBelongsToVersion(version, bindingKey);
+  const currentPolicy = frameworkConfig.model_api_key_policies[bindingKey];
+  if (!currentPolicy) {
+    throw new Error('Device runtime authorization binding was not found.');
+  }
+
+  const apiKey = `vsk_${randomBytes(24).toString('base64url')}`;
+  frameworkConfig.model_api_keys[bindingKey] = apiKey;
+  frameworkConfig.model_api_key_policies[bindingKey] = {
+    api_key: apiKey,
+    expires_at: currentPolicy.expires_at ?? null,
+    max_calls:
+      typeof currentPolicy.max_calls === 'number' && Number.isFinite(currentPolicy.max_calls)
+        ? Math.max(0, Math.floor(currentPolicy.max_calls))
+        : null,
+    used_calls: 0,
+    last_used_at: null,
+    issued_at: now()
+  };
+  runtimeSettings.active_profile_id = 'saved';
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  const record = buildRuntimeDeviceAccessRecord(version, bindingKey);
+  const snippets = buildRuntimeDeviceAccessSnippets(version, apiKey);
+  logAudit('runtime_device_access_rotated', 'ModelVersion', version.id, {
+    binding_key: bindingKey,
+    framework: version.framework,
+    task_type: version.task_type,
+    rotated_by: currentUser.id
+  });
+
+  return {
+    record,
+    api_key: apiKey,
+    snippets
+  };
+}
+
+export async function revokeRuntimeDeviceAccess(
+  input: RuntimeDeviceAccessRevokeInput
+): Promise<RuntimeDeviceAccessRecord[]> {
+  await delay(60);
+  const currentUser = findCurrentUser();
+  assertRuntimeDeviceAccessManagePermission(currentUser);
+  const version = assertModelVersionAccess(input.model_version_id.trim(), currentUser);
+  const frameworkConfig = runtimeSettings.frameworks[version.framework];
+  if (!frameworkConfig) {
+    throw new Error('Runtime framework config not found for selected model version.');
+  }
+
+  const bindingKey = input.binding_key.trim();
+  assertDeviceBindingKeyBelongsToVersion(version, bindingKey);
+  delete frameworkConfig.model_api_keys[bindingKey];
+  delete frameworkConfig.model_api_key_policies[bindingKey];
+
+  runtimeSettings.active_profile_id = 'saved';
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  logAudit('runtime_device_access_revoked', 'ModelVersion', version.id, {
+    binding_key: bindingKey,
+    framework: version.framework,
+    task_type: version.task_type,
+    revoked_by: currentUser.id
+  });
+
+  return listRuntimeDeviceBindingKeys(version).map((nextBindingKey) =>
+    buildRuntimeDeviceAccessRecord(version, nextBindingKey)
+  );
 }
 
 export async function submitApprovalRequest(

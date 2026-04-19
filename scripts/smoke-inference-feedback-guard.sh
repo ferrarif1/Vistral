@@ -12,6 +12,7 @@ EXPECTED_VALID_FEEDBACK_DATASET_ID="${EXPECTED_VALID_FEEDBACK_DATASET_ID:-}"
 EXPECTED_MISMATCH_FEEDBACK_DATASET_ID="${EXPECTED_MISMATCH_FEEDBACK_DATASET_ID:-}"
 EXPECTED_OCR_FEEDBACK_DATASET_ID="${EXPECTED_OCR_FEEDBACK_DATASET_ID:-}"
 AUTO_PREPARE_FEEDBACK_DATASETS="${AUTO_PREPARE_FEEDBACK_DATASETS:-true}"
+VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE="${VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE:-0}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-inference-feedback-guard] jq is required."
@@ -38,14 +39,33 @@ BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 COOKIE_FILE="$(mktemp)"
 API_LOG="$(mktemp)"
 APP_DATA_DIR="$(mktemp -d)"
+SYNTH_IMAGE_FILE=""
 API_PID=""
+
+sample_image_file="$(
+  find "${ROOT_DIR}/demo_data" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true
+)"
+if [[ -z "${sample_image_file}" ]]; then
+  SYNTH_IMAGE_FILE="$(mktemp "${TMPDIR:-/tmp}/feedback-guard-sample.XXXXXX.png")"
+  python3 - "${SYNTH_IMAGE_FILE}" <<'PY'
+import base64
+import pathlib
+import sys
+
+payload = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7ZlN8AAAAASUVORK5CYII="
+)
+pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(payload))
+PY
+  sample_image_file="${SYNTH_IMAGE_FILE}"
+fi
 
 cleanup() {
   if [[ -n "${API_PID}" ]]; then
     kill "${API_PID}" >/dev/null 2>&1 || true
     wait "${API_PID}" >/dev/null 2>&1 || true
   fi
-  rm -f "${COOKIE_FILE}" "${API_LOG}"
+  rm -f "${COOKIE_FILE}" "${API_LOG}" "${SYNTH_IMAGE_FILE:-}"
   rm -rf "${APP_DATA_DIR}"
 }
 trap cleanup EXIT
@@ -199,6 +219,7 @@ if [[ "${START_API}" == "true" ]]; then
   APP_STATE_STORE_PATH="${APP_DATA_DIR}/app-state.json" \
   UPLOAD_STORAGE_ROOT="${APP_DATA_DIR}/uploads" \
   TRAINING_WORKDIR_ROOT="${APP_DATA_DIR}/training" \
+  VISTRAL_DISABLE_INFERENCE_FALLBACK="${VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE}" \
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
   npm run dev:api >"${API_LOG}" 2>&1 &
@@ -260,10 +281,9 @@ if [[ -z "${detection_model_version_id}" || -z "${ocr_model_version_id}" ]]; the
 fi
 
 inference_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-  -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
-  -X POST "${BASE_URL}/api/files/inference/upload" \
-  -d "{\"filename\":\"feedback-guard-input-$(date +%s).jpg\"}")"
+  -F "file=@${sample_image_file};filename=feedback-guard-input-$(date +%s).jpg" \
+  "${BASE_URL}/api/files/inference/upload")"
 input_attachment_id="$(echo "${inference_upload_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${input_attachment_id}" ]]; then
   echo "[smoke-inference-feedback-guard] failed to upload inference attachment."
@@ -451,10 +471,9 @@ if [[ -z "${reuse_dataset_id}" ]]; then
 fi
 
 reuse_attachment_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
-  -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
-  -X POST "${BASE_URL}/api/files/dataset/${reuse_dataset_id}/upload" \
-  -d "{\"filename\":\"feedback-reuse-input-$(date +%s).jpg\"}")"
+  -F "file=@${sample_image_file};filename=feedback-reuse-input-$(date +%s).jpg" \
+  "${BASE_URL}/api/files/dataset/${reuse_dataset_id}/upload")"
 reuse_attachment_id="$(echo "${reuse_attachment_resp}" | jq -r '.data.id // empty')"
 if [[ -z "${reuse_attachment_id}" ]]; then
   echo "[smoke-inference-feedback-guard] failed to upload reuse dataset attachment."

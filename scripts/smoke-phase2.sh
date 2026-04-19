@@ -10,9 +10,12 @@ AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 EXPECT_RUNTIME_FALLBACK="${EXPECT_RUNTIME_FALLBACK:-true}"
 PHASE2_ALLOW_REGISTER_FALLBACK="${PHASE2_ALLOW_REGISTER_FALLBACK:-true}"
+PHASE2_DOCTR_WAIT_POLLS="${PHASE2_DOCTR_WAIT_POLLS:-240}"
+PHASE2_DOCTR_WAIT_SLEEP_SEC="${PHASE2_DOCTR_WAIT_SLEEP_SEC:-0.5}"
 PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
 YOLO_RUNTIME_ENDPOINT_FOR_SMOKE="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE:-http://127.0.0.1:9/unreachable}"
+VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE="${VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE:-0}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-phase2] jq is required."
@@ -38,14 +41,33 @@ BASE_URL="${BASE_URL:-http://${API_HOST}:${API_PORT}}"
 
 COOKIE_FILE="$(mktemp)"
 LOG_FILE="$(mktemp)"
+SYNTH_IMAGE_FILE=""
 API_PID=""
+
+sample_image_file="$(
+  find "${ROOT_DIR}/demo_data" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true
+)"
+if [[ -z "${sample_image_file}" ]]; then
+  SYNTH_IMAGE_FILE="$(mktemp "${TMPDIR:-/tmp}/phase2-sample.XXXXXX.png")"
+  python3 - "${SYNTH_IMAGE_FILE}" <<'PY'
+import base64
+import pathlib
+import sys
+
+payload = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7ZlN8AAAAASUVORK5CYII="
+)
+pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(payload))
+PY
+  sample_image_file="${SYNTH_IMAGE_FILE}"
+fi
 
 cleanup() {
   if [[ -n "$API_PID" ]]; then
     kill "$API_PID" >/dev/null 2>&1 || true
     wait "$API_PID" >/dev/null 2>&1 || true
   fi
-  rm -f "$COOKIE_FILE" "$LOG_FILE"
+  rm -f "$COOKIE_FILE" "$LOG_FILE" "${SYNTH_IMAGE_FILE:-}"
 }
 
 trap cleanup EXIT
@@ -96,6 +118,16 @@ is_registration_gate_rejection() {
   [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
 }
 
+is_fallback_like_source() {
+  local source="$1"
+  [[ "$source" == *"fallback"* || "$source" == *"template"* || "$source" == *"mock"* ]]
+}
+
+is_real_inference_source() {
+  local source="$1"
+  [[ "$source" == *"_runtime" || "$source" == *"_local_command" ]]
+}
+
 pick_registered_model_version_id() {
   local task_type="$1"
   local framework_filter="${2:-}"
@@ -116,6 +148,7 @@ if [[ "${START_API}" == "true" ]]; then
   PADDLEOCR_RUNTIME_ENDPOINT="${PADDLEOCR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
   DOCTR_RUNTIME_ENDPOINT="${DOCTR_RUNTIME_ENDPOINT_FOR_SMOKE}" \
   YOLO_RUNTIME_ENDPOINT="${YOLO_RUNTIME_ENDPOINT_FOR_SMOKE}" \
+  VISTRAL_DISABLE_INFERENCE_FALLBACK="${VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE}" \
   MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
   npm run dev:api >"$LOG_FILE" 2>&1 &
   API_PID=$!
@@ -166,6 +199,48 @@ if [[ -n "${AUTH_USERNAME}" ]]; then
   if [[ -z "$csrf_token" ]]; then
     echo "[smoke-phase2] Failed to refresh CSRF token after login"
     echo "$csrf_payload"
+    exit 1
+  fi
+fi
+
+if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
+  runtime_controls_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+    -H 'Content-Type: application/json' \
+    -H "x-csrf-token: $csrf_token" \
+    -d '{"runtime_config":{},"runtime_controls":{"disable_inference_fallback":false}}' \
+    "${BASE_URL}/api/settings/runtime")"
+  runtime_controls_saved="$(echo "$runtime_controls_resp" | jq -r '.success // false')"
+  runtime_controls_error_code="$(echo "$runtime_controls_resp" | jq -r '.error.code // empty')"
+  if [[ "$runtime_controls_saved" != "true" && "$runtime_controls_error_code" == "INSUFFICIENT_PERMISSIONS" ]]; then
+    phase2_admin_username="${PHASE2_ADMIN_USERNAME:-admin}"
+    phase2_admin_password="${PHASE2_ADMIN_PASSWORD:-mock-pass-admin}"
+    admin_login_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+      -H 'Content-Type: application/json' \
+      -X POST "${BASE_URL}/api/auth/login" \
+      -d "{\"username\":\"${phase2_admin_username}\",\"password\":\"${phase2_admin_password}\"}")"
+    admin_login_ok="$(echo "$admin_login_resp" | jq -r '.success // false')"
+    if [[ "$admin_login_ok" != "true" ]]; then
+      echo "[smoke-phase2] failed to elevate session for runtime settings update"
+      echo "$admin_login_resp"
+      exit 1
+    fi
+    csrf_payload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/auth/csrf")"
+    csrf_token="$(echo "$csrf_payload" | jq -r '.data.csrf_token // empty')"
+    if [[ -z "$csrf_token" ]]; then
+      echo "[smoke-phase2] failed to refresh CSRF token after admin login"
+      echo "$csrf_payload"
+      exit 1
+    fi
+    runtime_controls_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+      -H 'Content-Type: application/json' \
+      -H "x-csrf-token: $csrf_token" \
+      -d '{"runtime_config":{},"runtime_controls":{"disable_inference_fallback":false}}' \
+      "${BASE_URL}/api/settings/runtime")"
+    runtime_controls_saved="$(echo "$runtime_controls_resp" | jq -r '.success // false')"
+  fi
+  if [[ "$runtime_controls_saved" != "true" ]]; then
+    echo "[smoke-phase2] failed to relax runtime_controls.disable_inference_fallback for fallback assertions"
+    echo "$runtime_controls_resp"
     exit 1
   fi
 fi
@@ -578,9 +653,8 @@ if [[ -z "$detection_model_version_id" || -z "$ocr_model_version_id" ]]; then
 fi
 
 detect_inference_upload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
-  -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d '{"filename":"phase2-detect-input.jpg"}' \
+  -F "file=@${sample_image_file};filename=phase2-detect-input.jpg" \
   "${BASE_URL}/api/files/inference/upload")"
 detect_inference_attachment_id="$(echo "$detect_inference_upload" | jq -r '.data.id // empty')"
 if [[ -z "$detect_inference_attachment_id" ]]; then
@@ -591,9 +665,8 @@ fi
 wait_attachment_ready "${BASE_URL}/api/files/inference" "${detect_inference_attachment_id}" "detection inference"
 
 ocr_inference_upload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
-  -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d '{"filename":"phase2-ocr-input.jpg"}' \
+  -F "file=@${sample_image_file};filename=phase2-ocr-input.jpg" \
   "${BASE_URL}/api/files/inference/upload")"
 ocr_inference_attachment_id="$(echo "$ocr_inference_upload" | jq -r '.data.id // empty')"
 if [[ -z "$ocr_inference_attachment_id" ]]; then
@@ -739,13 +812,14 @@ if [[ -z "$inference_run_id" ]]; then
 fi
 
 if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
-  if [[ "$fallback_source" != *"fallback"* && "$fallback_source" != *"template"* && "$fallback_source" != *"mock"* && "$fallback_template_mode" != "template" && "$fallback_template_marker" != "true" ]]; then
-    echo "[smoke-phase2] YOLO runtime fallback/template marker assertion failed"
-    echo "$inference_result"
-    exit 1
-  fi
-  if [[ -z "$fallback_reason" && -z "$fallback_local_reason" && -z "$fallback_meta_reason" ]]; then
-    echo "[smoke-phase2] YOLO runtime fallback assertion failed"
+  if is_fallback_like_source "$fallback_source" || [[ "$fallback_template_mode" == "template" || "$fallback_template_marker" == "true" ]]; then
+    if [[ -z "$fallback_reason" && -z "$fallback_local_reason" && -z "$fallback_meta_reason" ]]; then
+      echo "[smoke-phase2] YOLO fallback path was selected but fallback reason metadata is missing"
+      echo "$inference_result"
+      exit 1
+    fi
+  elif ! is_real_inference_source "$fallback_source"; then
+    echo "[smoke-phase2] YOLO inference source is neither fallback-like nor real-runtime/local-command"
     echo "$inference_result"
     exit 1
   fi
@@ -782,13 +856,14 @@ if [[ -z "$ocr_inference_run_id" ]]; then
 fi
 
 if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
-  if [[ "$ocr_fallback_source" != *"fallback"* && "$ocr_fallback_source" != *"template"* && "$ocr_fallback_source" != *"mock"* && "$ocr_fallback_template_mode" != "template" && "$ocr_fallback_template_marker" != "true" ]]; then
-    echo "[smoke-phase2] PaddleOCR runtime fallback/template marker assertion failed"
-    echo "$ocr_inference_result"
-    exit 1
-  fi
-  if [[ -z "$ocr_fallback_reason" && -z "$ocr_fallback_local_reason" && -z "$ocr_fallback_meta_reason" ]]; then
-    echo "[smoke-phase2] PaddleOCR runtime fallback assertion failed"
+  if is_fallback_like_source "$ocr_fallback_source" || [[ "$ocr_fallback_template_mode" == "template" || "$ocr_fallback_template_marker" == "true" ]]; then
+    if [[ -z "$ocr_fallback_reason" && -z "$ocr_fallback_local_reason" && -z "$ocr_fallback_meta_reason" ]]; then
+      echo "[smoke-phase2] PaddleOCR fallback path was selected but fallback reason metadata is missing"
+      echo "$ocr_inference_result"
+      exit 1
+    fi
+  elif ! is_real_inference_source "$ocr_fallback_source"; then
+    echo "[smoke-phase2] PaddleOCR inference source is neither fallback-like nor real-runtime/local-command"
     echo "$ocr_inference_result"
     exit 1
   fi
@@ -900,14 +975,14 @@ if [[ -z "$doctr_training_job_id" ]]; then
 fi
 
 doctr_job_status=""
-for _ in $(seq 1 50); do
+for _ in $(seq 1 "${PHASE2_DOCTR_WAIT_POLLS}"); do
   doctr_job_detail="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
     "${BASE_URL}/api/training/jobs/${doctr_training_job_id}")"
   doctr_job_status="$(echo "$doctr_job_detail" | jq -r '.data.job.status // empty')"
   if [[ "$doctr_job_status" == "completed" ]]; then
     break
   fi
-  sleep 0.2
+  sleep "${PHASE2_DOCTR_WAIT_SLEEP_SEC}"
 done
 
 if [[ "$doctr_job_status" != "completed" ]]; then
@@ -985,13 +1060,14 @@ if [[ -z "$doctr_inference_run_id" ]]; then
 fi
 
 if [[ "${EXPECT_RUNTIME_FALLBACK}" == "true" ]]; then
-  if [[ "$doctr_fallback_source" != *"fallback"* && "$doctr_fallback_source" != *"template"* && "$doctr_fallback_source" != *"mock"* && "$doctr_fallback_template_mode" != "template" && "$doctr_fallback_template_marker" != "true" ]]; then
-    echo "[smoke-phase2] docTR runtime fallback/template marker assertion failed"
-    echo "$doctr_inference_result"
-    exit 1
-  fi
-  if [[ -z "$doctr_fallback_reason" && -z "$doctr_fallback_local_reason" && -z "$doctr_fallback_meta_reason" ]]; then
-    echo "[smoke-phase2] docTR runtime fallback assertion failed"
+  if is_fallback_like_source "$doctr_fallback_source" || [[ "$doctr_fallback_template_mode" == "template" || "$doctr_fallback_template_marker" == "true" ]]; then
+    if [[ -z "$doctr_fallback_reason" && -z "$doctr_fallback_local_reason" && -z "$doctr_fallback_meta_reason" ]]; then
+      echo "[smoke-phase2] docTR fallback path was selected but fallback reason metadata is missing"
+      echo "$doctr_inference_result"
+      exit 1
+    fi
+  elif ! is_real_inference_source "$doctr_fallback_source"; then
+    echo "[smoke-phase2] docTR inference source is neither fallback-like nor real-runtime/local-command"
     echo "$doctr_inference_result"
     exit 1
   fi

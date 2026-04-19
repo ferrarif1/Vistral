@@ -115,6 +115,59 @@ export default function RuntimeTemplatesPage() {
   const healthSnippet = `curl -sS ${healthEndpointForTemplate}`;
   const requestSnippet = JSON.stringify(sampleInputByFramework[templateFramework], null, 2);
   const responseSnippet = JSON.stringify(sampleOutputByFramework[templateFramework], null, 2);
+  const publicApiBaseUrl = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return 'http://127.0.0.1:8080/api/runtime/public';
+    }
+    return `${window.location.origin}/api/runtime/public`;
+  }, []);
+  const publicInferenceCurlSnippet = useMemo(() => {
+    const requestPayload = {
+      model_version_id: sampleInputByFramework[templateFramework].model_version_id,
+      task_type: sampleInputByFramework[templateFramework].task_type,
+      filename: sampleInputByFramework[templateFramework].filename,
+      image_base64: '<base64-image-content>'
+    };
+    return [
+      `curl -sS ${publicApiBaseUrl}/inference \\`,
+      '  -H "Authorization: Bearer <runtime-api-key>" \\',
+      '  -H "Content-Type: application/json" \\',
+      '  -X POST \\',
+      `  -d '${JSON.stringify(requestPayload)}'`
+    ].join('\n');
+  }, [publicApiBaseUrl, templateFramework]);
+  const publicModelPackageCurlSnippet = useMemo(() => {
+    const requestPayload = {
+      model_version_id: sampleInputByFramework[templateFramework].model_version_id,
+      encryption_key: '<delivery-encryption-key>'
+    };
+    return [
+      `curl -sS ${publicApiBaseUrl}/model-package \\`,
+      '  -H "Authorization: Bearer <runtime-api-key>" \\',
+      '  -H "Content-Type: application/json" \\',
+      '  -X POST \\',
+      `  -d '${JSON.stringify(requestPayload)}'`
+    ].join('\n');
+  }, [publicApiBaseUrl, templateFramework]);
+  const publicModelPackageResponseSnippet = JSON.stringify(
+    {
+      delivery_id: 'pubpkg-1001',
+      model_version_id: sampleInputByFramework[templateFramework].model_version_id,
+      framework: templateFramework,
+      runtime_auth_binding: 'model_version',
+      source_filename: 'model.bin',
+      source_byte_size: 1048576,
+      encryption: {
+        algorithm: 'aes-256-gcm',
+        kdf: 'sha256',
+        iv_base64: '<base64>',
+        tag_base64: '<base64>',
+        ciphertext_base64: '<base64>'
+      }
+    },
+    null,
+    2
+  );
 
   return (
     <WorkspacePage>
@@ -202,6 +255,59 @@ export default function RuntimeTemplatesPage() {
                 </Button>
               </div>
               <pre className="code-block">{responseSnippet}</pre>
+            </Card>
+
+            <Card as="section" className="workspace-record-item stack tight" tone="soft">
+              <div className="row between gap wrap align-center">
+                <h3>{t('Public model inference API (remote call)')}</h3>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void copyText(t('Public inference curl'), publicInferenceCurlSnippet)}
+                >
+                  {t('Copy')}
+                </Button>
+              </div>
+              <small className="muted">
+                {t('Use Runtime API key binding (model_version/model/framework) from Runtime Settings.')}
+              </small>
+              <pre className="code-block">{publicInferenceCurlSnippet}</pre>
+            </Card>
+
+            <Card as="section" className="workspace-record-item stack tight" tone="soft">
+              <div className="row between gap wrap align-center">
+                <h3>{t('Encrypted model package delivery')}</h3>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void copyText(t('Encrypted package curl'), publicModelPackageCurlSnippet)}
+                >
+                  {t('Copy')}
+                </Button>
+              </div>
+              <small className="muted">
+                {t('Returns AES-256-GCM encrypted payload for cross-machine secure model handoff.')}
+              </small>
+              <pre className="code-block">{publicModelPackageCurlSnippet}</pre>
+              <div className="row between gap wrap align-center">
+                <h4>{t('Encrypted package response example')}</h4>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    void copyText(
+                      t('Encrypted package response example'),
+                      publicModelPackageResponseSnippet
+                    )
+                  }
+                >
+                  {t('Copy')}
+                </Button>
+              </div>
+              <pre className="code-block">{publicModelPackageResponseSnippet}</pre>
             </Card>
           </div>
         }

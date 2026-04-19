@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import type { DatasetRecord, DatasetVersionRecord, RequirementTaskDraft } from '../../shared/domain';
+import type {
+  DatasetRecord,
+  DatasetVersionRecord,
+  RequirementTaskDraft,
+  TrainingWorkerNodeView
+} from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
@@ -23,6 +28,7 @@ const curatedBaseModelCatalog = {
   yolo: ['yolo11n']
 } as const;
 const taskTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
+const adminAccessMessagePattern = /(forbidden|permission|unauthorized|not allowed|admin|管理员|权限)/i;
 
 type TrainingFramework = keyof typeof curatedBaseModelCatalog;
 const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
@@ -57,11 +63,22 @@ export default function CreateTrainingJobPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const preferredTaskType = (searchParams.get('task_type') ?? searchParams.get('model_type') ?? '').trim();
+  const preferredExecutionTargetRaw = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
+  const preferredExecutionTarget =
+    preferredExecutionTargetRaw === 'control_plane' || preferredExecutionTargetRaw === 'worker'
+      ? preferredExecutionTargetRaw
+      : 'auto';
+  const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
 
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetVersions, setDatasetVersions] = useState<DatasetVersionRecord[]>([]);
   const [name, setName] = useState('');
-  const [taskType, setTaskType] = useState<'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>('ocr');
+  const [taskType, setTaskType] = useState<'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>(() =>
+    taskTypeOptions.includes(preferredTaskType as (typeof taskTypeOptions)[number])
+      ? (preferredTaskType as (typeof taskTypeOptions)[number])
+      : 'ocr'
+  );
   const [framework, setFramework] = useState<TrainingFramework>('paddleocr');
   const [datasetId, setDatasetId] = useState('');
   const [datasetVersionId, setDatasetVersionId] = useState('');
@@ -77,6 +94,14 @@ export default function CreateTrainingJobPage() {
   const [runtimeSettingsLoading, setRuntimeSettingsLoading] = useState(true);
   const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
   const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
+  const [dispatchPreference, setDispatchPreference] = useState<'auto' | 'control_plane' | 'worker'>(() =>
+    preferredWorkerId ? 'worker' : preferredExecutionTarget
+  );
+  const [selectedWorkerId, setSelectedWorkerId] = useState(preferredWorkerId);
+  const [workersLoading, setWorkersLoading] = useState(false);
+  const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
+  const [workersAccessDenied, setWorkersAccessDenied] = useState(false);
+  const [workersError, setWorkersError] = useState('');
   const [nonStrictLaunchConfirmed, setNonStrictLaunchConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -213,10 +238,53 @@ export default function CreateTrainingJobPage() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    setWorkersLoading(true);
+    setWorkersError('');
+    setWorkersAccessDenied(false);
+    api
+      .listTrainingWorkers()
+      .then((inventory) => {
+        if (!active) {
+          return;
+        }
+        setWorkers(inventory);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        const message = (error as Error).message;
+        setWorkers([]);
+        if (adminAccessMessagePattern.test(message)) {
+          setWorkersAccessDenied(true);
+          setWorkersError('');
+          return;
+        }
+        setWorkersError(message);
+      })
+      .finally(() => {
+        if (active) {
+          setWorkersLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (runtimeDisableSimulatedTrainFallback || runtimeSettingsError) {
       setNonStrictLaunchConfirmed(false);
     }
   }, [runtimeDisableSimulatedTrainFallback, runtimeSettingsError]);
+
+  useEffect(() => {
+    if (dispatchPreference !== 'worker' && selectedWorkerId) {
+      setSelectedWorkerId('');
+    }
+  }, [dispatchPreference, selectedWorkerId]);
 
   const baseModelOptions = useMemo<string[]>(
     () => [...curatedBaseModelCatalog[framework]],
@@ -238,6 +306,36 @@ export default function CreateTrainingJobPage() {
     () => filteredDatasets.find((dataset) => dataset.id === datasetId) ?? null,
     [datasetId, filteredDatasets]
   );
+  const onlineWorkers = useMemo(
+    () =>
+      workers.filter(
+        (worker) => worker.enabled && worker.effective_status === 'online' && Boolean(worker.endpoint)
+      ),
+    [workers]
+  );
+  const selectedWorker = useMemo(
+    () => workers.find((worker) => worker.id === selectedWorkerId) ?? null,
+    [selectedWorkerId, workers]
+  );
+  const selectedWorkerAvailable =
+    !selectedWorkerId || workersLoading || workersAccessDenied || Boolean(selectedWorker);
+  const dispatchSummary = useMemo(() => {
+    if (dispatchPreference === 'auto') {
+      return t('Scheduler chooses between worker and control-plane automatically.');
+    }
+    if (dispatchPreference === 'control_plane') {
+      return t('Run will stay on control-plane local execution path.');
+    }
+    if (selectedWorkerId) {
+      if (workersLoading || workersAccessDenied) {
+        return t('Worker inventory is unavailable. Worker ID will be validated at submit time.');
+      }
+      return selectedWorker
+        ? t('Worker dispatch is pinned to {worker}.', { worker: selectedWorker.name })
+        : t('Pinned worker is not in current inventory.');
+    }
+    return t('Worker dispatch is required. Scheduler will pick one online eligible worker.');
+  }, [dispatchPreference, selectedWorker, selectedWorkerId, t, workersAccessDenied, workersLoading]);
   const selectedDatasetVersion = useMemo(
     () => datasetVersions.find((version) => version.id === datasetVersionId) ?? null,
     [datasetVersionId, datasetVersions]
@@ -277,12 +375,14 @@ export default function CreateTrainingJobPage() {
     return issues;
   }, [batchSize, epochs, learningRate, t, warmupRatio, weightDecay]);
   const paramsReady = paramValidationIssues.length === 0;
+  const dispatchReady = dispatchPreference !== 'worker' || selectedWorkerAvailable;
   const submitReady =
     launchReady &&
     !runtimeSettingsLoading &&
     !runtimeSettingsError &&
     strictLaunchGateReady &&
-    paramsReady;
+    paramsReady &&
+    dispatchReady;
   const launchCheckpoints = useMemo(() => {
     const runtimeState = runtimeSettingsLoading
       ? ('pending' as const)
@@ -323,6 +423,13 @@ export default function CreateTrainingJobPage() {
         action: () => paramsEpochsInputRef.current?.focus()
       },
       {
+        key: 'dispatch',
+        label: t('Dispatch strategy'),
+        state: dispatchReady ? ('ready' as const) : ('blocked' as const),
+        detail: dispatchReady ? dispatchSummary : t('Selected worker is not in current inventory.'),
+        action: null
+      },
+      {
         key: 'runtime',
         label: t('Runtime guard'),
         state: runtimeState,
@@ -346,6 +453,8 @@ export default function CreateTrainingJobPage() {
     name,
     navigate,
     nonStrictLaunchConfirmed,
+    dispatchReady,
+    dispatchSummary,
     paramsReady,
     paramValidationIssues,
     runtimeDisableSimulatedTrainFallback,
@@ -447,10 +556,24 @@ export default function CreateTrainingJobPage() {
       return;
     }
 
+    if (!dispatchReady) {
+      setFeedback({
+        variant: 'error',
+        text: t('Selected worker is not in current inventory.')
+      });
+      return;
+    }
+
     setSubmitting(true);
     setFeedback(null);
 
     try {
+      const executionTarget =
+        dispatchPreference === 'auto' ? undefined : dispatchPreference;
+      const workerId =
+        dispatchPreference === 'worker' && selectedWorkerId.trim()
+          ? selectedWorkerId.trim()
+          : undefined;
       const created = await api.createTrainingJob({
         name: name.trim(),
         task_type: taskType,
@@ -464,14 +587,16 @@ export default function CreateTrainingJobPage() {
           learning_rate: learningRate,
           warmup_ratio: warmupRatio,
           weight_decay: weightDecay
-        }
+        },
+        ...(executionTarget ? { execution_target: executionTarget } : {}),
+        ...(workerId ? { worker_id: workerId } : {})
       });
 
-      setFeedback({
-        variant: 'success',
-        text: t('Training job created. Opening the detail page.')
-      });
-      navigate(`/training/jobs/${created.id}?dataset=${encodeURIComponent(datasetId)}&version=${encodeURIComponent(datasetVersionId)}`);
+      navigate(
+        `/training/jobs/${created.id}?dataset=${encodeURIComponent(datasetId)}&version=${encodeURIComponent(
+          datasetVersionId
+        )}&created=1`
+      );
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -496,10 +621,6 @@ export default function CreateTrainingJobPage() {
       if (!name.trim()) {
         setName(`${draft.task_type}-job-${Date.now().toString().slice(-6)}`);
       }
-      setFeedback({
-        variant: 'success',
-        text: t('Task draft generated from requirement ({source}).', { source: draft.source })
-      });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -513,9 +634,9 @@ export default function CreateTrainingJobPage() {
       ? 1
       : !paramsReady
         ? 2
-        : !submitReady
+        : !dispatchReady
           ? 3
-          : 3;
+          : 4;
 
   return (
     <WorkspacePage>
@@ -540,6 +661,9 @@ export default function CreateTrainingJobPage() {
             <Badge tone="info">{t('Task')}: {t(taskType)}</Badge>
             <Badge tone={snapshotPrefilledFromLink ? 'success' : 'neutral'}>
               {t('Snapshot prefill')}: {snapshotPrefilledFromLink ? t('Ready') : t('N/A')}
+            </Badge>
+            <Badge tone={dispatchPreference === 'auto' ? 'neutral' : dispatchPreference === 'control_plane' ? 'warning' : 'info'}>
+              {t('Dispatch')}: {dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}
             </Badge>
             <Badge
               tone={
@@ -567,7 +691,7 @@ export default function CreateTrainingJobPage() {
       />
 
       <ProgressStepper
-        steps={[t('Run identity'), t('Dataset snapshot'), t('Core params'), t('Review and launch')]}
+        steps={[t('Run identity'), t('Dataset snapshot'), t('Core params'), t('Dispatch strategy'), t('Review and launch')]}
         current={wizardStep}
         title={t('Launch steps')}
         caption={t('Fill them in order.')}
@@ -578,12 +702,14 @@ export default function CreateTrainingJobPage() {
       ) : null}
 
       {snapshotPrefilledFromLink ? (
-        <StateBlock
-          variant="success"
+        <InlineAlert
+          tone="success"
           title={t('Snapshot prefilled')}
-          description={preferredVersionId
-            ? t('Dataset and version are prefilled. Confirm to launch.')
-            : t('Dataset is prefilled. Pick a version next.')}
+          description={
+            preferredVersionId
+              ? t('Dataset and version are prefilled. Confirm to launch.')
+              : t('Dataset is prefilled. Pick a version next.')
+          }
         />
       ) : null}
 
@@ -708,19 +834,27 @@ export default function CreateTrainingJobPage() {
                   </Select>
                 </label>
               </div>
-              <Panel className="stack tight" tone="soft">
-                <div className="row gap wrap align-center">
-                  <Badge tone="neutral">{selectedDataset?.name ?? t('Dataset')}</Badge>
-                  <Badge tone="info">{selectedDatasetVersion!.version_name}</Badge>
-                  <Badge tone={datasetVersionHasTrainSplit ? 'success' : 'warning'}>
-                    {t('Train')}: {selectedDatasetVersion!.split_summary.train}
-                  </Badge>
-                  <Badge tone={datasetVersionHasAnnotationCoverage ? 'success' : 'warning'}>
-                    {t('Coverage')}: {formatCoveragePercent(selectedDatasetVersion!.annotation_coverage)}
-                  </Badge>
-                </div>
+              {selectedDatasetVersion ? (
+                <Panel className="stack tight" tone="soft">
+                  <div className="row gap wrap align-center">
+                    <Badge tone="neutral">{selectedDataset?.name ?? t('Dataset')}</Badge>
+                    <Badge tone="info">{selectedDatasetVersion.version_name}</Badge>
+                    <Badge tone={datasetVersionHasTrainSplit ? 'success' : 'warning'}>
+                      {t('Train')}: {selectedDatasetVersion.split_summary.train}
+                    </Badge>
+                    <Badge tone={datasetVersionHasAnnotationCoverage ? 'success' : 'warning'}>
+                      {t('Coverage')}: {formatCoveragePercent(selectedDatasetVersion.annotation_coverage)}
+                    </Badge>
+                  </div>
                   <small className="muted">{t('Launch uses only this snapshot.')}</small>
-              </Panel>
+                </Panel>
+              ) : (
+                <StateBlock
+                  variant="empty"
+                  title={t('No dataset version')}
+                  description={t('Create or pick a snapshot before launch.')}
+                />
+              )}
               {selectedDataset && datasetVersions.length === 0 && !versionsLoading ? (
                 <StateBlock
                   variant="empty"
@@ -801,51 +935,118 @@ export default function CreateTrainingJobPage() {
                     />
                   </label>
                 </div>
-                  <label>
-                    {t('Requirement')}
-                    <Textarea
-                      value={requirementDescription}
-                      onChange={(event) => setRequirementDescription(event.target.value)}
-                      rows={4}
-                      placeholder={t('For example: detect vehicle defects or read a vehicle number')}
-                    />
-                  </label>
-                  <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
-                    {drafting ? t('Generating...') : t('Draft from requirement')}
-                  </Button>
-                {taskDraft ? (
-                  <div className="stack tight">
-                    <div className="workspace-keyline-list">
-                      <div className="workspace-keyline-item">
-                        <span>{t('Task Type')}</span>
-                        <strong>{t(taskDraft.task_type)}</strong>
+                <details className="workspace-details">
+                  <summary>{t('Requirement to Task Draft')}</summary>
+                  <div className="workspace-disclosure-content stack">
+                    <label>
+                      {t('Requirement')}
+                      <Textarea
+                        value={requirementDescription}
+                        onChange={(event) => setRequirementDescription(event.target.value)}
+                        rows={3}
+                        placeholder={t('For example: detect vehicle defects or read a vehicle number')}
+                      />
+                    </label>
+                    <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
+                      {drafting ? t('Generating...') : t('Draft from requirement')}
+                    </Button>
+                    {taskDraft ? (
+                      <div className="stack tight">
+                        <div className="workspace-keyline-list">
+                          <div className="workspace-keyline-item">
+                            <span>{t('Task Type')}</span>
+                            <strong>{t(taskDraft.task_type)}</strong>
+                          </div>
+                          <div className="workspace-keyline-item">
+                            <span>{t('Framework')}</span>
+                            <strong>{t(taskDraft.recommended_framework)}</strong>
+                          </div>
+                          <div className="workspace-keyline-item">
+                            <span>{t('Labels')}</span>
+                            <strong>{taskDraft.label_hints.length}</strong>
+                          </div>
+                        </div>
+                        <small className="muted">{taskDraft.rationale}</small>
                       </div>
-                      <div className="workspace-keyline-item">
-                        <span>{t('Framework')}</span>
-                        <strong>{t(taskDraft.recommended_framework)}</strong>
-                      </div>
-                      <div className="workspace-keyline-item">
-                        <span>{t('Labels')}</span>
-                        <strong>{taskDraft.label_hints.length}</strong>
-                      </div>
-                    </div>
-                    <small className="muted">{taskDraft.rationale}</small>
+                    ) : (
+                      <small className="muted">
+                        {t('This is only a helper. Launch still depends on the snapshot and checks.')}
+                      </small>
+                    )}
                   </div>
-                ) : (
-                  <small className="muted">
-                    {t('This is only a helper. Launch still depends on the snapshot and checks.')}
-                  </small>
-                )}
+                </details>
               </AdvancedSection>
             </Card>
 
-            {feedback ? (
-              <StateBlock
-                variant={feedback.variant}
-                title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
-                description={feedback.text}
+            <Card as="article" className="stack">
+              <WorkspaceSectionHeader
+                title={t('4. Dispatch strategy')}
+                description={t('Choose whether this run is auto-scheduled, control-plane only, or worker-oriented.')}
+                actions={
+                  <Badge tone={dispatchPreference === 'auto' ? 'neutral' : dispatchPreference === 'control_plane' ? 'warning' : 'info'}>
+                    {dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}
+                  </Badge>
+                }
               />
-            ) : null}
+              <div className="workspace-form-grid">
+                <label className="workspace-form-span-2">
+                  {t('Dispatch target')}
+                  <Select
+                    value={dispatchPreference}
+                    onChange={(event) =>
+                      setDispatchPreference(event.target.value as 'auto' | 'control_plane' | 'worker')
+                    }
+                  >
+                    <option value="auto">{t('Auto (scheduler decides)')}</option>
+                    <option value="control_plane">{t('Force control-plane')}</option>
+                    <option value="worker">{t('Prefer worker dispatch')}</option>
+                  </Select>
+                </label>
+                {dispatchPreference === 'worker' ? (
+                  <label className="workspace-form-span-2">
+                    {t('Worker preference (optional)')}
+                    <Select
+                      value={selectedWorkerId}
+                      onChange={(event) => setSelectedWorkerId(event.target.value)}
+                      disabled={workersLoading || workersAccessDenied || workers.length === 0}
+                    >
+                      <option value="">{t('Auto-select from online workers')}</option>
+                      {onlineWorkers.map((worker) => (
+                        <option key={worker.id} value={worker.id}>
+                          {worker.name} · {worker.id}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                ) : null}
+              </div>
+              <small className="muted">{dispatchSummary}</small>
+              {dispatchPreference === 'worker' ? (
+                <div className="row gap wrap">
+                  <Badge tone={onlineWorkers.length > 0 ? 'success' : 'warning'}>
+                    {t('Online workers')}: {onlineWorkers.length}
+                  </Badge>
+                  {selectedWorkerId ? (
+                    <Badge tone={selectedWorkerAvailable ? 'success' : 'danger'}>
+                      {selectedWorkerAvailable ? t('Selected worker ready') : t('Selected worker missing')}
+                    </Badge>
+                  ) : null}
+                </div>
+              ) : null}
+              {workersLoading ? <small className="muted">{t('Loading worker inventory...')}</small> : null}
+              {workersAccessDenied ? (
+                <small className="muted">{t('Worker inventory is restricted to admins.')}</small>
+              ) : null}
+              {!workersAccessDenied && workersError ? <small className="muted">{workersError}</small> : null}
+              {dispatchPreference === 'worker' && !workersLoading && !workersAccessDenied && onlineWorkers.length === 0 ? (
+                <InlineAlert
+                  tone="warning"
+                  title={t('No online worker')}
+                  description={t('Worker dispatch may fail if no eligible online worker is available.')}
+                />
+              ) : null}
+            </Card>
+
           </div>
         }
         side={

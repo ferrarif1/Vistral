@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import socket
@@ -16,6 +17,11 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+except Exception:  # pragma: no cover
+    AESGCM = None  # type: ignore[assignment]
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 WORKER_ROOT = SCRIPT_DIR.parent
@@ -710,6 +716,258 @@ def is_safe_relative_path(value: str) -> bool:
     return True
 
 
+def sanitize_filename(value: str, fallback: str = "model.bin") -> str:
+    raw = Path(str(value).strip()).name
+    if not raw:
+        raw = fallback
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in raw)
+    return safe or fallback
+
+
+def resolve_worker_model_store_root() -> Path:
+    configured = os.getenv("WORKER_MODEL_STORE_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    run_root = Path(
+        os.getenv(
+            "WORKER_RUN_ROOT",
+            str(WORKER_ROOT.parent / ".data" / "worker-jobs"),
+        )
+    ).expanduser().resolve()
+    if run_root.name == "runs":
+        return (run_root.parent / "models").resolve()
+    return (run_root / "_models").resolve()
+
+
+def resolve_public_runtime_base_url(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("public_runtime_base_url", "")).strip()
+    if explicit:
+        return explicit.rstrip("/")
+    from_env = os.getenv("WORKER_RUNTIME_PUBLIC_BASE_URL", "").strip()
+    if from_env:
+        return from_env.rstrip("/")
+    control_plane_base = os.getenv("CONTROL_PLANE_BASE_URL", "").strip().rstrip("/")
+    if control_plane_base:
+        return f"{control_plane_base}/api/runtime/public"
+    return ""
+
+
+def resolve_runtime_public_api_key(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("runtime_api_key", "")).strip()
+    if explicit:
+        return explicit
+    return os.getenv("WORKER_RUNTIME_PUBLIC_API_KEY", "").strip()
+
+
+def resolve_model_delivery_encryption_key(payload: dict[str, Any]) -> str:
+    explicit = str(payload.get("encryption_key", "")).strip()
+    if explicit:
+        return explicit
+    env_key = os.getenv("WORKER_MODEL_DELIVERY_ENCRYPTION_KEY", "").strip()
+    if env_key:
+        return env_key
+    return os.getenv("MODEL_DELIVERY_ENCRYPTION_KEY", "").strip()
+
+
+def decrypt_aes_gcm_payload(
+    iv_b64: str,
+    tag_b64: str,
+    ciphertext_b64: str,
+    secret: str,
+) -> bytes:
+    if AESGCM is None:
+        raise RuntimeError(
+            "python package 'cryptography' is required for encrypted model package decryption"
+        )
+    key = hashlib.sha256(secret.encode("utf-8")).digest()
+    iv = base64.b64decode(iv_b64.encode("utf-8"), validate=True)
+    tag = base64.b64decode(tag_b64.encode("utf-8"), validate=True)
+    ciphertext = base64.b64decode(ciphertext_b64.encode("utf-8"), validate=True)
+    if len(iv) != 12:
+        raise ValueError("invalid AES-GCM iv length")
+    if len(tag) != 16:
+        raise ValueError("invalid AES-GCM tag length")
+    aes = AESGCM(key)
+    return aes.decrypt(iv, ciphertext + tag, None)
+
+
+def pull_encrypted_model_package(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    model_version_id = compact_text(payload.get("model_version_id"), 120)
+    if not model_version_id:
+        return 400, {"accepted": False, "error": "model_version_id is required"}
+
+    public_runtime_base_url = resolve_public_runtime_base_url(payload)
+    if not public_runtime_base_url:
+        return 400, {
+            "accepted": False,
+            "error": "public runtime base url is required (public_runtime_base_url or WORKER_RUNTIME_PUBLIC_BASE_URL or CONTROL_PLANE_BASE_URL)",
+        }
+
+    runtime_api_key = resolve_runtime_public_api_key(payload)
+    if not runtime_api_key:
+        return 400, {
+            "accepted": False,
+            "error": "runtime_api_key is required (request body or WORKER_RUNTIME_PUBLIC_API_KEY)",
+        }
+
+    encryption_key = resolve_model_delivery_encryption_key(payload)
+    if not encryption_key:
+        return 400, {
+            "accepted": False,
+            "error": "encryption_key is required (request body or WORKER_MODEL_DELIVERY_ENCRYPTION_KEY/MODEL_DELIVERY_ENCRYPTION_KEY)",
+        }
+
+    output_relative_dir = str(payload.get("output_relative_dir", "")).strip()
+    if output_relative_dir and not is_safe_relative_path(output_relative_dir):
+        return 400, {"accepted": False, "error": "output_relative_dir is unsafe"}
+
+    overwrite = bool(payload.get("overwrite", True))
+    timeout_seconds = as_positive_int(
+        payload.get(
+            "download_timeout_seconds",
+            os.getenv("WORKER_MODEL_PACKAGE_DOWNLOAD_TIMEOUT_SECONDS", "30"),
+        ),
+        30,
+    )
+
+    request_payload = {
+        "model_version_id": model_version_id,
+        "encryption_key": encryption_key,
+    }
+    request = urllib.request.Request(
+        f"{public_runtime_base_url}/model-package",
+        method="POST",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {runtime_api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8").strip()
+        except Exception:
+            detail = ""
+        if detail:
+            return 502, {
+                "accepted": False,
+                "error": f"public model-package request failed (status={exc.code}): {compact_text(detail, 220)}",
+            }
+        return 502, {
+            "accepted": False,
+            "error": f"public model-package request failed (status={exc.code})",
+        }
+    except Exception as exc:
+        return 502, {
+            "accepted": False,
+            "error": f"public model-package request failed: {compact_text(exc, 220)}",
+        }
+
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return 502, {"accepted": False, "error": "public model-package response is not valid JSON"}
+
+    resolved_data: Any = parsed
+    if isinstance(parsed, dict) and "success" in parsed:
+        if parsed.get("success") is not True:
+            error_part = parsed.get("error")
+            message = ""
+            if isinstance(error_part, dict):
+                message = compact_text(error_part.get("message"), 220)
+            if not message:
+                message = compact_text(parsed.get("message"), 220)
+            if not message:
+                message = "public model-package endpoint returned error response"
+            return 502, {"accepted": False, "error": message}
+        resolved_data = parsed.get("data")
+
+    if not isinstance(resolved_data, dict):
+        return 502, {"accepted": False, "error": "public model-package response payload is invalid"}
+
+    encryption = resolved_data.get("encryption")
+    if not isinstance(encryption, dict):
+        return 502, {"accepted": False, "error": "public model-package response missing encryption object"}
+    algorithm = str(encryption.get("algorithm", "")).strip().lower()
+    kdf = str(encryption.get("kdf", "")).strip().lower()
+    if algorithm != "aes-256-gcm" or kdf != "sha256":
+        return 502, {"accepted": False, "error": "unsupported encryption payload metadata"}
+
+    iv_b64 = str(encryption.get("iv_base64", "")).strip()
+    tag_b64 = str(encryption.get("tag_base64", "")).strip()
+    ciphertext_b64 = str(encryption.get("ciphertext_base64", "")).strip()
+    if not iv_b64 or not tag_b64 or not ciphertext_b64:
+        return 502, {"accepted": False, "error": "incomplete encrypted payload from public endpoint"}
+
+    try:
+        model_bytes = decrypt_aes_gcm_payload(iv_b64, tag_b64, ciphertext_b64, encryption_key)
+    except Exception as exc:
+        return 502, {
+            "accepted": False,
+            "error": f"failed to decrypt encrypted model payload: {compact_text(exc, 220)}",
+        }
+
+    source_filename = sanitize_filename(
+        str(payload.get("output_filename", "")).strip()
+        or str(resolved_data.get("source_filename", "")).strip()
+        or f"{model_version_id}.bin"
+    )
+    store_root = resolve_worker_model_store_root()
+    if output_relative_dir:
+        store_root = (store_root / output_relative_dir).resolve()
+    store_root.mkdir(parents=True, exist_ok=True)
+
+    version_dir = (store_root / model_version_id).resolve()
+    if not str(version_dir).startswith(str(store_root)):
+        return 400, {"accepted": False, "error": "model version output path is unsafe"}
+    version_dir.mkdir(parents=True, exist_ok=True)
+
+    target_path = (version_dir / source_filename).resolve()
+    if not str(target_path).startswith(str(version_dir)):
+        return 400, {"accepted": False, "error": "model output path is unsafe"}
+    if target_path.exists() and not overwrite:
+        return 409, {
+            "accepted": False,
+            "error": "target model file already exists and overwrite=false",
+            "local_model_path": str(target_path),
+        }
+
+    target_path.write_bytes(model_bytes)
+    sha256_digest = hashlib.sha256(model_bytes).hexdigest()
+
+    deployment_record = {
+        "deployed_at": now_iso(),
+        "mode": "public_encrypted_model_package_v1",
+        "delivery_id": compact_text(resolved_data.get("delivery_id"), 120),
+        "model_id": compact_text(resolved_data.get("model_id"), 120),
+        "model_version_id": model_version_id,
+        "framework": compact_text(resolved_data.get("framework"), 32),
+        "task_type": compact_text(resolved_data.get("task_type"), 32),
+        "runtime_auth_binding": compact_text(resolved_data.get("runtime_auth_binding"), 32),
+        "runtime_auth_binding_key": compact_text(resolved_data.get("runtime_auth_binding_key"), 120),
+        "source_filename": source_filename,
+        "source_byte_size": len(model_bytes),
+        "sha256": sha256_digest,
+        "local_model_path": str(target_path),
+        "local_model_dir": str(version_dir),
+        "public_runtime_base_url": public_runtime_base_url,
+    }
+    metadata_path = version_dir / "deployment.json"
+    metadata_path.write_text(json.dumps(deployment_record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return 200, {
+        "accepted": True,
+        "deployment": deployment_record,
+        "metadata_path": str(metadata_path),
+    }
+
+
 def rewrite_materialized_paths(value: Any, source_root: str | None, target_root: str) -> Any:
     if isinstance(value, dict):
         return {key: rewrite_materialized_paths(item, source_root, target_root) for key, item in value.items()}
@@ -1240,7 +1498,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if self.path not in ("/api/worker/train", "/api/worker/cancel"):
+        if self.path not in (
+            "/api/worker/train",
+            "/api/worker/cancel",
+            "/api/worker/models/pull-encrypted",
+        ):
             self._write_json(404, {"ok": False, "error": "not_found"})
             return
 
@@ -1275,6 +1537,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     "message": "cancel request recorded",
                 },
             )
+            return
+
+        if self.path == "/api/worker/models/pull-encrypted":
+            status, result = pull_encrypted_model_package(body)
+            self._write_json(status, result)
             return
 
         status, result = run_training(body)

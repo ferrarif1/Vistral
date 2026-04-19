@@ -81,7 +81,7 @@ export default function SampleReviewWorkbench({
     <Card as="section" className={className}>
       <div className="row between gap wrap align-center">
         <div className="stack tight">
-          <h3>{t('Sample info')}</h3>
+          <h3>{t('Current sample summary')}</h3>
         </div>
         {selectedAnnotation ? (
           <Badge tone="info">{t(selectedAnnotation.status)}</Badge>
@@ -104,10 +104,6 @@ export default function SampleReviewWorkbench({
         <div>
           <small className="muted">{t('Status')}</small>
           <strong>{selectedAnnotation ? t(selectedAnnotation.status) : t('Unannotated')}</strong>
-        </div>
-        <div>
-          <small className="muted">{t('Updated')}</small>
-          <strong>{selectedAnnotation ? formatCompactTimestamp(selectedAnnotation.updated_at, t('none')) : t('none')}</strong>
         </div>
       </div>
       {tagPreview.length > 0 || metadataPreview.length > 0 ? (
@@ -137,6 +133,9 @@ export default function SampleReviewWorkbench({
                 ))}
               </ul>
             ) : null}
+            <small className="muted">
+              {t('Updated')}: {selectedAnnotation ? formatCompactTimestamp(selectedAnnotation.updated_at, t('none')) : t('none')}
+            </small>
           </div>
         </details>
       ) : null}

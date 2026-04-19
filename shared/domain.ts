@@ -444,6 +444,9 @@ export interface ModelVersionRecord {
   status: ModelVersionStatus;
   metrics_summary: Record<string, string>;
   artifact_attachment_id: string | null;
+  registration_evidence_mode?: 'real' | 'real_probe' | 'non_real_local_command';
+  registration_gate_exempted?: boolean;
+  registration_gate_exemption_reason?: string | null;
   created_by: string;
   created_at: string;
 }
@@ -655,6 +658,13 @@ export interface CreateTrainingJobInput {
   dataset_version_id: string;
   base_model: string;
   config: Record<string, string>;
+  execution_target?: TrainingExecutionTarget;
+  worker_id?: string;
+}
+
+export interface RetryTrainingJobInput {
+  execution_target?: TrainingExecutionTarget;
+  worker_id?: string;
 }
 
 export interface CreateTrainingWorkerInput {
@@ -736,12 +746,89 @@ export interface RegisterModelVersionInput {
   model_id: string;
   training_job_id: string;
   version_name: string;
+  allow_ocr_real_probe_registration?: boolean;
 }
 
 export interface RunInferenceInput {
   model_version_id: string;
   input_attachment_id: string;
   task_type: TaskType;
+}
+
+export interface PublicRuntimeInferenceInput {
+  model_version_id: string;
+  image_base64: string;
+  filename?: string;
+  mime_type?: string;
+  task_type?: TaskType;
+}
+
+export interface PublicRuntimeInferenceResult {
+  request_id: string;
+  model_id: string;
+  model_version_id: string;
+  framework: ModelFramework;
+  task_type: TaskType;
+  execution_source: string;
+  runtime_auth_binding: 'framework' | 'model' | 'model_version';
+  runtime_auth_binding_key: string;
+  raw_output: Record<string, unknown>;
+  normalized_output: UnifiedInferenceOutput;
+}
+
+export interface RuntimePublicInferenceInvocationRecord {
+  id: string;
+  request_id: string;
+  model_id: string;
+  model_version_id: string;
+  framework: ModelFramework;
+  task_type: TaskType;
+  runtime_auth_binding: 'framework' | 'model' | 'model_version';
+  runtime_auth_binding_key: string;
+  execution_source: string;
+  filename: string;
+  mime_type: string | null;
+  input_byte_size: number;
+  created_at: string;
+}
+
+export interface PublicEncryptedModelPackageInput {
+  model_version_id: string;
+  encryption_key?: string;
+}
+
+export interface PublicEncryptedModelPackageResult {
+  delivery_id: string;
+  model_id: string;
+  model_version_id: string;
+  framework: ModelFramework;
+  task_type: TaskType;
+  runtime_auth_binding: 'framework' | 'model' | 'model_version';
+  runtime_auth_binding_key: string;
+  source_filename: string;
+  source_byte_size: number;
+  generated_at: string;
+  encryption: {
+    algorithm: 'aes-256-gcm';
+    kdf: 'sha256';
+    iv_base64: string;
+    tag_base64: string;
+    ciphertext_base64: string;
+  };
+}
+
+export interface RuntimePublicModelPackageDeliveryRecord {
+  id: string;
+  delivery_id: string;
+  model_id: string;
+  model_version_id: string;
+  framework: ModelFramework;
+  task_type: TaskType;
+  runtime_auth_binding: 'framework' | 'model' | 'model_version';
+  runtime_auth_binding_key: string;
+  source_filename: string;
+  source_byte_size: number;
+  generated_at: string;
 }
 
 export interface InferenceFeedbackInput {
@@ -787,6 +874,7 @@ export interface RuntimeApiKeyPolicy {
   max_calls: number | null;
   used_calls: number;
   last_used_at: string | null;
+  issued_at?: string | null;
 }
 
 export interface RuntimeApiKeyMetaView {
@@ -841,6 +929,62 @@ export interface RuntimeProfileView {
   source: 'env' | 'saved';
   frameworks: Record<ModelFramework, RuntimeFrameworkConfigView>;
   controls: RuntimeControlSettings;
+}
+
+export interface RuntimeDeviceAccessRecord {
+  binding_key: string;
+  model_version_id: string;
+  model_id: string;
+  framework: ModelFramework;
+  task_type: TaskType;
+  device_name: string;
+  has_api_key: boolean;
+  api_key_masked: string;
+  expires_at: string | null;
+  expires_status: RuntimeApiKeyMetaView['expires_status'];
+  expires_in_days: number | null;
+  max_calls: number | null;
+  used_calls: number;
+  remaining_calls: number | null;
+  is_expired: boolean;
+  issued_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface RuntimeDeviceLifecycleSnapshot {
+  model_version_id: string;
+  public_inference_invocations: RuntimePublicInferenceInvocationRecord[];
+  model_package_deliveries: RuntimePublicModelPackageDeliveryRecord[];
+}
+
+export interface RuntimeDeviceAccessSnippetBundle {
+  inference_endpoint: string;
+  model_package_endpoint: string;
+  sample_inference_curl: string;
+  sample_model_package_curl: string;
+}
+
+export interface RuntimeDeviceAccessIssueInput {
+  model_version_id: string;
+  device_name: string;
+  expires_at?: string | null;
+  max_calls?: number | null;
+}
+
+export interface RuntimeDeviceAccessIssueResult {
+  record: RuntimeDeviceAccessRecord;
+  api_key: string;
+  snippets: RuntimeDeviceAccessSnippetBundle;
+}
+
+export interface RuntimeDeviceAccessRotateInput {
+  model_version_id: string;
+  binding_key: string;
+}
+
+export interface RuntimeDeviceAccessRevokeInput {
+  model_version_id: string;
+  binding_key: string;
 }
 
 export interface StartConversationInput {

@@ -26,6 +26,14 @@ RUNNER_ENABLE_REAL_VALUE="${VISTRAL_RUNNER_ENABLE_REAL:-0}"
 if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
   RUNNER_ENABLE_REAL_VALUE="1"
 fi
+VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE="${VISTRAL_DISABLE_INFERENCE_FALLBACK:-}"
+if [[ -z "${VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE}" ]]; then
+  if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
+    VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE="1"
+  else
+    VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE="0"
+  fi
+fi
 
 if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
   OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS:-720}"
@@ -176,6 +184,7 @@ if [[ "${START_API}" == "true" ]]; then
   VISTRAL_PADDLEOCR_LANG="${VISTRAL_PADDLEOCR_LANG:-en}" \
   PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}" \
   VISTRAL_RUNNER_ENABLE_REAL="${RUNNER_ENABLE_REAL_VALUE}" \
+  VISTRAL_DISABLE_INFERENCE_FALLBACK="${VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE}" \
   LLM_CONFIG_SECRET="${LLM_CONFIG_SECRET:-smoke-ocr-closure-${API_PORT}}" \
   MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
   API_HOST="${API_HOST}" \
@@ -602,13 +611,20 @@ paddle_runtime_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data
 paddle_local_fallback_reason="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
 paddle_inference_meta_mode="$(echo "${paddle_inference_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
-  if [[ ( "${paddle_execution_source}" != "paddleocr_local_command" && "${paddle_execution_source}" != "paddleocr_local_command_fallback" ) || "${paddle_lines}" -lt 1 ]]; then
+  if [[ ( "${paddle_execution_source}" != "paddleocr_local_command" && "${paddle_execution_source}" != "paddleocr_local_command_fallback" ) ]]; then
     echo "[smoke-ocr-closure] PaddleOCR inference assertions failed."
     echo "${paddle_inference_resp}"
     exit 1
   fi
+  if [[ "${paddle_lines}" -lt 1 && "${OCR_CLOSURE_REQUIRE_REAL_MODE}" != "true" ]]; then
+    if [[ "${paddle_inference_meta_mode}" != "template" && -z "${paddle_runtime_fallback_reason}" && -z "${paddle_local_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] PaddleOCR returned no lines without explicit fallback/template evidence."
+      echo "${paddle_inference_resp}"
+      exit 1
+    fi
+  fi
   if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
-    if [[ "${paddle_inference_meta_mode}" == "template" || -n "${paddle_runtime_fallback_reason}" || -n "${paddle_local_fallback_reason}" ]]; then
+    if [[ "${paddle_lines}" -lt 1 || "${paddle_inference_meta_mode}" == "template" || -n "${paddle_runtime_fallback_reason}" || -n "${paddle_local_fallback_reason}" ]]; then
       echo "[smoke-ocr-closure] PaddleOCR inference require-real assertions failed."
       echo "${paddle_inference_resp}"
       exit 1
@@ -645,13 +661,20 @@ doctr_runtime_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.r
 doctr_local_fallback_reason="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.local_command_fallback_reason // empty')"
 doctr_inference_meta_mode="$(echo "${doctr_inference_resp}" | jq -r '.data.raw_output.meta.mode // empty')"
 if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
-  if [[ ( "${doctr_execution_source}" != "doctr_local_command" && "${doctr_execution_source}" != "doctr_local_command_fallback" ) || "${doctr_lines}" -lt 1 ]]; then
+  if [[ ( "${doctr_execution_source}" != "doctr_local_command" && "${doctr_execution_source}" != "doctr_local_command_fallback" ) ]]; then
     echo "[smoke-ocr-closure] docTR inference assertions failed."
     echo "${doctr_inference_resp}"
     exit 1
   fi
+  if [[ "${doctr_lines}" -lt 1 && "${OCR_CLOSURE_REQUIRE_REAL_MODE}" != "true" ]]; then
+    if [[ "${doctr_inference_meta_mode}" != "template" && -z "${doctr_runtime_fallback_reason}" && -z "${doctr_local_fallback_reason}" ]]; then
+      echo "[smoke-ocr-closure] docTR returned no lines without explicit fallback/template evidence."
+      echo "${doctr_inference_resp}"
+      exit 1
+    fi
+  fi
   if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
-    if [[ "${doctr_inference_meta_mode}" == "template" || -n "${doctr_runtime_fallback_reason}" || -n "${doctr_local_fallback_reason}" ]]; then
+    if [[ "${doctr_lines}" -lt 1 || "${doctr_inference_meta_mode}" == "template" || -n "${doctr_runtime_fallback_reason}" || -n "${doctr_local_fallback_reason}" ]]; then
       echo "[smoke-ocr-closure] docTR inference require-real assertions failed."
       echo "${doctr_inference_resp}"
       exit 1

@@ -2251,6 +2251,9 @@ const zhCNBase: Record<string, string> = {
   'Draft from requirement': '从需求生成草稿',
   Requirement: '需求',
   'Primary actions': '主要操作',
+  'Review the run and decide the next step.': '查看这次运行并决定下一步。',
+  'Inspect one job, then move on.': '查看一个任务，然后继续。',
+  'Current job': '当前任务',
   'All checks': '全部检查',
   'Runtime guard': 'Runtime 保护',
   'Add a short run name.': '填写一个简短的运行名称。',
@@ -2407,6 +2410,12 @@ const zhCNBase: Record<string, string> = {
   'Completed Training Job': '已完成训练任务',
   'Version Name': '版本名称',
   'for example: v2026.04.02': '例如：v2026.04.02',
+  'Register version': '注册版本',
+  'Training run prefilled': '已预填训练任务',
+  'Use the completed run as the registration anchor.': '使用这个已完成任务作为版本注册起点。',
+  'Open training job': '打开训练任务',
+  'Clear prefill': '清除预填',
+  'This run is kept for reference; choose a verified job below.': '这次运行仅作为参考，请在下方选择一个已验证任务。',
   model: '模型',
   job: '任务',
   status: '状态',
@@ -2475,6 +2484,15 @@ const zhCNBase: Record<string, string> = {
   'for example: v2': '例如：v2',
   'Create Version Snapshot': '创建版本快照',
   'Annotation Import / Export': '标注导入/导出',
+  'Split and version': '切分与版本',
+  'Reference items': '引用条目',
+  'Create metadata-only items when needed.': '需要时可创建仅含元数据的条目。',
+  'Batch curation': '批量整理',
+  'Saved views': '已保存视图',
+  'Current view name': '当前视图名称',
+  'Select all filtered': '全选筛选结果',
+  'Clear selection': '清除选择',
+  'Append tags, e.g. low_light,hard_case': '追加标签，例如 low_light,hard_case',
   'Use this section to import or export annotation files in selected format.':
     '此处可按选定格式导入或导出标注文件。',
   'Import Annotations': '导入标注',
@@ -2559,6 +2577,7 @@ const zhCNBase: Record<string, string> = {
   'Dataset, launch state, and handoff readiness for this run.': '查看本次运行的数据集、启动状态与产物承接准备情况。',
   'Dataset, runtime, and artifact status for this run.': '查看本次运行的数据集、执行状态与产物情况。',
   'Execution metadata and artifact status for this run.': '查看本次运行的执行元数据与产物状态。',
+  'Open model versions': '打开模型版本',
   'Scheduler decision': '调度决策',
   'Scheduler score breakdown': '调度评分拆解',
   Trigger: '触发源',
@@ -2629,12 +2648,12 @@ const zhCNBase: Record<string, string> = {
   'Download timeline metrics or continue to adjacent training surfaces.':
     '可下载时间线指标，或继续跳转到相邻训练页面。',
   'Back to jobs list': '返回任务列表',
-  'Open model versions': '打开模型版本',
   'Execution summary': '执行摘要',
   'Execution snapshot': '执行快照',
   'Compact view of launch, runtime, and artifact status for quick triage.':
     '用紧凑视图汇总启动、运行与产物状态，方便快速排查。',
   'Open dataset': '打开数据集',
+  'Validate inference': '验证推理',
   Retry: '重试',
   'Training job cancelled.': '训练任务已取消。',
   'Training job retried.': '训练任务已重试。',
@@ -3453,6 +3472,7 @@ const zhCNExtra: Record<string, string> = {
   'Local execution': '本地执行',
   'Unknown': '未知',
   'Sample info': '样本信息',
+  'Current sample summary': '当前样本摘要',
   'More details': '更多信息',
   'File name': '文件名',
   'Dataset split': '数据集切分',
@@ -3677,6 +3697,12 @@ const zhCNPageExtras: Record<string, string> = {
   'Model record unavailable': '模型记录不可用',
   'Job record unavailable': '任务记录不可用',
   'Select a model, job, and version name first.': '先选模型、任务和版本名。',
+  'Select a model': '选择模型',
+  'No matching owned model yet': '还没有匹配的自有模型',
+  'This completed run is ready, but none of your owned models match the selected task type yet.':
+    '这次已完成的任务已经可用，但你当前没有任何自有模型与所选任务类型匹配。',
+  'Choose a model that matches the completed run before registering.':
+    '注册前请选择一个与已完成任务匹配的模型。',
   'The selected job has not passed authenticity verification.': '选中的任务还没通过真实性验证。',
   'Version registered and ready for validation and comparison.': '版本已注册，可用于验证和比较。',
   'Compare or register verified versions.': '对比或注册已验证版本。',
@@ -3737,6 +3763,253 @@ const zhCNPageExtras: Record<string, string> = {
   'Python path.': 'Python 路径。',
   'Go to Runtime settings.': '去 Runtime 设置。',
   'No scheduling update yet.': '还没有调度更新。',
+  'Training Closure Wizard': '训练闭环向导',
+  'Bring images, then follow one clear next step until you get a model.':
+    '带上图片，从一个明确的下一步开始，直到拿到模型。',
+  'One page to move from raw images to a validated model version.':
+    '一个页面完成从原始图片到已验证模型版本的闭环。',
+  'Collecting datasets, jobs, versions, and inference runs.':
+    '正在汇总数据集、训练任务、模型版本和推理运行。',
+  'Workflow progress': '流程进度',
+  'Complete each step in order so engineers can move from images to model without detours.':
+    '按顺序完成每一步，让工程师从图片直达模型，避免绕路。',
+  'Progress {done}/{total} ({percent}%)': '进度 {done}/{total}（{percent}%）',
+  'Auto-refreshing while uploads or training are still running.':
+    '上传或训练仍在进行中，页面会自动刷新。',
+  'Status refreshes on demand and after each action.': '状态会在手动刷新和每次操作后更新。',
+  'Closure flow completed': '闭环流程已完成',
+  'Next unlock depends on the current step requirement': '下一步解锁取决于当前步骤条件',
+  'Registration is strict + real evidence': '当前注册为 strict + real 证据',
+  'Registration is not strict real yet': '当前注册还不是 strict real',
+  'Single next step': '单一下一步',
+  'Always execute this first to avoid page-hopping confusion.':
+    '优先执行这一步，避免在页面之间来回跳转。',
+  'Loop completed': '闭环已完成',
+  'You already have images, trainable data, model version, and feedback loop evidence.':
+    '你已经具备图片、可训练数据、模型版本和反馈闭环证据。',
+  'Closure checklist': '闭环检查清单',
+  'Every step maps to a concrete object so engineers can trace handoff clearly.':
+    '每一步都映射到具体对象，方便工程师清晰追踪交接链路。',
+  'Loading workspace': '加载工作区',
+  'Done when: {condition}': '完成条件：{condition}',
+  'Blocked by: {reason}': '当前阻塞：{reason}',
+  'Datasets': '数据集',
+  'Versions': '版本',
+  'Training Job': '训练任务',
+  'Training': '训练',
+  'Upload': '上传',
+  'Name': '名称',
+  'Guided Loop': '引导闭环',
+  'Dataset context': '数据集上下文',
+  'Pick one dataset as your loop context, then every next action stays aligned.':
+    '选择一个数据集作为闭环上下文，后续动作都会自动对齐。',
+  'Current dataset': '当前数据集',
+  'Create a fresh dataset': '创建新数据集',
+  'Engineers can start here with only images and skip manual navigation between pages.':
+    '工程师只带图片也可以从这里起步，不用手动在多页间找入口。',
+  'Create dataset and continue': '创建数据集并继续',
+  'Dataset name is required.': '必须填写数据集名称。',
+  'Created from training closure wizard.': '由训练闭环向导创建。',
+  'Dataset {datasetId} created. You can upload images now.': '数据集 {datasetId} 已创建，现在可以上传图片。',
+  'Select a dataset first.': '请先选择一个数据集。',
+  'Select or create dataset first': '请先选择或创建数据集',
+  'Select or create a dataset first.': '请先选择或创建一个数据集。',
+  'Upload images here': '在这里上传图片',
+  'Image uploads for current dataset': '当前数据集图片上传',
+  'Upload images here. Once ready, continue with annotation.': '在这里上传图片，ready 后继续标注。',
+  'Bring your images': '导入你的图片',
+  'Ready files: {count}. Dataset: {dataset}': '就绪文件：{count}。数据集：{dataset}',
+  'Files are still preparing ({count}). Wait until at least one file is ready.':
+    '文件仍在准备中（{count}），请等待至少一个文件 ready。',
+  'Some uploads failed ({count}). Re-upload failed files before annotation.':
+    '有上传失败文件（{count}），请先重传再进行标注。',
+  'No ready images yet for this dataset. Upload files to continue.':
+    '该数据集还没有 ready 图片，请先上传文件。',
+  'Create or select a dataset first, then upload your files.':
+    '请先创建或选择数据集，然后上传文件。',
+  'One selected dataset and at least one ready image.':
+    '至少需要一个已选数据集和一张 ready 图片。',
+  'No dataset context yet. Create a dataset below first.':
+    '尚未建立数据集上下文，请先在下方创建数据集。',
+  'Uploads are still processing. Wait for ready status.': '上传仍在处理中，请等待 ready 状态。',
+  'Some files are in error state. Re-upload failed files.': '部分文件处于 error 状态，请重传失败文件。',
+  'Upload at least one image to this dataset.': '请至少上传一张图片到该数据集。',
+  'Annotate and freeze a trainable version': '标注并冻结可训练版本',
+  'Version {version} is trainable. train={train}, coverage={coverage}':
+    '版本 {version} 可训练。train={train}，coverage={coverage}',
+  'Current latest version is not trainable yet. Add annotation coverage and train split.':
+    '当前最新版本还不可训练，请补齐标注覆盖和 train 切分。',
+  'No dataset version yet. Annotate files, split train/val/test, then create a version.':
+    '还没有数据集版本。请先标注、切分 train/val/test，再创建版本。',
+  'A dataset version with train split > 0 and annotation coverage > 0.':
+    '需要一个 train>0 且 annotation coverage>0 的数据集版本。',
+  'You need ready images before annotation and versioning.': '标注和版本化前需要先有 ready 图片。',
+  'Latest version exists but is not trainable yet. Improve annotation coverage and split.':
+    '已有最新版本但不可训练，请提升标注覆盖率并完善切分。',
+  'No dataset version created yet. Finish annotation and create a version.':
+    '还没有创建数据集版本，请先完成标注并创建版本。',
+  'Open annotation workspace': '打开标注工作区',
+  'Open dataset detail': '打开数据集详情',
+  'Launch training': '发起训练',
+  'Latest completed job: {job} ({framework}) at {time}': '最近完成任务：{job}（{framework}），时间 {time}',
+  'Training job {job} is {status}. Wait for completion before registration.':
+    '训练任务 {job} 当前为 {status}，请等待完成后再注册。',
+  'Start a training job from the trainable dataset version.': '从可训练数据集版本发起训练任务。',
+  'One completed training job aligned to the trainable dataset version.':
+    '需要一个与当前可训练版本对齐的已完成训练任务。',
+  'Prepare a trainable dataset version first.': '请先准备可训练数据集版本。',
+  'Training is running. Wait for completion and artifacts.': '训练正在运行中，请等待完成并产出工件。',
+  'No completed training job yet. Launch a training job now.': '还没有完成的训练任务，请现在发起训练。',
+  'Register a model version': '注册模型版本',
+  'Model version {version} registered. evidence={mode}, gate={gate}':
+    '模型版本 {version} 已注册。evidence={mode}，gate={gate}',
+  'Bind your completed training job into a new model version.':
+    '将已完成训练任务绑定为新的模型版本。',
+  'A registered model version linked to the completed training job.':
+    '需要一个绑定已完成训练任务的已注册模型版本。',
+  'Complete training before registration.': '注册前请先完成训练。',
+  'No registered version yet. Register the completed job output.': '还没有已注册版本，请先注册训练产物。',
+  'Open version registration': '打开版本注册',
+  'Complete training first': '先完成训练',
+  'Prepare trainable version first': '请先准备可训练版本',
+  'Validate inference and route feedback': '验证推理并回流反馈',
+  'Closed loop confirmed. run={run}, feedback_dataset={dataset}':
+    '闭环已确认。run={run}，feedback_dataset={dataset}',
+  'Inference run exists ({run}). Route it back to a dataset to finish the loop.':
+    '已有推理运行（{run}），请回流到数据集以完成闭环。',
+  'Run inference with the registered version, then send feedback back to dataset.':
+    '用已注册版本执行推理，然后把反馈回流到数据集。',
+  'At least one inference run and one feedback dataset handoff.':
+    '至少需要一次推理运行和一次反馈数据集回流。',
+  'Register a model version first.': '请先注册模型版本。',
+  'Run at least one inference with the registered version.': '请至少用已注册版本运行一次推理。',
+  'Inference exists, but feedback has not been routed to a dataset yet.':
+    '已有推理结果，但反馈尚未回流到数据集。',
+  'Open inference validation': '打开推理验证',
+  'Register a version first': '请先注册版本',
+  'Loop objects': '闭环对象',
+  'Track exactly what has been produced in this loop.':
+    '精确追踪本次闭环已产出的对象。',
+  'Device API authorization': '设备 API 授权',
+  'Issue scoped credentials so robots and edge clients can call runtime inference and pull model packages.':
+    '签发作用域凭据，供机器狗与边缘端调用运行时推理和模型包下载接口。',
+  'Issue scoped credentials so robots/edge clients can call runtime inference and pull model packages.':
+    '签发作用域凭据，供机器狗/边缘端调用运行时推理与模型包下载接口。',
+  'Device credentials ready: {count}. Hardware can call runtime public APIs directly.':
+    '设备凭据已就绪：{count} 个。现场硬件可直接调用 Runtime 公共 API。',
+  'Issue at least one device credential so robots/edge clients can consume this model.':
+    '请至少签发一个设备凭据，供机器狗/边缘端消费该模型。',
+  'No device API credential yet. Issue one in the section below.':
+    '尚无设备 API 凭据，请在下方区域先签发一条。',
+  'Issue one credential to enable API-based model usage from field devices.':
+    '请签发至少一条凭据，以支持现场设备通过 API 使用模型。',
+  'Complete training and version registration first, then issue device credentials here.':
+    '请先完成训练与版本注册，再在此签发设备凭据。',
+  'Only registered model versions support device authorization.': '仅已注册模型版本支持设备授权。',
+  'Device authorization failed': '设备授权操作失败',
+  'Device name': '设备名称',
+  'Expire days (optional)': '过期天数（可选）',
+  'Issue device credential': '签发设备凭据',
+  'Loading device credentials...': '正在加载设备凭据...',
+  'No device credential yet.': '暂无设备凭据。',
+  'Latest issued credential (copy once)': '最近一次签发凭据（仅展示一次）',
+  'Inference API sample': '推理 API 示例',
+  'Model package API sample': '模型包 API 示例',
+  'Device access key issued for {device}. Keep this key in your device secret manager.':
+    '已为 {device} 签发设备访问密钥，请立即保存到设备密钥管理器。',
+  'Device key rotated for {device}. Distribute the new key to the device now.':
+    '已为 {device} 轮换密钥，请立即下发新密钥到设备端。',
+  'Device access revoked.': '设备访问已撤销。',
+  'Device name is required.': '设备名称不能为空。',
+  'max_calls must be a positive integer.': 'max_calls 必须为正整数。',
+  'Expire days must be a positive integer.': '过期天数必须为正整数。',
+  'Finish inference + feedback loop before issuing device access.':
+    '请先完成推理与反馈回流，再签发设备访问凭据。',
+  'Refresh credentials': '刷新凭据',
+  'Runtime & worker handoff': 'Runtime 与 Worker 交付衔接',
+  'Check runtime readiness and worker inventory before dispatching jobs or exposing APIs.':
+    '在下发任务或开放 API 前，请先检查 Runtime 就绪状态与 Worker 清单。',
+  'Worker inventory is restricted to admins.': 'Worker 清单仅对管理员开放。',
+  'Scheduler chooses between worker and control-plane automatically.':
+    '由调度器自动在 Worker 与控制面本地执行之间选择。',
+  'Run will stay on control-plane local execution path.':
+    '该任务将固定走控制面本地执行路径。',
+  'Worker dispatch is pinned to {worker}.': '该任务将固定下发到 Worker：{worker}。',
+  'Pinned worker is not in current inventory.': '固定 Worker 不在当前清单中。',
+  'Worker inventory is unavailable. Worker ID will be validated at submit time.':
+    '当前无法获取 Worker 清单，提交时将校验 Worker ID。',
+  'Worker dispatch is required. Scheduler will pick one online eligible worker.':
+    '该任务要求 Worker 下发，调度器将选择一个在线且可用的 Worker。',
+  'Selected worker is not in current inventory.': '所选 Worker 不在当前清单中。',
+  Dispatch: '下发',
+  '4. Dispatch strategy': '4. 下发策略',
+  'Choose whether this run is auto-scheduled, control-plane only, or worker-oriented.':
+    '选择本次任务采用自动调度、控制面执行，或 Worker 下发。',
+  'Dispatch target': '下发目标',
+  'Auto (scheduler decides)': '自动（调度器决策）',
+  'Force control-plane': '强制控制面执行',
+  'Prefer worker dispatch': '优先 Worker 下发',
+  'Worker preference (optional)': 'Worker 偏好（可选）',
+  'Auto-select from online workers': '从在线 Worker 自动选择',
+  'Selected worker ready': '所选 Worker 可用',
+  'Selected worker missing': '所选 Worker 不可用',
+  'Loading worker inventory...': '正在加载 Worker 清单...',
+  'Worker dispatch may fail if no eligible online worker is available.':
+    '若无可用在线 Worker，Worker 下发可能失败。',
+  'Retry dispatch strategy': '重试下发策略',
+  'Choose where the retried run should execute.': '选择重试任务的执行路径。',
+  'Training job retried with selected dispatch strategy.': '已按所选下发策略重试训练任务。',
+  'Batch retry in current view': '当前视图批量重试',
+  'Applies to failed/cancelled jobs in the current filter scope only.':
+    '仅对当前筛选范围内的失败/取消任务生效。',
+  'Retryable jobs': '可重试任务',
+  'Retry all visible failed jobs': '重试当前可见失败任务',
+  'No failed/cancelled jobs are visible in current filters.':
+    '当前筛选条件下没有失败或取消的任务可重试。',
+  'Retried {count} job(s) with selected dispatch strategy.':
+    '已按所选下发策略重试 {count} 个任务。',
+  'Batch retry failed for all {count} jobs. First error: {message}':
+    '批量重试全部失败，共 {count} 个任务。首个错误：{message}',
+  'Batch retry completed: {success} succeeded, {failed} failed. First error: {message}':
+    '批量重试完成：成功 {success} 个，失败 {failed} 个。首个错误：{message}',
+  'Batch operations in current view': '当前视图批量操作',
+  'Applies to jobs in the current filter scope only.': '仅对当前筛选范围内的任务生效。',
+  'Active jobs': '进行中任务',
+  'Cancel all visible active jobs': '取消当前可见进行中任务',
+  'No active jobs are visible in current filters.': '当前筛选条件下没有进行中任务可取消。',
+  'Cancelled {count} job(s) in current view.': '已取消当前视图中的 {count} 个任务。',
+  'Batch cancel failed for all {count} jobs. First error: {message}':
+    '批量取消全部失败，共 {count} 个任务。首个错误：{message}',
+  'Batch cancel completed: {success} succeeded, {failed} failed. First error: {message}':
+    '批量取消完成：成功 {success} 个，失败 {failed} 个。首个错误：{message}',
+  'Batch retry precheck': '批量重试预检',
+  'Precheck passed for current dispatch strategy.': '当前下发策略预检通过。',
+  'remaining calls': '剩余调用次数',
+  'last used': '最近使用',
+  active: '有效',
+  expired: '已过期',
+  key: '密钥',
+  'Dataset Version': '数据集版本',
+  'Feedback dataset': '反馈数据集',
+  'Reality & gate status': '真实性与门禁状态',
+  'Keep evidence mode and registration gate visible for every handoff.':
+    '在每次交接中保持 evidence mode 和 gate 状态可见。',
+  'evidence mode': '证据模式',
+  'gate status': '门禁状态',
+  'gate interpretation': '门禁解读',
+  'This version can be treated as strict real-evidence registration.':
+    '该版本可视为严格 real 证据注册。',
+  'This version is usable, but not yet a strict real-evidence registration.':
+    '该版本可用，但还不是严格 real 证据注册。',
+  'Quick routes': '快捷跳转',
+  'If you must jump, use these scoped links so context is preserved.':
+    '如需跳转，请使用这些带上下文的链接，避免丢失流程信息。',
+  'Completed': '已完成',
+  'Now': '进行中',
+  'Pending': '待完成',
+  'dataset': '数据集',
+  'No dataset version created yet.': '还没有创建数据集版本。',
+  'For example: Invoice OCR Batch A': '例如：发票 OCR 批次 A',
 };
 
 const zhCN: Record<string, string> = {

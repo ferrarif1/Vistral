@@ -226,7 +226,11 @@
    - `completed`（或 `failed` / `cancelled`）
 5. 在 `/training/jobs/:jobId` 查看日志与指标
 6. 在任务详情页可带相同数据集/版本上下文跳转到推理验证和任务列表范围视图
+6a. 当已完成任务没有与其任务类型匹配的自有模型时，任务详情页应直接提供带任务类型预填的模型草稿创建入口，方便先补模型再注册版本
+6b. 从已完成任务打开的模型草稿页应持续保留版本注册回流入口，方便使用同一个任务上下文返回
 7. 从范围任务列表进入任务详情时，应持续保留 `dataset`、`version` 查询上下文
+8. 当已完成任务准备进入版本注册时，直接打开 `/models/versions` 并预填该任务，让版本注册从这次训练结果开始
+9. 版本注册仍需要选择一个自有模型，但已完成任务和建议版本名应当默认填好
 
 ## 7. Flow F：模型版本注册
 执行者：`user`
@@ -234,6 +238,8 @@
 1. 训练任务完成后，且 `execution_mode=local_command` 时才可注册模型版本
 1a. 若产物摘要显示为非真实本地执行（`mode=template`、存在 `fallback_reason`、或 `training_performed=false`），必须阻止注册；仅在显式设置 `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1` 时可放开
 2. 在 `/models/versions` 发起注册
+2a. 如果已完成任务没有任何与其任务类型匹配的自有模型，注册界面应直接给出带该任务类型预填的模型草稿创建入口，而不是静默选中不相关模型
+2b. 注册成功后，页面应直接给出新版本的推理验证下一步入口
 3. 版本关联模型 + 数据集 + 训练任务 + 指标摘要
 
 ## 8. Flow G：推理验证 + 错误回流
@@ -243,6 +249,7 @@
 2. 查看 runtime 摘要（reachable/unreachable/not configured）；若需排障或改配置，跳转 `/settings/runtime`
 3. 上传推理图片
 4. 选择模型版本
+4a. 页面同时支持通过 `?modelVersion=<id>` 直接预填模型版本，供聊天/动作链接使用；而 `?dataset=<id>&version=<id>` 仍保留为数据集版本上下文，用于反馈回流跳转
 5. 执行推理
 6. 查看可视化结果 + raw 输出 + normalized 输出
 6a. 若 `source` 命中 `mock/template/fallback` 或 raw 中存在 fallback reason，页面必须明确提示“当前结果为回退/模板结果，不是真实 OCR 识别”
@@ -254,6 +261,12 @@
     - 先用 `model_version:<model_version_id>` 绑定密钥
     - 再用 `model:<model_id>` 绑定密钥
     - 最后回退到 framework 级 `api_key`
+11. 无 Web 会话的远程客户端可直接调用 Bearer-key 公共 Runtime 接口：
+    - `POST /api/runtime/public/inference`（内联 base64 输入）
+    - `POST /api/runtime/public/model-package`（返回 AES-256-GCM 加密模型工件 payload）
+11a. 跨机器模型下发时，worker 可通过 `POST /api/worker/models/pull-encrypted` 拉取并本地解密部署模型：
+    - 接口使用 worker token 鉴权
+    - worker 内部调用 `POST /api/runtime/public/model-package`（runtime bearer key）
 
 ## 9. 闭环业务 1：OCR 微调
 1. 创建 OCR 数据集

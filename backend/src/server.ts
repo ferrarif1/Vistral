@@ -8,6 +8,13 @@ import type {
   InferenceFeedbackInput,
   LlmConfig,
   ModelFramework,
+  PublicEncryptedModelPackageInput,
+  PublicRuntimeInferenceInput,
+  RuntimeDeviceAccessIssueInput,
+  RuntimeDeviceAccessRevokeInput,
+  RuntimeDeviceAccessRotateInput,
+  RetryTrainingJobInput,
+  RegisterModelVersionInput,
   RunInferenceInput,
   TaskType
 } from '../../shared/domain';
@@ -327,6 +334,29 @@ const parseCreateTrainingJobBody = (raw: unknown): ParseResult<CreateTrainingJob
     };
   }
 
+  let executionTarget: CreateTrainingJobInput['execution_target'] | undefined;
+  if (raw.execution_target !== undefined && raw.execution_target !== null) {
+    const normalizedExecutionTarget = toOptionalTrimmedString(raw.execution_target)?.toLowerCase() ?? '';
+    if (!normalizedExecutionTarget || normalizedExecutionTarget === 'auto') {
+      executionTarget = undefined;
+    } else if (normalizedExecutionTarget === 'control_plane' || normalizedExecutionTarget === 'worker') {
+      executionTarget = normalizedExecutionTarget;
+    } else {
+      return {
+        ok: false,
+        message: 'execution_target must be auto|control_plane|worker when provided.'
+      };
+    }
+  }
+
+  const workerId = toOptionalTrimmedString(raw.worker_id);
+  if (executionTarget === 'control_plane' && workerId) {
+    return {
+      ok: false,
+      message: 'worker_id cannot be set when execution_target is control_plane.'
+    };
+  }
+
   return {
     ok: true,
     value: {
@@ -336,7 +366,49 @@ const parseCreateTrainingJobBody = (raw: unknown): ParseResult<CreateTrainingJob
       dataset_id: datasetId,
       dataset_version_id: datasetVersionId,
       base_model: baseModel,
-      config: normalizeTrainingConfigInput(raw.config)
+      config: normalizeTrainingConfigInput(raw.config),
+      ...(executionTarget ? { execution_target: executionTarget } : {}),
+      ...(workerId ? { worker_id: workerId } : {})
+    }
+  };
+};
+
+const parseRetryTrainingJobBody = (raw: unknown): ParseResult<RetryTrainingJobInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Retry payload must be a JSON object.'
+    };
+  }
+
+  let executionTarget: RetryTrainingJobInput['execution_target'] | undefined;
+  if (raw.execution_target !== undefined && raw.execution_target !== null) {
+    const normalizedExecutionTarget = toOptionalTrimmedString(raw.execution_target)?.toLowerCase() ?? '';
+    if (!normalizedExecutionTarget || normalizedExecutionTarget === 'auto') {
+      executionTarget = undefined;
+    } else if (normalizedExecutionTarget === 'control_plane' || normalizedExecutionTarget === 'worker') {
+      executionTarget = normalizedExecutionTarget;
+    } else {
+      return {
+        ok: false,
+        message: 'execution_target must be auto|control_plane|worker when provided.'
+      };
+    }
+  }
+
+  const workerId = toOptionalTrimmedString(raw.worker_id);
+  if (executionTarget === 'control_plane' && workerId) {
+    return {
+      ok: false,
+      message: 'worker_id cannot be set when execution_target is control_plane.'
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...(executionTarget ? { execution_target: executionTarget } : {}),
+      ...(workerId ? { worker_id: workerId } : {})
     }
   };
 };
@@ -378,6 +450,99 @@ const parseRunInferenceBody = (raw: unknown): ParseResult<RunInferenceInput> => 
       model_version_id: modelVersionId,
       input_attachment_id: inputAttachmentId,
       task_type: raw.task_type
+    }
+  };
+};
+
+const parsePublicRuntimeInferenceBody = (
+  raw: unknown
+): ParseResult<PublicRuntimeInferenceInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Public runtime inference payload must be a JSON object.'
+    };
+  }
+
+  const modelVersionId = toNonEmptyString(raw.model_version_id);
+  if (!modelVersionId) {
+    return {
+      ok: false,
+      message: 'model_version_id is required.'
+    };
+  }
+
+  const imageBase64 = toNonEmptyString(raw.image_base64);
+  if (!imageBase64) {
+    return {
+      ok: false,
+      message: 'image_base64 is required.'
+    };
+  }
+
+  if (raw.task_type !== undefined && !isTaskType(raw.task_type)) {
+    return {
+      ok: false,
+      message: 'task_type is invalid.'
+    };
+  }
+
+  if (raw.filename !== undefined && typeof raw.filename !== 'string') {
+    return {
+      ok: false,
+      message: 'filename must be string when provided.'
+    };
+  }
+
+  if (raw.mime_type !== undefined && typeof raw.mime_type !== 'string') {
+    return {
+      ok: false,
+      message: 'mime_type must be string when provided.'
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      model_version_id: modelVersionId,
+      image_base64: imageBase64,
+      ...(typeof raw.filename === 'string' ? { filename: raw.filename } : {}),
+      ...(typeof raw.mime_type === 'string' ? { mime_type: raw.mime_type } : {}),
+      ...(isTaskType(raw.task_type) ? { task_type: raw.task_type } : {})
+    }
+  };
+};
+
+const parsePublicEncryptedModelPackageBody = (
+  raw: unknown
+): ParseResult<PublicEncryptedModelPackageInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Public model package payload must be a JSON object.'
+    };
+  }
+
+  const modelVersionId = toNonEmptyString(raw.model_version_id);
+  if (!modelVersionId) {
+    return {
+      ok: false,
+      message: 'model_version_id is required.'
+    };
+  }
+
+  if (raw.encryption_key !== undefined && typeof raw.encryption_key !== 'string') {
+    return {
+      ok: false,
+      message: 'encryption_key must be string when provided.'
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      model_version_id: modelVersionId,
+      ...(typeof raw.encryption_key === 'string' ? { encryption_key: raw.encryption_key } : {})
     }
   };
 };
@@ -465,11 +630,7 @@ const parseTaskDraftBody = (raw: unknown): ParseResult<{ description: string }> 
 
 const parseRegisterModelVersionBody = (
   raw: unknown
-): ParseResult<{
-  model_id: string;
-  training_job_id: string;
-  version_name: string;
-}> => {
+): ParseResult<RegisterModelVersionInput> => {
   if (!isPlainObject(raw)) {
     return {
       ok: false,
@@ -497,12 +658,26 @@ const parseRegisterModelVersionBody = (
       message: 'version_name is required.'
     };
   }
+  if (
+    raw.allow_ocr_real_probe_registration !== undefined &&
+    typeof raw.allow_ocr_real_probe_registration !== 'boolean'
+  ) {
+    return {
+      ok: false,
+      message: 'allow_ocr_real_probe_registration must be boolean when provided.'
+    };
+  }
   return {
     ok: true,
     value: {
       model_id: modelId,
       training_job_id: trainingJobId,
-      version_name: versionName
+      version_name: versionName,
+      ...(typeof raw.allow_ocr_real_probe_registration === 'boolean'
+        ? {
+            allow_ocr_real_probe_registration: raw.allow_ocr_real_probe_registration
+          }
+        : {})
     }
   };
 };
@@ -1108,6 +1283,101 @@ const parseRotateRuntimeApiKeyBody = (
     value: {
       framework: framework as ModelFramework,
       binding_key: bindingKey || undefined
+    }
+  };
+};
+
+const parseIssueRuntimeDeviceAccessBody = (
+  raw: unknown
+): ParseResult<RuntimeDeviceAccessIssueInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Runtime device access issue payload must be a JSON object.'
+    };
+  }
+
+  const modelVersionId = toNonEmptyString(raw.model_version_id);
+  if (!modelVersionId) {
+    return {
+      ok: false,
+      message: 'model_version_id is required.'
+    };
+  }
+
+  const deviceName = toNonEmptyString(raw.device_name);
+  if (!deviceName) {
+    return {
+      ok: false,
+      message: 'device_name is required.'
+    };
+  }
+
+  if (
+    raw.expires_at !== undefined &&
+    raw.expires_at !== null &&
+    typeof raw.expires_at !== 'string'
+  ) {
+    return {
+      ok: false,
+      message: 'expires_at must be string|null when provided.'
+    };
+  }
+
+  if (
+    raw.max_calls !== undefined &&
+    raw.max_calls !== null &&
+    (typeof raw.max_calls !== 'number' || !Number.isFinite(raw.max_calls))
+  ) {
+    return {
+      ok: false,
+      message: 'max_calls must be number|null when provided.'
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      model_version_id: modelVersionId,
+      device_name: deviceName,
+      expires_at: typeof raw.expires_at === 'string' ? raw.expires_at.trim() : null,
+      max_calls: typeof raw.max_calls === 'number' ? raw.max_calls : null
+    }
+  };
+};
+
+const parseRuntimeDeviceAccessBindingBody = (
+  raw: unknown,
+  messagePrefix: string
+): ParseResult<RuntimeDeviceAccessRotateInput | RuntimeDeviceAccessRevokeInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: `${messagePrefix} must be a JSON object.`
+    };
+  }
+
+  const modelVersionId = toNonEmptyString(raw.model_version_id);
+  if (!modelVersionId) {
+    return {
+      ok: false,
+      message: 'model_version_id is required.'
+    };
+  }
+
+  const bindingKey = toNonEmptyString(raw.binding_key);
+  if (!bindingKey) {
+    return {
+      ok: false,
+      message: 'binding_key is required.'
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      model_version_id: modelVersionId,
+      binding_key: bindingKey
     }
   };
 };
@@ -2349,6 +2619,20 @@ const readTrainingWorkerToken = (req: IncomingMessage): string | null => {
   return incomingToken?.trim() || null;
 };
 
+const readBearerToken = (req: IncomingMessage): string | null => {
+  const header = req.headers.authorization;
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) {
+    return null;
+  }
+  const matched = raw.match(/^Bearer\s+(.+)$/i);
+  if (!matched?.[1]) {
+    return null;
+  }
+  const token = matched[1].trim();
+  return token || null;
+};
+
 const server = createServer(async (req, res) => {
   try {
     if (!req.url || !req.method) {
@@ -3185,7 +3469,12 @@ const server = createServer(async (req, res) => {
         return methodNotAllowed(res);
       }
 
-      return withUserMutation(req, res, () => handlers.retryTrainingJob(jobId));
+      const parsed = parseRetryTrainingJobBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+
+      return withUserMutation(req, res, () => handlers.retryTrainingJob(jobId, parsed.value));
     }
 
     if (path === '/api/model-versions' && req.method === 'GET') {
@@ -3247,6 +3536,86 @@ const server = createServer(async (req, res) => {
       }
 
       return withUserMutation(req, res, () => handlers.sendInferenceFeedback(parsed.value));
+    }
+
+    if (path === '/api/runtime/device-access' && req.method === 'GET') {
+      const modelVersionId = toNonEmptyString(url.searchParams.get('model_version_id'));
+      if (!modelVersionId) {
+        return sendJson(
+          res,
+          400,
+          errorJson('model_version_id query is required.', 'VALIDATION_ERROR')
+        );
+      }
+      return withUser(req, res, () => handlers.listRuntimeDeviceAccess(modelVersionId));
+    }
+
+    if (path === '/api/runtime/device-access/lifecycle' && req.method === 'GET') {
+      const modelVersionId = toNonEmptyString(url.searchParams.get('model_version_id'));
+      if (!modelVersionId) {
+        return sendJson(
+          res,
+          400,
+          errorJson('model_version_id query is required.', 'VALIDATION_ERROR')
+        );
+      }
+      return withUser(req, res, () => handlers.getRuntimeDeviceLifecycle(modelVersionId));
+    }
+
+    if (path === '/api/runtime/device-access/issue' && req.method === 'POST') {
+      const parsed = parseIssueRuntimeDeviceAccessBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () => handlers.issueRuntimeDeviceAccess(parsed.value));
+    }
+
+    if (path === '/api/runtime/device-access/rotate' && req.method === 'POST') {
+      const parsed = parseRuntimeDeviceAccessBindingBody(
+        await readBody(req),
+        'Runtime device access rotate payload'
+      );
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () => handlers.rotateRuntimeDeviceAccess(parsed.value));
+    }
+
+    if (path === '/api/runtime/device-access/revoke' && req.method === 'POST') {
+      const parsed = parseRuntimeDeviceAccessBindingBody(
+        await readBody(req),
+        'Runtime device access revoke payload'
+      );
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () => handlers.revokeRuntimeDeviceAccess(parsed.value));
+    }
+
+    if (path === '/api/runtime/public/inference') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const parsed = parsePublicRuntimeInferenceBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withHandler(res, () =>
+        handlers.runPublicRuntimeInference(parsed.value, readBearerToken(req))
+      );
+    }
+
+    if (path === '/api/runtime/public/model-package') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const parsed = parsePublicEncryptedModelPackageBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withHandler(res, () =>
+        handlers.downloadEncryptedModelPackageByRuntimeApiKey(parsed.value, readBearerToken(req))
+      );
     }
 
     if (path === '/api/runtime/training-workers/heartbeat') {

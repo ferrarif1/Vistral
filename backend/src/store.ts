@@ -26,6 +26,8 @@ import type {
   MessageRecord,
   ModelRecord,
   ModelVersionRecord,
+  RuntimePublicInferenceInvocationRecord,
+  RuntimePublicModelPackageDeliveryRecord,
   RuntimeSettingsRecord,
   TrainingJobRecord,
   TrainingExecutionTarget,
@@ -76,6 +78,8 @@ interface AppStatePayload {
   trainingMetrics: TrainingMetricRecord[];
   modelVersions: ModelVersionRecord[];
   inferenceRuns: InferenceRunRecord[];
+  runtimePublicInferenceInvocations: RuntimePublicInferenceInvocationRecord[];
+  runtimePublicModelPackageDeliveries: RuntimePublicModelPackageDeliveryRecord[];
   approvalRequests: ApprovalRequest[];
   auditLogs: AuditLogRecord[];
 }
@@ -605,6 +609,8 @@ export const modelVersions: ModelVersionRecord[] = [
 ];
 
 export const inferenceRuns: InferenceRunRecord[] = [];
+export const runtimePublicInferenceInvocations: RuntimePublicInferenceInvocationRecord[] = [];
+export const runtimePublicModelPackageDeliveries: RuntimePublicModelPackageDeliveryRecord[] = [];
 
 export const approvalRequests: ApprovalRequest[] = [];
 export const auditLogs: AuditLogRecord[] = [];
@@ -716,6 +722,8 @@ const applyMinimalBootstrapState = (): void => {
   replaceArray(trainingMetrics, []);
   replaceArray(modelVersions, []);
   replaceArray(inferenceRuns, []);
+  replaceArray(runtimePublicInferenceInvocations, []);
+  replaceArray(runtimePublicModelPackageDeliveries, []);
   replaceArray(approvalRequests, []);
   replaceArray(auditLogs, []);
 };
@@ -1239,6 +1247,12 @@ const sanitizeAppStatePayload = (
   const sourceModelVersions = Array.isArray(payload.modelVersions) ? payload.modelVersions : [];
   const sourceConversations = Array.isArray(payload.conversations) ? payload.conversations : [];
   const sourceInferenceRuns = Array.isArray(payload.inferenceRuns) ? payload.inferenceRuns : [];
+  const sourceRuntimePublicInferenceInvocations = Array.isArray(payload.runtimePublicInferenceInvocations)
+    ? payload.runtimePublicInferenceInvocations
+    : [];
+  const sourceRuntimePublicModelPackageDeliveries = Array.isArray(payload.runtimePublicModelPackageDeliveries)
+    ? payload.runtimePublicModelPackageDeliveries
+    : [];
   const sourceAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
   const sourceDatasetItems = Array.isArray(payload.datasetItems) ? payload.datasetItems : [];
   const sourceAnnotations = Array.isArray(payload.annotations) ? payload.annotations : [];
@@ -1322,6 +1336,14 @@ const sanitizeAppStatePayload = (
       keptModelVersionIds.has(run.model_version_id) && baseAttachmentIds.has(run.input_attachment_id)
   );
   const keptInferenceRunIds = new Set(keptInferenceRuns.map((run) => run.id));
+  const keptRuntimePublicInferenceInvocations = sourceRuntimePublicInferenceInvocations.filter(
+    (record) =>
+      keptModelVersionIds.has(record.model_version_id) && keptModelIds.has(record.model_id)
+  );
+  const keptRuntimePublicModelPackageDeliveries = sourceRuntimePublicModelPackageDeliveries.filter(
+    (record) =>
+      keptModelVersionIds.has(record.model_version_id) && keptModelIds.has(record.model_id)
+  );
 
   const keptAttachments = baseAttachments.filter((attachment) => {
     if (attachment.attached_to_type === 'InferenceRun') {
@@ -1401,6 +1423,8 @@ const sanitizeAppStatePayload = (
     modelVersions: normalizedModelVersions,
     conversations: keptConversations,
     inferenceRuns: keptInferenceRuns,
+    runtimePublicInferenceInvocations: keptRuntimePublicInferenceInvocations,
+    runtimePublicModelPackageDeliveries: keptRuntimePublicModelPackageDeliveries,
     attachments: keptAttachments,
     datasetItems: keptDatasetItems,
     annotations: keptAnnotations,
@@ -1441,6 +1465,8 @@ const sanitizeAppStatePayload = (
     keptModelVersions.length !== sourceModelVersions.length ||
     keptConversations.length !== sourceConversations.length ||
     keptInferenceRuns.length !== sourceInferenceRuns.length ||
+    keptRuntimePublicInferenceInvocations.length !== sourceRuntimePublicInferenceInvocations.length ||
+    keptRuntimePublicModelPackageDeliveries.length !== sourceRuntimePublicModelPackageDeliveries.length ||
     keptAttachments.length !== sourceAttachments.length ||
     keptDatasetItems.length !== sourceDatasetItems.length ||
     keptAnnotations.length !== sourceAnnotations.length ||
@@ -1483,6 +1509,8 @@ const buildAppStatePayload = (): AppStatePayload => ({
   trainingMetrics: [...trainingMetrics],
   modelVersions: [...modelVersions],
   inferenceRuns: inferenceRuns.map(normalizeInferenceRun),
+  runtimePublicInferenceInvocations: [...runtimePublicInferenceInvocations],
+  runtimePublicModelPackageDeliveries: [...runtimePublicModelPackageDeliveries],
   approvalRequests: [...approvalRequests],
   auditLogs: [...auditLogs]
 });
@@ -1570,6 +1598,12 @@ export const loadPersistedAppState = async (): Promise<void> => {
     }
     if (Array.isArray(state.inferenceRuns)) {
       replaceArray(inferenceRuns, state.inferenceRuns.map(normalizeInferenceRun));
+    }
+    if (Array.isArray(state.runtimePublicInferenceInvocations)) {
+      replaceArray(runtimePublicInferenceInvocations, state.runtimePublicInferenceInvocations);
+    }
+    if (Array.isArray(state.runtimePublicModelPackageDeliveries)) {
+      replaceArray(runtimePublicModelPackageDeliveries, state.runtimePublicModelPackageDeliveries);
     }
     if (Array.isArray(state.approvalRequests)) {
       replaceArray(approvalRequests, state.approvalRequests);
@@ -1737,6 +1771,10 @@ const normalizeRuntimeFrameworkConfig = (
         last_used_at:
           normalizeIsoDate(entry?.last_used_at) ??
           normalizeIsoDate(fallbackPolicy?.last_used_at) ??
+          null,
+        issued_at:
+          normalizeIsoDate(entry?.issued_at) ??
+          normalizeIsoDate(fallbackPolicy?.issued_at) ??
           null
       };
     }

@@ -33,12 +33,6 @@ export default function BulkActionBar({
 }: BulkActionBarProps) {
   return (
     <div className="dataset-item-browser-batch">
-      <div className="row between gap wrap">
-        <strong>{t('Batch curation')}</strong>
-        <small className="muted">
-          {t('Selected samples')}: {selectedCount}
-        </small>
-      </div>
       <div className="dataset-item-browser-toolbar compact">
         <Select
           value={batchSplit}
@@ -73,9 +67,6 @@ export default function BulkActionBar({
         />
       </div>
       <div className="row between gap wrap">
-        <small className="muted">
-          {t('Applies only to the selected samples.')}
-        </small>
         <Button
           type="button"
           size="sm"
@@ -86,9 +77,6 @@ export default function BulkActionBar({
           {t('Apply to selected')}
         </Button>
       </div>
-      <small className="muted">
-        {t('Tags are stored as metadata keys with prefix')} {'tag:'}.
-      </small>
     </div>
   );
 }

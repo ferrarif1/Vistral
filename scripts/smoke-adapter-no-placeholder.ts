@@ -27,6 +27,7 @@ const run = async () => {
   process.env.PADDLEOCR_RUNTIME_ENDPOINT = '';
   process.env.DOCTR_RUNTIME_ENDPOINT = '';
   process.env.YOLO_RUNTIME_ENDPOINT = '';
+  process.env.VISTRAL_DISABLE_INFERENCE_FALLBACK = '0';
   process.env.PADDLEOCR_LOCAL_PREDICT_COMMAND = "python3 __missing_runner_for_smoke__.py";
   process.env.YOLO_LOCAL_PREDICT_COMMAND = "python3 __missing_runner_for_smoke__.py";
 

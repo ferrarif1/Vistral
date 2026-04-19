@@ -93,7 +93,8 @@ export default function InferenceValidationPage() {
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeConnectivityRecord[]>([]);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
-  const preferredVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredDatasetVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredModelVersionId = (searchParams.get('modelVersion') ?? searchParams.get('model_version') ?? '').trim();
   const preferredContextAppliedRef = useRef(false);
   const resourcesSignatureRef = useRef('');
   const inputUploaderRef = useRef<HTMLDivElement | null>(null);
@@ -133,9 +134,15 @@ export default function InferenceValidationPage() {
         const preferredTaskVersion = preferredTaskType
           ? versionResult.find((version) => version.task_type === preferredTaskType) ?? null
           : null;
-        const requestedVersion =
-          preferredVersionId && versionResult.find((version) => version.id === preferredVersionId)
-            ? preferredVersionId
+        const requestedModelVersion =
+          preferredModelVersionId && versionResult.find((version) => version.id === preferredModelVersionId)
+            ? preferredModelVersionId
+            : '';
+        const legacyRequestedModelVersion =
+          !requestedModelVersion &&
+          preferredDatasetVersionId &&
+          versionResult.find((version) => version.id === preferredDatasetVersionId)
+            ? preferredDatasetVersionId
             : '';
         setVersions(versionResult);
         setDatasets(datasetResult);
@@ -143,7 +150,8 @@ export default function InferenceValidationPage() {
         setRuns(runResult);
         setSelectedRunId((prev) => (prev && runResult.some((run) => run.id === prev) ? prev : runResult[0]?.id || ''));
         setSelectedVersionId((prev) =>
-          requestedVersion ||
+          requestedModelVersion ||
+          legacyRequestedModelVersion ||
           (preferredTaskVersion?.id ?? '') ||
           (prev && versionResult.some((version) => version.id === prev) ? prev : versionResult[0]?.id || '')
         );
@@ -157,7 +165,7 @@ export default function InferenceValidationPage() {
             ? prev
             : readyAttachments[0]?.id || '';
         });
-        if (preferredDataset || requestedVersion) {
+        if (preferredDataset || requestedModelVersion || legacyRequestedModelVersion) {
           preferredContextAppliedRef.current = true;
         }
       }
@@ -170,7 +178,7 @@ export default function InferenceValidationPage() {
         setRefreshing(false);
       }
     }
-  }, [preferredDatasetId, preferredVersionId]);
+  }, [preferredDatasetId, preferredDatasetVersionId, preferredModelVersionId]);
 
   useEffect(() => {
     loadAll('initial')
@@ -181,6 +189,10 @@ export default function InferenceValidationPage() {
   const selectedVersion = useMemo(
     () => versions.find((version) => version.id === selectedVersionId) ?? null,
     [versions, selectedVersionId]
+  );
+  const prefilledModelVersion = useMemo(
+    () => (preferredModelVersionId ? versions.find((version) => version.id === preferredModelVersionId) ?? null : null),
+    [preferredModelVersionId, versions]
   );
   const versionsById = useMemo(() => new Map(versions.map((version) => [version.id, version])), [versions]);
 
@@ -217,7 +229,7 @@ export default function InferenceValidationPage() {
     [datasets, selectedDatasetId]
   );
   const scopedDatasetId = selectedDataset?.id ?? preferredDatasetId;
-  const scopedVersionId = selectedVersion?.id ?? preferredVersionId;
+  const scopedVersionId = preferredDatasetVersionId;
   const scopedAnnotationQueue = useMemo<'all' | 'needs_work' | 'in_review' | 'rejected' | 'approved'>(() => {
     if (!selectedRun) {
       return 'needs_work';
@@ -368,7 +380,7 @@ export default function InferenceValidationPage() {
     if (selectedRunFallbackWarning) {
       return {
         tone: 'danger' as const,
-        title: t('Current result is not real OCR'),
+        title: t('Current result is not real output'),
         description: selectedRunFallbackWarning.reason
           ? `${t('Fallback reason')}: ${formatFallbackReasonLabel(selectedRunFallbackWarning.reason)}`
           : t('Fix Runtime or local command settings first.')
@@ -385,6 +397,27 @@ export default function InferenceValidationPage() {
 
     return null;
   }, [formatFallbackReasonLabel, selectedRunFallbackWarning, selectedRunHasEmptyOcrResult, t]);
+  const modelVersionPrefillBanner = useMemo(() => {
+    if (!preferredModelVersionId) {
+      return null;
+    }
+
+    if (!prefilledModelVersion) {
+      return {
+        tone: 'warning' as const,
+        title: t('Model version prefill missing'),
+        description: t('The requested model version is no longer available. Choose another one.'),
+        actionLabel: t('Open model versions')
+      };
+    }
+
+    return {
+      tone: 'info' as const,
+      title: t('Model version prefilled'),
+      description: t('{name} is already selected.', { name: prefilledModelVersion.version_name }),
+      actionLabel: t('Clear prefill')
+    };
+  }, [prefilledModelVersion, preferredModelVersionId, t]);
 
   const readyAttachmentCount = useMemo(
     () => attachments.filter((attachment) => attachment.status === 'ready').length,
@@ -663,6 +696,25 @@ export default function InferenceValidationPage() {
         />
       )}
 
+      {modelVersionPrefillBanner ? (
+        <InlineAlert
+          tone={modelVersionPrefillBanner.tone}
+          title={modelVersionPrefillBanner.title}
+          description={modelVersionPrefillBanner.description}
+          actions={
+            modelVersionPrefillBanner.actionLabel === t('Clear prefill') ? (
+              <ButtonLink to="/inference/validate" variant="ghost" size="sm">
+                {modelVersionPrefillBanner.actionLabel}
+              </ButtonLink>
+            ) : (
+              <ButtonLink to="/models/versions" variant="secondary" size="sm">
+                {modelVersionPrefillBanner.actionLabel}
+              </ButtonLink>
+            )
+          }
+        />
+      ) : null}
+
       <WorkspaceWorkbench
         toolbar={
           <Card as="section" className="workspace-toolbar-card">
@@ -920,29 +972,32 @@ export default function InferenceValidationPage() {
                 ) : null}
               </SectionCard>
 
-              <SectionCard
-                title={t('Recent runs')}
-                description={t('Switch the active result without re-running inference.')}
-              >
-                <label className="stack tight">
-                  <small className="muted">{t('Select run')}</small>
-                  <Select
-                    value={selectedRun?.id ?? ''}
-                    onChange={(event) => setSelectedRunId(event.target.value)}
-                    disabled={runs.length === 0}
-                  >
-                    {runs.length === 0 ? (
-                      <option value="">{t('No runs yet')}</option>
-                    ) : (
-                      runs.map((run) => (
-                        <option key={run.id} value={run.id}>
-                          {describeRun(run)} · {formatCompactTimestamp(run.updated_at, t('n/a'))} · {t(run.status)}
-                        </option>
-                      ))
-                    )}
-                  </Select>
-                </label>
-              </SectionCard>
+              <details className="workspace-details">
+                <summary>
+                  <span>{t('Recent runs')}</span>
+                  <Badge tone="neutral">{runs.length}</Badge>
+                </summary>
+                <div className="workspace-disclosure-content">
+                  <label className="stack tight">
+                    <small className="muted">{t('Select run')}</small>
+                    <Select
+                      value={selectedRun?.id ?? ''}
+                      onChange={(event) => setSelectedRunId(event.target.value)}
+                      disabled={runs.length === 0}
+                    >
+                      {runs.length === 0 ? (
+                        <option value="">{t('No runs yet')}</option>
+                      ) : (
+                        runs.map((run) => (
+                          <option key={run.id} value={run.id}>
+                            {describeRun(run)} · {formatCompactTimestamp(run.updated_at, t('n/a'))} · {t(run.status)}
+                          </option>
+                        ))
+                      )}
+                    </Select>
+                  </label>
+                </div>
+              </details>
             </div>
           </div>
         }

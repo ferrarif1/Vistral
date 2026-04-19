@@ -17,7 +17,6 @@ import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import {
-  ActionBar,
   DetailDrawer,
   DetailList,
   FilterToolbar,
@@ -39,7 +38,6 @@ import { matchesMetadataFilter } from '../features/metadataFilter';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
-import { formatCompactTimestamp } from '../utils/formatting';
 
 const metadataToText = (metadata: Record<string, string>): string =>
   Object.entries(metadata)
@@ -112,10 +110,12 @@ const buildTrainingJobCreatePath = (datasetId: string, versionId: string): strin
   return `/training/jobs/new?${searchParams.toString()}`;
 };
 
-const buildTrainingJobsPath = (datasetId: string, versionId: string): string => {
+const buildTrainingJobsPath = (datasetId: string, versionId?: string): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
-  searchParams.set('version', versionId);
+  if (versionId) {
+    searchParams.set('version', versionId);
+  }
   return `/training/jobs?${searchParams.toString()}`;
 };
 
@@ -126,6 +126,15 @@ const buildInferenceValidationPath = (datasetId: string, versionId?: string): st
     searchParams.set('version', versionId);
   }
   return `/inference/validate?${searchParams.toString()}`;
+};
+
+const buildClosureWizardPath = (datasetId: string, versionId?: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId) {
+    searchParams.set('version', versionId);
+  }
+  return `/workflow/closure?${searchParams.toString()}`;
 };
 
 const backgroundRefreshIntervalMs = 5000;
@@ -378,6 +387,15 @@ export default function DatasetDetailPage() {
     }
     return 'approved' as const;
   }, [annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected]);
+  const launchReadyVersions = useMemo(
+    () =>
+      versions.filter(
+        (version) =>
+          (version.split_summary.train ?? 0) > 0 && (version.annotation_coverage ?? 0) > 0
+      ),
+    [versions]
+  );
+  const latestLaunchReadyVersion = launchReadyVersions[0] ?? null;
   const filteredSampleItems = useMemo(() => {
     const normalizedSearch = sampleSearchText.trim().toLowerCase();
     return items.filter((item) => {
@@ -1177,6 +1195,16 @@ export default function DatasetDetailPage() {
     document.getElementById('dataset-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   const preferredTrainingVersion = selectedVersion ?? versions[0] ?? null;
+  const preferredLaunchReadyVersion =
+    selectedVersionLaunchReady && selectedVersion ? selectedVersion : latestLaunchReadyVersion;
+  const closureWizardPath = buildClosureWizardPath(
+    dataset.id,
+    preferredLaunchReadyVersion?.id ?? preferredTrainingVersion?.id
+  );
+  const inferenceValidationPath = buildInferenceValidationPath(
+    dataset.id,
+    preferredLaunchReadyVersion?.id ?? preferredTrainingVersion?.id ?? undefined
+  );
   const nextDatasetAction =
     readyCount === 0
       ? {
@@ -1241,13 +1269,6 @@ export default function DatasetDetailPage() {
           <>
             <ButtonLink to="/datasets" variant="ghost" size="sm">
               {t('Back to Datasets')}
-            </ButtonLink>
-            <ButtonLink
-              to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
-              variant="ghost"
-              size="sm"
-            >
-              {t('Open Annotation Workspace')}
             </ButtonLink>
           </>
         }
@@ -1457,45 +1478,47 @@ export default function DatasetDetailPage() {
                 description={t('Split, import/export, and reference items stay collapsed.')}
               >
                 <div className="stack">
-                  <SectionCard
-                    title={t('Split and version')}
-                    description={t('Set split ratios and create a snapshot.')}
-                  >
-                    <div className="workspace-form-grid">
+                  <details className="workspace-details">
+                    <summary>
+                      <span>{t('Split and version')}</span>
+                    </summary>
+                    <div className="workspace-disclosure-content stack">
+                      <div className="workspace-form-grid">
+                        <label>
+                          {t('Train Ratio')}
+                          <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
+                        </label>
+                        <label>
+                          {t('Val Ratio')}
+                          <Input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
+                        </label>
+                        <label className="workspace-form-span-2">
+                          {t('Test Ratio')}
+                          <Input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
+                        </label>
+                      </div>
+                      <Button onClick={runSplit} disabled={busy || items.length === 0} block>
+                        {t('Apply Split')}
+                      </Button>
                       <label>
-                        {t('Train Ratio')}
-                        <Input value={splitTrain} onChange={(event) => setSplitTrain(event.target.value)} />
+                        {t('Version Name (optional)')}
+                        <Input
+                          value={versionName}
+                          onChange={(event) => setVersionName(event.target.value)}
+                          placeholder={t('for example: v2')}
+                        />
                       </label>
-                      <label>
-                        {t('Val Ratio')}
-                        <Input value={splitVal} onChange={(event) => setSplitVal(event.target.value)} />
-                      </label>
-                      <label className="workspace-form-span-2">
-                        {t('Test Ratio')}
-                        <Input value={splitTest} onChange={(event) => setSplitTest(event.target.value)} />
-                      </label>
+                      <Button onClick={createVersion} disabled={busy || items.length === 0} block>
+                        {t('Create Version Snapshot')}
+                      </Button>
                     </div>
-                    <Button onClick={runSplit} disabled={busy || items.length === 0} block>
-                      {t('Apply Split')}
-                    </Button>
-                    <label>
-                      {t('Version Name (optional)')}
-                      <Input
-                        value={versionName}
-                        onChange={(event) => setVersionName(event.target.value)}
-                        placeholder={t('for example: v2')}
-                      />
-                    </label>
-                    <Button onClick={createVersion} disabled={busy || items.length === 0} block>
-                      {t('Create Version Snapshot')}
-                    </Button>
-                  </SectionCard>
+                  </details>
 
-                  <SectionCard
-                    title={t('Import / Export')}
-                    description={t('Import or export annotations.')}
-                  >
-                    <div className="stack">
+                  <details className="workspace-details">
+                    <summary>
+                      <span>{t('Annotation Import / Export')}</span>
+                    </summary>
+                    <div className="workspace-disclosure-content stack">
                       <label>
                         {t('Import format')}
                         <Select
@@ -1528,8 +1551,6 @@ export default function DatasetDetailPage() {
                       <Button onClick={importAnnotations} disabled={busy || !importAttachmentId}>
                         {t('Run Import')}
                       </Button>
-                    </div>
-                    <div className="stack">
                       <label>
                         {t('Export format')}
                         <Select
@@ -1548,8 +1569,13 @@ export default function DatasetDetailPage() {
                         {t('Run Export')}
                       </Button>
                     </div>
-                    <div className="stack">
-                      <h4>{t('Reference items')}</h4>
+                  </details>
+
+                  <details className="workspace-details">
+                    <summary>
+                      <span>{t('Reference items')}</span>
+                    </summary>
+                    <div className="workspace-disclosure-content stack">
                       <small className="muted">
                         {t('Create metadata-only items when needed.')}
                       </small>
@@ -1602,7 +1628,7 @@ export default function DatasetDetailPage() {
                         {t('Create Reference Item')}
                       </Button>
                     </div>
-                  </SectionCard>
+                  </details>
                 </div>
               </AdvancedSection>
             </div>
@@ -1610,25 +1636,21 @@ export default function DatasetDetailPage() {
         }
         side={
           <div className="workspace-inspector-rail">
-          <SectionCard
-            title={t('Current status')}
-            description={t('Readiness and next move.')}
+            <SectionCard
+              title={t('Next step')}
+              description={t('Readiness and next move.')}
             >
               <DetailList
                 items={[
-                  { label: t('Next step'), value: nextDatasetAction.title },
-                  { label: t('Task Type'), value: t(dataset.task_type) },
-                  { label: t('Last updated'), value: formatCompactTimestamp(dataset.updated_at, t('n/a')) },
-                  { label: t('Ready files'), value: readyCount },
-                  { label: t('Visible samples'), value: filteredSampleItems.length },
+                  { label: t('Recommended next step'), value: nextDatasetAction.title },
                   {
-                    label: t('Queue focus'),
+                    label: t('Queue Focus'),
                     value:
                       sampleQueueFilter === 'all'
                         ? t('All items')
                         : sampleQueueFilter === 'needs_work'
                           ? t('Needs Work')
-                      : t(sampleQueueFilter)
+                          : t(sampleQueueFilter)
                   }
                 ]}
               />
@@ -1636,24 +1658,72 @@ export default function DatasetDetailPage() {
                 {dataset.description ? <small className="muted">{dataset.description}</small> : null}
                 <small className="muted">{nextDatasetAction.description}</small>
               </div>
-              <ActionBar
-                secondary={
-                  <Button type="button" variant="ghost" size="sm" onClick={focusWorkflowPanel}>
-                    {t('Open Advanced Actions')}
-                  </Button>
-                }
-                tertiary={
-                  preferredTrainingVersion ? (
-                    <ButtonLink
-                      to={buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)}
-                      variant="ghost"
-                      size="sm"
-                    >
-                      {t('Open Training Jobs')}
-                    </ButtonLink>
-                  ) : null
-                }
+              <div className="row gap wrap">
+                <Button type="button" size="sm" onClick={handleNextDatasetAction}>
+                  {nextDatasetAction.label}
+                </Button>
+                <ButtonLink
+                  to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+                  variant="ghost"
+                  size="sm"
+                >
+                  {t('Open Annotation Workspace')}
+                </ButtonLink>
+                <ButtonLink to={closureWizardPath} variant="ghost" size="sm">
+                  {t('Training Closure Wizard')}
+                </ButtonLink>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title={t('Closure snapshot')}
+              description={t('Keep the dataset-to-training handoff visible from this page.')}
+            >
+              <DetailList
+                items={[
+                  { label: t('Ready files'), value: readyCount },
+                  { label: t('Needs work'), value: annotationSummary.needs_work },
+                  { label: t('Approved'), value: annotationSummary.approved },
+                  {
+                    label: t('Launch-ready versions'),
+                    value: launchReadyVersions.length
+                  },
+                  {
+                    label: t('Preferred training version'),
+                    value: preferredLaunchReadyVersion?.id ?? preferredTrainingVersion?.id ?? '-'
+                  }
+                ]}
               />
+              <div className="stack tight">
+                <small className="muted">
+                  {preferredLaunchReadyVersion
+                    ? t(
+                        'A launch-ready version is available. You can move directly into training, closure verification, or inference validation.'
+                      )
+                    : t(
+                        'No launch-ready version yet. Finish annotation and create a version snapshot with train split plus coverage first.'
+                      )}
+                </small>
+              </div>
+              <div className="row gap wrap">
+                <ButtonLink
+                  to={
+                    preferredLaunchReadyVersion
+                      ? buildTrainingJobCreatePath(dataset.id, preferredLaunchReadyVersion.id)
+                      : buildTrainingJobsPath(dataset.id, preferredTrainingVersion?.id)
+                  }
+                  variant="secondary"
+                  size="sm"
+                >
+                  {preferredLaunchReadyVersion ? t('Create Training Job') : t('Open Training Jobs')}
+                </ButtonLink>
+                <ButtonLink to={closureWizardPath} variant="ghost" size="sm">
+                  {t('Open Closure Wizard')}
+                </ButtonLink>
+                <ButtonLink to={inferenceValidationPath} variant="ghost" size="sm">
+                  {t('Validate Inference')}
+                </ButtonLink>
+              </div>
             </SectionCard>
           </div>
         }

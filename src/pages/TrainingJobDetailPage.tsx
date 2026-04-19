@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import type {
   DatasetRecord,
+  ModelRecord,
+  ModelVersionRecord,
+  TrainingWorkerNodeView,
   TrainingArtifactSummary,
   TrainingJobRecord,
   TrainingMetricRecord,
@@ -9,9 +12,11 @@ import type {
 } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import VirtualList from '../components/VirtualList';
+import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { DetailList, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
+import { Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
   WorkspacePage,
@@ -41,6 +46,7 @@ const metricTimelineVirtualRowHeight = 56;
 const metricTimelineVirtualViewportHeight = 420;
 const logsBatchSize = 300;
 const backgroundRefreshIntervalMs = 5000;
+const adminAccessMessagePattern = /(forbidden|permission|unauthorized|not allowed|admin|管理员|权限)/i;
 
 type LoadMode = 'initial' | 'manual' | 'background';
 
@@ -53,13 +59,66 @@ const buildScopedTrainingJobsPath = (datasetId: string, versionId?: string | nul
   return `/training/jobs?${searchParams.toString()}`;
 };
 
-const buildScopedInferencePath = (datasetId: string, versionId?: string | null): string => {
+const buildScopedInferencePath = (
+  datasetId: string,
+  versionId?: string | null,
+  modelVersionId?: string | null
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId?.trim()) {
     searchParams.set('version', versionId.trim());
   }
+  if (modelVersionId?.trim()) {
+    searchParams.set('modelVersion', modelVersionId.trim());
+  }
   return `/inference/validate?${searchParams.toString()}`;
+};
+
+const buildScopedClosurePath = (datasetId: string, versionId?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/workflow/closure?${searchParams.toString()}`;
+};
+
+const buildScopedModelVersionsPath = (
+  job: TrainingJobRecord,
+  versionName?: string,
+  selectedVersionId?: string
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('job', job.id);
+  if (versionName?.trim()) {
+    searchParams.set('version_name', versionName.trim());
+  }
+  if (selectedVersionId?.trim()) {
+    searchParams.set('selectedVersion', selectedVersionId.trim());
+  }
+  return `/models/versions?${searchParams.toString()}`;
+};
+
+const buildCreateModelDraftPath = (
+  taskType?: string,
+  options?: {
+    jobId?: string;
+    versionName?: string;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (taskType?.trim()) {
+    searchParams.set('task_type', taskType.trim());
+  }
+  if (options?.jobId?.trim()) {
+    searchParams.set('job', options.jobId.trim());
+  }
+  if (options?.versionName?.trim()) {
+    searchParams.set('version_name', options.versionName.trim());
+  }
+  const query = searchParams.toString();
+  return query ? `/models/create?${query}` : '/models/create';
 };
 
 export default function TrainingJobDetailPage() {
@@ -68,6 +127,9 @@ export default function TrainingJobDetailPage() {
   const [searchParams] = useSearchParams();
   const [job, setJob] = useState<TrainingJobRecord | null>(null);
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
+  const [models, setModels] = useState<ModelRecord[]>([]);
+  const [modelVersions, setModelVersions] = useState<ModelVersionRecord[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [metrics, setMetrics] = useState<TrainingMetricRecord[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [artifactAttachmentId, setArtifactAttachmentId] = useState<string | null>(null);
@@ -78,6 +140,12 @@ export default function TrainingJobDetailPage() {
   const [runtimeDisableSimulatedTrainFallback, setRuntimeDisableSimulatedTrainFallback] = useState(false);
   const [runtimeDisableInferenceFallback, setRuntimeDisableInferenceFallback] = useState(false);
   const [runtimePythonBin, setRuntimePythonBin] = useState('');
+  const [workersLoading, setWorkersLoading] = useState(false);
+  const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
+  const [workersAccessDenied, setWorkersAccessDenied] = useState(false);
+  const [workersError, setWorkersError] = useState('');
+  const [retryDispatchPreference, setRetryDispatchPreference] = useState<'auto' | 'control_plane' | 'worker'>('auto');
+  const [retryWorkerId, setRetryWorkerId] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -87,6 +155,7 @@ export default function TrainingJobDetailPage() {
   const [evidenceView, setEvidenceView] = useState<'overview' | 'metrics' | 'logs'>('overview');
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const detailSignatureRef = useRef('');
+  const retryDispatchTouchedRef = useRef(false);
 
   const load = useCallback(async (mode: LoadMode) => {
     if (!jobId) {
@@ -102,9 +171,11 @@ export default function TrainingJobDetailPage() {
     }
 
     try {
-      const [detail, datasetResult] = await Promise.all([
+      const [detail, datasetResult, modelResult, versionResult] = await Promise.all([
         api.getTrainingJobDetail(jobId),
-        api.listDatasets().catch(() => [] as DatasetRecord[])
+        api.listDatasets().catch(() => [] as DatasetRecord[]),
+        api.listMyModels().catch(() => null),
+        api.listModelVersions().catch(() => [] as ModelVersionRecord[])
       ]);
       const nextSignature = JSON.stringify({
         job: detail.job,
@@ -117,6 +188,22 @@ export default function TrainingJobDetailPage() {
           id: dataset.id,
           name: dataset.name,
           updated_at: dataset.updated_at
+        })),
+        models: modelResult
+          ? modelResult.map((model) => ({
+              id: model.id,
+              name: model.name,
+              model_type: model.model_type,
+              updated_at: model.updated_at
+            }))
+          : [],
+        model_versions: versionResult.map((version) => ({
+          id: version.id,
+          model_id: version.model_id,
+          status: version.status,
+          version_name: version.version_name,
+          training_job_id: version.training_job_id,
+          created_at: version.created_at
         }))
       });
 
@@ -124,6 +211,9 @@ export default function TrainingJobDetailPage() {
         detailSignatureRef.current = nextSignature;
         setJob(detail.job);
         setDatasets(datasetResult);
+        setModels(modelResult ?? []);
+        setModelVersions(versionResult);
+        setModelsLoaded(Boolean(modelResult));
         setMetrics(detail.metrics);
         setLogs(detail.logs);
         setArtifactAttachmentId(detail.artifact_attachment_id);
@@ -184,6 +274,61 @@ export default function TrainingJobDetailPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    setWorkersLoading(true);
+    setWorkersError('');
+    setWorkersAccessDenied(false);
+    api
+      .listTrainingWorkers()
+      .then((inventory) => {
+        if (!active) {
+          return;
+        }
+        setWorkers(inventory);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        const message = (error as Error).message;
+        setWorkers([]);
+        if (adminAccessMessagePattern.test(message)) {
+          setWorkersAccessDenied(true);
+          setWorkersError('');
+          return;
+        }
+        setWorkersError(message);
+      })
+      .finally(() => {
+        if (active) {
+          setWorkersLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!job || retryDispatchTouchedRef.current) {
+      return;
+    }
+    if (!['failed', 'cancelled'].includes(job.status)) {
+      return;
+    }
+
+    if (job.execution_target === 'control_plane') {
+      setRetryDispatchPreference('control_plane');
+      setRetryWorkerId('');
+      return;
+    }
+
+    setRetryDispatchPreference('worker');
+    setRetryWorkerId(job.scheduled_worker_id ?? '');
+  }, [job]);
+
   useBackgroundPolling(
     () => {
       load('background').catch(() => {
@@ -203,6 +348,17 @@ export default function TrainingJobDetailPage() {
     () => new Map(datasets.map((dataset) => [dataset.id, dataset])),
     [datasets]
   );
+  const modelsById = useMemo(
+    () => new Map(models.map((model) => [model.id, model])),
+    [models]
+  );
+  const matchingOwnedModel = useMemo(() => {
+    if (!job || !modelsLoaded) {
+      return null;
+    }
+
+    return models.find((model) => model.model_type === job.task_type) ?? null;
+  }, [job, models, modelsLoaded]);
 
   const latestMetrics = useMemo(() => {
     const latestByMetric = new Map<string, TrainingMetricRecord>();
@@ -232,6 +388,43 @@ export default function TrainingJobDetailPage() {
     () => [...(job?.scheduler_decision_history ?? [])].sort((left, right) => Date.parse(right.decided_at) - Date.parse(left.decided_at)),
     [job]
   );
+  const onlineWorkers = useMemo(
+    () =>
+      workers.filter(
+        (worker) => worker.enabled && worker.effective_status === 'online' && Boolean(worker.endpoint)
+      ),
+    [workers]
+  );
+  const selectedRetryWorker = useMemo(
+    () => workers.find((worker) => worker.id === retryWorkerId) ?? null,
+    [retryWorkerId, workers]
+  );
+  const retryWorkerAvailable =
+    !retryWorkerId || workersLoading || workersAccessDenied || Boolean(selectedRetryWorker);
+  const retryDispatchSummary = useMemo(() => {
+    if (retryDispatchPreference === 'auto') {
+      return t('Scheduler chooses between worker and control-plane automatically.');
+    }
+    if (retryDispatchPreference === 'control_plane') {
+      return t('Run will stay on control-plane local execution path.');
+    }
+    if (retryWorkerId) {
+      if (workersLoading || workersAccessDenied) {
+        return t('Worker inventory is unavailable. Worker ID will be validated at submit time.');
+      }
+      return selectedRetryWorker
+        ? t('Worker dispatch is pinned to {worker}.', { worker: selectedRetryWorker.name })
+        : t('Pinned worker is not in current inventory.');
+    }
+    return t('Worker dispatch is required. Scheduler will pick one online eligible worker.');
+  }, [
+    retryDispatchPreference,
+    retryWorkerId,
+    selectedRetryWorker,
+    t,
+    workersAccessDenied,
+    workersLoading
+  ]);
 
   const metricCurves = useMemo(() => {
     const grouped = new Map<string, TrainingMetricRecord[]>();
@@ -331,13 +524,24 @@ export default function TrainingJobDetailPage() {
       return;
     }
 
+    if (retryDispatchPreference === 'worker' && !retryWorkerAvailable) {
+      setFeedback({ variant: 'error', text: t('Selected worker is not in current inventory.') });
+      return;
+    }
+
     setBusy(true);
     setFeedback(null);
 
     try {
-      await api.retryTrainingJob(jobId);
+      const executionTarget = retryDispatchPreference === 'auto' ? undefined : retryDispatchPreference;
+      const workerId =
+        retryDispatchPreference === 'worker' && retryWorkerId.trim() ? retryWorkerId.trim() : undefined;
+      await api.retryTrainingJob(jobId, {
+        ...(executionTarget ? { execution_target: executionTarget } : {}),
+        ...(workerId ? { worker_id: workerId } : {})
+      });
       await load('manual');
-      setFeedback({ variant: 'success', text: t('Training job retried.') });
+      setFeedback({ variant: 'success', text: t('Training job retried with selected dispatch strategy.') });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
     } finally {
@@ -476,13 +680,28 @@ export default function TrainingJobDetailPage() {
   const canRetry = ['failed', 'cancelled'].includes(job.status);
   const isInterrupted = job.status === 'failed' || job.status === 'cancelled';
   const linkedDataset = datasetsById.get(job.dataset_id);
+  const linkedVersions = useMemo(
+    () =>
+      modelVersions
+        .filter((version) => version.training_job_id === job.id)
+        .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at)),
+    [job.id, modelVersions]
+  );
+  const latestLinkedVersion = linkedVersions[0] ?? null;
+  const linkedVersionModel = latestLinkedVersion ? modelsById.get(latestLinkedVersion.model_id) ?? null : null;
   const queryScopedDatasetId = (searchParams.get('dataset') ?? '').trim();
   const queryScopedVersionId = (searchParams.get('version') ?? '').trim();
+  const createdFromWizard = searchParams.get('created') === '1';
   const scopedDatasetId = queryScopedDatasetId || job.dataset_id;
   const scopedVersionId = queryScopedVersionId || job.dataset_version_id;
   const datasetDisplayName = linkedDataset?.name ?? t('Dataset record unavailable');
   const scopedJobsPath = buildScopedTrainingJobsPath(scopedDatasetId, scopedVersionId);
-  const scopedInferencePath = buildScopedInferencePath(scopedDatasetId, scopedVersionId);
+  const scopedInferencePath = buildScopedInferencePath(
+    scopedDatasetId,
+    scopedVersionId,
+    latestLinkedVersion?.id ?? undefined
+  );
+  const scopedClosurePath = buildScopedClosurePath(scopedDatasetId, scopedVersionId);
   const versionSnapshotLabel = job.dataset_version_id ? t('Version set') : t('Version pending');
   const executionTargetLabel = job.execution_target === 'worker' ? t('Worker lane') : t('Control plane');
   const describeSelectedWorker = (
@@ -505,6 +724,39 @@ export default function TrainingJobDetailPage() {
     executionMode: job.execution_mode,
     artifactSummary
   });
+  const canRegisterVersion = job.status === 'completed' && executionInsight.reality === 'real';
+  const versionRegistryPath = buildScopedModelVersionsPath(job, job.name, latestLinkedVersion?.id ?? undefined);
+  const createModelDraftPath = buildCreateModelDraftPath(job.task_type, {
+    jobId: job.id,
+    versionName: job.name
+  });
+  const myModelsPath = '/models/my-models';
+  const completionAction =
+    job.status !== 'completed'
+      ? null
+      : latestLinkedVersion
+        ? {
+            label: t('Open linked version'),
+            to: buildScopedModelVersionsPath(job, latestLinkedVersion.version_name, latestLinkedVersion.id),
+            variant: 'secondary' as const
+          }
+        : canRegisterVersion
+        ? {
+            label: t('Register version'),
+            to: versionRegistryPath,
+            variant: 'secondary' as const
+          }
+        : modelsLoaded && !matchingOwnedModel
+          ? {
+              label: t('Create model draft'),
+              to: createModelDraftPath,
+              variant: 'secondary' as const
+            }
+          : {
+              label: t('Open model versions'),
+              to: versionRegistryPath,
+              variant: 'ghost' as const
+            };
   const executionRealityLabel =
     executionInsight.reality === 'real'
       ? t('Real execution')
@@ -522,18 +774,192 @@ export default function TrainingJobDetailPage() {
       job.scheduler_decision?.selected_worker_id ||
       (job.scheduler_decision?.excluded_worker_ids.length ?? 0) > 0
   );
+  const creationHandoffDescription = createdFromWizard
+    ? job.status === 'completed'
+      ? !modelsLoaded
+        ? t('The run is complete. Load models to continue with validation or version registration.')
+        : matchingOwnedModel
+          ? t('The run is complete. Continue with validation or version registration.')
+          : t('The run is complete, but you still need a matching owned model before registering a version.')
+      : t('This run was just created. Keep this page open to watch progress and return here for the next step.')
+    : '';
   const refreshDetail = () => {
     load('manual')
       .then(() => setFeedback(null))
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
   };
 
+  type GuidanceAction = {
+    label: string;
+    to?: string;
+    onClick?: () => void;
+    variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+    disabled?: boolean;
+  };
+  type TrainingNextStepState = {
+    current: number;
+    total: number;
+    title: string;
+    detail: string;
+    badgeTone: 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+    badgeLabel: string;
+    actions: GuidanceAction[];
+  };
+
+  const trainingNextStep = useMemo<TrainingNextStepState>(() => {
+    if (['queued', 'preparing', 'running', 'evaluating'].includes(job.status)) {
+      return {
+        current: 2,
+        total: 5,
+        title: t('Keep watching this run until artifacts are ready'),
+        detail: t('The job is still executing. Stay on this page for logs and metrics, then continue to version registration when it completes.'),
+        badgeTone: 'info',
+        badgeLabel: t('In progress'),
+        actions: [
+          { label: t('Refresh now'), onClick: refreshDetail },
+          { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (job.status === 'failed' || job.status === 'cancelled') {
+      return {
+        current: 2,
+        total: 5,
+        title: t('Review logs and retry this run'),
+        detail: t('The run ended early. Check logs first, then retry with a clearer dispatch choice if needed.'),
+        badgeTone: 'danger',
+        badgeLabel: t('Needs retry'),
+        actions: [
+          {
+            label: t('Open logs'),
+            onClick: () => {
+              setEvidenceView('logs');
+            }
+          },
+          canRetry
+            ? {
+                label: t('Retry run'),
+                onClick: () => {
+                  void retryJob();
+                },
+                variant: 'secondary',
+                disabled: busy
+              }
+            : {
+                label: t('Open jobs'),
+                to: scopedJobsPath,
+                variant: 'ghost'
+              }
+        ]
+      };
+    }
+
+    if (!artifactAttachmentId) {
+      return {
+        current: 3,
+        total: 5,
+        title: t('Wait for the artifact package to finish'),
+        detail: t('The run completed, but the packaged artifact is not visible yet. Refresh this page before moving to registration or validation.'),
+        badgeTone: 'warning',
+        badgeLabel: t('Artifact pending'),
+        actions: [
+          { label: t('Refresh now'), onClick: refreshDetail },
+          { label: t('Open runtime settings'), to: '/settings/runtime', variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (executionInsight.reality !== 'real') {
+      return {
+        current: 4,
+        total: 5,
+        title: t('Fix runtime evidence before registration'),
+        detail: t('This run completed with incomplete or fallback evidence. Review runtime settings and closure checks before treating it as a publishable version.'),
+        badgeTone: 'warning',
+        badgeLabel: t('Evidence review'),
+        actions: [
+          { label: t('Open runtime settings'), to: '/settings/runtime' },
+          { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (modelsLoaded && !matchingOwnedModel) {
+      return {
+        current: 4,
+        total: 5,
+        title: t('Create a matching model shell first'),
+        detail: t('The training result is real, but you still need an owned model draft before this run can register a version.'),
+        badgeTone: 'info',
+        badgeLabel: t('Model needed'),
+        actions: [
+          { label: t('Create model draft'), to: createModelDraftPath },
+          { label: t('Open My Models'), to: myModelsPath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (linkedVersions.length === 0) {
+      return {
+        current: 5,
+        total: 5,
+        title: t('Register this completed run as a model version'),
+        detail: t('The run is real and artifacts are ready. Register one model version now so downstream validation and device delivery stay anchored to this run.'),
+        badgeTone: 'success',
+        badgeLabel: t('Ready to register'),
+        actions: [
+          { label: t('Register version'), to: versionRegistryPath },
+          { label: t('Validate inference'), to: scopedInferencePath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    return {
+      current: 5,
+      total: 5,
+      title: t('Move the linked version into validation or delivery'),
+      detail: t('Version {version} is already linked to this run. Continue with inference validation, governance follow-up, or device delivery from the version page.', {
+        version: latestLinkedVersion?.version_name ?? job.name
+      }),
+      badgeTone: 'success',
+      badgeLabel: t('Linked version ready'),
+      actions: [
+        {
+          label: t('Open linked version'),
+          to: buildScopedModelVersionsPath(job, latestLinkedVersion?.version_name ?? job.name, latestLinkedVersion?.id ?? undefined)
+        },
+        { label: t('Validate inference'), to: scopedInferencePath, variant: 'secondary' },
+        { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
+      ]
+    };
+  }, [
+    artifactAttachmentId,
+    busy,
+    canRetry,
+    createModelDraftPath,
+    executionInsight.reality,
+    job,
+    latestLinkedVersion?.id,
+    latestLinkedVersion?.version_name,
+    linkedVersions.length,
+    matchingOwnedModel,
+    modelsLoaded,
+    myModelsPath,
+    refreshDetail,
+    scopedClosurePath,
+    scopedInferencePath,
+    scopedJobsPath,
+    t,
+    versionRegistryPath
+  ]);
+
   return (
     <WorkspacePage>
       <PageHeader
         eyebrow={t('Training detail')}
         title={job.name}
-        description={t('Track readiness, metrics, worker delivery, and artifact handoff for this training run.')}
+        description={t('Review the run and decide the next step.')}
         meta={
           <div className="row gap wrap align-center">
             <StatusTag status={job.status}>{t(job.status)}</StatusTag>
@@ -548,11 +974,19 @@ export default function TrainingJobDetailPage() {
           disabled: loading || refreshing || busy
         }}
         secondaryActions={
-          <>
+          <div className="row gap wrap">
+            {completionAction ? (
+              <ButtonLink to={completionAction.to} variant={completionAction.variant} size="sm">
+                {completionAction.label}
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to={scopedClosurePath} variant="ghost" size="sm">
+              {t('Continue to next loop lane')}
+            </ButtonLink>
             <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
               {t('Back to jobs')}
             </ButtonLink>
-          </>
+          </div>
         }
       />
 
@@ -561,6 +995,26 @@ export default function TrainingJobDetailPage() {
           tone={feedback.variant === 'success' ? 'success' : 'danger'}
           title={feedback.variant === 'success' ? t('Done') : t('Failed')}
           description={feedback.text}
+        />
+      ) : null}
+
+      {createdFromWizard ? (
+        <InlineAlert
+          tone={job.status === 'completed' ? 'success' : 'info'}
+          title={t('Training run created')}
+          description={creationHandoffDescription}
+          actions={
+            <div className="row gap wrap">
+              {job.status === 'completed' && modelsLoaded && !matchingOwnedModel ? (
+                <ButtonLink to={createModelDraftPath} variant="secondary" size="sm">
+                  {t('Create model draft')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
+                {t('Back to jobs')}
+              </ButtonLink>
+            </div>
+          }
         />
       ) : null}
 
@@ -595,6 +1049,80 @@ export default function TrainingJobDetailPage() {
                 ) : null}
               </div>
             </div>
+            {canRetry ? (
+              <Panel tone="soft" className="stack tight">
+                <strong>{t('Retry dispatch strategy')}</strong>
+                <small className="muted">{t('Choose where the retried run should execute.')}</small>
+                <div className="workspace-form-grid">
+                  <label className="workspace-form-span-2">
+                    {t('Dispatch target')}
+                    <Select
+                      value={retryDispatchPreference}
+                      onChange={(event) => {
+                        retryDispatchTouchedRef.current = true;
+                        const nextPreference = event.target.value as 'auto' | 'control_plane' | 'worker';
+                        setRetryDispatchPreference(nextPreference);
+                        if (nextPreference !== 'worker') {
+                          setRetryWorkerId('');
+                        }
+                      }}
+                    >
+                      <option value="auto">{t('Auto (scheduler decides)')}</option>
+                      <option value="control_plane">{t('Force control-plane')}</option>
+                      <option value="worker">{t('Prefer worker dispatch')}</option>
+                    </Select>
+                  </label>
+                  {retryDispatchPreference === 'worker' ? (
+                    <label className="workspace-form-span-2">
+                      {t('Worker preference (optional)')}
+                      <Select
+                        value={retryWorkerId}
+                        onChange={(event) => {
+                          retryDispatchTouchedRef.current = true;
+                          setRetryWorkerId(event.target.value);
+                        }}
+                        disabled={workersLoading || workersAccessDenied || workers.length === 0}
+                      >
+                        <option value="">{t('Auto-select from online workers')}</option>
+                        {onlineWorkers.map((worker) => (
+                          <option key={worker.id} value={worker.id}>
+                            {worker.name} · {worker.id}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                  ) : null}
+                </div>
+                <small className="muted">{retryDispatchSummary}</small>
+                {retryDispatchPreference === 'worker' ? (
+                  <div className="row gap wrap">
+                    <Badge tone={onlineWorkers.length > 0 ? 'success' : 'warning'}>
+                      {t('Online workers')}: {onlineWorkers.length}
+                    </Badge>
+                    {retryWorkerId ? (
+                      <Badge tone={retryWorkerAvailable ? 'success' : 'danger'}>
+                        {retryWorkerAvailable ? t('Selected worker ready') : t('Selected worker missing')}
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : null}
+                {workersLoading ? <small className="muted">{t('Loading worker inventory...')}</small> : null}
+                {workersAccessDenied ? (
+                  <small className="muted">{t('Worker inventory is restricted to admins.')}</small>
+                ) : null}
+                {!workersAccessDenied && workersError ? <small className="muted">{workersError}</small> : null}
+                {retryDispatchPreference === 'worker' &&
+                !workersLoading &&
+                !workersAccessDenied &&
+                onlineWorkers.length === 0 ? (
+                  <InlineAlert
+                    tone="warning"
+                    title={t('No online worker')}
+                    description={t('Worker dispatch may fail if no eligible online worker is available.')}
+                  />
+                ) : null}
+              </Panel>
+            ) : null}
             {artifactAttachmentId ? (
               <details className="workspace-details">
                 <summary>{t('More actions')}</summary>
@@ -640,23 +1168,29 @@ export default function TrainingJobDetailPage() {
                 <InlineAlert
                   tone={executionInsight.showWarning ? 'warning' : 'success'}
                   title={
-                    executionInsight.showWarning ? t('Verify before publishing') : t('Training complete')
+                    executionInsight.showWarning
+                      ? t('Verify before publishing')
+                      : !matchingOwnedModel && modelsLoaded
+                        ? t('Training complete, model needed')
+                        : t('Training complete')
                   }
                   description={
                     executionInsight.showWarning
                       ? t('The run is complete, but the evidence is not complete yet.')
-                      : t('Next you can validate inference or register a version.')
+                      : !matchingOwnedModel && modelsLoaded
+                        ? t('Create a matching model draft before registering this run.')
+                        : t('Next you can validate inference or register a version.')
                   }
                   actions={
                     executionInsight.showWarning ? (
                       <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
                         {t('Open runtime settings')}
                       </ButtonLink>
-                    ) : (
+                    ) : !createdFromWizard ? (
                       <ButtonLink to={scopedInferencePath} variant="secondary" size="sm">
                         {t('Validate inference')}
                       </ButtonLink>
-                    )
+                    ) : null
                   }
                 />
               ) : job.status === 'failed' || job.status === 'cancelled' ? (
@@ -865,6 +1399,78 @@ export default function TrainingJobDetailPage() {
         }
         side={
           <div className="workspace-inspector-rail">
+            <WorkspaceNextStepCard
+              title={t('Next step')}
+              description={t('Keep the post-training handoff obvious from this page.')}
+              stepLabel={trainingNextStep.title}
+              stepDetail={trainingNextStep.detail}
+              current={trainingNextStep.current}
+              total={trainingNextStep.total}
+              badgeLabel={trainingNextStep.badgeLabel}
+              badgeTone={trainingNextStep.badgeTone}
+              actions={trainingNextStep.actions.map((action) =>
+                action.to ? (
+                  <ButtonLink
+                    key={action.label}
+                    to={action.to}
+                    variant={action.variant ?? 'primary'}
+                    size="sm"
+                  >
+                    {action.label}
+                  </ButtonLink>
+                ) : (
+                  <Button
+                    key={action.label}
+                    type="button"
+                    variant={action.variant ?? 'primary'}
+                    size="sm"
+                    onClick={action.onClick}
+                    disabled={action.disabled}
+                  >
+                    {action.label}
+                  </Button>
+                )
+              )}
+            />
+
+            <SectionCard
+              title={t('Downstream snapshot')}
+              description={t('Track the training result, model shell, and version registration without leaving this page.')}
+            >
+              <DetailList
+                items={[
+                  { label: t('Dataset'), value: datasetDisplayName },
+                  { label: t('Dataset version'), value: job.dataset_version_id ?? t('not pinned') },
+                  { label: t('Artifact'), value: artifactAttachmentId ? t('Ready') : t('Pending') },
+                  { label: t('Evidence'), value: executionRealityLabel },
+                  {
+                    label: t('Owned model'),
+                    value: linkedVersionModel?.name ?? matchingOwnedModel?.name ?? t('No matching model yet')
+                  },
+                  {
+                    label: t('Model status'),
+                    value: linkedVersionModel ? t(linkedVersionModel.status) : matchingOwnedModel ? t(matchingOwnedModel.status) : '-'
+                  },
+                  { label: t('Linked versions'), value: linkedVersions.length },
+                  {
+                    label: t('Latest linked version'),
+                    value: latestLinkedVersion?.version_name ?? '-'
+                  }
+                ]}
+              />
+              <div className="row gap wrap">
+                <ButtonLink to={versionRegistryPath} variant="ghost" size="sm">
+                  {linkedVersions.length > 0 ? t('Open version registry') : t('Register version')}
+                </ButtonLink>
+                <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
+                  {t('Validate inference')}
+                </ButtonLink>
+                <ButtonLink to={myModelsPath} variant="ghost" size="sm">
+                  {t('Open My Models')}
+                </ButtonLink>
+              </div>
+            </SectionCard>
+
             <Card as="section" className="workspace-inspector-card">
               <WorkspaceSectionHeader title={t('Inspector')} description={t('Job snapshot.') } />
               <Panel as="section" className="stack tight" tone="soft">

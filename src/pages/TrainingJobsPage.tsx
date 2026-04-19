@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   TrainingArtifactSummary,
   TrainingExecutionMode,
+  ModelRecord,
+  TrainingWorkerNodeView,
   TrainingJobRecord,
   TrainingJobStatus
 } from '../../shared/domain';
@@ -36,6 +38,8 @@ import { bucketRuntimeFallbackReason, runtimeFallbackReasonLabelKey } from '../u
 const activeStatusSet = new Set<TrainingJobStatus>(['queued', 'preparing', 'running', 'evaluating']);
 const terminalStatusSet = new Set<TrainingJobStatus>(['completed', 'failed', 'cancelled']);
 const backgroundRefreshIntervalMs = 5000;
+const adminAccessMessagePattern = /(forbidden|permission|unauthorized|not allowed|admin|管理员|权限)/i;
+const cancelTransitionRacePattern = /Only queued\/preparing\/running job can be cancelled/i;
 
 type LoadMode = 'initial' | 'manual' | 'background';
 type QueueFilter = 'all' | 'active' | 'terminal';
@@ -49,6 +53,45 @@ const buildScopedDatasetPath = (datasetId: string, versionId?: string | null): s
   }
   const query = searchParams.toString();
   return query ? `/datasets/${datasetId}?${query}` : `/datasets/${datasetId}`;
+};
+
+const buildScopedClosurePath = (datasetId: string, versionId?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  return `/workflow/closure?${searchParams.toString()}`;
+};
+
+const buildScopedModelVersionsPath = (job: TrainingJobRecord, versionName?: string): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('job', job.id);
+  if (versionName?.trim()) {
+    searchParams.set('version_name', versionName.trim());
+  }
+  return `/models/versions?${searchParams.toString()}`;
+};
+
+const buildCreateModelDraftPath = (
+  taskType?: string,
+  options?: {
+    jobId?: string;
+    versionName?: string;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (taskType?.trim()) {
+    searchParams.set('task_type', taskType.trim());
+  }
+  if (options?.jobId?.trim()) {
+    searchParams.set('job', options.jobId.trim());
+  }
+  if (options?.versionName?.trim()) {
+    searchParams.set('version_name', options.versionName.trim());
+  }
+  const query = searchParams.toString();
+  return query ? `/models/create?${query}` : '/models/create';
 };
 
 const buildJobsSignature = (jobs: TrainingJobRecord[]): string =>
@@ -173,6 +216,8 @@ export default function TrainingJobsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [models, setModels] = useState<ModelRecord[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [taskFilter, setTaskFilter] = useState<
     'all' | 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
@@ -186,11 +231,29 @@ export default function TrainingJobsPage() {
   const [selectedArtifactSummary, setSelectedArtifactSummary] = useState<TrainingArtifactSummary | null>(
     null
   );
+  const [workersLoading, setWorkersLoading] = useState(false);
+  const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
+  const [workersAccessDenied, setWorkersAccessDenied] = useState(false);
+  const [workersError, setWorkersError] = useState('');
+  const [retryDispatchPreference, setRetryDispatchPreference] = useState<
+    'auto' | 'control_plane' | 'worker'
+  >('auto');
+  const [retryWorkerId, setRetryWorkerId] = useState('');
+  const [bulkRetryDispatchPreference, setBulkRetryDispatchPreference] = useState<
+    'auto' | 'control_plane' | 'worker'
+  >('auto');
+  const [bulkRetryWorkerId, setBulkRetryWorkerId] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<{
+    variant: 'success' | 'error';
+    text: string;
+  } | null>(null);
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>(
     {}
   );
   const jobsSignatureRef = useRef('');
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const retryDispatchTouchedRef = useRef(false);
 
   const load = async (mode: LoadMode) => {
     if (mode === 'initial') {
@@ -202,11 +265,18 @@ export default function TrainingJobsPage() {
     }
 
     try {
-      const result = await api.listTrainingJobs();
+      const [result, modelResult] = await Promise.all([
+        api.listTrainingJobs(),
+        api.listMyModels().catch(() => null)
+      ]);
       const nextSignature = buildJobsSignature(result);
       if (jobsSignatureRef.current !== nextSignature) {
         jobsSignatureRef.current = nextSignature;
         setJobs(result);
+      }
+      if (modelResult) {
+        setModels(modelResult);
+        setModelsLoaded(true);
       }
       setError('');
     } catch (loadError) {
@@ -226,6 +296,43 @@ export default function TrainingJobsPage() {
     load('initial').catch(() => {
       // no-op
     });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setWorkersLoading(true);
+    setWorkersError('');
+    setWorkersAccessDenied(false);
+    api
+      .listTrainingWorkers()
+      .then((inventory) => {
+        if (!active) {
+          return;
+        }
+        setWorkers(inventory);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        const message = (error as Error).message;
+        setWorkers([]);
+        if (adminAccessMessagePattern.test(message)) {
+          setWorkersAccessDenied(true);
+          setWorkersError('');
+          return;
+        }
+        setWorkersError(message);
+      })
+      .finally(() => {
+        if (active) {
+          setWorkersLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useBackgroundPolling(
@@ -362,6 +469,14 @@ export default function TrainingJobsPage() {
       );
     });
   }, [frameworkFilter, queueFilter, scopedJobs, searchText, taskFilter]);
+  const activeVisibleJobs = useMemo(
+    () => filteredJobs.filter((job) => activeStatusSet.has(job.status)),
+    [filteredJobs]
+  );
+  const retryableVisibleJobs = useMemo(
+    () => filteredJobs.filter((job) => ['failed', 'cancelled'].includes(job.status)),
+    [filteredJobs]
+  );
 
   useEffect(() => {
     if (!filteredJobs.length) {
@@ -374,6 +489,10 @@ export default function TrainingJobsPage() {
       setDetailDrawerOpen(false);
     }
   }, [filteredJobs, selectedJobId]);
+
+  useEffect(() => {
+    setActionFeedback(null);
+  }, [selectedJobId]);
 
   const selectedJob = useMemo(
     () => filteredJobs.find((job) => job.id === selectedJobId) ?? null,
@@ -413,6 +532,383 @@ export default function TrainingJobsPage() {
     }
     return t('Unknown execution');
   }, [selectedExecutionInsight, t]);
+  const canCancelSelectedJob = Boolean(
+    selectedJob && ['queued', 'preparing', 'running'].includes(selectedJob.status)
+  );
+  const canRetrySelectedJob = Boolean(selectedJob && ['failed', 'cancelled'].includes(selectedJob.status));
+  const onlineWorkers = useMemo(
+    () =>
+      workers.filter(
+        (worker) => worker.enabled && worker.effective_status === 'online' && Boolean(worker.endpoint)
+      ),
+    [workers]
+  );
+  const selectedRetryWorker = useMemo(
+    () => workers.find((worker) => worker.id === retryWorkerId) ?? null,
+    [retryWorkerId, workers]
+  );
+  const retryWorkerAvailable =
+    !retryWorkerId || workersLoading || workersAccessDenied || Boolean(selectedRetryWorker);
+  const selectedBulkRetryWorker = useMemo(
+    () => workers.find((worker) => worker.id === bulkRetryWorkerId) ?? null,
+    [bulkRetryWorkerId, workers]
+  );
+  const bulkRetryWorkerAvailable =
+    !bulkRetryWorkerId || workersLoading || workersAccessDenied || Boolean(selectedBulkRetryWorker);
+  const retryDispatchSummary = useMemo(() => {
+    if (retryDispatchPreference === 'auto') {
+      return t('Scheduler chooses between worker and control-plane automatically.');
+    }
+    if (retryDispatchPreference === 'control_plane') {
+      return t('Run will stay on control-plane local execution path.');
+    }
+    if (retryWorkerId) {
+      if (workersLoading || workersAccessDenied) {
+        return t('Worker inventory is unavailable. Worker ID will be validated at submit time.');
+      }
+      return selectedRetryWorker
+        ? t('Worker dispatch is pinned to {worker}.', { worker: selectedRetryWorker.name })
+        : t('Pinned worker is not in current inventory.');
+    }
+    return t('Worker dispatch is required. Scheduler will pick one online eligible worker.');
+  }, [
+    retryDispatchPreference,
+    retryWorkerId,
+    selectedRetryWorker,
+    t,
+    workersAccessDenied,
+    workersLoading
+  ]);
+  const bulkRetryDispatchSummary = useMemo(() => {
+    if (bulkRetryDispatchPreference === 'auto') {
+      return t('Scheduler chooses between worker and control-plane automatically.');
+    }
+    if (bulkRetryDispatchPreference === 'control_plane') {
+      return t('Run will stay on control-plane local execution path.');
+    }
+    if (bulkRetryWorkerId) {
+      if (workersLoading || workersAccessDenied) {
+        return t('Worker inventory is unavailable. Worker ID will be validated at submit time.');
+      }
+      return selectedBulkRetryWorker
+        ? t('Worker dispatch is pinned to {worker}.', { worker: selectedBulkRetryWorker.name })
+        : t('Pinned worker is not in current inventory.');
+    }
+    return t('Worker dispatch is required. Scheduler will pick one online eligible worker.');
+  }, [
+    bulkRetryDispatchPreference,
+    bulkRetryWorkerId,
+    selectedBulkRetryWorker,
+    t,
+    workersAccessDenied,
+    workersLoading
+  ]);
+
+  useEffect(() => {
+    retryDispatchTouchedRef.current = false;
+    if (!selectedJob || !['failed', 'cancelled'].includes(selectedJob.status)) {
+      setRetryDispatchPreference('auto');
+      setRetryWorkerId('');
+      return;
+    }
+    if (selectedJob.execution_target === 'control_plane') {
+      setRetryDispatchPreference('control_plane');
+      setRetryWorkerId('');
+      return;
+    }
+    setRetryDispatchPreference('worker');
+    setRetryWorkerId(selectedJob.scheduled_worker_id ?? '');
+  }, [selectedJob?.execution_target, selectedJob?.id, selectedJob?.scheduled_worker_id, selectedJob?.status]);
+
+  const cancelSelectedJob = useCallback(async () => {
+    if (!selectedJob) {
+      return;
+    }
+    setActionBusy(true);
+    setActionFeedback(null);
+    try {
+      await api.cancelTrainingJob(selectedJob.id);
+      await load('manual');
+      setActionFeedback({ variant: 'success', text: t('Training job cancelled.') });
+    } catch (error) {
+      setActionFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setActionBusy(false);
+    }
+  }, [load, selectedJob, t]);
+
+  const retrySelectedJob = useCallback(async () => {
+    if (!selectedJob) {
+      return;
+    }
+    if (retryDispatchPreference === 'worker' && !retryWorkerAvailable) {
+      setActionFeedback({ variant: 'error', text: t('Selected worker is not in current inventory.') });
+      return;
+    }
+    setActionBusy(true);
+    setActionFeedback(null);
+    try {
+      const executionTarget = retryDispatchPreference === 'auto' ? undefined : retryDispatchPreference;
+      const workerId =
+        retryDispatchPreference === 'worker' && retryWorkerId.trim() ? retryWorkerId.trim() : undefined;
+      await api.retryTrainingJob(selectedJob.id, {
+        ...(executionTarget ? { execution_target: executionTarget } : {}),
+        ...(workerId ? { worker_id: workerId } : {})
+      });
+      await load('manual');
+      setActionFeedback({
+        variant: 'success',
+        text: t('Training job retried with selected dispatch strategy.')
+      });
+    } catch (error) {
+      setActionFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setActionBusy(false);
+    }
+  }, [
+    load,
+    retryDispatchPreference,
+    retryWorkerAvailable,
+    retryWorkerId,
+    selectedJob,
+    t
+  ]);
+
+  const retryVisibleJobs = useCallback(async () => {
+    if (!retryableVisibleJobs.length) {
+      setActionFeedback({
+        variant: 'error',
+        text: t('No failed/cancelled jobs are visible in current filters.')
+      });
+      return;
+    }
+    if (bulkRetryDispatchPreference === 'worker' && !bulkRetryWorkerAvailable) {
+      setActionFeedback({ variant: 'error', text: t('Selected worker is not in current inventory.') });
+      return;
+    }
+
+    setActionBusy(true);
+    setActionFeedback(null);
+    let successCount = 0;
+    let failureCount = 0;
+    let firstError = '';
+
+    try {
+      const executionTarget =
+        bulkRetryDispatchPreference === 'auto' ? undefined : bulkRetryDispatchPreference;
+      const workerId =
+        bulkRetryDispatchPreference === 'worker' && bulkRetryWorkerId.trim()
+          ? bulkRetryWorkerId.trim()
+          : undefined;
+
+      for (const job of retryableVisibleJobs) {
+        try {
+          await api.retryTrainingJob(job.id, {
+            ...(executionTarget ? { execution_target: executionTarget } : {}),
+            ...(workerId ? { worker_id: workerId } : {})
+          });
+          successCount += 1;
+        } catch (error) {
+          failureCount += 1;
+          if (!firstError) {
+            firstError = (error as Error).message;
+          }
+        }
+      }
+
+      await load('manual');
+      if (failureCount === 0) {
+        setActionFeedback({
+          variant: 'success',
+          text: t('Retried {count} job(s) with selected dispatch strategy.', {
+            count: successCount
+          })
+        });
+        return;
+      }
+      if (successCount === 0) {
+        setActionFeedback({
+          variant: 'error',
+          text: t('Batch retry failed for all {count} jobs. First error: {message}', {
+            count: failureCount,
+            message: firstError || t('Unknown')
+          })
+        });
+        return;
+      }
+      setActionFeedback({
+        variant: 'error',
+        text: t('Batch retry completed: {success} succeeded, {failed} failed. First error: {message}', {
+          success: successCount,
+          failed: failureCount,
+          message: firstError || t('Unknown')
+        })
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  }, [
+    bulkRetryDispatchPreference,
+    bulkRetryWorkerAvailable,
+    bulkRetryWorkerId,
+    load,
+    retryableVisibleJobs,
+    t
+  ]);
+  const cancelVisibleActiveJobs = useCallback(async () => {
+    if (!activeVisibleJobs.length) {
+      setActionFeedback({
+        variant: 'error',
+        text: t('No active jobs are visible in current filters.')
+      });
+      return;
+    }
+
+    setActionBusy(true);
+    setActionFeedback(null);
+    let successCount = 0;
+    let failureCount = 0;
+    let firstError = '';
+
+    try {
+      for (const job of activeVisibleJobs) {
+        try {
+          await api.cancelTrainingJob(job.id);
+          successCount += 1;
+        } catch (error) {
+          const message = (error as Error).message;
+          if (cancelTransitionRacePattern.test(message)) {
+            successCount += 1;
+            continue;
+          }
+          failureCount += 1;
+          if (!firstError) {
+            firstError = message;
+          }
+        }
+      }
+
+      await load('manual');
+      if (failureCount === 0) {
+        setActionFeedback({
+          variant: 'success',
+          text: t('Cancelled {count} job(s) in current view.', {
+            count: successCount
+          })
+        });
+        return;
+      }
+      if (successCount === 0) {
+        setActionFeedback({
+          variant: 'error',
+          text: t('Batch cancel failed for all {count} jobs. First error: {message}', {
+            count: failureCount,
+            message: firstError || t('Unknown')
+          })
+        });
+        return;
+      }
+      setActionFeedback({
+        variant: 'error',
+        text: t('Batch cancel completed: {success} succeeded, {failed} failed. First error: {message}', {
+          success: successCount,
+          failed: failureCount,
+          message: firstError || t('Unknown')
+        })
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  }, [activeVisibleJobs, load, t]);
+  const bulkRetryPrecheck = useMemo(() => {
+    if (bulkRetryDispatchPreference !== 'worker') {
+      return {
+        tone: 'success' as const,
+        text: t('Precheck passed for current dispatch strategy.')
+      };
+    }
+    if (workersLoading) {
+      return {
+        tone: 'warning' as const,
+        text: t('Loading worker inventory...')
+      };
+    }
+    if (workersAccessDenied) {
+      return {
+        tone: 'warning' as const,
+        text: t('Worker inventory is restricted to admins.')
+      };
+    }
+    if (bulkRetryWorkerId && !bulkRetryWorkerAvailable) {
+      return {
+        tone: 'danger' as const,
+        text: t('Selected worker is not in current inventory.')
+      };
+    }
+    if (!bulkRetryWorkerId && onlineWorkers.length === 0) {
+      return {
+        tone: 'warning' as const,
+        text: t('Worker dispatch may fail if no eligible online worker is available.')
+      };
+    }
+    return {
+      tone: 'success' as const,
+      text: t('Precheck passed for current dispatch strategy.')
+    };
+  }, [
+    bulkRetryDispatchPreference,
+    bulkRetryWorkerAvailable,
+    bulkRetryWorkerId,
+    onlineWorkers.length,
+    t,
+    workersAccessDenied,
+    workersLoading
+  ]);
+
+  const getJobCompletionAction = useCallback(
+    (job: TrainingJobRecord, artifactSummary?: TrainingArtifactSummary | null) => {
+      if (job.status !== 'completed') {
+        return null;
+      }
+
+      const insight =
+        jobExecutionInsights[job.id] ??
+        (artifactSummary
+          ? deriveTrainingExecutionInsight({
+              status: job.status,
+              executionMode: job.execution_mode,
+              artifactSummary
+            })
+          : null);
+
+      if (!insight) {
+        return null;
+      }
+
+      if (insight.reality !== 'real') {
+        return null;
+      }
+
+      const matchingModel = modelsLoaded ? models.find((model) => model.model_type === job.task_type) ?? null : null;
+      if (modelsLoaded && !matchingModel) {
+        return {
+          label: t('Create model draft'),
+          to: buildCreateModelDraftPath(job.task_type, {
+            jobId: job.id,
+            versionName: job.name
+          }),
+          variant: 'secondary' as const
+        };
+      }
+
+      return {
+        label: t('Register version'),
+        to: buildScopedModelVersionsPath(job, job.name),
+        variant: 'secondary' as const
+      };
+    },
+    [jobExecutionInsights, models, modelsLoaded, t]
+  );
 
   const selectedJobKey = selectedJob?.id ?? '';
   const selectedJobUpdatedAt = selectedJob?.updated_at ?? '';
@@ -657,22 +1153,30 @@ export default function TrainingJobsPage() {
       {
         key: 'actions',
         header: t('Open'),
-        width: '10%',
-        cell: (job) => (
-          <div className="workspace-record-actions">
-            <ButtonLink
-              to={`/training/jobs/${job.id}${detailQuerySuffix}`}
-              variant="ghost"
-              size="sm"
-              onClick={(event) => event.stopPropagation()}
-            >
-              {t('Open')}
-            </ButtonLink>
-          </div>
-        )
+        width: '16%',
+        cell: (job) => {
+          const action = getJobCompletionAction(job);
+          return (
+            <div className="workspace-record-actions row gap wrap">
+              {action ? (
+                <ButtonLink to={action.to} variant={action.variant} size="sm">
+                  {action.label}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink
+                to={`/training/jobs/${job.id}${detailQuerySuffix}`}
+                variant="ghost"
+                size="sm"
+                onClick={(event) => event.stopPropagation()}
+              >
+                {t('Open')}
+              </ButtonLink>
+            </div>
+          );
+        }
       }
     ],
-    [detailQuerySuffix, jobExecutionInsights, t]
+    [detailQuerySuffix, getJobCompletionAction, jobExecutionInsights, t]
   );
 
   return (
@@ -680,7 +1184,7 @@ export default function TrainingJobsPage() {
       <PageHeader
         eyebrow={t('Training control')}
         title={t('Training Jobs')}
-        description={t('Select one job to inspect details or create a new run.')}
+        description={t('Inspect one job, then move on.')}
         meta={
           <div className="row gap wrap align-center">
             <Badge tone="info">
@@ -711,6 +1215,11 @@ export default function TrainingJobsPage() {
               <Button type="button" variant="ghost" size="sm" onClick={openBestVisibleJob}>
                 {t('Open active job')}
               </Button>
+            ) : null}
+            {scopedDatasetId ? (
+              <ButtonLink to={buildScopedClosurePath(scopedDatasetId, scopedVersionId)} variant="ghost" size="sm">
+                {t('Continue to next loop lane')}
+              </ButtonLink>
             ) : null}
             <Button
               type="button"
@@ -888,7 +1397,7 @@ export default function TrainingJobsPage() {
         }
         side={
           <SectionCard
-            title={t('Current task')}
+            title={t('Current job')}
             description={
               filteredJobs.length === 0
                 ? hasActiveFilters
@@ -904,6 +1413,28 @@ export default function TrainingJobsPage() {
               <div className="row gap wrap">
                 {selectedJob ? (
                   <>
+                    {canCancelSelectedJob ? (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        size="sm"
+                        onClick={cancelSelectedJob}
+                        disabled={actionBusy}
+                      >
+                        {t('Cancel')}
+                      </Button>
+                    ) : null}
+                    {canRetrySelectedJob ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={retrySelectedJob}
+                        disabled={actionBusy}
+                      >
+                        {t('Retry')}
+                      </Button>
+                    ) : null}
                     {selectedJob.dataset_id ? (
                       <ButtonLink
                         to={buildScopedDatasetPath(selectedJob.dataset_id, selectedJob.dataset_version_id)}
@@ -911,6 +1442,15 @@ export default function TrainingJobsPage() {
                         size="sm"
                       >
                         {t('Open dataset')}
+                      </ButtonLink>
+                    ) : null}
+                    {selectedJob.dataset_id ? (
+                      <ButtonLink
+                        to={buildScopedClosurePath(selectedJob.dataset_id, selectedJob.dataset_version_id)}
+                        variant="ghost"
+                        size="sm"
+                      >
+                        {t('Continue to next loop lane')}
                       </ButtonLink>
                     ) : null}
                     <ButtonLink
@@ -936,13 +1476,213 @@ export default function TrainingJobsPage() {
             }
           >
             {selectedJob ? (
-              <TrainingJobSummaryBlock
-                t={t}
-                job={selectedJob}
-                insight={selectedExecutionInsight}
-                realityLabel={selectedExecutionRealityLabel}
-                variant="glance"
-              />
+              <div className="stack">
+                <TrainingJobSummaryBlock
+                  t={t}
+                  job={selectedJob}
+                  insight={selectedExecutionInsight}
+                  realityLabel={selectedExecutionRealityLabel}
+                  variant="glance"
+                />
+                {actionFeedback ? (
+                  <InlineAlert
+                    tone={actionFeedback.variant === 'success' ? 'success' : 'danger'}
+                    title={actionFeedback.variant === 'success' ? t('Success') : t('Operation failed')}
+                    description={actionFeedback.text}
+                  />
+                ) : null}
+                {canRetrySelectedJob ? (
+                  <Panel tone="soft" className="stack tight">
+                    <strong>{t('Retry dispatch strategy')}</strong>
+                    <small className="muted">{t('Choose where the retried run should execute.')}</small>
+                    <label className="stack tight">
+                      <small className="muted">{t('Dispatch target')}</small>
+                      <Select
+                        value={retryDispatchPreference}
+                        onChange={(event) => {
+                          retryDispatchTouchedRef.current = true;
+                          const nextPreference = event.target.value as 'auto' | 'control_plane' | 'worker';
+                          setRetryDispatchPreference(nextPreference);
+                          if (nextPreference !== 'worker') {
+                            setRetryWorkerId('');
+                          }
+                        }}
+                      >
+                        <option value="auto">{t('Auto (scheduler decides)')}</option>
+                        <option value="control_plane">{t('Force control-plane')}</option>
+                        <option value="worker">{t('Prefer worker dispatch')}</option>
+                      </Select>
+                    </label>
+                    {retryDispatchPreference === 'worker' ? (
+                      <label className="stack tight">
+                        <small className="muted">{t('Worker preference (optional)')}</small>
+                        <Select
+                          value={retryWorkerId}
+                          onChange={(event) => {
+                            retryDispatchTouchedRef.current = true;
+                            setRetryWorkerId(event.target.value);
+                          }}
+                          disabled={workersLoading || workersAccessDenied || workers.length === 0}
+                        >
+                          <option value="">{t('Auto-select from online workers')}</option>
+                          {onlineWorkers.map((worker) => (
+                            <option key={worker.id} value={worker.id}>
+                              {worker.name} · {worker.id}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                    ) : null}
+                    <small className="muted">{retryDispatchSummary}</small>
+                    {retryDispatchPreference === 'worker' ? (
+                      <div className="row gap wrap">
+                        <Badge tone={onlineWorkers.length > 0 ? 'success' : 'warning'}>
+                          {t('Online workers')}: {onlineWorkers.length}
+                        </Badge>
+                        {retryWorkerId ? (
+                          <Badge tone={retryWorkerAvailable ? 'success' : 'danger'}>
+                            {retryWorkerAvailable ? t('Selected worker ready') : t('Selected worker missing')}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {workersLoading ? (
+                      <small className="muted">{t('Loading worker inventory...')}</small>
+                    ) : null}
+                    {workersAccessDenied ? (
+                      <small className="muted">{t('Worker inventory is restricted to admins.')}</small>
+                    ) : null}
+                    {!workersAccessDenied && workersError ? (
+                      <small className="muted">{workersError}</small>
+                    ) : null}
+                    {retryDispatchPreference === 'worker' &&
+                    !workersLoading &&
+                    !workersAccessDenied &&
+                    onlineWorkers.length === 0 ? (
+                      <InlineAlert
+                        tone="warning"
+                        title={t('No online worker')}
+                        description={t(
+                          'Worker dispatch may fail if no eligible online worker is available.'
+                        )}
+                      />
+                    ) : null}
+                  </Panel>
+                ) : null}
+                {activeVisibleJobs.length > 0 || retryableVisibleJobs.length > 0 ? (
+                  <Panel tone="soft" className="stack tight">
+                    <strong>{t('Batch operations in current view')}</strong>
+                    <small className="muted">
+                      {t('Applies to jobs in the current filter scope only.')}
+                    </small>
+                    <div className="row gap wrap">
+                      <Badge tone="info">
+                        {t('Active jobs')}: {activeVisibleJobs.length}
+                      </Badge>
+                      <Badge tone="warning">
+                        {t('Retryable jobs')}: {retryableVisibleJobs.length}
+                      </Badge>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      onClick={cancelVisibleActiveJobs}
+                      disabled={actionBusy || activeVisibleJobs.length === 0}
+                    >
+                      {t('Cancel all visible active jobs')}
+                    </Button>
+                    {retryableVisibleJobs.length === 0 ? null : (
+                      <>
+                    <label className="stack tight">
+                      <small className="muted">{t('Dispatch target')}</small>
+                      <Select
+                        value={bulkRetryDispatchPreference}
+                        onChange={(event) => {
+                          const nextPreference = event.target.value as
+                            | 'auto'
+                            | 'control_plane'
+                            | 'worker';
+                          setBulkRetryDispatchPreference(nextPreference);
+                          if (nextPreference !== 'worker') {
+                            setBulkRetryWorkerId('');
+                          }
+                        }}
+                      >
+                        <option value="auto">{t('Auto (scheduler decides)')}</option>
+                        <option value="control_plane">{t('Force control-plane')}</option>
+                        <option value="worker">{t('Prefer worker dispatch')}</option>
+                      </Select>
+                    </label>
+                    {bulkRetryDispatchPreference === 'worker' ? (
+                      <label className="stack tight">
+                        <small className="muted">{t('Worker preference (optional)')}</small>
+                        <Select
+                          value={bulkRetryWorkerId}
+                          onChange={(event) => {
+                            setBulkRetryWorkerId(event.target.value);
+                          }}
+                          disabled={workersLoading || workersAccessDenied || workers.length === 0}
+                        >
+                          <option value="">{t('Auto-select from online workers')}</option>
+                          {onlineWorkers.map((worker) => (
+                            <option key={worker.id} value={worker.id}>
+                              {worker.name} · {worker.id}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                    ) : null}
+                    <small className="muted">{bulkRetryDispatchSummary}</small>
+                    <InlineAlert
+                      tone={bulkRetryPrecheck.tone}
+                      title={t('Batch retry precheck')}
+                      description={bulkRetryPrecheck.text}
+                    />
+                    {bulkRetryDispatchPreference === 'worker' ? (
+                      <div className="row gap wrap">
+                        <Badge tone={onlineWorkers.length > 0 ? 'success' : 'warning'}>
+                          {t('Online workers')}: {onlineWorkers.length}
+                        </Badge>
+                        {bulkRetryWorkerId ? (
+                          <Badge tone={bulkRetryWorkerAvailable ? 'success' : 'danger'}>
+                            {bulkRetryWorkerAvailable
+                              ? t('Selected worker ready')
+                              : t('Selected worker missing')}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={retryVisibleJobs}
+                      disabled={
+                        actionBusy ||
+                        retryableVisibleJobs.length === 0 ||
+                        (bulkRetryDispatchPreference === 'worker' && !bulkRetryWorkerAvailable)
+                      }
+                    >
+                      {t('Retry all visible failed jobs')}
+                    </Button>
+                    {bulkRetryDispatchPreference === 'worker' &&
+                    !workersLoading &&
+                    !workersAccessDenied &&
+                    onlineWorkers.length === 0 ? (
+                      <InlineAlert
+                        tone="warning"
+                        title={t('No online worker')}
+                        description={t(
+                          'Worker dispatch may fail if no eligible online worker is available.'
+                        )}
+                      />
+                    ) : null}
+                      </>
+                    )}
+                  </Panel>
+                ) : null}
+              </div>
             ) : firstActiveJob ? (
               <div className="stack tight">
                 <small className="muted">{t('Open the active job first.')}</small>

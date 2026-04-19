@@ -92,6 +92,7 @@ npm run smoke:dataset-export-roundtrip
 npm run smoke:training-worker-scheduler
 npm run smoke:training-worker-dispatch
 npm run smoke:training-worker-cancel
+npm run smoke:worker-model-pull-encrypted
 npm run smoke:admin:verification-retention
 npm run smoke:verify-report-retention-e2e
 ```
@@ -105,6 +106,11 @@ Worker scheduler/dispatch/cancel/failover/package/dedicated-auth smoke knobs:
 - `EXPECTED_TRAINING_DATASET_ID`
 - `EXPECTED_TRAINING_DATASET_VERSION_ID`
   - when omitted, scripts auto-select a ready detection dataset + trainable version (`split_summary.train > 0` and `annotation_coverage > 0`)
+
+`smoke:worker-model-pull-encrypted` knobs:
+- `RUNTIME_API_KEY` (default `smoke-yolo-public-key`)
+- `DELIVERY_KEY` (default `smoke-delivery-key-123`)
+- `TRAINING_DATASET_ID` / `TRAINING_DATASET_VERSION_ID` / `TRAINING_MODEL_ID` (defaults: `d-2` / `dv-2` / `m-1`)
 
 `smoke:inference-feedback-guard` environment knobs:
 - `EXPECTED_VALID_FEEDBACK_DATASET_ID`
@@ -179,8 +185,26 @@ Persistence-related env vars (prototype):
 - `TRAINING_WORKER_DISPATCH_FALLBACK_LOCAL` (default `1`, allow local fallback when worker dispatch fails)
 - `TRAINING_WORKER_INLINE_PACKAGE_MAX_FILES` (default `800`, max file count for inline dataset package sent to worker)
 - `TRAINING_WORKER_INLINE_PACKAGE_MAX_BYTES` (default `41943040`, max total bytes for inline dataset package sent to worker)
+- `PUBLIC_RUNTIME_INFERENCE_MAX_BYTES` (default `10485760`, max decoded bytes accepted by `/api/runtime/public/inference`)
+- `PUBLIC_MODEL_PACKAGE_MAX_BYTES` (default `67108864`, max model artifact bytes accepted by `/api/runtime/public/model-package`)
+- `MODEL_DELIVERY_ENCRYPTION_KEY` (optional fallback encryption key for `/api/runtime/public/model-package` when request omits `encryption_key`)
+- worker-side encrypted model delivery vars:
+  - `WORKER_RUNTIME_PUBLIC_BASE_URL` (optional; default `${CONTROL_PLANE_BASE_URL}/api/runtime/public`)
+  - `WORKER_RUNTIME_PUBLIC_API_KEY` (optional default bearer key for worker `/api/worker/models/pull-encrypted`)
+  - `WORKER_MODEL_DELIVERY_ENCRYPTION_KEY` (optional default decryption key for worker `/api/worker/models/pull-encrypted`)
+  - `WORKER_MODEL_STORE_ROOT` (optional local root directory for pulled/deployed model artifacts)
+  - `WORKER_MODEL_PACKAGE_DOWNLOAD_TIMEOUT_SECONDS` (default `30`, worker pull timeout for control-plane `/api/runtime/public/model-package`)
 - local command templates are available under `scripts/local-runners/`
 - placeholder examples: `{{python_bin}}`, `{{repo_root}}`, `{{job_id}}`, `{{dataset_id}}`, `{{task_type}}`, `{{metrics_path}}`, `{{output_path}}`
+
+Public runtime endpoints (Bearer runtime API key, no session/CSRF):
+- `POST /api/runtime/public/inference`
+- `POST /api/runtime/public/model-package`
+Use Runtime Settings key bindings (`model_version:*`, `model:*`, framework fallback) to control access and quota.
+
+Worker model deployment endpoint (worker auth token required):
+- `POST /api/worker/models/pull-encrypted`
+- worker pulls `/api/runtime/public/model-package`, decrypts AES-256-GCM payload locally, and stores deployment metadata.
 
 For restricted-network environments where `doctr-static.mindee.com` is unreachable:
 - place predownloaded docTR model files (for default arches: `db_resnet50-79bd7d70.pt`, `vgg16_bn_r-d108c19c.pt`) under `VISTRAL_DOCTR_PRESEEDED_MODELS_DIR`, or

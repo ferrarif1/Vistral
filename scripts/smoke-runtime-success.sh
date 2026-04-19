@@ -7,6 +7,9 @@ cd "$ROOT_DIR"
 API_HOST="${API_HOST:-127.0.0.1}"
 AUTH_USERNAME="${AUTH_USERNAME:-admin}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-mock-pass-admin}"
+VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE="${VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE:-0}"
+DOCTR_WAIT_POLLS="${DOCTR_WAIT_POLLS:-240}"
+DOCTR_WAIT_SLEEP_SEC="${DOCTR_WAIT_SLEEP_SEC:-0.5}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "[smoke-runtime-success] jq is required."
@@ -44,8 +47,27 @@ DOCTR_SMOKE_EXPECTED_MISSING_FILE="vistral-smoke-doctr-missing.bin"
 COOKIE_FILE="$(mktemp)"
 API_LOG="$(mktemp)"
 RUNTIME_LOG="$(mktemp)"
+SYNTH_IMAGE_FILE=""
 API_PID=""
 RUNTIME_PID=""
+
+sample_image_file="$(
+  find "${ROOT_DIR}/demo_data" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true
+)"
+if [[ -z "${sample_image_file}" ]]; then
+  SYNTH_IMAGE_FILE="$(mktemp "${TMPDIR:-/tmp}/runtime-success-sample.XXXXXX.png")"
+  python3 - "${SYNTH_IMAGE_FILE}" <<'PY'
+import base64
+import pathlib
+import sys
+
+payload = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7ZlN8AAAAASUVORK5CYII="
+)
+pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(payload))
+PY
+  sample_image_file="${SYNTH_IMAGE_FILE}"
+fi
 
 cleanup() {
   if [[ -n "$API_PID" ]]; then
@@ -58,7 +80,7 @@ cleanup() {
     wait "$RUNTIME_PID" >/dev/null 2>&1 || true
   fi
 
-  rm -f "$COOKIE_FILE" "$API_LOG" "$RUNTIME_LOG"
+  rm -f "$COOKIE_FILE" "$API_LOG" "$RUNTIME_LOG" "${SYNTH_IMAGE_FILE:-}"
 }
 
 trap cleanup EXIT
@@ -115,6 +137,7 @@ LLM_CONFIG_SECRET="smoke-runtime-success-${API_PORT}" \
 PADDLEOCR_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
 DOCTR_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
 YOLO_RUNTIME_ENDPOINT="$RUNTIME_ENDPOINT" \
+VISTRAL_DISABLE_INFERENCE_FALLBACK="${VISTRAL_DISABLE_INFERENCE_FALLBACK_FOR_SMOKE}" \
 VISTRAL_DOCTR_EXPECTED_MODEL_FILES="${DOCTR_SMOKE_EXPECTED_MISSING_FILE}" \
 MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
 npm run dev:api >"$API_LOG" 2>&1 &
@@ -163,6 +186,40 @@ csrf_token="$(echo "$csrf_payload" | jq -r '.data.csrf_token // empty')"
 if [[ -z "$csrf_token" ]]; then
   echo "[smoke-runtime-success] Failed to refresh CSRF token after login"
   echo "$csrf_payload"
+  exit 1
+fi
+
+runtime_controls_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d '{"runtime_config":{},"runtime_controls":{"disable_inference_fallback":false}}' \
+  "${BASE_URL}/api/settings/runtime")"
+runtime_controls_saved="$(echo "$runtime_controls_resp" | jq -r '.success // false')"
+if [[ "$runtime_controls_saved" != "true" ]]; then
+  echo "[smoke-runtime-success] failed to relax runtime_controls.disable_inference_fallback"
+  echo "$runtime_controls_resp"
+  exit 1
+fi
+
+runtime_endpoint_seed_payload="$(
+  jq -nc --arg endpoint "$RUNTIME_ENDPOINT" '{
+    runtime_config: {
+      paddleocr: { endpoint: $endpoint },
+      doctr: { endpoint: $endpoint },
+      yolo: { endpoint: $endpoint }
+    },
+    keep_existing_api_keys: true
+  }'
+)"
+runtime_endpoint_seed_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$runtime_endpoint_seed_payload" \
+  "${BASE_URL}/api/settings/runtime")"
+runtime_endpoint_seed_ok="$(echo "$runtime_endpoint_seed_resp" | jq -r '.success // false')"
+if [[ "$runtime_endpoint_seed_ok" != "true" ]]; then
+  echo "[smoke-runtime-success] failed to seed runtime endpoints"
+  echo "$runtime_endpoint_seed_resp"
   exit 1
 fi
 
@@ -218,9 +275,8 @@ if [[ -z "$ocr_dataset_version_id" ]]; then
 fi
 
 detection_upload_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
-  -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d "{\"filename\":\"runtime-success-detection-$(date +%s).jpg\"}" \
+  -F "file=@${sample_image_file};filename=runtime-success-detection-$(date +%s).jpg" \
   "${BASE_URL}/api/files/inference/upload")"
 detection_input_attachment_id="$(echo "$detection_upload_resp" | jq -r '.data.id // empty')"
 if [[ -z "$detection_input_attachment_id" ]]; then
@@ -231,9 +287,8 @@ fi
 wait_inference_attachment_ready "${detection_input_attachment_id}"
 
 ocr_upload_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
-  -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d "{\"filename\":\"runtime-success-ocr-$(date +%s).jpg\"}" \
+  -F "file=@${sample_image_file};filename=runtime-success-ocr-$(date +%s).jpg" \
   "${BASE_URL}/api/files/inference/upload")"
 ocr_input_attachment_id="$(echo "$ocr_upload_resp" | jq -r '.data.id // empty')"
 if [[ -z "$ocr_input_attachment_id" ]]; then
@@ -289,13 +344,18 @@ if [[ -z "$doctr_training_job_id" ]]; then
 fi
 
 doctr_job_status=""
-for _ in $(seq 1 50); do
+for _ in $(seq 1 "${DOCTR_WAIT_POLLS}"); do
   doctr_job_detail="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/training/jobs/${doctr_training_job_id}")"
   doctr_job_status="$(echo "$doctr_job_detail" | jq -r '.data.job.status // empty')"
   if [[ "$doctr_job_status" == "completed" ]]; then
     break
   fi
-  sleep 0.2
+  if [[ "$doctr_job_status" == "failed" || "$doctr_job_status" == "cancelled" ]]; then
+    echo "[smoke-runtime-success] docTR training job ended unexpectedly: ${doctr_job_status}"
+    echo "$doctr_job_detail"
+    exit 1
+  fi
+  sleep "${DOCTR_WAIT_SLEEP_SEC}"
 done
 
 if [[ "$doctr_job_status" != "completed" ]]; then

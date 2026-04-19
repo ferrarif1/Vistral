@@ -27,6 +27,9 @@ import type {
   ResetUserPasswordInput,
   ReviewAnnotationInput,
   RuntimeConnectivityRecord,
+  RuntimeDeviceAccessIssueResult,
+  RuntimeDeviceLifecycleSnapshot,
+  RuntimeDeviceAccessRecord,
   RuntimeReadinessReport,
   RuntimeMetricsRetentionSummary,
   SubmitApprovalInput,
@@ -684,6 +687,8 @@ export const api = {
     dataset_version_id: string;
     base_model: string;
     config: Record<string, string>;
+    execution_target?: 'control_plane' | 'worker';
+    worker_id?: string;
   }) =>
     request<TrainingJobRecord>('/api/training/jobs', {
       method: 'POST',
@@ -733,9 +738,16 @@ export const api = {
       method: 'POST'
     }),
 
-  retryTrainingJob: (jobId: string) =>
+  retryTrainingJob: (
+    jobId: string,
+    input?: {
+      execution_target?: 'control_plane' | 'worker';
+      worker_id?: string;
+    }
+  ) =>
     request<TrainingJobRecord>(`/api/training/jobs/${encodeURIComponent(jobId)}/retry`, {
-      method: 'POST'
+      method: 'POST',
+      body: JSON.stringify(input ?? {})
     }),
 
   listModelVersions: async () =>
@@ -748,6 +760,7 @@ export const api = {
     model_id: string;
     training_job_id: string;
     version_name: string;
+    allow_ocr_real_probe_registration?: boolean;
   }) =>
     request<ModelVersionRecord>('/api/model-versions/register', {
       method: 'POST',
@@ -904,5 +917,38 @@ export const api = {
         framework,
         binding_key: bindingKey ?? 'framework'
       })
+    }),
+
+  listRuntimeDeviceAccess: (modelVersionId: string) =>
+    request<RuntimeDeviceAccessRecord[]>(
+      `/api/runtime/device-access?model_version_id=${encodeURIComponent(modelVersionId)}`
+    ),
+
+  getRuntimeDeviceLifecycle: (modelVersionId: string) =>
+    request<RuntimeDeviceLifecycleSnapshot>(
+      `/api/runtime/device-access/lifecycle?model_version_id=${encodeURIComponent(modelVersionId)}`
+    ),
+
+  issueRuntimeDeviceAccess: (input: {
+    model_version_id: string;
+    device_name: string;
+    expires_at?: string | null;
+    max_calls?: number | null;
+  }) =>
+    request<RuntimeDeviceAccessIssueResult>('/api/runtime/device-access/issue', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  rotateRuntimeDeviceAccess: (input: { model_version_id: string; binding_key: string }) =>
+    request<RuntimeDeviceAccessIssueResult>('/api/runtime/device-access/rotate', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  revokeRuntimeDeviceAccess: (input: { model_version_id: string; binding_key: string }) =>
+    request<RuntimeDeviceAccessRecord[]>('/api/runtime/device-access/revoke', {
+      method: 'POST',
+      body: JSON.stringify(input)
     })
 };

@@ -228,8 +228,15 @@ Actor: `user`
    - `completed` (or `failed` / `cancelled`)
 5. view logs and metrics in `/training/jobs/:jobId`
 6. from job detail, operators can jump to scoped inference validation and scoped jobs list with the same dataset/version context
+6a. when a completed job has no owned model matching its task type, the detail page should surface a direct prefilled model-draft creation path so the operator can create the missing model before registering the version
+6b. model-draft creation opened from a completed job should keep the version-registration handoff visible so the operator can return with the same job context
 7. when opening job detail from a scoped jobs list, query scope should stay preserved across navigation (`dataset`, `version`)
 8. training detail also exposes scheduler decision history (latest snapshot plus prior reschedule/failover/fallback entries) for auditability
+9. when a completed job is ready for promotion, open `/models/versions` with the job prefilled so version registration starts from the finished run
+10. version registration still requires selecting an owned model, but the completed job and suggested version name should already be filled in
+11. for cross-machine model handoff, worker can deploy encrypted artifact via:
+   - `POST /api/worker/models/pull-encrypted` (worker-auth protected)
+   - worker internally calls `POST /api/runtime/public/model-package` (runtime bearer key) and decrypts payload locally
 
 ## 7. Flow F: Model Version Registration
 Actor: `user`
@@ -237,6 +244,8 @@ Actor: `user`
 1. completed training job becomes registerable only when `execution_mode=local_command`
 1a. if artifact summary signals non-real local execution (`mode=template`, explicit `fallback_reason`, or `training_performed=false`), registration must be blocked unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
 2. register model version in `/models/versions`
+2a. if the completed job has no owned model that matches its task type, the registration surface should surface a direct model-draft creation path prefilled to that task type instead of silently selecting an unrelated model
+2b. after successful registration, the page should expose a direct inference-validation next step for the newly created version
 3. model version is linked to model + dataset + training job + metrics
 
 ## 8. Flow G: Inference Validation + Feedback Loop
@@ -246,6 +255,7 @@ Actor: `user`
 2. review runtime summary (reachable/unreachable/not-configured) and jump to `/settings/runtime` when readiness/configuration issues need fixing
 3. upload inference image
 4. select model version
+4a. the page also accepts a direct model-version prefill via `?modelVersion=<id>` for chat/action links, while `?dataset=<id>&version=<id>` continues to carry dataset-version context for scoped feedback routing
 5. run inference
 6. inspect visualized predictions + raw output + normalized output
 6a. when run source indicates fallback/template (`source` contains `mock` / `template` / `fallback` or raw fallback reason exists), UI must show explicit warning that this is not real OCR output
@@ -258,6 +268,9 @@ Actor: `user`
     - `model_version` bound key first (`model_version:<model_version_id>`)
     - then `model` bound key (`model:<model_id>`)
     - then framework-level fallback key (`<framework>.api_key`)
+12. for remote clients without web session, control plane also exposes bearer-key public runtime APIs:
+    - `POST /api/runtime/public/inference` (inline base64 input)
+    - `POST /api/runtime/public/model-package` (AES-256-GCM encrypted model artifact payload)
 
 ## 9. Closed Business Loop 1: OCR Fine-tune
 1. create OCR dataset

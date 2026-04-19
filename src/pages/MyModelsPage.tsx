@@ -1,16 +1,13 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, User } from '../../shared/domain';
 import ModelInventory from '../components/models/ModelInventory';
+import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { FilterToolbar, InlineAlert, PageHeader } from '../components/ui/ConsolePage';
+import { DetailList, FilterToolbar, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
-import { Card } from '../components/ui/Surface';
-import {
-  WorkspacePage,
-  WorkspaceSectionHeader,
-  WorkspaceWorkbench
-} from '../components/ui/WorkspacePage';
+import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import { buildModelAuthenticityCountsById } from '../features/modelAuthenticity';
 import { deriveTrainingExecutionInsight, type TrainingExecutionInsight } from '../features/trainingExecutionInsight';
 import { useI18n } from '../i18n/I18nProvider';
@@ -23,6 +20,23 @@ type LoadMode = 'initial' | 'manual';
 
 export default function MyModelsPage() {
   const { t } = useI18n();
+  const [searchParams] = useSearchParams();
+  const initialLaneFilter = (() => {
+    const value = (searchParams.get('lane') ?? '').trim();
+    return value === 'ready' || value === 'pending' || value === 'draft_rework' ? value : 'all';
+  })();
+  const initialStatusFilter = (() => {
+    const value = (searchParams.get('status') ?? '').trim();
+    return value === 'draft' ||
+      value === 'pending_approval' ||
+      value === 'approved' ||
+      value === 'rejected' ||
+      value === 'published' ||
+      value === 'deprecated'
+      ? value
+      : 'all';
+  })();
+  const initialSearchText = (searchParams.get('q') ?? '').trim();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [modelVersions, setModelVersions] = useState<ModelVersionRecord[]>([]);
@@ -33,10 +47,10 @@ export default function MyModelsPage() {
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>({});
   const [error, setError] = useState('');
   const [result, setResult] = useState('');
-  const [searchText, setSearchText] = useState('');
+  const [searchText, setSearchText] = useState(initialSearchText);
   const deferredSearchText = useDeferredValue(searchText);
-  const [statusFilter, setStatusFilter] = useState<'all' | ModelRecord['status']>('all');
-  const [laneFilter, setLaneFilter] = useState<'all' | 'ready' | 'pending' | 'draft_rework'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | ModelRecord['status']>(initialStatusFilter);
+  const [laneFilter, setLaneFilter] = useState<'all' | 'ready' | 'pending' | 'draft_rework'>(initialLaneFilter);
 
   const load = async (mode: LoadMode = 'initial') => {
     if (mode === 'initial') {
@@ -284,6 +298,15 @@ export default function MyModelsPage() {
     searchText.trim().length > 0 ||
     statusFilter !== 'all' ||
     laneFilter !== 'all';
+  const overallSummary = useMemo(
+    () => ({
+      total: models.length,
+      ready: models.filter((model) => readyStatusSet.has(model.status)).length,
+      pending: models.filter((model) => model.status === 'pending_approval').length,
+      draftOrRework: models.filter((model) => model.status === 'draft' || model.status === 'rejected').length
+    }),
+    [models]
+  );
 
   const deleteModel = async (model: ModelRecord) => {
     setDeletingModelId(model.id);
@@ -309,6 +332,95 @@ export default function MyModelsPage() {
     setStatusFilter('all');
     setLaneFilter('all');
   };
+
+  type GuidanceAction = {
+    label: string;
+    to?: string;
+    onClick?: () => void;
+    variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  };
+  type OwnerNextStepState = {
+    current: number;
+    total: number;
+    title: string;
+    detail: string;
+    badgeTone: 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+    badgeLabel: string;
+    actions: GuidanceAction[];
+  };
+
+  const ownerNextStep = useMemo<OwnerNextStepState>(() => {
+    if (models.length === 0) {
+      return {
+        current: 1,
+        total: 4,
+        title: t('Create the first model draft'),
+        detail: t('Start with a model shell so completed training runs have a governance target for version registration and approval.'),
+        badgeTone: 'warning',
+        badgeLabel: t('No models'),
+        actions: [{ label: t('Create model draft'), to: '/models/create' }]
+      };
+    }
+
+    if (overallSummary.draftOrRework > 0) {
+      return {
+        current: 2,
+        total: 4,
+        title: t('Finish draft or rework governance'),
+        detail: t('{count} models are still in draft or rejected state. Clean these up first so version delivery does not lose its governance anchor.', {
+          count: overallSummary.draftOrRework
+        }),
+        badgeTone: 'warning',
+        badgeLabel: t('Drafts / rework'),
+        actions: [
+          {
+            label: t('Focus drafts / rework'),
+            onClick: () => {
+              setLaneFilter('draft_rework');
+              setStatusFilter('all');
+            }
+          },
+          { label: t('Open version registry'), to: '/models/versions', variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (overallSummary.pending > 0) {
+      return {
+        current: 3,
+        total: 4,
+        title: t('Track pending approval results'),
+        detail: t('{count} models are waiting in pending approval. Watch these before you broaden rollout or device delivery.', {
+          count: overallSummary.pending
+        }),
+        badgeTone: 'info',
+        badgeLabel: t('Pending approval'),
+        actions: [
+          {
+            label: t('Focus pending models'),
+            onClick: () => {
+              setLaneFilter('pending');
+              setStatusFilter('all');
+            }
+          },
+          { label: t('Open version registry'), to: '/models/versions', variant: 'ghost' }
+        ]
+      };
+    }
+
+    return {
+      current: 4,
+      total: 4,
+      title: t('Ready models can move into versions and delivery'),
+      detail: t('Your governed model shells are in good shape. Continue in the version registry for validation, comparison, and device-facing delivery.'),
+      badgeTone: 'success',
+      badgeLabel: t('Governance ready'),
+      actions: [
+        { label: t('Open version registry'), to: '/models/versions' },
+        { label: t('Create another model'), to: '/models/create', variant: 'ghost' }
+      ]
+    };
+  }, [models.length, overallSummary.draftOrRework, overallSummary.pending, t]);
 
   return (
     <WorkspacePage>
@@ -428,10 +540,41 @@ export default function MyModelsPage() {
         }
         side={
           <div className="workspace-inspector-rail">
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Owner snapshot')}
-                description={t('Keep the ownership-focused scope compact and always visible.')}
+            <WorkspaceNextStepCard
+              title={t('Next step')}
+              description={t('Keep ownership governance and version work connected from this lane.')}
+              stepLabel={ownerNextStep.title}
+              stepDetail={ownerNextStep.detail}
+              current={ownerNextStep.current}
+              total={ownerNextStep.total}
+              badgeLabel={ownerNextStep.badgeLabel}
+              badgeTone={ownerNextStep.badgeTone}
+              actions={ownerNextStep.actions.map((action) =>
+                action.to ? (
+                  <ButtonLink key={action.label} to={action.to} variant={action.variant ?? 'primary'} size="sm">
+                    {action.label}
+                  </ButtonLink>
+                ) : (
+                  <Button key={action.label} type="button" variant={action.variant ?? 'primary'} size="sm" onClick={action.onClick}>
+                    {action.label}
+                  </Button>
+                )
+              )}
+            />
+
+            <SectionCard
+              title={t('Owner snapshot')}
+              description={t('Keep model governance counts and current filters visible from the side rail.')}
+            >
+              <DetailList
+                items={[
+                  { label: t('Owner'), value: currentUser?.username ?? t('guest') },
+                  { label: t('Visible models'), value: filteredSummary.total },
+                  { label: t('Ready'), value: overallSummary.ready },
+                  { label: t('Pending approval'), value: overallSummary.pending },
+                  { label: t('Drafts / rework'), value: overallSummary.draftOrRework },
+                  { label: t('Risky models'), value: filteredRiskyModels }
+                ]}
               />
               <small className="muted">
                 {t('Search')}: {searchText.trim() || t('all')} · {t('Lane')}:{' '}
@@ -441,15 +584,17 @@ export default function MyModelsPage() {
                     ? t('Ready')
                     : laneFilter === 'pending'
                       ? t('Pending review')
-                      : t('Drafts / rework')} · {t('Owner')}: {currentUser?.username ?? t('guest')}
+                      : t('Drafts / rework')}
               </small>
               <div className="row gap wrap">
-                <Badge tone="neutral">{t('Visible')}: {filteredSummary.total}</Badge>
-                <Badge tone={filteredRiskyModels > 0 ? 'warning' : 'neutral'}>
-                  {t('Risky')}: {filteredRiskyModels}
-                </Badge>
+                <ButtonLink to="/models/versions" variant="ghost" size="sm">
+                  {t('Open version registry')}
+                </ButtonLink>
+                <ButtonLink to="/models/create" variant="ghost" size="sm">
+                  {t('Create model draft')}
+                </ButtonLink>
               </div>
-            </Card>
+            </SectionCard>
           </div>
         }
       />

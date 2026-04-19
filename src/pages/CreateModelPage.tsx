@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { FileAttachment, ModelRecord } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
+import { Button, ButtonLink } from '../components/ui/Button';
 import { PageHeader } from '../components/ui/ConsolePage';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Card } from '../components/ui/Surface';
@@ -37,6 +38,10 @@ const buildModelFilesSignature = (modelId: string | null, files: FileAttachment[
 
 export default function CreateModelPage() {
   const { t } = useI18n();
+  const [searchParams] = useSearchParams();
+  const preferredModelType = (searchParams.get('task_type') ?? searchParams.get('model_type') ?? '').trim();
+  const preferredTrainingJobId = (searchParams.get('job') ?? '').trim();
+  const preferredVersionName = (searchParams.get('version_name') ?? searchParams.get('versionName') ?? '').trim();
   const steps = useMemo(() => [t('Metadata'), t('Model File'), t('Parameters'), t('Review')], [t]);
   const stepTitles = useMemo(
     () => [t('Step 1. Metadata'), t('Step 2. Model File Upload'), t('Step 3. Parameters'), t('Step 4. Review and Submit')],
@@ -55,7 +60,11 @@ export default function CreateModelPage() {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [modelType, setModelType] = useState<'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>('classification');
+  const [modelType, setModelType] = useState<'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>(() =>
+    modelTypeOptions.includes(preferredModelType as (typeof modelTypeOptions)[number])
+      ? (preferredModelType as (typeof modelTypeOptions)[number])
+      : 'classification'
+  );
   const [visibility, setVisibility] = useState<'private' | 'workspace' | 'public'>('private');
   const [draftModel, setDraftModel] = useState<ModelRecord | null>(null);
   const [modelFiles, setModelFiles] = useState<FileAttachment[]>([]);
@@ -96,6 +105,21 @@ export default function CreateModelPage() {
     [modelFiles]
   );
   const draftStatusLabel = draftModel ? t(draftModel.status) : t('not started');
+  const versionRegistrationPath = useMemo(() => {
+    if (!draftModel) {
+      return '';
+    }
+
+    const params = new URLSearchParams();
+    params.set('model', draftModel.id);
+    if (preferredTrainingJobId) {
+      params.set('job', preferredTrainingJobId);
+    }
+    if (preferredVersionName) {
+      params.set('version_name', preferredVersionName);
+    }
+    return `/models/versions?${params.toString()}`;
+  }, [draftModel, preferredTrainingJobId, preferredVersionName]);
 
   useBackgroundPolling(
     () => {
@@ -130,7 +154,9 @@ export default function CreateModelPage() {
       setStep(1);
       setFeedback({
         variant: 'success',
-        text: t('Draft created. Continue with model file upload.')
+        text: preferredTrainingJobId
+          ? t('Draft created. Continue with model file upload and then version registration.')
+          : t('Draft created. Continue with model file upload.')
       });
       await refreshModelFiles();
     } catch (error) {
@@ -496,6 +522,22 @@ export default function CreateModelPage() {
                 />
               )}
             </Card>
+
+            {draftModel && preferredTrainingJobId ? (
+              <Card as="article" className="workspace-inspector-card">
+                <div className="stack tight">
+                  <h3>{t('Next step')}</h3>
+                  <small className="muted">
+                    {t('Return to version registration after the draft and files are ready.')}
+                  </small>
+                </div>
+                <div className="row gap wrap">
+                  <ButtonLink to={versionRegistrationPath} variant="secondary" size="sm">
+                    {t('Open version registration')}
+                  </ButtonLink>
+                </div>
+              </Card>
+            ) : null}
 
             <Card as="article" className="workspace-inspector-card">
               <div className="row between gap wrap align-center">

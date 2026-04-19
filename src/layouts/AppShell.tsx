@@ -259,6 +259,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
         label: t('Data & Run'),
         items: [
           {
+            to: '/workflow/closure',
+            label: t('Training Closure Wizard'),
+            shortLabel: 'WF',
+            matchPrefixes: ['/workflow/closure']
+          },
+          {
             to: '/datasets',
             label: t('Datasets'),
             shortLabel: 'D',
@@ -337,6 +343,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
         label: t('Models Explore'),
         shortLabel: 'M',
         matchPrefixes: ['/models']
+      },
+      {
+        to: '/workflow/closure',
+        label: t('Training Closure Wizard'),
+        shortLabel: 'WF',
+        matchPrefixes: ['/workflow/closure']
       },
       {
         to: '/datasets',

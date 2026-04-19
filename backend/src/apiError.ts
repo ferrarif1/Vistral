@@ -87,6 +87,18 @@ const isValidationMessage = (message: string): boolean => {
   ]);
 };
 
+const isRuntimePublicAuthMissingMessage = (message: string): boolean =>
+  normalizeMessage(message) === 'bearer runtime api key is required.';
+
+const isRuntimePublicAuthDeniedMessage = (message: string): boolean => {
+  const normalized = normalizeMessage(message);
+  return (
+    normalized === 'invalid runtime api key for requested model version.' ||
+    normalized.startsWith('runtime api key expired for ') ||
+    normalized.startsWith('runtime api key quota exceeded for ')
+  );
+};
+
 export const normalizeApiError = (error: unknown): NormalizedApiError => {
   if (!(error instanceof Error)) {
     return {
@@ -145,6 +157,22 @@ export const normalizeApiError = (error: unknown): NormalizedApiError => {
     return {
       status: 401,
       code: 'AUTHENTICATION_REQUIRED',
+      message
+    };
+  }
+
+  if (isRuntimePublicAuthMissingMessage(message)) {
+    return {
+      status: 401,
+      code: 'AUTHENTICATION_REQUIRED',
+      message
+    };
+  }
+
+  if (isRuntimePublicAuthDeniedMessage(message)) {
+    return {
+      status: 403,
+      code: 'INSUFFICIENT_PERMISSIONS',
       message
     };
   }

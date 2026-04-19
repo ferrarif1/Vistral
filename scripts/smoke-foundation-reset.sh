@@ -115,10 +115,10 @@ model_count="$(jq '.models | length' "$TMP_STATE")"
 dataset_count="$(jq '.datasets | length' "$TMP_STATE")"
 training_count="$(jq '.trainingJobs | length' "$TMP_STATE")"
 inference_count="$(jq '.inferenceRuns | length' "$TMP_STATE")"
-foundation_yolo="$(jq -r '[.models[]?.name] | index("Road Damage Detector") // empty' "$TMP_STATE")"
-foundation_ocr="$(jq -r '[.models[]?.name] | index("Invoice OCR Assistant") // empty' "$TMP_STATE")"
+foundation_detection_count="$(jq '[.models[]? | select(.model_type=="detection" and ((.metadata.foundation // false) == true or (.metadata.foundation // "") == "true"))] | length' "$TMP_STATE")"
+foundation_ocr_count="$(jq '[.models[]? | select(.model_type=="ocr" and ((.metadata.foundation // false) == true or (.metadata.foundation // "") == "true"))] | length' "$TMP_STATE")"
 
-if [[ "$model_count" -lt 2 || -z "$foundation_yolo" || -z "$foundation_ocr" ]]; then
+if [[ "$model_count" -lt 2 || "$foundation_detection_count" -lt 1 || "$foundation_ocr_count" -lt 1 ]]; then
   echo "[smoke-foundation-reset] expected curated foundation models after reset."
   cat "$TMP_STATE"
   exit 1
@@ -143,17 +143,17 @@ rm -f "$TMP_BOOTSTRAP_STATE"
 bootstrap_output="$(
   APP_STATE_STORE_PATH="$TMP_BOOTSTRAP_STATE" \
   APP_STATE_BOOTSTRAP_MODE=minimal \
-  npx tsx -e "import {loadPersistedAppState, models, datasets, trainingJobs, inferenceRuns} from './backend/src/store.ts'; (async()=>{await loadPersistedAppState(); console.log(JSON.stringify({models:models.map((m)=>m.name),datasets:datasets.length,trainingJobs:trainingJobs.length,inferenceRuns:inferenceRuns.length}));})();"
+  npx tsx -e "import {loadPersistedAppState, models, datasets, trainingJobs, inferenceRuns} from './backend/src/store.ts'; (async()=>{await loadPersistedAppState(); console.log(JSON.stringify({models:models.map((m)=>({name:m.name,model_type:m.model_type,metadata:m.metadata})),datasets:datasets.length,trainingJobs:trainingJobs.length,inferenceRuns:inferenceRuns.length}));})();"
 )"
 
 bootstrap_models_count="$(echo "$bootstrap_output" | jq '.models | length')"
 bootstrap_datasets="$(echo "$bootstrap_output" | jq '.datasets')"
 bootstrap_training_jobs="$(echo "$bootstrap_output" | jq '.trainingJobs')"
 bootstrap_inference_runs="$(echo "$bootstrap_output" | jq '.inferenceRuns')"
-bootstrap_foundation_yolo="$(echo "$bootstrap_output" | jq -r '.models | index("Road Damage Detector") // empty')"
-bootstrap_foundation_ocr="$(echo "$bootstrap_output" | jq -r '.models | index("Invoice OCR Assistant") // empty')"
+bootstrap_foundation_detection_count="$(echo "$bootstrap_output" | jq '[.models[]? | select(.model_type=="detection" and ((.metadata.foundation // false) == true or (.metadata.foundation // "") == "true"))] | length')"
+bootstrap_foundation_ocr_count="$(echo "$bootstrap_output" | jq '[.models[]? | select(.model_type=="ocr" and ((.metadata.foundation // false) == true or (.metadata.foundation // "") == "true"))] | length')"
 
-if [[ "$bootstrap_models_count" -lt 2 || -z "$bootstrap_foundation_yolo" || -z "$bootstrap_foundation_ocr" ]]; then
+if [[ "$bootstrap_models_count" -lt 2 || "$bootstrap_foundation_detection_count" -lt 1 || "$bootstrap_foundation_ocr_count" -lt 1 ]]; then
   echo "[smoke-foundation-reset] minimal bootstrap should keep curated foundation models."
   echo "$bootstrap_output"
   exit 1
