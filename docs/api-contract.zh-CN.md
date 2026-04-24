@@ -233,6 +233,12 @@
   - `create_model_draft`
   - `create_training_job`
   - `run_model_inference`（当消息含附件且命中推理意图时，自动用当前会话模型最近已注册版本执行推理）
+- 当输入已明确表达创建/训练类执行意图（尤其是 `create_*`、创建模型、创建训练任务）时，必须优先进入该操作分支，不能因为出现车牌/编号等 OCR 关键词而被误劫持到“提取最近识别结果”。
+- OCR 提取类 follow-up 只允许作为“最近一次推理结果”的后处理；如果当前轮携带了新附件，后端必须优先基于当前附件理解并执行，而不是直接跳到“最近结果提取”分支。
+- 当用户保存的 LLM 配置已启用时，后端可以先推断用户真正的操作目标，并选择“让用户操作最少”的执行路径：
+  - 仅回答问题
+  - 执行单个 bridge API
+  - 执行多步目标编排：先创建/更新 `VisionTask`，再在信息足够时继续触发下一步相关后端动作
 - 当 `run_model_inference` 返回非真实来源标记（`*fallback*` / `*template*` / `*mock*` / `base_empty`）时，助手摘要必须显式提示“当前为回退/模板结果，非真实推理”，并可附带 `action_links` 引导到推理验证 / Runtime 设置页面。
 - 缺关键字段时，返回 `metadata.conversation_action.status=requires_input`
 - `metadata.conversation_action` 可选返回 `action_links`（`[{label, href}]`），用于前端渲染直达工作区的操作卡片
@@ -242,11 +248,18 @@
 - 支持高级控制台桥接：用户可通过 `/ops {json}` 在会话里直连控制台 API
   - `/ops {json}` payload 在执行前会做参数校验；缺少桥接必填参数时，返回 `requires_input` + `missing_fields`，并支持后续只补缺失字段继续执行
   - 常见自然语言意图也会路由到同一 bridge（如“查看训练任务”“导出 d-12 的 OCR 标注”“取消训练任务 tj-101”）
+  - 当启用 LLM 目标规划时，服务端也可以替用户先合成 bridge payload，让线程直接走“用户操作最少”的执行路径
   - 支持 `api`：
     - 读取类：`list_datasets`、`list_models`、`list_model_versions`、`list_training_jobs`、`list_inference_runs`、`list_dataset_annotations`
     - 执行类：`run_inference`、`create_dataset_version`、`export_dataset_annotations`
     - 变更/高风险：`create_dataset`、`create_model_draft`、`create_training_job`、`register_model_version`、`submit_approval_request`、`send_inference_feedback`、`cancel_training_job`、`retry_training_job`、`upsert_dataset_annotation`、`review_dataset_annotation`、`import_dataset_annotations`、`run_dataset_pre_annotations`、`activate_runtime_profile`、`auto_configure_runtime_settings`
       - `auto_configure_runtime_settings` 参数：可选 `overwrite_endpoint`（boolean，默认 `false`）
+    - 目标编排：`goal_orchestration`
+      - 可先创建/更新 `VisionTask`
+      - 可复用当前附件作为样例输入
+      - 信息足够时可继续衔接 `auto_advance_vision_task`
+      - 若业务条件仍缺失，返回 `requires_input`
+      - 若将自动触发后续变更动作，仍需在线程内显式确认
   - `run_dataset_pre_annotations` 的 bridge 参数语义为 `dataset_id + model_version_id`（兼容 legacy `source_model_version_id`，服务端会内部归一化）
 - 执行成功时，返回 `metadata.conversation_action.status=completed`
 - 执行失败或用户取消时，返回 `failed` / `cancelled`
@@ -662,6 +675,16 @@
   - 返回任务指标导出 JSON（`latest_metrics` + `metrics_by_name` 序列）
   - 供训练详情页下载排障
   - 支持 `?format=csv`，返回 CSV 下载（`training_job_id, metric_name, step, metric_value, recorded_at`）
+- 训练驾驶舱兼容说明：
+  - 当前前端 `Training Cockpit` 的 `live` 模式可基于 `GET /training/jobs/{id}` 返回的 `job + metrics + logs + artifact_summary` 组合视图
+  - 建议归一化后的驾驶舱视图至少能填充：
+    - `training_task`
+    - `metric_series`
+    - `resource_series`
+    - `tuning_trials`
+    - `event_logs`
+  - 当后端尚未返回 `resource_series` 或 `tuning_trials` 时，`live` 模式必须把这些面板视为“缺失/派生”，而不是伪装成真实持久化数据
+  - `demo` 模式仅属于前端演示层，不得修改服务器上的训练任务事实
 - 运行时适配器行为约束：
   - `evaluate()`：优先读取训练工作目录中的真实指标产物（如 `metrics.json`）；没有可评估产物时返回空指标，而不是按任务名猜测固定值。
   - `export()`：必须生成真实本地导出文件路径（可配置根目录），禁止返回伪路径（如 `/mock-artifacts/...`）。

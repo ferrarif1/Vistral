@@ -62,6 +62,7 @@ Vistral must provide one closed-loop platform where engineers can:
 - persistent context per conversation
 - attachment-driven message flow
 - for operational requests (for example dataset creation, model draft creation, training job creation), the conversation layer can call backend APIs and return real execution results
+- when BYO LLM is enabled, the conversation layer should first infer the user's actual operational goal, choose the least-user-operation execution lane, and may chain multiple backend actions in one guided turn (for example understand a `VisionTask` first, then auto-advance the next safe step)
 - when required fields are missing, assistant must explicitly ask for the missing inputs instead of silently guessing critical parameters
 - assistant execution results should stay readable in the timeline as compact action cards with status, missing inputs, and created-entity summary
 - conversation actions may create or update a `VisionTask` so users can continue the same requirement from a dedicated detail page instead of repeating the prompt
@@ -133,6 +134,17 @@ Vistral must provide one closed-loop platform where engineers can:
 - internal smoke/verification/demo fixtures must not remain visible in the default workspace catalog; when sample records are needed, keep at most 1-2 curated examples
 - configure parameters and submit
 - support start/cancel/retry lifecycle
+- provide a dedicated training visualization cockpit for one run, accessible from both training job list and training detail without replacing the existing detail workflow
+- training cockpit must support `live` and `demo` modes:
+  - `live`: consume real training-job status, metric timeline, and logs from backend APIs with non-jumping refresh
+  - `demo`: replay a deterministic mock timeline for presentation, screenshots, and product demos when backend tuning/resource streams are not available
+- training cockpit must visualize at minimum:
+  - stage progression from data preparation to registration/publish handoff
+  - metric curves (for example `loss`, `val_loss`, `accuracy`, `mAP`, `learning_rate`)
+  - resource usage (`gpu`, `gpu_memory`, `cpu`, `memory`, throughput, `eta`)
+  - auto-tuning attempts (candidate params, trial status, best selection, applied config)
+  - timestamped event/log stream with highlighted important events
+- auto-tuning visualization must make "system is actively searching for a better config" obvious even when the current backend only provides partial data; mock/demo output must stay decoupled from persisted training-job truth
 - training scheduling must support control-plane/worker topology:
   - Vistral app can run as control plane on machine `A`
   - one or more training workers can run on machines `B/C/D...`

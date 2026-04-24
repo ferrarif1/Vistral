@@ -248,6 +248,12 @@ Notes:
   - `create_training_job`
   - `run_model_inference` (attachment + inference intent keywords => auto run inference using conversation model's latest registered version)
 - `create_training_job` may also create/update a structured `VisionTask` when the backend needs a persistent orchestration object for task understanding, missing requirements, or next-step continuation
+- when explicit setup/training intent is present (`create_*`, especially model/training creation), it takes precedence over OCR extraction-style keywords such as plate/serial/number so the request is not hijacked into the wrong lane
+- OCR extraction-style follow-up is only allowed as a post-processing step over an existing latest inference result; if the current turn includes new attachments, the backend must interpret the request against those current attachments first instead of skipping directly to "latest result extraction"
+- when saved LLM config is enabled, the backend may first infer the user's real operational goal and choose a least-user-operation lane:
+  - answer only
+  - single bridge API call
+  - multi-step goal orchestration that creates/updates a `VisionTask` and then triggers the next related backend step when enough information is already available
 - when `run_model_inference` returns non-real source markers (`*fallback*` / `*template*` / `*mock*` / `base_empty`), assistant summary must explicitly label it as fallback/template output (not real inference), and may include direct `action_links` to runtime/inference settings pages for remediation.
 - assistant can post-process latest OCR inference for extraction intents (plate/serial/number keywords) and return extracted candidate content
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
@@ -260,6 +266,7 @@ Notes:
 - when execution fails or user cancels, assistant returns `failed` / `cancelled`
 - advanced console bridge (LLM/tool-like call): message can use `/ops {json}` to invoke selected console APIs directly in conversation
   - natural-language route is also supported for common intents (for example: “查看训练任务”, “导出 d-12 的 OCR 标注”, “取消训练任务 tj-101”); server maps intent to bridge API automatically
+  - when LLM goal planning is enabled, the server may synthesize a bridge payload on the user's behalf so the thread can continue on the least-user-operation lane
   - `/ops {json}` payload is validated before execution; when bridge-required params are missing, server returns `requires_input` with explicit `missing_fields` so users can continue by only补充缺失参数 in follow-up turns
   - when natural-language intent is recognized but required IDs/params are missing, assistant returns structured `requires_input` with explicit `missing_fields`
   - user can reply with only the missing value(s) in follow-up turn; server merges them into pending bridge payload and continues execution flow (including high-risk confirmation gate)
@@ -270,6 +277,10 @@ Notes:
     - execute: `run_inference`, `create_dataset_version`, `export_dataset_annotations`
     - mutating/high-risk: `create_dataset`, `create_model_draft`, `create_training_job`, `register_model_version`, `submit_approval_request`, `send_inference_feedback`, `cancel_training_job`, `retry_training_job`, `upsert_dataset_annotation`, `review_dataset_annotation`, `import_dataset_annotations`, `run_dataset_pre_annotations`, `activate_runtime_profile`, `auto_configure_runtime_settings`, `auto_continue_vision_task`, `auto_advance_vision_task`, `generate_vision_task_feedback_dataset`, `register_vision_task_model`
       - `auto_configure_runtime_settings` params: optional `overwrite_endpoint` (boolean, default `false`)
+    - orchestrated lane: `goal_orchestration`
+      - can create/update a `VisionTask`, reuse current attachments as sample inputs, and optionally continue with `auto_advance_vision_task`
+      - when business requirements are still missing, it returns `requires_input`
+      - when downstream mutating follow-up would start automatically, it still requires explicit in-thread confirmation first
   - high-risk bridge APIs (all mutating actions above) require explicit confirmation before execution
 
 ### GET /conversations/{id}
@@ -1558,6 +1569,17 @@ Get training job detail including:
   - `generated_at`
   - `sampled_items`
   - `metrics_keys` (summary of metric keys persisted in artifact)
+
+Training cockpit compatibility notes:
+- current frontend `Training Cockpit` live mode may compose its visualization state from this endpoint plus local refresh/presentation adapters
+- the normalized cockpit view model should be able to populate:
+  - `training_task`
+  - `metric_series`
+  - `resource_series`
+  - `tuning_trials`
+  - `event_logs`
+- when backend does not yet provide `resource_series` or `tuning_trials`, `live` mode must keep those sections nullable/derived instead of pretending they are persisted training facts
+- `demo` mode is frontend-only and must not mutate job truth on the server; it exists to replay a presentation-grade training + auto-tuning timeline for demos and screenshots
 
 ### GET /training/jobs/{id}/metrics-export
 Export normalized metric series JSON for troubleshooting.

@@ -219,6 +219,45 @@ Rules:
   - `npm run build`
   - `npm run smoke:runner-real-fallback`
 
+## 2026-04-24 16:42 (Asia/Shanghai)
+- context: Midway through a docs-first/chat-orchestration round to let saved LLM config infer the user's real goal, choose a least-user-operation lane, and continue through a `goal_orchestration` bridge path; interrupted by a new request to build a Training Cockpit / training visualization experience.
+- plan_md:
+  - `docs/prd.md`
+  - `docs/flows.md`
+  - `docs/api-contract.md`
+  - `docs/data-model.md`
+- done:
+  - Synced core contracts for LLM goal planning and least-user-operation execution language in EN/ZH docs.
+  - Partially implemented backend support in `backend/src/handlers.ts`:
+    - saved-LLM goal planner prompt + payload parser
+    - `goal_orchestration` bridge path skeleton
+    - shared `understandVisionTaskForContext(...)` helper for conversation-driven updates
+    - conversation entry now passes effective LLM config into action resolution
+  - Preserved prior training-intent vs OCR-extraction fix already verified earlier in the same thread.
+- code_changes:
+  - `backend/src/handlers.ts`
+  - `docs/prd.md`
+  - `docs/prd.zh-CN.md`
+  - `docs/flows.md`
+  - `docs/flows.zh-CN.md`
+  - `docs/api-contract.md`
+  - `docs/api-contract.zh-CN.md`
+  - `docs/data-model.md`
+  - `docs/data-model.zh-CN.md`
+- next:
+  1. Finish `goal_orchestration` backend integration and resolve any type/runtime issues in `backend/src/handlers.ts`.
+  2. Add targeted regression smoke with a local mock LLM endpoint for goal planning + task auto-advance.
+  3. Decide whether chat UI should relabel `console_api_call(api=goal_orchestration)` as a more user-facing action card title.
+  4. Run `npm run typecheck` plus the new/affected conversation smokes.
+- risks:
+  - The backend work is intentionally incomplete right now; switching tasks without this note would lose where the dynamic missing-field/confirmation logic stopped.
+  - The planned smoke needs a local OpenAI-compatible mock endpoint because external LLM calls are not suitable for deterministic verification.
+- verification:
+  - Not yet re-run after the partial LLM goal-planner code landed.
+  - Prior completed check before interruption: `npm run typecheck`, `npm run smoke:conversation-actions`
+- doc_backfill:
+  - Primary contracts were updated first; any future completion of this feature should reconcile those docs with the final backend behavior before merge.
+
 ## 2026-04-23 21:03 (Asia/Shanghai)
 - context: Continue the planning/docs completion round for `PLAN_llm.md`, `PLANS.md`, and related contracts; interrupted by a new request to clean invalid/expired Docker content because the local system is lagging.
 - plan_md:

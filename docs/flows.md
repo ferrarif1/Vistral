@@ -30,6 +30,12 @@ Guest/access branch:
 Operational branch inside the same flow:
 1. user asks the assistant to perform a real setup action (for example create dataset / create model draft / create training job / run model inference on attached files)
 2. system parses intent and available fields from current turn plus pending conversation action context
+2a. when a message contains explicit setup/training intent plus OCR-ish keywords (for example plate/serial/number), the setup/training lane wins; the request must not be rerouted into OCR extraction post-processing by keyword overlap alone
+2b. OCR extraction from a latest inference result is treated as a follow-up-only action; when the current turn includes new attachments, the system must first interpret the request against those current attachments
+2c. when a saved LLM configuration is enabled, the system may first build a goal-oriented execution plan:
+    - decide whether the user really wants a question answered, a single console action, or a broader closed-loop workflow continuation
+    - choose the least-user-operation lane
+    - call one or more related backend actions in sequence when that reduces user work without bypassing the same confirmation/safety gates
 3. if critical fields are missing, assistant responds with a compact `requires_input` card that lists missing fields and optional suggestions
 3a. for complex operational intents (for example annotation/review/training/inference scopes), the same `requires_input` card can include direct navigation links so users can jump to the relevant workspace and fetch required ids/inputs
 4. once required fields are complete for high-risk mutations (create dataset/model/training job), assistant asks for explicit confirmation (`确认执行` / `confirm execute`)
@@ -41,6 +47,7 @@ Operational branch inside the same flow:
 8a. when `/ops {json}` or natural-language bridge intent has missing required parameters, assistant must return `requires_input` with explicit missing fields and allow the user to continue by supplying only those fields in follow-up turns
 8b. runtime setup operations can also run from bridge (`activate_runtime_profile`, `auto_configure_runtime_settings`); both remain behind explicit high-risk confirmation
 8c. conversation action cards may surface a derived "suggested next step" for training-job failures or incomplete operations; clicking an executable suggestion sends the equivalent bridge action in-thread, and mutating actions such as `retry_training_job` still pause at the same explicit confirmation gate before execution
+8d. the bridge may also use a goal-orchestration lane that creates/updates a `VisionTask` first and then auto-calls follow-up actions such as `auto_advance_vision_task` when enough information is available; missing business requirements and mutating follow-up confirmation still remain in-thread
 
 Attachment states:
 - `uploading`
@@ -229,6 +236,16 @@ Actor: `user`
    - `evaluating`
    - `completed` (or `failed` / `cancelled`)
 5. view logs and metrics in `/training/jobs/:jobId`
+5a. open `/training/jobs/:jobId/cockpit` when the operator needs the visual execution surface:
+   - top summary keeps run name/status/epoch/runtime/best metric/device
+   - flow rail shows current stage plus completed/upcoming stages
+   - center area visualizes metric curves and resource monitoring
+   - right-side tuning panel shows candidate generation, trial progress, best-trial promotion, and applied-parameter updates
+   - bottom event stream keeps timestamps, highlighted milestones, and log continuity
+5b. cockpit supports two execution modes:
+   - `live`: poll current training detail and map the result into cockpit view state without disrupting the rest of the page
+   - `demo`: replay deterministic mock training/tuning/resource events with playback controls (`play`, `pause`, `replay`, `1x/2x/4x`)
+5c. when backend lacks tuning/resource streams, cockpit may leave those panels empty/derived in `live` mode, while `demo` mode continues to provide a full presentation-grade animation lane
 6. from job detail, operators can jump to scoped inference validation and scoped jobs list with the same dataset/version context
 6a. when a completed job has no owned model matching its task type, the detail page should surface a direct prefilled model-draft creation path so the operator can create the missing model before registering the version
 6b. model-draft creation opened from a completed job should keep the version-registration handoff visible so the operator can return with the same job context

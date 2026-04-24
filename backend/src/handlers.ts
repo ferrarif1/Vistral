@@ -1850,6 +1850,262 @@ const generateTaskDraftFromLlm = async (description: string, llmConfig: LlmConfi
   return parseDraftFromLlmText(response);
 };
 
+type LlmConversationGoalPlan = {
+  mode: 'none' | 'console_api_call' | 'goal_orchestration';
+  intent_summary?: string;
+  reason?: string;
+  api?: string;
+  params?: Record<string, unknown>;
+  prompt?: string;
+  task_id?: string;
+  dataset_id?: string;
+  dataset_version_id?: string;
+  task_type?: TaskType;
+  auto_advance?: boolean;
+  max_rounds?: number;
+};
+
+const goalPlannerSupportedBridgeApis = new Set([
+  'list_datasets',
+  'list_models',
+  'list_model_versions',
+  'list_training_jobs',
+  'list_inference_runs',
+  'list_dataset_annotations',
+  'list_vision_tasks',
+  'get_vision_task',
+  'run_inference',
+  'create_dataset_version',
+  'export_dataset_annotations',
+  'create_dataset',
+  'create_model_draft',
+  'create_training_job',
+  'register_model_version',
+  'submit_approval_request',
+  'send_inference_feedback',
+  'cancel_training_job',
+  'retry_training_job',
+  'upsert_dataset_annotation',
+  'review_dataset_annotation',
+  'import_dataset_annotations',
+  'run_dataset_pre_annotations',
+  'activate_runtime_profile',
+  'auto_configure_runtime_settings',
+  'auto_continue_vision_task',
+  'auto_advance_vision_task',
+  'generate_vision_task_feedback_dataset',
+  'register_vision_task_model',
+  'goal_orchestration'
+]);
+
+const sanitizePlannerParams = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([key]) => typeof key === 'string' && key.trim())
+  );
+};
+
+const parseConversationGoalPlanFromLlmText = (
+  text: string
+): LlmConversationGoalPlan | null => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const jsonText = fencedMatch?.[1]?.trim() || trimmed;
+  try {
+    const parsed = JSON.parse(jsonText) as Partial<LlmConversationGoalPlan>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const mode =
+      parsed.mode === 'none' || parsed.mode === 'console_api_call' || parsed.mode === 'goal_orchestration'
+        ? parsed.mode
+        : null;
+    if (!mode) {
+      return null;
+    }
+    return {
+      mode,
+      intent_summary: typeof parsed.intent_summary === 'string' ? parsed.intent_summary.trim() : '',
+      reason: typeof parsed.reason === 'string' ? parsed.reason.trim() : '',
+      api: typeof parsed.api === 'string' ? parsed.api.trim().toLowerCase() : '',
+      params: sanitizePlannerParams(parsed.params),
+      prompt: typeof parsed.prompt === 'string' ? parsed.prompt.trim() : '',
+      task_id: typeof parsed.task_id === 'string' ? parsed.task_id.trim() : '',
+      dataset_id: typeof parsed.dataset_id === 'string' ? parsed.dataset_id.trim() : '',
+      dataset_version_id:
+        typeof parsed.dataset_version_id === 'string' ? parsed.dataset_version_id.trim() : '',
+      task_type:
+        typeof parsed.task_type === 'string' && isTaskTypeValue(parsed.task_type)
+          ? parsed.task_type
+          : undefined,
+      auto_advance: typeof parsed.auto_advance === 'boolean' ? parsed.auto_advance : undefined,
+      max_rounds:
+        typeof parsed.max_rounds === 'number' && Number.isFinite(parsed.max_rounds)
+          ? parsed.max_rounds
+          : undefined
+    };
+  } catch {
+    return null;
+  }
+};
+
+const buildGoalPlannerWorkspaceContext = (
+  conversation: ConversationRecord,
+  currentUser: User,
+  attachmentIds: string[]
+): Record<string, unknown> => {
+  const conversationModel = models.find((item) => item.id === conversation.model_id) ?? null;
+  const latestConversationModelVersion = conversationModel
+    ? [...modelVersions]
+        .filter(
+          (item) =>
+            item.model_id === conversationModel.id &&
+            item.status === 'registered' &&
+            item.task_type === conversationModel.model_type
+        )
+        .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0] ?? null
+    : null;
+  const datasetContext = listAccessibleDatasetsForConversation(currentUser)
+    .slice(0, 8)
+    .map((dataset) => {
+      const latestTrainableVersion = listDatasetVersionsForTraining(dataset.id)[0] ?? null;
+      return {
+        id: dataset.id,
+        name: dataset.name,
+        task_type: dataset.task_type,
+        status: dataset.status,
+        latest_trainable_version_id: latestTrainableVersion?.id ?? '',
+        latest_trainable_version_name: latestTrainableVersion?.version_name ?? ''
+      };
+    });
+  const modelVersionContext = getModelVersionsVisibleToUser(currentUser)
+    .slice(0, 8)
+    .map((version) => ({
+      id: version.id,
+      model_id: version.model_id,
+      task_type: version.task_type,
+      framework: version.framework,
+      status: version.status
+    }));
+  const visionTaskContext = listVisionModelingTasksForUser(currentUser)
+    .slice(0, 6)
+    .map((task) => ({
+      id: task.id,
+      status: task.status,
+      task_type: task.spec.task_type,
+      dataset_id: task.dataset_id ?? '',
+      dataset_version_id: task.dataset_version_id ?? '',
+      training_job_id: task.training_job_id ?? '',
+      model_version_id: task.model_version_id ?? ''
+    }));
+  const attachmentContext = attachmentIds
+    .map((attachmentId) => attachments.find((item) => item.id === attachmentId))
+    .filter((item): item is FileAttachment => Boolean(item))
+    .map((attachment) => ({
+      id: attachment.id,
+      filename: attachment.filename,
+      status: attachment.status,
+      mime_type: attachment.mime_type ?? ''
+    }));
+
+  return {
+    conversation: {
+      id: conversation.id,
+      model_id: conversation.model_id,
+      model_name: conversationModel?.name ?? '',
+      model_type: conversationModel?.model_type ?? '',
+      latest_registered_version_id: latestConversationModelVersion?.id ?? ''
+    },
+    attachments: attachmentContext,
+    datasets: datasetContext,
+    model_versions: modelVersionContext,
+    vision_tasks: visionTaskContext
+  };
+};
+
+const buildLlmGoalPlannerPayload = async (input: {
+  conversation: ConversationRecord;
+  content: string;
+  attachmentIds: string[];
+  currentUser: User;
+  llmConfig: LlmConfig;
+}): Promise<ConsoleOpsPayload | null> => {
+  const workspaceContext = buildGoalPlannerWorkspaceContext(
+    input.conversation,
+    input.currentUser,
+    input.attachmentIds
+  );
+  const llmText = await callConfiguredLlm(
+    [
+      '你是 Vistral 的目标规划器。请严格返回 JSON，不要输出额外文本。',
+      '目标：准确判断用户真正想完成什么，并选择“让用户操作最少”的执行路径。',
+      'mode 只能是: none, console_api_call, goal_orchestration。',
+      '如果只是问答，返回 {"mode":"none"}。',
+      '如果是单个明确操作，返回 {"mode":"console_api_call","api":"...","params":{...}}。',
+      '如果是更大的建模/闭环目标，优先返回 {"mode":"goal_orchestration", ...}，而不是直接 create_training_job。',
+      'goal_orchestration 适用于：根据需求+样例图理解任务、尽量复用现有数据集/版本、创建或更新 VisionTask，并在信息足够时自动推进下一步。',
+      '只能使用上下文中已经存在的 id；不确定就留空，不要编造。',
+      'goal_orchestration 可选字段：prompt, dataset_id, dataset_version_id, task_type, auto_advance, max_rounds, intent_summary, reason。',
+      `WORKSPACE_CONTEXT_JSON=${JSON.stringify(workspaceContext)}`,
+      `USER_MESSAGE=${input.content}`
+    ].join('\n'),
+    [],
+    input.llmConfig
+  );
+  const plan = parseConversationGoalPlanFromLlmText(llmText);
+  if (!plan || plan.mode === 'none') {
+    return null;
+  }
+
+  if (plan.mode === 'console_api_call') {
+    if (!plan.api || !goalPlannerSupportedBridgeApis.has(plan.api)) {
+      return null;
+    }
+    return {
+      api: plan.api,
+      params: sanitizePlannerParams(plan.params)
+    };
+  }
+
+  const datasetId =
+    plan.dataset_id && datasets.some((item) => item.id === plan.dataset_id) ? plan.dataset_id : '';
+  const datasetVersionId =
+    plan.dataset_version_id && datasetVersions.some((item) => item.id === plan.dataset_version_id)
+      ? plan.dataset_version_id
+      : '';
+  const taskId =
+    plan.task_id &&
+    listVisionModelingTasksForUser(input.currentUser).some((task) => task.id === plan.task_id)
+      ? plan.task_id
+      : '';
+  return {
+    api: 'goal_orchestration',
+    params: {
+      prompt: plan.prompt || input.content,
+      ...(taskId ? { task_id: taskId } : {}),
+      ...(datasetId ? { dataset_id: datasetId } : {}),
+      ...(datasetVersionId ? { dataset_version_id: datasetVersionId } : {}),
+      ...(plan.task_type ? { task_type: plan.task_type } : {}),
+      auto_advance:
+        typeof plan.auto_advance === 'boolean'
+          ? plan.auto_advance
+          : detectConversationGoalAutomationPreference(input.content),
+      max_rounds:
+        typeof plan.max_rounds === 'number' && Number.isFinite(plan.max_rounds)
+          ? Math.max(1, Math.min(5, Math.round(plan.max_rounds)))
+          : 3,
+      sample_attachment_ids: input.attachmentIds.slice(0, 10),
+      goal_summary: plan.intent_summary || '',
+      plan_reason: plan.reason || ''
+    }
+  };
+};
+
 const getCurrentUserLlmConfigView = (): LlmConfigView => {
   const currentUser = findCurrentUser();
   const config = getStoredLlmConfigByUser(currentUser.id);
@@ -2219,8 +2475,9 @@ const detectConversationActionType = (text: string): ConversationActionMetadata[
     /(如何|怎么|what is|what are|why|解释|介绍)/i.test(text) &&
     !/(帮我|请|直接|现在|立即|马上)/i.test(text);
   const hasCreateIntent =
-    /(创建|新建|建立|帮我建|帮我创建|生成|create|set up|setup|start)/i.test(text);
-  const hasDirectExecutionIntent = /(帮我|请|直接|现在|立即|马上|run|train|启动|全流程|闭环|编排|一键)/i.test(text);
+    /(创建|新建|建立|帮我建|帮我创建|生成|做个|弄个|搞个|来个|create|set up|setup|start)/i.test(text);
+  const hasDirectExecutionIntent =
+    /(帮我|请|直接|现在|立即|马上|run|train|训练|启动|做个|弄个|搞个|来个|全流程|闭环|编排|一键)/i.test(text);
 
   if (looksLikeQuestion) {
     return null;
@@ -2244,9 +2501,43 @@ const detectConversationActionType = (text: string): ConversationActionMetadata[
   return null;
 };
 
+const detectConversationOperatorContext = (text: string): boolean =>
+  /(训练|微调|模型|model|数据集|dataset|标注|annotation|版本|version|任务|job|pipeline|workflow|编排|创建|新建|建立|草稿)/i.test(
+    text
+  );
+
+const detectOcrIdentifierTarget = (content: string): boolean =>
+  /(车号|车牌|数字|编号|serial|plate|number)/i.test(content);
+
+const detectOcrExtractionFollowUpCue = (content: string): boolean =>
+  /(提取|抽取|抓取|extract|读出|读取|read out|最近|刚才|上一[次张个]?|前面|latest|last|previous|结果|识别结果|推理结果|多少|是什么|是啥|哪[个一]?|号码|号牌|\?|？)/i.test(
+    content
+  );
+
 const detectTrainingFullPipelineIntent = (text: string): boolean =>
   /(全流程|闭环|编排|一键|自动(?:化)?|pipeline|orchestr(?:ate|ation))/i.test(text) &&
   /(训练|train|training|微调|fine[- ]?tune)/i.test(text);
+
+const detectConversationGoalPlanningCandidate = (
+  content: string,
+  attachmentIds: string[]
+): boolean => {
+  const trimmed = compactWhitespace(content);
+  if (!trimmed || /^\/ops\b/i.test(trimmed)) {
+    return false;
+  }
+  return (
+    attachmentIds.length > 0 ||
+    /(帮我|请帮|请|直接|现在|立即|完成|处理|安排|推进|自动|一键|尽量少|闭环|训练|微调|创建|新建|运行|推理|注册|回流|导入|导出|审批|审核|标注|deploy|publish|train|create|run|register|retry|cancel|continue|advance|feedback)/i.test(
+      trimmed
+    )
+  );
+};
+
+const detectConversationGoalAutomationPreference = (content: string): boolean =>
+  /(自动|一键|闭环|尽量少|少让我|自动推进|全部做完|least[- ]click|minimal steps|as much as possible|end[- ]to[- ]end|complete the loop)/i.test(
+    content
+  );
 
 const detectCancelIntent = (text: string): boolean =>
   /(取消|算了|不用了|先不用|停止|cancel|never mind|forget it)/i.test(text);
@@ -2738,6 +3029,15 @@ const buildConsoleActionLinks = (
         href: visionTaskDetailHref
       },
       { label: chinese ? '打开模型版本' : 'Open Model Version', href: modelVersionDetailHref }
+    ],
+    goal_orchestration: [
+      {
+        label: chinese ? '打开视觉建模任务' : 'Open Vision Task',
+        href: visionTaskDetailHref
+      },
+      { label: chinese ? '打开训练任务' : 'Open Training Job', href: trainingJobDetailHref },
+      { label: chinese ? '打开模型版本' : 'Open Model Version', href: modelVersionDetailHref },
+      { label: chinese ? '打开反馈数据集' : 'Open Feedback Dataset', href: feedbackDatasetHref }
     ],
     list_model_versions: [{ label: chinese ? '打开模型版本' : 'Open Model Versions', href: '/models/versions' }],
     register_model_version: [{ label: chinese ? '打开模型版本' : 'Open Model Versions', href: '/models/versions' }],
@@ -4851,7 +5151,10 @@ const detectConversationInferenceIntent = (content: string, attachmentIds: strin
   if (detectConversationActionType(content)) {
     return false;
   }
-  return /(识别|推理|检测|ocr|read|predict|inference|analy[sz]e|请分析|帮我识别)/i.test(content);
+  if (/(识别|推理|检测|ocr|read|predict|inference|analy[sz]e|请分析|帮我识别)/i.test(content)) {
+    return true;
+  }
+  return detectOcrIdentifierTarget(content) && !detectConversationOperatorContext(content);
 };
 
 const resolveInferenceFallbackReason = (run: InferenceRunRecord): string => {
@@ -5134,8 +5437,18 @@ const resolveConversationInferenceAction = async (
   }
 };
 
-const detectOcrExtractionIntent = (content: string): boolean =>
-  /(提取|抽取|抓取|车号|车牌|数字|编号|serial|plate|number|extract)/i.test(content);
+const detectOcrExtractionIntent = (content: string, attachmentIds: string[]): boolean => {
+  if (attachmentIds.length > 0) {
+    return false;
+  }
+  if (!detectOcrIdentifierTarget(content)) {
+    return false;
+  }
+  if (detectConversationOperatorContext(content)) {
+    return false;
+  }
+  return detectOcrExtractionFollowUpCue(content);
+};
 
 type ConsoleOpsPayload = {
   api: string;
@@ -6072,11 +6385,23 @@ const fillConsoleMissingField = (
     }
     return false;
   }
+  if (field === 'prompt') {
+    const candidate = compactWhitespace(content);
+    if (candidate) {
+      params.prompt = candidate;
+      return true;
+    }
+    return false;
+  }
   return false;
 };
 
 const hasNonEmptyConsoleParam = (params: Record<string, unknown>, field: string): boolean =>
   typeof params[field] === 'string' && String(params[field]).trim().length > 0;
+
+const hasNonEmptyStringArrayConsoleParam = (params: Record<string, unknown>, field: string): boolean =>
+  Array.isArray(params[field]) &&
+  (params[field] as unknown[]).some((item) => typeof item === 'string' && item.trim().length > 0);
 
 const detectConsolePayloadMissingFields = (
   api: string,
@@ -6156,6 +6481,33 @@ const detectConsolePayloadMissingFields = (
     const hasTaskId =
       hasNonEmptyConsoleParam(params, 'task_id') || hasNonEmptyConsoleParam(params, 'vision_task_id');
     return hasTaskId ? [] : ['task_id'];
+  }
+
+  if (api === 'goal_orchestration') {
+    const missing: string[] = [];
+    const hasTaskId =
+      hasNonEmptyConsoleParam(params, 'task_id') || hasNonEmptyConsoleParam(params, 'vision_task_id');
+    if (!hasTaskId && !hasNonEmptyConsoleParam(params, 'prompt')) {
+      missing.push('prompt');
+    }
+    const pendingMissingFields = Array.isArray(params.pending_missing_fields)
+      ? (params.pending_missing_fields as unknown[])
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter(Boolean)
+      : [];
+    if (pendingMissingFields.includes('dataset_id') && !hasNonEmptyConsoleParam(params, 'dataset_id')) {
+      missing.push('dataset_id');
+    }
+    if (pendingMissingFields.includes('dataset_version_id') && !hasNonEmptyConsoleParam(params, 'dataset_version_id')) {
+      missing.push('dataset_version_id');
+    }
+    if (pendingMissingFields.includes('task_type') && !hasNonEmptyConsoleParam(params, 'task_type')) {
+      missing.push('task_type');
+    }
+    if (pendingMissingFields.includes('example_images') && !hasNonEmptyStringArrayConsoleParam(params, 'sample_attachment_ids')) {
+      missing.push('example_images');
+    }
+    return missing;
   }
 
   if (api === 'create_dataset') {
@@ -6280,6 +6632,39 @@ const applyConsoleParamDefaults = (
     }
   }
 
+  if (api === 'goal_orchestration') {
+    if (!readParam('prompt')) {
+      writeParam('prompt', compactWhitespace(content));
+    }
+    const taskType =
+      (isTaskTypeValue(readParam('task_type')) ? (readParam('task_type') as TaskType) : null) ??
+      inferTaskTypeFromText(content);
+    if (!readParam('task_type') && taskType) {
+      writeParam('task_type', taskType);
+    }
+    if (!readParam('dataset_id')) {
+      const inferredDatasetId =
+        resolveDatasetReference(content) || resolveImplicitDatasetReference(content, taskType ?? null);
+      if (inferredDatasetId) {
+        writeParam('dataset_id', inferredDatasetId);
+      }
+    }
+    const datasetId = readParam('dataset_id');
+    if (!readParam('dataset_version_id') && datasetId) {
+      const preferredVersion = listDatasetVersionsForTraining(datasetId)[0] ?? null;
+      if (preferredVersion) {
+        writeParam('dataset_version_id', preferredVersion.id);
+      }
+    }
+    if (typeof params.auto_advance !== 'boolean') {
+      params.auto_advance = detectConversationGoalAutomationPreference(content);
+    }
+    if (typeof params.max_rounds !== 'number' || !Number.isFinite(params.max_rounds)) {
+      params.max_rounds = 3;
+    }
+    return;
+  }
+
   if (api !== 'create_training_job') {
     return;
   }
@@ -6375,9 +6760,300 @@ const highRiskConsoleApis = new Set([
   'register_vision_task_model'
 ]);
 
+const normalizeGoalOrchestrationStringArray = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 10)
+    : [];
+
+const buildGoalOrchestrationActionLinks = (input: {
+  chinese: boolean;
+  taskId: string;
+  datasetId?: string;
+  trainingJobId?: string;
+  modelVersionId?: string;
+  feedbackDatasetId?: string;
+}): Array<{ label: string; href: string }> => {
+  const links: Array<{ label: string; href: string }> = [];
+  const push = (label: string, href: string) => {
+    if (!href) {
+      return;
+    }
+    if (!links.some((item) => item.label === label && item.href === href)) {
+      links.push({ label, href });
+    }
+  };
+
+  push(
+    input.chinese ? '打开视觉建模任务' : 'Open Vision Task',
+    `/vision/tasks/${encodeURIComponent(input.taskId)}`
+  );
+  push(
+    input.chinese ? '打开数据集详情' : 'Open Dataset Detail',
+    input.datasetId ? `/datasets/${encodeURIComponent(input.datasetId)}` : '/datasets'
+  );
+  push(
+    input.chinese ? '打开训练任务' : 'Open Training Job',
+    input.trainingJobId ? `/training/jobs/${encodeURIComponent(input.trainingJobId)}` : '/training/jobs'
+  );
+  push(
+    input.chinese ? '打开模型版本' : 'Open Model Version',
+    input.modelVersionId
+      ? `/models/versions?selectedVersion=${encodeURIComponent(input.modelVersionId)}`
+      : '/models/versions'
+  );
+  push(
+    input.chinese ? '打开反馈数据集' : 'Open Feedback Dataset',
+    input.feedbackDatasetId ? `/datasets/${encodeURIComponent(input.feedbackDatasetId)}` : '/datasets'
+  );
+  return links;
+};
+
+const executeGoalOrchestration = async (input: {
+  params: Record<string, unknown>;
+  content: string;
+  currentUser: User;
+  conversationId: string | null;
+  currentAttachmentIds: string[];
+  confirmed: boolean;
+  pendingAction: ConversationActionMetadata | null;
+}): Promise<ConversationActionResolution> => {
+  const chinese = hasChineseText(input.content);
+  const prompt =
+    (typeof input.params.prompt === 'string' ? input.params.prompt.trim() : '') ||
+    compactWhitespace(input.content);
+  const taskId =
+    (typeof input.params.task_id === 'string' ? input.params.task_id.trim() : '') ||
+    (typeof input.params.vision_task_id === 'string' ? input.params.vision_task_id.trim() : '');
+  const datasetId = typeof input.params.dataset_id === 'string' ? input.params.dataset_id.trim() : '';
+  const datasetVersionId =
+    typeof input.params.dataset_version_id === 'string' ? input.params.dataset_version_id.trim() : '';
+  const taskType =
+    typeof input.params.task_type === 'string' && isTaskTypeValue(input.params.task_type)
+      ? input.params.task_type
+      : null;
+  const autoAdvance =
+    typeof input.params.auto_advance === 'boolean'
+      ? input.params.auto_advance
+      : detectConversationGoalAutomationPreference(input.content);
+  const maxRoundsRaw =
+    typeof input.params.max_rounds === 'number' && Number.isFinite(input.params.max_rounds)
+      ? input.params.max_rounds
+      : 3;
+  const maxRounds = Math.max(1, Math.min(5, Math.round(maxRoundsRaw)));
+  const goalSummary = typeof input.params.goal_summary === 'string' ? input.params.goal_summary.trim() : '';
+  const planReason = typeof input.params.plan_reason === 'string' ? input.params.plan_reason.trim() : '';
+  const pendingMissingFields = normalizeGoalOrchestrationStringArray(input.params.pending_missing_fields);
+  const sampleAttachmentIds = Array.from(
+    new Set([
+      ...normalizeGoalOrchestrationStringArray(input.params.sample_attachment_ids),
+      ...normalizeAttachmentIds(input.currentAttachmentIds)
+    ])
+  ).slice(0, 10);
+
+  const understanding = await understandVisionTaskForContext({
+    prompt,
+    attachment_ids: sampleAttachmentIds,
+    dataset_id: datasetId,
+    dataset_version_id: datasetVersionId,
+    task_id: taskId || null,
+    conversation_id: input.conversationId,
+    currentUser: input.currentUser
+  });
+
+  const task = understanding.task;
+  const effectiveTaskType = toTaskTypeFromVisionTaskType(task.spec.task_type) ?? taskType ?? '';
+  const baseParams = {
+    prompt,
+    task_id: task.id,
+    dataset_id: task.dataset_id ?? datasetId,
+    dataset_version_id: task.dataset_version_id ?? datasetVersionId,
+    task_type: effectiveTaskType,
+    auto_advance: autoAdvance,
+    max_rounds: maxRounds,
+    sample_attachment_ids: sampleAttachmentIds,
+    goal_summary: goalSummary,
+    plan_reason: planReason
+  };
+  const baseCollectedFields = normalizeCollectedFields({
+    api: 'goal_orchestration',
+    prompt,
+    task_id: task.id,
+    vision_task_id: task.id,
+    dataset_id: task.dataset_id ?? datasetId,
+    dataset_version_id: task.dataset_version_id ?? datasetVersionId,
+    task_type: effectiveTaskType,
+    auto_advance: autoAdvance ? 'true' : 'false',
+    max_rounds: String(maxRounds),
+    goal_summary: goalSummary,
+    plan_reason: planReason,
+    sample_attachment_ids: sampleAttachmentIds.join(',')
+  });
+
+  if (task.missing_requirements.length > 0) {
+    const summary = chinese
+      ? `我已理解你的目标并创建视觉建模任务 ${task.id}，但还缺少这些条件：${task.missing_requirements.join(', ')}。补齐后我会继续尽量自动推进。`
+      : `I created vision task ${task.id} for this goal, but I still need: ${task.missing_requirements.join(', ')}. Once those are provided, I will continue with the least-manual path.`;
+    return {
+      content: summary,
+      metadata: toActionMetadata(
+        'console_api_call',
+        'requires_input',
+        summary,
+        {
+          ...baseCollectedFields,
+          payload_json: JSON.stringify({
+            api: 'goal_orchestration',
+            params: {
+              ...baseParams,
+              pending_missing_fields: task.missing_requirements
+            }
+          })
+        },
+        {
+          missingFields: task.missing_requirements,
+          suggestions: task.missing_requirements
+            .flatMap((field) => suggestionsForMissingConsoleField(field))
+            .slice(0, 8),
+          createdEntityType: 'VisionTask',
+          createdEntityId: task.id,
+          createdEntityLabel: task.id,
+          actionLinks: buildGoalOrchestrationActionLinks({
+            chinese,
+            taskId: task.id,
+            datasetId: task.dataset_id ?? undefined
+          })
+        }
+      )
+    };
+  }
+
+  if (!autoAdvance) {
+    const summary = chinese
+      ? `我已将目标整理为视觉建模任务 ${task.id}，当前信息已齐备。你可以继续自动推进，或在任务详情里手动控制下一步。`
+      : `I organized this goal into vision task ${task.id}. The task is ready, and you can either continue automatically or open the task detail for manual control.`;
+    return {
+      content: summary,
+      metadata: toActionMetadata(
+        'console_api_call',
+        'completed',
+        summary,
+        {
+          ...baseCollectedFields,
+          payload_json: JSON.stringify({
+            api: 'goal_orchestration',
+            params: {
+              ...baseParams,
+              pending_missing_fields: pendingMissingFields
+            }
+          })
+        },
+        {
+          createdEntityType: 'VisionTask',
+          createdEntityId: task.id,
+          createdEntityLabel: task.id,
+          actionLinks: buildGoalOrchestrationActionLinks({
+            chinese,
+            taskId: task.id,
+            datasetId: task.dataset_id ?? undefined
+          })
+        }
+      )
+    };
+  }
+
+  if (!input.confirmed) {
+    const confirmationPhrase = resolveConfirmationPhrase(input.content, input.pendingAction);
+    const summary = chinese
+      ? `我已经把目标整理为视觉建模任务 ${task.id}，并准备继续自动推进下一步。若要真正执行，请回复“${confirmationPhrase}”。`
+      : `I organized this goal into vision task ${task.id} and I am ready to continue automatically. Reply "${confirmationPhrase}" to execute the next step.`;
+    return {
+      content: summary,
+      metadata: toActionMetadata(
+        'console_api_call',
+        'requires_input',
+        summary,
+        {
+          ...baseCollectedFields,
+          payload_json: JSON.stringify({
+            api: 'goal_orchestration',
+            params: {
+              ...baseParams,
+              pending_missing_fields: pendingMissingFields
+            }
+          })
+        },
+        {
+          missingFields: ['confirmation'],
+          requiresConfirmation: true,
+          confirmationPhrase,
+          createdEntityType: 'VisionTask',
+          createdEntityId: task.id,
+          createdEntityLabel: task.id,
+          actionLinks: buildGoalOrchestrationActionLinks({
+            chinese,
+            taskId: task.id,
+            datasetId: task.dataset_id ?? undefined
+          })
+        }
+      )
+    };
+  }
+
+  const advanced = await autoAdvanceVisionTask({
+    task_id: task.id,
+    max_rounds: maxRounds
+  });
+
+  const advancedSummary = chinese
+    ? `我已按“最少人工操作”路径继续执行：${advanced.message}`
+    : `I continued on the least-manual path: ${advanced.message}`;
+  return {
+    content: advancedSummary,
+    metadata: toActionMetadata(
+      'console_api_call',
+      'completed',
+      advancedSummary,
+      {
+        ...baseCollectedFields,
+        action: advanced.action,
+        training_job_id: advanced.training_job_id ?? '',
+        model_version_id: advanced.model_version_id ?? '',
+        feedback_dataset_id: advanced.feedback_dataset_id ?? '',
+        payload_json: JSON.stringify({
+          api: 'goal_orchestration',
+          params: {
+            ...baseParams,
+            task_id: task.id,
+            pending_missing_fields: pendingMissingFields
+          }
+        })
+      },
+      {
+        createdEntityType: 'VisionTask',
+        createdEntityId: advanced.task.id,
+        createdEntityLabel: advanced.task.id,
+        actionLinks: buildGoalOrchestrationActionLinks({
+          chinese,
+          taskId: advanced.task.id,
+          datasetId: advanced.task.dataset_id ?? undefined,
+          trainingJobId: advanced.training_job_id ?? undefined,
+          modelVersionId: advanced.model_version_id ?? undefined,
+          feedbackDatasetId: advanced.feedback_dataset_id ?? undefined
+        })
+      }
+    )
+  };
+};
+
 const resolveConsoleApiAction = async (
   content: string,
-  pendingAction: ConversationActionMetadata | null
+  pendingAction: ConversationActionMetadata | null,
+  currentUser: User,
+  conversationId: string | null,
+  attachmentIds: string[]
 ): Promise<ConversationActionResolution | null> => {
   const parsed = parseConsoleOpsPayload(content);
   if (!parsed && /^\/ops\b/i.test(content.trim())) {
@@ -6405,6 +7081,14 @@ const resolveConsoleApiAction = async (
                 ? { ...(recovered.params as Record<string, unknown>) }
                 : {};
             const normalizedRecoveredApi = recovered.api.trim().toLowerCase();
+            if (normalizedRecoveredApi === 'goal_orchestration' && attachmentIds.length > 0) {
+              params.sample_attachment_ids = Array.from(
+                new Set([
+                  ...normalizeGoalOrchestrationStringArray(params.sample_attachment_ids),
+                  ...normalizeAttachmentIds(attachmentIds)
+                ])
+              ).slice(0, 10);
+            }
             const missingFields = Array.isArray(pendingAction.missing_fields)
               ? pendingAction.missing_fields
               : [];
@@ -6517,6 +7201,14 @@ const resolveConsoleApiAction = async (
 
   const normalizedApi = payload.api.trim().toLowerCase();
   const params = payload.params ?? {};
+  if (normalizedApi === 'goal_orchestration' && attachmentIds.length > 0) {
+    params.sample_attachment_ids = Array.from(
+      new Set([
+        ...normalizeGoalOrchestrationStringArray(params.sample_attachment_ids),
+        ...normalizeAttachmentIds(attachmentIds)
+      ])
+    ).slice(0, 10);
+  }
   applyConsoleParamDefaults(normalizedApi, params, content);
   const payloadMissingFields = detectConsolePayloadMissingFields(normalizedApi, params);
   if (payloadMissingFields.length > 0) {
@@ -6826,6 +7518,18 @@ const resolveConsoleApiAction = async (
           }
         )
       };
+    }
+
+    if (normalizedApi === 'goal_orchestration') {
+      return executeGoalOrchestration({
+        params,
+        content,
+        currentUser,
+        conversationId,
+        currentAttachmentIds: attachmentIds,
+        confirmed,
+        pendingAction
+      });
     }
 
     if (normalizedApi === 'list_inference_runs') {
@@ -7263,9 +7967,10 @@ const resolveConsoleApiAction = async (
 
 const resolveConversationExtractionAction = (
   conversationId: string,
-  content: string
+  content: string,
+  attachmentIds: string[]
 ): ConversationActionResolution | null => {
-  if (!detectOcrExtractionIntent(content)) {
+  if (!detectOcrExtractionIntent(content, attachmentIds)) {
     return null;
   }
 
@@ -7329,23 +8034,79 @@ const resolveConversationExtractionAction = (
   };
 };
 
+const resolveLlmGoalPlanningAction = async (input: {
+  conversation: ConversationRecord;
+  content: string;
+  attachmentIds: string[];
+  currentUser: User;
+  llmConfig?: LlmConfig | null;
+}): Promise<ConversationActionResolution | null> => {
+  if (!input.llmConfig || !input.llmConfig.enabled || !input.llmConfig.api_key.trim()) {
+    return null;
+  }
+  if (!detectConversationGoalPlanningCandidate(input.content, input.attachmentIds)) {
+    return null;
+  }
+  try {
+    const payload = await buildLlmGoalPlannerPayload({
+      conversation: input.conversation,
+      content: input.content,
+      attachmentIds: input.attachmentIds,
+      currentUser: input.currentUser,
+      llmConfig: input.llmConfig
+    });
+    if (!payload) {
+      return null;
+    }
+    return await resolveConsoleApiAction(
+      `/ops ${JSON.stringify(payload)}`,
+      null,
+      input.currentUser,
+      input.conversation.id,
+      input.attachmentIds
+    );
+  } catch {
+    return null;
+  }
+};
+
 const resolveConversationAction = async (
   conversation: ConversationRecord,
   content: string,
   attachmentIds: string[],
-  currentUser: User
+  currentUser: User,
+  llmConfig?: LlmConfig | null
 ): Promise<ConversationActionResolution | null> => {
   const pendingAction = getPendingConversationAction(conversation.id);
-  const consoleApiResolution = await resolveConsoleApiAction(content, pendingAction);
+  const consoleApiResolution = await resolveConsoleApiAction(
+    content,
+    pendingAction,
+    currentUser,
+    conversation.id,
+    attachmentIds
+  );
   if (consoleApiResolution) {
     return consoleApiResolution;
+  }
+
+  if (!pendingAction) {
+    const llmGoalResolution = await resolveLlmGoalPlanningAction({
+      conversation,
+      content,
+      attachmentIds,
+      currentUser,
+      llmConfig
+    });
+    if (llmGoalResolution) {
+      return llmGoalResolution;
+    }
   }
 
   const explicitAction = detectConversationActionType(content);
   const action = explicitAction ?? pendingAction?.action ?? null;
 
   if (!action) {
-    const extractionResolution = resolveConversationExtractionAction(conversation.id, content);
+    const extractionResolution = resolveConversationExtractionAction(conversation.id, content, attachmentIds);
     if (extractionResolution) {
       return extractionResolution;
     }
@@ -12944,7 +13705,8 @@ export async function startConversation(
     createdConversation,
     input.initial_message,
     normalizedAttachmentIds,
-    currentUser
+    currentUser,
+    effectiveLlmConfig
   );
   const assistantContent =
     actionResolution?.content ??
@@ -13010,7 +13772,8 @@ export async function sendConversationMessage(
     conversation,
     input.content,
     normalizedAttachmentIds,
-    currentUser
+    currentUser,
+    effectiveLlmConfig
   );
   const assistantContent =
     actionResolution?.content ??
@@ -14923,23 +15686,35 @@ export async function draftTaskFromRequirement(input: {
   }
 }
 
-export async function understandVisionTask(input: {
+const understandVisionTaskForContext = async (input: {
   prompt: string;
   attachment_ids?: string[];
   dataset_id?: string;
   dataset_version_id?: string;
+  task_id?: string | null;
+  conversation_id?: string | null;
+  currentUser: User;
 }): Promise<{
   task: VisionModelingTaskRecord;
   can_start_training: boolean;
 }> {
-  await delay(80);
-  const currentUser = findCurrentUser();
-  const prompt = input.prompt.trim();
+  const existingTask =
+    typeof input.task_id === 'string' && input.task_id.trim()
+      ? findVisionModelingTask(input.task_id.trim())
+      : null;
+  if (existingTask && !(input.currentUser.role === 'admin' || existingTask.created_by === input.currentUser.id)) {
+    throw new Error('No permission to access this vision modeling task.');
+  }
+
+  const prompt = input.prompt.trim() || existingTask?.source_prompt.trim() || '';
   if (!prompt) {
     throw new Error('prompt is required.');
   }
   const attachmentIds = normalizeAttachmentIds(input.attachment_ids);
-  const sampleAttachmentIds = attachmentIds
+  const mergedAttachmentIds = Array.from(
+    new Set([...(existingTask?.sample_attachment_ids ?? []), ...attachmentIds])
+  );
+  const sampleAttachmentIds = mergedAttachmentIds
     .filter((attachmentId) =>
       isImageAttachment(attachments.find((entry) => entry.id === attachmentId))
     )
@@ -14949,13 +15724,14 @@ export async function understandVisionTask(input: {
     .filter(Boolean);
   const spec = await generateVisionTaskSpec({
     content: prompt,
-    currentUser,
+    currentUser: input.currentUser,
     sampleFileNames,
     fallbackTaskType: inferTaskTypeFromText(prompt)
   });
 
-  const datasetId = typeof input.dataset_id === 'string' ? input.dataset_id.trim() : '';
-  const dataset = datasetId ? assertDatasetAccess(datasetId, currentUser) : null;
+  const datasetId =
+    (typeof input.dataset_id === 'string' ? input.dataset_id.trim() : '') || existingTask?.dataset_id || '';
+  const dataset = datasetId ? assertDatasetAccess(datasetId, input.currentUser) : null;
   const profile = dataset ? buildDatasetProfileForVisionTask(dataset, spec) : null;
   const plan = profile
     ? buildTrainingPlanFromRecipe(spec, profile, {
@@ -14998,15 +15774,19 @@ export async function understandVisionTask(input: {
   }
 
   const task = upsertVisionModelingTask({
-    conversationId: null,
+    taskId: existingTask?.id ?? null,
+    conversationId:
+      (typeof input.conversation_id === 'string' && input.conversation_id.trim()
+        ? input.conversation_id.trim()
+        : existingTask?.conversation_id) ?? null,
     status: missingRequirements.length > 0 ? 'requires_input' : 'plan_ready',
     sourcePrompt: prompt,
     sampleAttachmentIds,
     datasetId: dataset?.id ?? null,
     datasetVersionId:
-      typeof input.dataset_version_id === 'string' && input.dataset_version_id.trim()
+      (typeof input.dataset_version_id === 'string' && input.dataset_version_id.trim()
         ? input.dataset_version_id.trim()
-        : null,
+        : existingTask?.dataset_version_id) ?? null,
     spec,
     datasetProfile: profile,
     trainingPlan: plan,
@@ -15015,7 +15795,7 @@ export async function understandVisionTask(input: {
       auto_tune_rounds_json: JSON.stringify(autoTuneRounds),
       threshold_rule_json: JSON.stringify(thresholdRule)
     },
-    currentUser
+    currentUser: input.currentUser
   });
 
   logAudit('vision_task_understood', 'VisionTask', task.id, {
@@ -15027,6 +15807,23 @@ export async function understandVisionTask(input: {
     task,
     can_start_training: missingRequirements.length === 0
   };
+};
+
+export async function understandVisionTask(input: {
+  prompt: string;
+  attachment_ids?: string[];
+  dataset_id?: string;
+  dataset_version_id?: string;
+}): Promise<{
+  task: VisionModelingTaskRecord;
+  can_start_training: boolean;
+}> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  return understandVisionTaskForContext({
+    ...input,
+    currentUser
+  });
 }
 
 export async function listVisionModelingTasks(): Promise<VisionModelingTaskRecord[]> {

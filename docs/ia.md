@@ -164,8 +164,16 @@ Define executable route and page structure for the AI-native conversation worksp
   - detail: status, logs, metrics, and artifact readiness for one run
   - scheduler history, raw fallback reasons, and technical identifiers should stay in advanced disclosure by default
   - first screen should prioritize evidence inspection (status/logs/metrics/artifacts), while cross-domain next steps stay as lightweight links
+  - detail should expose a direct `Open cockpit` continuation into the dedicated visualization surface
   - completed runs should expose a direct version-registration handoff into `/models/versions` with the job context prefilled
   - when no owned model matches the completed job's task type, the detail page should also expose a direct model-draft creation path prefilled to that task type
+- `/training/jobs/:jobId/cockpit`
+  - dedicated training cockpit for one run
+  - accessible from both training list and training detail without removing the existing detail page responsibilities
+  - keeps one professional dark-surface visualization layout: top run summary, stage flow rail, metric/resource center, auto-tuning panel, and event stream
+  - supports mode switch between `live` and `demo`
+  - `demo` mode must expose playback controls (`play`, `pause`, `replay`, `1x/2x/4x`)
+  - `live` mode should prefer real backend data, while missing tuning/resource feeds stay clearly marked as unavailable or derived instead of pretending to be persisted truth
 
 ### 3.7A Vision Orchestration Domain
 - `/vision/tasks`

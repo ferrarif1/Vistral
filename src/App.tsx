@@ -22,6 +22,7 @@ const AnnotationWorkspacePage = lazy(() => import('./pages/AnnotationWorkspacePa
 const TrainingJobsPage = lazy(() => import('./pages/TrainingJobsPage'));
 const CreateTrainingJobPage = lazy(() => import('./pages/CreateTrainingJobPage'));
 const TrainingJobDetailPage = lazy(() => import('./pages/TrainingJobDetailPage'));
+const TrainingCockpitPage = lazy(() => import('./pages/TrainingCockpitPage'));
 const TrainingClosurePage = lazy(() => import('./pages/TrainingClosurePage'));
 const ModelVersionsPage = lazy(() => import('./pages/ModelVersionsPage'));
 const InferenceValidationPage = lazy(() => import('./pages/InferenceValidationPage'));
@@ -76,6 +77,7 @@ export default function App() {
             <Route path="/training/jobs" element={<TrainingJobsPage />} />
             <Route path="/training/jobs/new" element={<CreateTrainingJobPage />} />
             <Route path="/training/jobs/:jobId" element={<TrainingJobDetailPage />} />
+            <Route path="/training/jobs/:jobId/cockpit" element={<TrainingCockpitPage />} />
             <Route path="/vision/tasks" element={<VisionModelingTasksPage />} />
             <Route path="/vision/tasks/:taskId" element={<VisionModelingTaskPage />} />
             <Route path="/workflow/closure" element={<TrainingClosurePage />} />

@@ -65,9 +65,10 @@
 - 附件状态：`uploading | processing | ready | error`
 - `Message.metadata` 可选，用于承载结构化对话动作信息
 - 助手消息可携带 `metadata.conversation_action`
-  - `action`：`create_dataset | create_model_draft | create_training_job`
+  - `action`：`create_dataset | create_model_draft | create_training_job | run_model_inference | console_api_call`
   - `status`：`requires_input | completed | failed | cancelled`
   - 记录 `missing_fields`、`collected_fields`、可选 `suggestions` 与已创建实体引用，供聊天时间线渲染紧凑执行卡片
+- 当 `action=console_api_call` 时，`collected_fields.api` 既可以表示单个 bridge API，也可以表示“让用户操作最少”的编排通道，例如 `goal_orchestration`
 
 ### TrainingJob / InferenceRun（补充）
 - `training_jobs.dataset_version_id`
@@ -104,6 +105,17 @@
 - 推理反馈规则：
   - `POST /inference/runs/{id}/feedback` 的目标数据集 `task_type` 必须与推理任务 `task_type` 一致
   - 不允许跨任务类型（例如 detection 结果回流到 ocr 数据集）
+- `TrainingCockpitSnapshot`（前端组合视图，未来可映射到独立流接口）：
+  - `training_task`：任务摘要（名称、状态、模型类型、数据集版本、模型版本、运行时长、epoch、最佳指标）
+  - `metric_series[]`：`step / epoch / loss / val_loss / accuracy / map / learning_rate / recorded_at`
+  - `resource_series[]`：`gpu_util / gpu_memory / cpu_util / memory_util / throughput / eta_seconds / recorded_at`
+  - `tuning_trials[]`：`trial_id / params / status / score / start_time / end_time / is_best / note`
+  - `event_logs[]`：`time / level / message / event_type`
+  - `mode`：`live | demo`
+  - 规则：
+    - `live` 模式必须保留后端真实事实；缺失资源/调参流时只能显示为空或“派生”标记
+    - `demo` 模式允许使用确定性 mock 序列做演示，但不得回写或污染真实训练任务记录
+    - 当前 UI 可由 `TrainingJob + TrainingMetric + logs + VisionTask.metadata.auto_tune_*` 组合出该视图，未来 SSE/WebSocket 也应尽量复用同一形状
 
 ### RuntimeSettings（补充）
 - 作用域：`设置 > Runtime` 的全局 runtime 适配器配置（管理员范围）

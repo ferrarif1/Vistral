@@ -128,6 +128,13 @@ const buildScopedJobDetailPath = (jobId: string, params?: URLSearchParams): stri
   return query ? `/training/jobs/${jobId}?${query}` : `/training/jobs/${jobId}`;
 };
 
+const buildScopedJobCockpitPath = (jobId: string, params?: URLSearchParams): string => {
+  const next = new URLSearchParams(params?.toString() ?? '');
+  next.set('mode', 'live');
+  const query = next.toString();
+  return query ? `/training/jobs/${jobId}/cockpit?${query}` : `/training/jobs/${jobId}/cockpit`;
+};
+
 type JobDetailPathOptions = {
   logEntryId?: string;
   evidenceView?: 'overview' | 'metrics' | 'logs';
@@ -2205,6 +2212,10 @@ export default function TrainingJobsPage() {
     },
     [detailSearchParams]
   );
+  const buildSelectedJobCockpitPath = useCallback(
+    (jobId: string) => buildScopedJobCockpitPath(jobId, detailSearchParams),
+    [detailSearchParams]
+  );
   const buildOperationLogQueueFocusPath = useCallback(
     (jobId: string, logEntryId?: string) => {
       const next = new URLSearchParams(searchParams);
@@ -2248,6 +2259,10 @@ export default function TrainingJobsPage() {
   const selectedJobDetailPath = useMemo(
     () => (selectedJob ? buildSelectedJobDetailPath(selectedJob.id) : ''),
     [buildSelectedJobDetailPath, selectedJob]
+  );
+  const selectedJobCockpitPath = useMemo(
+    () => (selectedJob ? buildSelectedJobCockpitPath(selectedJob.id) : ''),
+    [buildSelectedJobCockpitPath, selectedJob]
   );
   const selectedJobClosurePath = useMemo(() => {
     if (!selectedJob?.dataset_id) {
@@ -2322,6 +2337,11 @@ export default function TrainingJobsPage() {
           to: buildSelectedJobDetailPath(job.id),
           variant: 'secondary'
         });
+        actions.push({
+          label: t('Open cockpit'),
+          to: buildSelectedJobCockpitPath(job.id),
+          variant: 'ghost'
+        });
         if (job.dataset_id) {
           actions.push({
             label: t('Open dataset'),
@@ -2337,6 +2357,11 @@ export default function TrainingJobsPage() {
           label: t('Review & retry'),
           onClick: () => openJobDrawer(job.id),
           variant: 'secondary'
+        });
+        actions.push({
+          label: t('Open cockpit'),
+          to: buildSelectedJobCockpitPath(job.id),
+          variant: 'ghost'
         });
         actions.push({
           label: t('Create next run'),
@@ -2370,6 +2395,11 @@ export default function TrainingJobsPage() {
         });
       }
       actions.push({
+        label: t('Open cockpit'),
+        to: buildSelectedJobCockpitPath(job.id),
+        variant: 'ghost'
+      });
+      actions.push({
         label: t('Create next run'),
         to: buildCreatePathFromJob(job),
         variant: 'ghost'
@@ -2386,6 +2416,7 @@ export default function TrainingJobsPage() {
       return actions;
     },
     [
+      buildSelectedJobCockpitPath,
       buildSelectedJobDetailPath,
       buildCreatePathFromJob,
       getJobCompletionAction,
@@ -3812,6 +3843,7 @@ export default function TrainingJobsPage() {
                       { label: t('Training Job'), value: selectedJob.id },
                       { label: t('Latest Model Version'), value: selectedJobLinkedVersion?.id || t('Not linked yet') },
                       { label: t('Evidence status'), value: selectedExecutionRealityLabel || t('Unknown execution') },
+                      { label: t('Cockpit lane'), value: selectedJobCockpitPath ? t('Ready') : t('Pending') },
                       { label: t('Inference lane'), value: selectedJobInferencePath ? t('Ready') : t('Pending') },
                       { label: t('Closure lane'), value: selectedJobClosurePath ? t('Ready') : t('Pending') }
                     ]}
@@ -3820,6 +3852,11 @@ export default function TrainingJobsPage() {
                     <ButtonLink to={selectedJobDetailPath} variant="secondary" size="sm">
                       {t('View full detail')}
                     </ButtonLink>
+                    {selectedJobCockpitPath ? (
+                      <ButtonLink to={selectedJobCockpitPath} variant="secondary" size="sm">
+                        {t('Open cockpit')}
+                      </ButtonLink>
+                    ) : null}
                     <ButtonLink to={selectedJobCreateNextRunPath} variant="secondary" size="sm">
                       {t('Create next run')}
                     </ButtonLink>

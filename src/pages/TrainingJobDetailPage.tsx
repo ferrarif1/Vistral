@@ -215,6 +215,13 @@ const buildScopedClosurePath = (
   return `/workflow/closure?${searchParams.toString()}`;
 };
 
+const buildScopedJobCockpitPath = (jobId: string, params?: URLSearchParams): string => {
+  const next = new URLSearchParams(params?.toString() ?? '');
+  next.set('mode', 'live');
+  const query = next.toString();
+  return query ? `/training/jobs/${jobId}/cockpit?${query}` : `/training/jobs/${jobId}/cockpit`;
+};
+
 const buildScopedModelVersionsPath = (
   job: TrainingJobRecord,
   versionName?: string,
@@ -1412,6 +1419,9 @@ export default function TrainingJobDetailPage() {
     launchContextForDetail
   );
   const scopedClosurePath = buildScopedClosurePath(scopedDatasetId, scopedVersionId, launchContextForDetail);
+  const cockpitSearchParams = new URLSearchParams(searchParams);
+  cockpitSearchParams.delete('created');
+  const cockpitPath = buildScopedJobCockpitPath(job.id, cockpitSearchParams);
   const versionSnapshotLabel = job.dataset_version_id ? t('Version set') : t('Version pending');
   const executionTargetLabel = job.execution_target === 'worker' ? t('Worker lane') : t('Control plane');
   const describeSelectedWorker = (
@@ -1704,6 +1714,9 @@ export default function TrainingJobDetailPage() {
                 {completionAction.label}
               </ButtonLink>
             ) : null}
+            <ButtonLink to={cockpitPath} variant="secondary" size="sm">
+              {t('Open cockpit')}
+            </ButtonLink>
             <ButtonLink to={scopedClosurePath} variant="ghost" size="sm">
               {t('Continue to next loop lane')}
             </ButtonLink>

@@ -417,6 +417,22 @@ if [[ "$training_extraction_conflict_action" != "create_training_job" || "$train
   exit 1
 fi
 
+training_short_prompt_started="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "{\"model_id\":\"${model_id}\",\"initial_message\":\"训练识别车号的模型\",\"attachment_ids\":[\"${training_extraction_conflict_attachment_id}\"]}" \
+  "${BASE_URL}/api/conversations/start")"
+
+training_short_prompt_action="$(echo "$training_short_prompt_started" | jq -r '.data.messages[1].metadata.conversation_action.action // empty')"
+training_short_prompt_status="$(echo "$training_short_prompt_started" | jq -r '.data.messages[1].metadata.conversation_action.status // empty')"
+training_short_prompt_missing_dataset="$(echo "$training_short_prompt_started" | jq -r '.data.messages[1].metadata.conversation_action.missing_fields[]? | select(.=="dataset_id")')"
+
+if [[ "$training_short_prompt_action" != "create_training_job" || "$training_short_prompt_status" != "requires_input" || "$training_short_prompt_missing_dataset" != "dataset_id" ]]; then
+  echo "[smoke-conversation-actions] Short Chinese training intent was not resolved as create_training_job"
+  echo "$training_short_prompt_started"
+  exit 1
+fi
+
 training_followup="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \

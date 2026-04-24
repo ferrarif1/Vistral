@@ -189,6 +189,7 @@ Conversation action metadata rules:
 - supported action types: `create_dataset`, `create_model_draft`, `create_training_job`, `run_model_inference`, `console_api_call`
 - supported action statuses: `requires_input`, `completed`, `failed`, `cancelled`
 - action metadata stores `missing_fields`, `collected_fields`, optional `suggestions`, optional `action_links`, and optional created-entity reference (`Dataset`, `TrainingJob`, `Model`, `VisionTask`) so UI can render a compact execution card in the chat timeline
+- when action type is `console_api_call`, `collected_fields.api` may describe either one bridge API or a least-user-operation orchestration lane such as `goal_orchestration`
 - frontend may derive additional next-step actions from the action metadata, but mutating follow-up actions must still go through the same confirmation and API guards as the manual path
 
 ### 4.5 FileAttachment
@@ -456,6 +457,62 @@ Attributes:
 - `metric_value` (float)
 - `step` (int)
 - `recorded_at`
+
+### 4.14A TrainingCockpitSnapshot (frontend-composed view, future API-compatible)
+Attributes:
+- `training_task`
+  - `id`
+  - `name`
+  - `status`
+  - `model_type`
+  - `dataset_version`
+  - `model_version`
+  - `created_at`
+  - `started_at`
+  - `duration`
+  - `current_epoch`
+  - `total_epoch`
+  - `best_metric`
+- `metric_series[]`
+  - `step`
+  - `epoch`
+  - `loss`
+  - `val_loss`
+  - `accuracy`
+  - `map`
+  - `learning_rate`
+  - `recorded_at`
+- `resource_series[]`
+  - `gpu_util`
+  - `gpu_memory`
+  - `cpu_util`
+  - `memory_util`
+  - `throughput`
+  - `eta_seconds`
+  - `recorded_at`
+- `tuning_trials[]`
+  - `trial_id`
+  - `params`
+  - `status` (`pending` | `running` | `completed` | `rejected` | `best`)
+  - `score`
+  - `start_time`
+  - `end_time`
+  - `is_best`
+  - `note`
+- `event_logs[]`
+  - `time`
+  - `level`
+  - `message`
+  - `event_type`
+- `mode` (`live` | `demo`)
+
+Rules:
+- current UI may compose this snapshot from `TrainingJob`, `TrainingMetric`, runtime logs, artifact summary, and optional `VisionTask.metadata.auto_tune_*` fields when they are available
+- `live` mode must preserve backend truth:
+  - missing resource/tuning feeds remain empty, unavailable, or explicitly marked as derived
+  - synthesized demo-only values must not be written back into `TrainingJob`, `TrainingMetric`, or task records
+- `demo` mode may use deterministic mock series to simulate auto-tuning, resource oscillation, and event progression for presentation-quality playback
+- the normalized snapshot shape should stay stable so a future SSE/WebSocket cockpit stream can replace the current polling adapter without rewriting UI panels
 
 ### 4.15 ModelVersion
 Attributes:
