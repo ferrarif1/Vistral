@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import type { CreateUserInput, User } from '../../shared/domain';
 import SettingsTabs from '../components/settings/SettingsTabs';
 import StateBlock from '../components/StateBlock';
@@ -31,8 +32,54 @@ type AccountStatusChangeIntent = {
 
 const roleTone = (role: User['role']) => (role === 'admin' ? 'info' : 'neutral');
 
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const buildLoginPath = (returnTo?: string | null): string => {
+  const normalized = returnTo?.trim() ?? '';
+  if (
+    normalized &&
+    normalized.startsWith('/') &&
+    !normalized.startsWith('//') &&
+    !normalized.includes('://')
+  ) {
+    const searchParams = new URLSearchParams();
+    searchParams.set('return_to', normalized);
+    return `/auth/login?${searchParams.toString()}`;
+  }
+  return '/auth/login';
+};
+
 export default function AccountSettingsPage() {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { t, roleLabel } = useI18n();
+  const requestedReturnTo = useMemo(
+    () => sanitizeReturnToPath(searchParams.get('return_to')),
+    [searchParams]
+  );
+  const currentTaskPath = useMemo(
+    () => {
+      const params = new URLSearchParams(location.search || '');
+      params.delete('return_to');
+      const query = params.toString();
+      return `${location.pathname}${query ? `?${query}` : ''}`;
+    },
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
+  const loginPath = useMemo(
+    () => buildLoginPath(outboundReturnTo),
+    [outboundReturnTo]
+  );
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -414,6 +461,13 @@ export default function AccountSettingsPage() {
           },
           disabled: loading || refreshing || passwordSaving || creatingUser
         }}
+        secondaryActions={
+          requestedReturnTo ? (
+            <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+              {t('Return to current task')}
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       {loadError && !authRequired ? (
@@ -440,7 +494,7 @@ export default function AccountSettingsPage() {
           title={t('Login to manage account settings')}
           description={t('You must sign in to change passwords or use admin tools.')}
           extra={
-            <ButtonLink to="/auth/login" variant="secondary">
+            <ButtonLink to={loginPath} variant="secondary">
               {t('Login')}
             </ButtonLink>
           }

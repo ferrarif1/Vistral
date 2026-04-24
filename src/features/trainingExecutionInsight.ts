@@ -3,8 +3,9 @@ import type {
   TrainingExecutionMode,
   TrainingJobStatus
 } from '../../shared/domain';
+import { isCalibratedEvidenceLevel } from '../utils/registrationEvidence';
 
-export type TrainingExecutionReality = 'real' | 'template' | 'simulated' | 'unknown';
+export type TrainingExecutionReality = 'standard' | 'template' | 'simulated' | 'unknown';
 
 export interface TrainingExecutionInsight {
   reality: TrainingExecutionReality;
@@ -61,16 +62,16 @@ export const deriveTrainingExecutionInsight = (input: {
 
   if (runnerMode === 'real' && trainingPerformed === true) {
     return {
-      reality: 'real',
+      reality: 'standard',
       fallbackReason,
       runnerMode,
       showWarning: false
     };
   }
 
-  if (runnerMode === 'real_probe' && !fallbackReason && sampledItems > 0) {
+  if (isCalibratedEvidenceLevel(runnerMode) && !fallbackReason && sampledItems > 0) {
     return {
-      reality: 'real',
+      reality: 'standard',
       fallbackReason,
       runnerMode,
       showWarning: false
@@ -96,7 +97,7 @@ export const deriveTrainingExecutionInsight = (input: {
   }
 
   return {
-    reality: 'real',
+    reality: 'standard',
     fallbackReason,
     runnerMode,
     showWarning: false

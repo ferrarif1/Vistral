@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type {
   CreateTrainingWorkerInput,
   TrainingWorkerBootstrapSessionRecord,
@@ -10,7 +11,7 @@ import type {
 import SettingsTabs from '../components/settings/SettingsTabs';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
+import { Button, ButtonLink } from '../components/ui/Button';
 import {
   ActionBar,
   ConfirmDangerDialog,
@@ -128,6 +129,138 @@ const buildWorkerSetupUrlHint = (workerPublicHost: string | null, workerBindPort
   return endpoint ? `${endpoint}/setup` : `http://<worker-host>:${workerBindPort}/setup`;
 };
 
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: {
+    datasetId?: string | null;
+    versionId?: string | null;
+    taskType?: string | null;
+    framework?: string | null;
+    executionTarget?: string | null;
+    workerId?: string | null;
+  }
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const appendReturnTo = (searchParams: URLSearchParams, returnTo?: string | null) => {
+  const safeReturnTo = sanitizeReturnToPath(returnTo);
+  if (safeReturnTo && !searchParams.has('return_to')) {
+    searchParams.set('return_to', safeReturnTo);
+  }
+};
+
+const buildTrainingLaunchPath = (context?: {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+},
+returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, context);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/training/jobs/new?${query}` : '/training/jobs/new';
+};
+
+const buildWorkerViewPath = (
+  focus: 'inventory' | 'pairing',
+  options?: {
+    onboarding?: boolean;
+    profile?: TrainingWorkerProfile | null;
+    launchContext?: {
+      datasetId?: string | null;
+      versionId?: string | null;
+      taskType?: string | null;
+      framework?: string | null;
+      executionTarget?: string | null;
+      workerId?: string | null;
+    };
+    returnTo?: string | null;
+  }
+): string => {
+  const nextParams = new URLSearchParams();
+  nextParams.set('focus', focus);
+  if (options?.onboarding) {
+    nextParams.set('onboarding', '1');
+  }
+  if (options?.profile) {
+    nextParams.set('profile', options.profile);
+  }
+  appendTrainingLaunchContext(nextParams, options?.launchContext);
+  appendReturnTo(nextParams, options?.returnTo);
+  return `/settings/workers?${nextParams.toString()}`;
+};
+
+const buildWorkerTrainingPath = (
+  profile?: TrainingWorkerProfile | null,
+  workerId?: string | null,
+  launchContext?: {
+    datasetId?: string | null;
+    versionId?: string | null;
+    taskType?: string | null;
+    framework?: string | null;
+    executionTarget?: string | null;
+    workerId?: string | null;
+  },
+  returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('execution_target', 'worker');
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  if (workerId?.trim()) {
+    searchParams.set('worker', workerId.trim());
+  }
+  if (profile === 'yolo') {
+    searchParams.set('task_type', 'detection');
+    searchParams.set('framework', 'yolo');
+  } else if (profile === 'paddleocr' || profile === 'doctr') {
+    searchParams.set('task_type', 'ocr');
+    searchParams.set('framework', profile);
+  }
+  return `/training/jobs/new?${searchParams.toString()}`;
+};
+
 const resolveWorkerRuntimeProfile = (worker: TrainingWorkerNodeView): string | null =>
   worker.metadata.runtime_profile ??
   worker.metadata.worker_runtime_profile ??
@@ -188,6 +321,7 @@ const workerCompatibilityBadgeTone = (
 
 export default function WorkerSettingsPage() {
   const { t } = useI18n();
+  const [searchParams] = useSearchParams();
   const [workerView, setWorkerView] = useState<'inventory' | 'pairing'>('inventory');
   const [workersLoading, setWorkersLoading] = useState(true);
   const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
@@ -225,6 +359,49 @@ export default function WorkerSettingsPage() {
   const [reconfiguringWorkerId, setReconfiguringWorkerId] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState('');
   const [removingWorker, setRemovingWorker] = useState<TrainingWorkerNodeView | null>(null);
+  const deepLinkAppliedRef = useRef(false);
+  const removeWorkerLockRef = useRef(false);
+  const prefillFocus = (searchParams.get('focus') ?? '').trim().toLowerCase();
+  const prefillWorkerId = (searchParams.get('worker') ?? '').trim();
+  const prefillSessionId = (searchParams.get('session') ?? '').trim();
+  const prefillOnboarding = searchParams.get('onboarding') === '1';
+  const prefillProfileRaw = (
+    searchParams.get('profile') ??
+    searchParams.get('framework') ??
+    ''
+  ).trim().toLowerCase();
+  const prefillProfile =
+    prefillProfileRaw === 'yolo' ||
+    prefillProfileRaw === 'paddleocr' ||
+    prefillProfileRaw === 'doctr' ||
+    prefillProfileRaw === 'mixed'
+      ? (prefillProfileRaw as TrainingWorkerProfile)
+      : null;
+  const launchFrameworkRaw = (
+    searchParams.get('framework') ??
+    searchParams.get('profile') ??
+    ''
+  ).trim().toLowerCase();
+  const launchFramework =
+    launchFrameworkRaw === 'yolo' ||
+    launchFrameworkRaw === 'paddleocr' ||
+    launchFrameworkRaw === 'doctr'
+      ? launchFrameworkRaw
+      : null;
+  const launchDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const launchVersionId = (searchParams.get('version') ?? '').trim();
+  const launchTaskType = (searchParams.get('task_type') ?? '').trim();
+  const launchExecutionTarget = (searchParams.get('execution_target') ?? '').trim();
+  const launchWorkerId = (searchParams.get('worker') ?? '').trim();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const hasTrainingLaunchContext = Boolean(
+    launchDatasetId ||
+      launchVersionId ||
+      launchTaskType ||
+      launchFramework ||
+      launchExecutionTarget ||
+      launchWorkerId
+  );
 
   const refreshTrainingWorkers = useCallback(async () => {
     setWorkersLoading(true);
@@ -270,6 +447,45 @@ export default function WorkerSettingsPage() {
     void refreshTrainingWorkers();
     void refreshBootstrapSessions();
   }, [refreshBootstrapSessions, refreshTrainingWorkers]);
+
+  useEffect(() => {
+    if (prefillFocus === 'pairing') {
+      setWorkerView('pairing');
+      return;
+    }
+    if (prefillFocus === 'inventory') {
+      setWorkerView('inventory');
+    }
+  }, [prefillFocus]);
+
+  useEffect(() => {
+    if (!prefillOnboarding) {
+      return;
+    }
+    setWorkerView('pairing');
+    setWorkerOnboardingOpen(true);
+  }, [prefillOnboarding]);
+
+  useEffect(() => {
+    if (!prefillProfile) {
+      return;
+    }
+    setWorkerOnboardingDraft((prev) =>
+      prev.worker_profile === prefillProfile ? prev : { ...prev, worker_profile: prefillProfile }
+    );
+  }, [prefillProfile]);
+
+  useEffect(() => {
+    if (selectedWorkerId && !workers.some((worker) => worker.id === selectedWorkerId)) {
+      setSelectedWorkerId(null);
+    }
+  }, [selectedWorkerId, workers]);
+
+  useEffect(() => {
+    if (removingWorker && !workers.some((worker) => worker.id === removingWorker.id)) {
+      setRemovingWorker(null);
+    }
+  }, [removingWorker, workers]);
 
   const refreshAll = async () => {
     await Promise.all([refreshTrainingWorkers(), refreshBootstrapSessions()]);
@@ -356,18 +572,24 @@ export default function WorkerSettingsPage() {
   };
 
   const removeWorker = async (worker: TrainingWorkerNodeView) => {
+    if (removeWorkerLockRef.current) {
+      return;
+    }
+    removeWorkerLockRef.current = true;
     setWorkerMutationTargetId(worker.id);
     setWorkerMutationAction('remove');
     setWorkersError('');
     try {
       await api.removeTrainingWorker(worker.id);
       setWorkers((prev) => prev.filter((item) => item.id !== worker.id));
+      setSelectedWorkerId((prev) => (prev === worker.id ? null : prev));
       setRemovingWorker(null);
     } catch (workerError) {
       setWorkersError((workerError as Error).message);
     } finally {
       setWorkerMutationTargetId(null);
       setWorkerMutationAction('');
+      removeWorkerLockRef.current = false;
     }
   };
 
@@ -489,9 +711,51 @@ export default function WorkerSettingsPage() {
   const editingWorker =
     editingWorkerId ? workers.find((worker) => worker.id === editingWorkerId) ?? null : null;
   const workerRegistryTitle = editingWorker ? t('Edit Worker') : t('Register Worker');
+  const workerOnlineCount = workers.filter((worker) => worker.effective_status === 'online').length;
   const pendingBootstrapCount = bootstrapSessions.filter(
     (session) => session.status !== 'online' && session.status !== 'expired'
   ).length;
+  const preferredWorkerForTraining =
+    selectedWorker ??
+    workers.find((worker) => worker.effective_status === 'online' && worker.enabled && Boolean(worker.endpoint)) ??
+    null;
+  const trainingLaunchContext = {
+    datasetId: launchDatasetId || null,
+    versionId: launchVersionId || null,
+    taskType: launchTaskType || null,
+    framework: launchFramework || null,
+    executionTarget: launchExecutionTarget || null,
+    workerId: launchWorkerId || null
+  };
+  const fallbackReturnTaskPath = hasTrainingLaunchContext ? buildTrainingLaunchPath(trainingLaunchContext) : null;
+  const returnTaskPath = requestedReturnTo ?? fallbackReturnTaskPath;
+  const returnTrainingLaunchPath = buildTrainingLaunchPath(trainingLaunchContext, returnTaskPath);
+  const preferredWorkerTrainingPath = buildWorkerTrainingPath(
+    preferredWorkerForTraining
+      ? (resolveWorkerRuntimeProfile(preferredWorkerForTraining) as TrainingWorkerProfile | null)
+      : prefillProfile,
+    preferredWorkerForTraining?.id ?? null,
+    trainingLaunchContext,
+    returnTaskPath
+  );
+  const workerPairingPath = useMemo(
+    () =>
+      buildWorkerViewPath('pairing', {
+        onboarding: true,
+        profile: prefillProfile,
+        launchContext: trainingLaunchContext,
+        returnTo: returnTaskPath
+      }),
+    [prefillProfile, returnTaskPath, trainingLaunchContext]
+  );
+  const workerInventoryPath = useMemo(
+    () =>
+      buildWorkerViewPath('inventory', {
+        launchContext: trainingLaunchContext,
+        returnTo: returnTaskPath
+      }),
+    [returnTaskPath, trainingLaunchContext]
+  );
 
   const workerTableColumns = useMemo<StatusTableColumn<TrainingWorkerNodeView>[]>(
     () => [
@@ -687,6 +951,60 @@ export default function WorkerSettingsPage() {
     }
     return bootstrapSessions.find((session) => session.id === activeBootstrapSessionId) ?? null;
   }, [activeBootstrapSessionId, bootstrapSessions]);
+  const workerNextStepTitle =
+    workerView === 'inventory'
+      ? workerOnlineCount > 0
+        ? t('Workers are ready for scheduled training')
+        : t('No online worker yet')
+      : activeBootstrapSession
+        ? activeBootstrapSession.status === 'online'
+          ? t('Pairing succeeded')
+          : t('Finish the active pairing session')
+        : t('Create a pairing session first');
+  const workerNextStepDetail =
+    workerView === 'inventory'
+      ? workerOnlineCount > 0
+        ? preferredWorkerForTraining
+          ? t('Use the selected worker context to launch a worker-dispatched training run without re-picking the lane.')
+          : t('At least one worker is online. You can launch a worker-dispatched training run now.')
+        : t('Create a pairing session and bring one worker online before you rely on worker dispatch.')
+      : activeBootstrapSession
+        ? activeBootstrapSession.status === 'online'
+          ? t('The worker is online. Return to inventory or go straight to training launch.')
+          : t('Open the active pairing session, complete /setup on the worker host, then validate the callback here.')
+        : t('Generate a session to get the pairing token, setup URL, and startup command.');
+
+  useEffect(() => {
+    if (deepLinkAppliedRef.current) {
+      return;
+    }
+
+    const workerAvailable = prefillWorkerId ? workers.some((worker) => worker.id === prefillWorkerId) : true;
+    const sessionAvailable = prefillSessionId
+      ? bootstrapSessions.some((session) => session.id === prefillSessionId)
+      : true;
+
+    if (!workerAvailable || !sessionAvailable) {
+      return;
+    }
+
+    if (!prefillWorkerId && !prefillSessionId) {
+      deepLinkAppliedRef.current = true;
+      return;
+    }
+
+    deepLinkAppliedRef.current = true;
+
+    if (prefillWorkerId) {
+      setWorkerView('inventory');
+      setSelectedWorkerId(prefillWorkerId);
+    }
+    if (prefillSessionId) {
+      setWorkerView('pairing');
+      setActiveBootstrapSessionId(prefillSessionId);
+      setWorkerOnboardingOpen(true);
+    }
+  }, [bootstrapSessions, prefillSessionId, prefillWorkerId, workers]);
 
   const activeBootstrapCompatibility = activeBootstrapSession
     ? resolveSessionCompatibility(activeBootstrapSession)
@@ -700,10 +1018,6 @@ export default function WorkerSettingsPage() {
       ? 2
       : 1
     : 0;
-  const workerOnlineCount = useMemo(
-    () => workers.filter((worker) => worker.effective_status === 'online').length,
-    [workers]
-  );
   const workerPageDescription =
     workerView === 'inventory'
       ? t('Inventory first, maintenance second.')
@@ -752,6 +1066,16 @@ export default function WorkerSettingsPage() {
         }}
         secondaryActions={
           <div className="row gap wrap">
+            {returnTaskPath ? (
+              <ButtonLink to={returnTaskPath} variant="secondary" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            {hasTrainingLaunchContext && returnTrainingLaunchPath !== returnTaskPath ? (
+              <ButtonLink to={returnTrainingLaunchPath} variant="ghost" size="sm">
+                {t('Return to training launch')}
+              </ButtonLink>
+            ) : null}
             <Button
               type="button"
               variant={workerView === 'inventory' ? 'secondary' : 'ghost'}
@@ -845,25 +1169,73 @@ export default function WorkerSettingsPage() {
         }
         side={
           <div className="workspace-inspector-rail">
-            <Card as="article" className="workspace-inspector-card">
-              <WorkspaceSectionHeader
-                title={t('Next step')}
-                description={t('Pairing, registration, and maintenance live in drawers.')}
-              />
-              <small className="muted">
-                {workerView === 'inventory' ? t('Inventory first.') : t('Pairing first.')}
-              </small>
+            <SectionCard
+              title={t('Next step')}
+              description={t('Pairing, registration, and maintenance live in drawers.')}
+            >
+              <small className="muted">{workerNextStepTitle}</small>
+              <small className="muted">{workerNextStepDetail}</small>
               <div className="row gap wrap">
-                <Button
-                  type="button"
+                {workerView === 'inventory' ? (
+                  returnTaskPath ? (
+                    <ButtonLink to={returnTaskPath} variant="secondary" size="sm">
+                      {t('Return to current task')}
+                    </ButtonLink>
+                  ) : workerOnlineCount > 0 ? (
+                    <ButtonLink to={preferredWorkerTrainingPath} variant="secondary" size="sm">
+                      {t('Create Training Job')}
+                    </ButtonLink>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setWorkerView('pairing');
+                        setWorkerOnboardingOpen(true);
+                      }}
+                    >
+                      {t('Add Worker')}
+                    </Button>
+                  )
+                ) : activeBootstrapSession ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setWorkerOnboardingOpen(true)}
+                  >
+                    {t('Open')}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setWorkerOnboardingOpen(true)}
+                  >
+                    {t('Add Worker')}
+                  </Button>
+                )}
+                <ButtonLink
+                  to={workerView === 'inventory' ? workerPairingPath : workerInventoryPath}
                   variant="ghost"
                   size="sm"
-                  onClick={() => setWorkerView(workerView === 'inventory' ? 'pairing' : 'inventory')}
                 >
                   {workerView === 'inventory' ? t('Go to Pairing') : t('Go to Inventory')}
-                </Button>
+                </ButtonLink>
               </div>
-            </Card>
+              <div className="workspace-keyline-list">
+                <div className="workspace-keyline-item">
+                  <span>{t('Online')}</span>
+                  <small>{workerOnlineCount}</small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Pending')}</span>
+                  <small>{pendingBootstrapCount}</small>
+                </div>
+              </div>
+            </SectionCard>
           </div>
         }
       />

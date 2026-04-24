@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { ModelFramework } from '../../shared/domain';
 import SettingsTabs from '../components/settings/SettingsTabs';
 import { Badge } from '../components/ui/Badge';
@@ -83,10 +84,127 @@ const sampleOutputByFramework: Record<ModelFramework, Record<string, unknown>> =
   }
 };
 
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: LaunchContext
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const buildRuntimeSettingsPath = (
+  launchContext?: LaunchContext,
+  framework?: ModelFramework | null
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', 'readiness');
+  if (framework) {
+    searchParams.set('framework', framework);
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/settings/runtime?${searchParams.toString()}`;
+};
+
+const buildWorkerSettingsPath = (
+  launchContext?: LaunchContext,
+  framework?: ModelFramework | null
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', 'inventory');
+  if (framework) {
+    searchParams.set('profile', framework);
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/settings/workers?${searchParams.toString()}`;
+};
+
 export default function RuntimeTemplatesPage() {
   const { t } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const [templateFramework, setTemplateFramework] = useState<ModelFramework>('yolo');
   const [copyMessage, setCopyMessage] = useState('');
+  const launchContext = useMemo<LaunchContext>(
+    () => ({
+      datasetId: (searchParams.get('dataset') ?? '').trim() || null,
+      versionId: (searchParams.get('version') ?? '').trim() || null,
+      taskType: (searchParams.get('task_type') ?? '').trim() || null,
+      framework: (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase() || null,
+      executionTarget: (searchParams.get('execution_target') ?? '').trim().toLowerCase() || null,
+      workerId: (searchParams.get('worker') ?? '').trim() || null,
+      returnTo: outboundReturnTo
+    }),
+    [outboundReturnTo, searchParams]
+  );
+  const runtimeSettingsPath = useMemo(
+    () => buildRuntimeSettingsPath(launchContext, templateFramework),
+    [launchContext, templateFramework]
+  );
+  const workerSettingsPath = useMemo(
+    () => buildWorkerSettingsPath(launchContext, templateFramework),
+    [launchContext, templateFramework]
+  );
 
   const predictEndpointForTemplate = useMemo(() => {
     if (templateFramework === 'paddleocr') {
@@ -185,13 +303,20 @@ export default function RuntimeTemplatesPage() {
         primaryAction={{
           label: t('Open Runtime Settings'),
           onClick: () => {
-            window.location.assign('/settings/runtime');
+            navigate(runtimeSettingsPath);
           }
         }}
         secondaryActions={
-          <ButtonLink to="/settings/workers" size="sm" variant="ghost">
-            {t('Open Worker Settings')}
-          </ButtonLink>
+          <div className="row gap wrap">
+            {requestedReturnTo ? (
+              <ButtonLink to={requestedReturnTo} size="sm" variant="ghost">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to={workerSettingsPath} size="sm" variant="ghost">
+              {t('Open Worker Settings')}
+            </ButtonLink>
+          </div>
         }
       />
 
@@ -320,12 +445,12 @@ export default function RuntimeTemplatesPage() {
               </small>
               <ActionBar
                 primary={
-                  <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                  <ButtonLink to={runtimeSettingsPath} variant="secondary" size="sm">
                     {t('Open Runtime Settings')}
                   </ButtonLink>
                 }
                 secondary={
-                  <ButtonLink to="/settings/workers" variant="ghost" size="sm">
+                  <ButtonLink to={workerSettingsPath} variant="ghost" size="sm">
                     {t('Open Worker Settings')}
                   </ButtonLink>
                 }

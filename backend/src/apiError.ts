@@ -6,7 +6,7 @@ export interface NormalizedApiError {
 
 const authMessages = new Set<string>([
   'Authentication required.',
-  'Current user not found in mock store.',
+  'Current user not found in local store.',
   'Invalid username or password.'
 ]);
 

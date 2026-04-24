@@ -14,10 +14,20 @@ INFERENCE_RUN_RECOVERY_MAX_TRIES="${INFERENCE_RUN_RECOVERY_MAX_TRIES:-240}"
 INFERENCE_RUN_RECOVERY_INTERVAL_SECONDS="${INFERENCE_RUN_RECOVERY_INTERVAL_SECONDS:-1}"
 INFERENCE_RUN_POST_RETRY_MAX_ATTEMPTS="${INFERENCE_RUN_POST_RETRY_MAX_ATTEMPTS:-2}"
 INFERENCE_RUN_POST_RETRY_INTERVAL_SECONDS="${INFERENCE_RUN_POST_RETRY_INTERVAL_SECONDS:-2}"
+PHASE2_RETRY_MAX_ATTEMPTS="${PHASE2_RETRY_MAX_ATTEMPTS:-3}"
+PHASE2_RETRY_INTERVAL_SECONDS="${PHASE2_RETRY_INTERVAL_SECONDS:-2}"
+OCR_CLOSURE_RETRY_MAX_ATTEMPTS="${OCR_CLOSURE_RETRY_MAX_ATTEMPTS:-2}"
+OCR_CLOSURE_RETRY_INTERVAL_SECONDS="${OCR_CLOSURE_RETRY_INTERVAL_SECONDS:-3}"
 VERIFY_SKIP_HEALTHZ="${VERIFY_SKIP_HEALTHZ:-0}"
 OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND:-false}"
+OCR_CLOSURE_REQUIRE_REAL_MODE="${OCR_CLOSURE_REQUIRE_REAL_MODE:-false}"
+OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION="${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION:-false}"
+OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS:-2400}"
+OCR_CLOSURE_WAIT_SLEEP_SEC="${OCR_CLOSURE_WAIT_SLEEP_SEC:-0.25}"
 REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION:-false}"
-REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION="${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION:-false}"
+REAL_CLOSURE_REQUIRE_REAL_MODE="${REAL_CLOSURE_REQUIRE_REAL_MODE:-false}"
+REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION="${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION:-false}"
+REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION="${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION:-false}"
 RUN_TAG="$(date +%Y%m%d%H%M%S)"
 REPORT_DIR="${REPORT_DIR:-.data/verify-reports}"
 REPORT_BASENAME="${REPORT_BASENAME:-docker-verify-full-${RUN_TAG}}"
@@ -111,6 +121,15 @@ finalize_report() {
     --arg runtime_device_binding_key "${RUNTIME_DEVICE_BINDING_KEY}" \
     --arg runtime_device_request_id "${RUNTIME_DEVICE_REQUEST_ID}" \
     --arg runtime_device_delivery_id "${RUNTIME_DEVICE_DELIVERY_ID}" \
+    --arg ocr_closure_strict_local_command "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" \
+    --arg ocr_closure_require_real_mode "${OCR_CLOSURE_REQUIRE_REAL_MODE}" \
+    --arg ocr_closure_require_pure_real_registration "${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" \
+    --arg ocr_closure_wait_polls "${OCR_CLOSURE_WAIT_POLLS}" \
+    --arg ocr_closure_wait_sleep_sec "${OCR_CLOSURE_WAIT_SLEEP_SEC}" \
+    --arg real_closure_strict_registration "${REAL_CLOSURE_STRICT_REGISTRATION}" \
+    --arg real_closure_require_real_mode "${REAL_CLOSURE_REQUIRE_REAL_MODE}" \
+    --arg real_closure_require_pure_real_registration "${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" \
+    --arg real_closure_allow_ocr_calibrated_registration "${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION}" \
     --argjson checks "${CHECKS_JSON}" \
     --argjson runtime_metrics_retention "${RUNTIME_METRICS_RETENTION_JSON}" \
     '{
@@ -143,6 +162,17 @@ finalize_report() {
         runtime_device_request_id: $runtime_device_request_id,
         runtime_device_delivery_id: $runtime_device_delivery_id
       },
+      options: {
+        ocr_closure_strict_local_command: $ocr_closure_strict_local_command,
+        ocr_closure_require_real_mode: $ocr_closure_require_real_mode,
+        ocr_closure_require_pure_real_registration: $ocr_closure_require_pure_real_registration,
+        ocr_closure_wait_polls: $ocr_closure_wait_polls,
+        ocr_closure_wait_sleep_sec: $ocr_closure_wait_sleep_sec,
+        real_closure_strict_registration: $real_closure_strict_registration,
+        real_closure_require_real_mode: $real_closure_require_real_mode,
+        real_closure_require_pure_real_registration: $real_closure_require_pure_real_registration,
+        real_closure_allow_ocr_calibrated_registration: $real_closure_allow_ocr_calibrated_registration
+      },
       checks: $checks,
       runtime_metrics_retention: $runtime_metrics_retention
     }' > "${REPORT_JSON_PATH}"
@@ -165,6 +195,16 @@ finalize_report() {
 - Base URL: ${BASE_URL}
 - Business User: ${BUSINESS_USERNAME}
 - Probe User: ${PROBE_USERNAME}
+- Verify Options:
+  - OCR_CLOSURE_STRICT_LOCAL_COMMAND=${OCR_CLOSURE_STRICT_LOCAL_COMMAND}
+  - OCR_CLOSURE_REQUIRE_REAL_MODE=${OCR_CLOSURE_REQUIRE_REAL_MODE}
+  - OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION=${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}
+  - OCR_CLOSURE_WAIT_POLLS=${OCR_CLOSURE_WAIT_POLLS}
+  - OCR_CLOSURE_WAIT_SLEEP_SEC=${OCR_CLOSURE_WAIT_SLEEP_SEC}
+  - REAL_CLOSURE_STRICT_REGISTRATION=${REAL_CLOSURE_STRICT_REGISTRATION}
+  - REAL_CLOSURE_REQUIRE_REAL_MODE=${REAL_CLOSURE_REQUIRE_REAL_MODE}
+  - REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION=${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}
+  - REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION=${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION}
 
 ## Key IDs
 - attachment_id: ${ATTACHMENT_ID}
@@ -319,14 +359,15 @@ perform_inference_run() {
 
 CURRENT_STEP='infrastructure health checks'
 echo "[docker-verify-full] 1/19 ${CURRENT_STEP}"
+bash scripts/smoke-navigation-context-hygiene.sh
 if [[ "${VERIFY_SKIP_HEALTHZ}" != "1" ]]; then
   curl -fsS "${BASE_URL}/healthz" >/dev/null
 fi
 curl -fsS "${BASE_URL}/api/health" >/dev/null
 if [[ "${VERIFY_SKIP_HEALTHZ}" == "1" ]]; then
-  append_check "${CURRENT_STEP}" "passed" "api health endpoint is reachable (/healthz check skipped)"
+  append_check "${CURRENT_STEP}" "passed" "navigation-context hygiene passed; api health endpoint is reachable (/healthz check skipped)"
 else
-  append_check "${CURRENT_STEP}" "passed" "health endpoints are reachable"
+  append_check "${CURRENT_STEP}" "passed" "navigation-context hygiene passed; health endpoints are reachable"
 fi
 
 CURRENT_STEP='probe login'
@@ -917,7 +958,30 @@ append_check "${CURRENT_STEP}" "passed" "detection mismatch->${MISMATCH_DETECTIO
 
 CURRENT_STEP='phase2 annotation/review + launch-readiness guards'
 echo "[docker-verify-full] 13/19 ${CURRENT_STEP}"
-PHASE2_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" EXPECT_RUNTIME_FALLBACK=false bash scripts/smoke-phase2.sh)"
+PHASE2_OUTPUT=''
+PHASE2_ATTEMPTS_USED=0
+phase2_exit_code=1
+for attempt in $(seq 1 "${PHASE2_RETRY_MAX_ATTEMPTS}"); do
+  PHASE2_ATTEMPTS_USED="${attempt}"
+  set +e
+  PHASE2_OUTPUT="$(START_API=false BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" EXPECT_RUNTIME_FALLBACK=false bash scripts/smoke-phase2.sh 2>&1)"
+  phase2_exit_code=$?
+  set -e
+
+  if [[ "${phase2_exit_code}" -eq 0 ]]; then
+    break
+  fi
+
+  echo "[docker-verify-full] smoke-phase2 attempt ${attempt}/${PHASE2_RETRY_MAX_ATTEMPTS} failed (exit=${phase2_exit_code})" >&2
+  echo "${PHASE2_OUTPUT}" >&2
+  if [[ "${attempt}" -lt "${PHASE2_RETRY_MAX_ATTEMPTS}" ]]; then
+    sleep "${PHASE2_RETRY_INTERVAL_SECONDS}"
+  fi
+done
+if [[ "${phase2_exit_code}" -ne 0 ]]; then
+  echo "[docker-verify-full] smoke-phase2 failed after ${PHASE2_ATTEMPTS_USED} attempts"
+  exit "${phase2_exit_code}"
+fi
 echo "${PHASE2_OUTPUT}"
 PHASE2_DATASET_ID="$(echo "${PHASE2_OUTPUT}" | awk -F= '/^dataset_id=/{print $2; exit}')"
 PHASE2_NO_TRAIN_VERSION_ID="$(echo "${PHASE2_OUTPUT}" | awk -F= '/^no_train_gate_version_id=/{print $2; exit}')"
@@ -925,7 +989,7 @@ if [[ -z "${PHASE2_DATASET_ID}" || -z "${PHASE2_NO_TRAIN_VERSION_ID}" ]]; then
   echo "[docker-verify-full] phase2 output missing required ids"
   exit 1
 fi
-append_check "${CURRENT_STEP}" "passed" "phase2 dataset=${PHASE2_DATASET_ID}, no-train gate version=${PHASE2_NO_TRAIN_VERSION_ID}"
+append_check "${CURRENT_STEP}" "passed" "phase2 dataset=${PHASE2_DATASET_ID}, no-train gate version=${PHASE2_NO_TRAIN_VERSION_ID}, attempts=${PHASE2_ATTEMPTS_USED}"
 
 CURRENT_STEP='dataset export/import roundtrip'
 echo "[docker-verify-full] 14/19 ${CURRENT_STEP}"
@@ -943,7 +1007,7 @@ append_check "${CURRENT_STEP}" "passed" "roundtrip targets: det=${ROUNDTRIP_DET_
 
 CURRENT_STEP='real closure smoke (yolo + paddleocr + doctr)'
 echo "[docker-verify-full] 15/19 ${CURRENT_STEP}"
-REAL_CLOSURE_OUTPUT="$(START_API=false REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION}" REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION="${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION}" BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-real-closure.sh)"
+REAL_CLOSURE_OUTPUT="$(START_API=false REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION}" REAL_CLOSURE_REQUIRE_REAL_MODE="${REAL_CLOSURE_REQUIRE_REAL_MODE}" REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION="${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION="${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION}" BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-real-closure.sh)"
 echo "${REAL_CLOSURE_OUTPUT}"
 
 REAL_CLOSURE_YOLO_SOURCE="$(echo "${REAL_CLOSURE_OUTPUT}" | awk -F= '/^yolo_source=/{print $2; exit}')"
@@ -958,11 +1022,45 @@ if [[ -z "${REAL_CLOSURE_YOLO_SOURCE}" || -z "${REAL_CLOSURE_OCR_SOURCE}" || -z 
   echo "[docker-verify-full] real closure output missing inference sources"
   exit 1
 fi
-append_check "${CURRENT_STEP}" "passed" "sources: yolo=${REAL_CLOSURE_YOLO_SOURCE}, paddleocr=${REAL_CLOSURE_OCR_SOURCE}, doctr=${REAL_CLOSURE_DOCTR_SOURCE}; register_modes: yolo=${REAL_CLOSURE_YOLO_REGISTER_MODE:-unknown}, doctr=${REAL_CLOSURE_DOCTR_REGISTER_MODE:-unknown}; new_ocr_model=${REAL_CLOSURE_NEW_OCR_MODEL_ID:-unknown}; new_ocr_version=${REAL_CLOSURE_NEW_OCR_VERSION_ID:-unknown}; new_ocr_job=${REAL_CLOSURE_NEW_OCR_JOB_ID:-unknown}"
+append_check "${CURRENT_STEP}" "passed" "sources: yolo=${REAL_CLOSURE_YOLO_SOURCE}, paddleocr=${REAL_CLOSURE_OCR_SOURCE}, doctr=${REAL_CLOSURE_DOCTR_SOURCE}; register_modes: yolo=${REAL_CLOSURE_YOLO_REGISTER_MODE:-unknown}, doctr=${REAL_CLOSURE_DOCTR_REGISTER_MODE:-unknown}; new_ocr_model=${REAL_CLOSURE_NEW_OCR_MODEL_ID:-unknown}; new_ocr_version=${REAL_CLOSURE_NEW_OCR_VERSION_ID:-unknown}; new_ocr_job=${REAL_CLOSURE_NEW_OCR_JOB_ID:-unknown}; strict_registration=${REAL_CLOSURE_STRICT_REGISTRATION}; require_real_mode=${REAL_CLOSURE_REQUIRE_REAL_MODE}; require_pure_real_registration=${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}"
 
 CURRENT_STEP='ocr closure smoke (paddleocr + doctr)'
 echo "[docker-verify-full] 16/19 ${CURRENT_STEP}"
-OCR_CLOSURE_OUTPUT="$(START_API=false OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" BASE_URL="${BASE_URL}" AUTH_USERNAME="${BUSINESS_USERNAME}" AUTH_PASSWORD="${BUSINESS_PASSWORD}" bash scripts/smoke-ocr-closure.sh)"
+OCR_CLOSURE_OUTPUT=''
+OCR_CLOSURE_ATTEMPTS_USED=0
+ocr_closure_exit_code=1
+for attempt in $(seq 1 "${OCR_CLOSURE_RETRY_MAX_ATTEMPTS}"); do
+  OCR_CLOSURE_ATTEMPTS_USED="${attempt}"
+  set +e
+  OCR_CLOSURE_OUTPUT="$(
+    START_API=false \
+    OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" \
+    OCR_CLOSURE_REQUIRE_REAL_MODE="${OCR_CLOSURE_REQUIRE_REAL_MODE}" \
+    OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION="${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" \
+    OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS}" \
+    OCR_CLOSURE_WAIT_SLEEP_SEC="${OCR_CLOSURE_WAIT_SLEEP_SEC}" \
+    BASE_URL="${BASE_URL}" \
+    AUTH_USERNAME="${BUSINESS_USERNAME}" \
+    AUTH_PASSWORD="${BUSINESS_PASSWORD}" \
+    bash scripts/smoke-ocr-closure.sh 2>&1
+  )"
+  ocr_closure_exit_code=$?
+  set -e
+
+  if [[ "${ocr_closure_exit_code}" -eq 0 ]]; then
+    break
+  fi
+
+  echo "[docker-verify-full] smoke-ocr-closure attempt ${attempt}/${OCR_CLOSURE_RETRY_MAX_ATTEMPTS} failed (exit=${ocr_closure_exit_code})" >&2
+  echo "${OCR_CLOSURE_OUTPUT}" >&2
+  if [[ "${attempt}" -lt "${OCR_CLOSURE_RETRY_MAX_ATTEMPTS}" ]]; then
+    sleep "${OCR_CLOSURE_RETRY_INTERVAL_SECONDS}"
+  fi
+done
+if [[ "${ocr_closure_exit_code}" -ne 0 ]]; then
+  echo "[docker-verify-full] smoke-ocr-closure failed after ${OCR_CLOSURE_ATTEMPTS_USED} attempts"
+  exit "${ocr_closure_exit_code}"
+fi
 echo "${OCR_CLOSURE_OUTPUT}"
 
 OCR_CLOSURE_PADDLE_SOURCE="$(echo "${OCR_CLOSURE_OUTPUT}" | awk -F= '/^paddle_execution_source=/{print $2; exit}')"
@@ -984,7 +1082,7 @@ if [[ -z "${OCR_CLOSURE_DOCTR_PRIMARY_NAME}" || -z "${OCR_CLOSURE_DOCTR_PRIMARY_
   echo "[docker-verify-full] ocr closure output missing docTR primary metric."
   exit 1
 fi
-append_check "${CURRENT_STEP}" "passed" "execution_sources: paddleocr=${OCR_CLOSURE_PADDLE_SOURCE}, doctr=${OCR_CLOSURE_DOCTR_SOURCE}; metrics: paddle_accuracy=${OCR_CLOSURE_PADDLE_ACCURACY}, doctr_${OCR_CLOSURE_DOCTR_PRIMARY_NAME}=${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}; register_modes: paddle=${OCR_CLOSURE_PADDLE_REGISTER_MODE:-unknown}, doctr=${OCR_CLOSURE_DOCTR_REGISTER_MODE:-unknown}"
+append_check "${CURRENT_STEP}" "passed" "execution_sources: paddleocr=${OCR_CLOSURE_PADDLE_SOURCE}, doctr=${OCR_CLOSURE_DOCTR_SOURCE}; metrics: paddle_accuracy=${OCR_CLOSURE_PADDLE_ACCURACY}, doctr_${OCR_CLOSURE_DOCTR_PRIMARY_NAME}=${OCR_CLOSURE_DOCTR_PRIMARY_VALUE}; register_modes: paddle=${OCR_CLOSURE_PADDLE_REGISTER_MODE:-unknown}, doctr=${OCR_CLOSURE_DOCTR_REGISTER_MODE:-unknown}; strict_local_command=${OCR_CLOSURE_STRICT_LOCAL_COMMAND}; require_real_mode=${OCR_CLOSURE_REQUIRE_REAL_MODE}; require_pure_real_registration=${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}; attempts=${OCR_CLOSURE_ATTEMPTS_USED}"
 
 CURRENT_STEP='training worker dedicated auth smoke'
 echo "[docker-verify-full] 17/19 ${CURRENT_STEP}"

@@ -70,6 +70,14 @@ Validation baseline:
 - `failed`
 - `cancelled`
 
+### 4.6 Vision modeling task status
+- `draft`
+- `requires_input`
+- `plan_ready`
+- `training_started`
+- `training_completed`
+- `failed`
+
 ## 5. Authentication Endpoints
 
 ### POST /auth/register
@@ -239,10 +247,12 @@ Notes:
   - `create_model_draft`
   - `create_training_job`
   - `run_model_inference` (attachment + inference intent keywords => auto run inference using conversation model's latest registered version)
+- `create_training_job` may also create/update a structured `VisionTask` when the backend needs a persistent orchestration object for task understanding, missing requirements, or next-step continuation
 - when `run_model_inference` returns non-real source markers (`*fallback*` / `*template*` / `*mock*` / `base_empty`), assistant summary must explicitly label it as fallback/template output (not real inference), and may include direct `action_links` to runtime/inference settings pages for remediation.
 - assistant can post-process latest OCR inference for extraction intents (plate/serial/number keywords) and return extracted candidate content
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
 - `metadata.conversation_action` may include optional `action_links` (`[{label, href}]`) so clients can render direct navigation cards for complex follow-up input collection (for example annotation/training/inference workspaces)
+- when the same in-thread action materializes a `VisionTask`, assistant may also return `created_entity_type=VisionTask` with deep links into `/vision/tasks` or `/vision/tasks/{id}`
 - high-risk mutating operations (`create_*`) require explicit confirmation before backend execution; assistant returns `missing_fields=["confirmation"]` plus `requires_confirmation=true`
 - when `confirmation_phrase` is present in pending action metadata, execution confirmation must match that phrase after trim/case/punctuation normalization (free-form "yes" is not enough)
 - when a pending action already has confirmation context, follow-up turns should keep the same `confirmation_phrase` (avoid switching zh/en phrase because user only replied with ids)
@@ -254,10 +264,11 @@ Notes:
   - when natural-language intent is recognized but required IDs/params are missing, assistant returns structured `requires_input` with explicit `missing_fields`
   - user can reply with only the missing value(s) in follow-up turn; server merges them into pending bridge payload and continues execution flow (including high-risk confirmation gate)
   - for `run_dataset_pre_annotations`, bridge params use `dataset_id` + `model_version_id` (legacy `source_model_version_id` is accepted for compatibility and normalized internally)
+  - for `retry_training_job`, bridge params use `job_id`; optional `execution_target=control_plane|worker|auto` and `worker_id` are accepted with the same validation semantics as `POST /training/jobs/{id}/retry`
   - supported `api`:
-    - read: `list_datasets`, `list_models`, `list_model_versions`, `list_training_jobs`, `list_inference_runs`, `list_dataset_annotations`
+    - read: `list_datasets`, `list_models`, `list_model_versions`, `list_training_jobs`, `list_inference_runs`, `list_dataset_annotations`, `list_vision_tasks`, `get_vision_task`
     - execute: `run_inference`, `create_dataset_version`, `export_dataset_annotations`
-    - mutating/high-risk: `create_dataset`, `create_model_draft`, `create_training_job`, `register_model_version`, `submit_approval_request`, `send_inference_feedback`, `cancel_training_job`, `retry_training_job`, `upsert_dataset_annotation`, `review_dataset_annotation`, `import_dataset_annotations`, `run_dataset_pre_annotations`, `activate_runtime_profile`, `auto_configure_runtime_settings`
+    - mutating/high-risk: `create_dataset`, `create_model_draft`, `create_training_job`, `register_model_version`, `submit_approval_request`, `send_inference_feedback`, `cancel_training_job`, `retry_training_job`, `upsert_dataset_annotation`, `review_dataset_annotation`, `import_dataset_annotations`, `run_dataset_pre_annotations`, `activate_runtime_profile`, `auto_configure_runtime_settings`, `auto_continue_vision_task`, `auto_advance_vision_task`, `generate_vision_task_feedback_dataset`, `register_vision_task_model`
       - `auto_configure_runtime_settings` params: optional `overwrite_endpoint` (boolean, default `false`)
   - high-risk bridge APIs (all mutating actions above) require explicit confirmation before execution
 
@@ -1299,6 +1310,157 @@ Notes:
 - if user has enabled LLM config with valid key, server attempts LLM-enhanced draft and falls back to rule result on failure
 - `annotation_type` is kept as backward-compatible alias of `recommended_annotation_type`
 
+## 12.1 Vision Modeling Task Endpoints
+
+### POST /vision/tasks/understand
+Create or update a structured vision-task understanding record from prompt + optional sample images.
+
+Request:
+```json
+{
+  "prompt": "Train an OCR model for serial numbers on industrial nameplates",
+  "attachment_ids": ["f-1", "f-2"],
+  "dataset_id": "d-21",
+  "dataset_version_id": "dv-9"
+}
+```
+
+Rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `prompt` is required after trim
+- `attachment_ids` is optional; backend keeps only visible image attachments and ignores non-image files for task understanding
+- when `dataset_id` / `dataset_version_id` are provided, they must be strings after trim
+- response shape:
+  - `task`
+  - `can_start_training`
+- `task.status` is typically `requires_input` or `plan_ready`
+- `task.missing_requirements` must explain why training cannot start yet when `can_start_training=false`
+
+### GET /vision/tasks
+List vision-task records visible to the current owner/admin scope.
+
+Rules:
+- owner can only see their own tasks; `admin` can see all
+- backend may refresh `status`, `validation_report`, `model_id`, and `model_version_id` from linked runtime state before returning the list
+
+### GET /vision/tasks/{id}
+Get one vision-task detail record.
+
+Rules:
+- owner/admin visibility only
+- response includes the same orchestration fields used by task detail page:
+  - `spec`
+  - `dataset_profile`
+  - `training_plan`
+  - `validation_report`
+  - `missing_requirements`
+  - `training_job_id`
+  - `model_version_id`
+
+### POST /vision/tasks/{id}/auto-continue
+Start the next available training round for a ready vision task.
+
+Request:
+```json
+{
+  "max_rounds": 3,
+  "force": false
+}
+```
+
+Rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `max_rounds` must be a finite number when provided
+- `force` must be boolean when provided
+- requires resolved task type, accessible dataset, and a training-ready dataset version
+- when threshold is already reached and `force=false`, backend returns `launched=false` with `reason=threshold_reached`
+- when a previous round is still non-terminal, backend returns `launched=false` with `reason=previous_round_running`
+- when no unused round remains inside `max_rounds`, backend returns `launched=false` with `reason=round_exhausted`
+- success response includes:
+  - `task`
+  - `launched`
+  - `reason`
+  - `next_round`
+  - `training_job_id`
+
+### POST /vision/tasks/{id}/auto-advance
+Pick the current best next mutation for a vision task.
+
+Request:
+```json
+{
+  "max_rounds": 3,
+  "force": false
+}
+```
+
+Rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `max_rounds` must be a finite number when provided
+- `force` must be boolean when provided
+- uses the same task visibility and readiness rules as `auto-continue`
+- response includes:
+  - `task`
+  - `action`
+  - `message`
+  - `training_job_id`
+  - `model_version_id`
+  - `feedback_dataset_id`
+- `action` values:
+  - `requires_input`
+  - `training_started`
+  - `waiting_training`
+  - `registered`
+  - `feedback_mined`
+  - `completed`
+
+### POST /vision/tasks/{id}/feedback-dataset
+Mine low-confidence inference runs into a feedback dataset for the task.
+
+Request:
+```json
+{
+  "max_samples": 12
+}
+```
+
+Rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `max_samples` must be a finite number when provided
+- `max_samples` is optional; current implementation clamps to `1..30`
+- backend selects completed inference runs linked to the task's current model version (or model versions produced from the linked training job)
+- response includes:
+  - `task`
+  - `dataset_id`
+  - `selected_run_ids`
+  - `sample_count`
+
+### POST /vision/tasks/{id}/register-model
+Register a model version from the task's linked completed training job.
+
+Request:
+```json
+{
+  "version_name": "vt-120-v001",
+  "model_id": "m-18",
+  "allow_ocr_calibrated_registration": false,
+  "require_pure_real_evidence": true
+}
+```
+
+Rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `version_name` and `model_id` must be strings when provided
+- `allow_ocr_calibrated_registration` and `require_pure_real_evidence` must be boolean when provided
+- task must already have a linked `training_job_id`
+- `model_id` is optional:
+  - backend can reuse an owned model of the same task type
+  - otherwise backend may auto-create a draft model for the task
+- the same real/local-command evidence gate as `POST /model-versions/register` still applies
+- success response includes:
+  - `task`
+  - `model_version`
+
 ## 13. Training Job Endpoints
 
 ### GET /training/jobs
@@ -1432,6 +1594,19 @@ Cancel running/queued job.
 
 ### POST /training/jobs/{id}/retry
 Retry from failed/cancelled state.
+
+Request (optional):
+```json
+{
+  "execution_target": "control_plane",
+  "worker_id": "tw-22"
+}
+```
+
+Rules:
+- request payload must be a JSON object when provided
+- `execution_target` may be `auto`, `control_plane`, or `worker`; `auto` is treated as scheduler default
+- `worker_id` is only valid when `execution_target=worker`
 
 ## 14. Model Version Endpoints
 

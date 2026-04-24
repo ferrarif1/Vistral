@@ -231,7 +231,47 @@ Strict OCR closure options:
 Strict real-closure registration option:
 - `REAL_CLOSURE_STRICT_REGISTRATION=true npm run smoke:real-closure`
 
-## 6) Baseline Validation
+## 6) Remote / Nightly Runner Baseline
+
+Use this when you want `.github/workflows/plan-llm-complete.yml` or another fixed runner to behave like a reproducible release-evidence lane instead of a one-off local machine.
+
+Runner prerequisites/caches to keep warm:
+- cache `.data/runtime-python/.venv`
+- cache `.data/runtime-models`
+- export `VISTRAL_PYTHON_BIN=.data/runtime-python/.venv/bin/python`
+- export `YOLO_LOCAL_MODEL_PATH=.data/runtime-models/yolo11n.pt`
+
+Recommended readiness flow:
+```bash
+npm run doctor:real-training-readiness || {
+  npm run setup:real-training-env
+  npm run doctor:real-training-readiness
+}
+```
+
+Recommended smoke order on a fresh or newly restored runner:
+```bash
+npm run smoke:vision-task-closure
+npm run smoke:plan-llm-complete
+```
+
+Once the branch is pushed and `gh auth login` is ready, use the remote-proof helper to generate a reusable GitHub-run report:
+```bash
+npm run proof:plan-llm-remote
+```
+
+Notes:
+- `smoke:plan-llm-complete` now already includes `smoke:vision-task-closure`; the standalone command is still useful as a faster preflight when bringing up a new runner/cache.
+- If readiness still fails after `setup:real-training-env`, keep running `npm run smoke:plan-llm-complete` so the report/artifact lane still records the failure in `.data/verify-reports/plan-llm-complete-*.json/.md/.log`.
+- If caches look poisoned or stale, delete `.data/runtime-python/.venv` and `.data/runtime-models` or bump `PLAN_LLM_RUNTIME_CACHE_VERSION` in the workflow before retrying.
+- `npm run proof:plan-llm-remote` will return `blocked` until both conditions are true:
+  - the target ref is already pushed to `origin`
+  - `gh auth status` succeeds
+- the same helper also returns `blocked` when `git ls-remote origin <ref>` cannot reach GitHub from the current machine/network.
+- if the local worktree is dirty but `remote HEAD` already matches the commit being dispatched, the helper records that as an advisory warning only; the resulting remote proof still applies to the pushed commit, not the uncommitted local edits.
+- successful remote-proof runs download the `plan-llm-complete-reports` artifact into `.data/verify-reports/plan-llm-remote-proof-<timestamp>-artifacts/`.
+
+## 7) Baseline Validation
 For docs-focused changes, run at least:
 ```bash
 rg "docs/setup.md|docs/contributing.md" README.md
@@ -246,7 +286,7 @@ npm run lint
 npm run build
 ```
 
-## 7) Demo Dataset Import (train images)
+## 8) Demo Dataset Import (train images)
 Use local images under `demo_data/train` to quickly build a detection dataset with real file upload:
 ```bash
 npm run smoke:demo:train-data
@@ -257,7 +297,7 @@ Optional controls:
 - `START_API=false BASE_URL=http://127.0.0.1:8080 npm run smoke:demo:train-data` reuse an already running API
 - `START_API=false BASE_URL=http://127.0.0.1:8080 AUTH_USERNAME=alice AUTH_PASSWORD=mock-pass npm run smoke:demo:train-data` reuse deployed API with authenticated session
 
-## 8) Real Closure Smoke (upload -> import -> train -> version -> inference -> feedback)
+## 9) Real Closure Smoke (upload -> import -> train -> version -> inference -> feedback)
 Run a stronger end-to-end smoke check:
 ```bash
 npm run smoke:real-closure

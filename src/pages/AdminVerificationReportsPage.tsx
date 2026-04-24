@@ -1,8 +1,10 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import type { User, VerificationReportRecord, VerificationReportStatus } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import { Badge, StatusTag } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
+import { Button, ButtonLink } from '../components/ui/Button';
 import {
   ActionBar,
   DetailDrawer,
@@ -43,8 +45,136 @@ const toInputDate = (date: Date): string => {
   return `${year}-${month}-${day}`;
 };
 
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: LaunchContext
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const buildAdminAuditPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/admin/audit?${query}` : '/admin/audit';
+};
+
+const buildAdminPendingApprovalsPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/admin/models/pending?${query}` : '/admin/models/pending';
+};
+
 export default function AdminVerificationReportsPage() {
   const { t } = useI18n();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
+  const launchContext = useMemo<LaunchContext>(
+    () => ({
+      datasetId: (searchParams.get('dataset') ?? '').trim() || null,
+      versionId: (searchParams.get('version') ?? '').trim() || null,
+      taskType: (searchParams.get('task_type') ?? '').trim() || null,
+      framework: (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase() || null,
+      executionTarget: (searchParams.get('execution_target') ?? '').trim().toLowerCase() || null,
+      workerId: (searchParams.get('worker') ?? '').trim() || null,
+      returnTo: outboundReturnTo
+    }),
+    [outboundReturnTo, searchParams]
+  );
+  const adminAuditPath = useMemo(
+    () => buildAdminAuditPath(launchContext),
+    [launchContext]
+  );
+  const pendingApprovalsPath = useMemo(
+    () => buildAdminPendingApprovalsPath(launchContext),
+    [launchContext]
+  );
+  const headerMeta = (
+    <TrainingLaunchContextPills
+      taskType={launchContext.taskType}
+      framework={launchContext.framework}
+      executionTarget={launchContext.executionTarget}
+      workerId={launchContext.workerId}
+      t={t}
+    />
+  );
+  const headerSecondaryActions = (
+    <div className="row gap wrap">
+      {requestedReturnTo ? (
+        <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+          {t('Return to current task')}
+        </ButtonLink>
+      ) : null}
+      <ButtonLink to={pendingApprovalsPath} variant="ghost" size="sm">
+        {t('Open pending requests')}
+      </ButtonLink>
+      <ButtonLink to={adminAuditPath} variant="ghost" size="sm">
+        {t('Open audit logs')}
+      </ButtonLink>
+    </div>
+  );
   const notAvailable = t('n/a');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [items, setItems] = useState<VerificationReportRecord[]>([]);
@@ -338,6 +468,8 @@ export default function AdminVerificationReportsPage() {
           eyebrow={t('Operations Audit')}
           title={activePageTitle}
           description={t('Review deployment verification evidence and inspect one report at a time.')}
+          meta={headerMeta}
+          secondaryActions={headerSecondaryActions}
         />
         <StateBlock
           variant="loading"
@@ -355,6 +487,8 @@ export default function AdminVerificationReportsPage() {
           eyebrow={t('Operations Audit')}
           title={activePageTitle}
           description={t('Review deployment verification evidence and inspect one report at a time.')}
+          meta={headerMeta}
+          secondaryActions={headerSecondaryActions}
         />
         <StateBlock variant="error" title={t('Load Failed')} description={error} />
       </WorkspacePage>
@@ -368,6 +502,8 @@ export default function AdminVerificationReportsPage() {
           eyebrow={t('Operations Audit')}
           title={activePageTitle}
           description={t('Review deployment verification evidence and inspect one report at a time.')}
+          meta={headerMeta}
+          secondaryActions={headerSecondaryActions}
         />
         <StateBlock
           variant="error"
@@ -385,6 +521,8 @@ export default function AdminVerificationReportsPage() {
           eyebrow={t('Operations Audit')}
           title={activePageTitle}
           description={t('Review deployment verification evidence and inspect one report at a time.')}
+          meta={headerMeta}
+          secondaryActions={headerSecondaryActions}
         />
         <div className="workspace-main-stack">
           <StateBlock
@@ -418,6 +556,7 @@ export default function AdminVerificationReportsPage() {
         eyebrow={t('Operations Audit')}
         title={activePageTitle}
         description={t('Review deployment verification evidence and inspect one report at a time.')}
+        meta={headerMeta}
         primaryAction={{
           label: refreshing ? t('Refreshing...') : t('Refresh'),
           onClick: () => {
@@ -427,6 +566,7 @@ export default function AdminVerificationReportsPage() {
           },
           disabled: refreshing || loading
         }}
+        secondaryActions={headerSecondaryActions}
       />
 
       <WorkspaceWorkbench

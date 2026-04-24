@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { LlmConfig, LlmConfigView } from '../../shared/domain';
 import SettingsTabs from '../components/settings/SettingsTabs';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
+import { Button, ButtonLink } from '../components/ui/Button';
 import { DetailList, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
 import { Checkbox, Input } from '../components/ui/Field';
 import { WorkspacePage } from '../components/ui/WorkspacePage';
@@ -38,7 +39,7 @@ const resolveConnectionAdvice = (
   if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('etimedout')) {
     return t('Connection timed out. Try again later.');
   }
-  return t('Apply a preset before testing.');
+  return t('Apply a preset before connection check.');
 };
 
 const buildEditableForm = (current: LlmConfigView): LlmConfig => ({
@@ -50,8 +51,24 @@ const buildEditableForm = (current: LlmConfigView): LlmConfig => ({
   temperature: current.temperature
 });
 
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
 export default function LlmSettingsPage() {
+  const [searchParams] = useSearchParams();
   const { t } = useI18n();
+  const requestedReturnTo = useMemo(
+    () => sanitizeReturnToPath(searchParams.get('return_to')),
+    [searchParams]
+  );
   const [form, setForm] = useState<LlmConfig>({ ...DEFAULT_LLM_CONFIG });
   const [savedConfig, setSavedConfig] = useState<LlmConfigView | null>(null);
   const [status, setStatus] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
@@ -143,7 +160,7 @@ export default function LlmSettingsPage() {
 
     if (!next.base_url || !next.model) {
       setStatus({ variant: 'error', text: t('Base URL and model are required.') });
-      setConnectionAdvice(t('Apply a preset before testing.'));
+      setConnectionAdvice(t('Apply a preset before connection check.'));
       return;
     }
 
@@ -207,7 +224,7 @@ export default function LlmSettingsPage() {
     if (!configForTest.api_key && !useStoredApiKey) {
       setStatus({
         variant: 'error',
-        text: t('Testing requires an input key or a saved key.')
+        text: t('Connection check requires an input key or a saved key.')
       });
       setConnectionAdvice(t('API key may be invalid. Re-copy it before retrying.'));
       return;
@@ -251,6 +268,13 @@ export default function LlmSettingsPage() {
           eyebrow={t('Settings')}
           title={t('LLM Settings')}
           description={t('Pick a preset first, then fill the fields.')}
+          secondaryActions={
+            requestedReturnTo ? (
+              <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : undefined
+          }
         />
         <StateBlock
           variant="loading"
@@ -275,6 +299,13 @@ export default function LlmSettingsPage() {
           },
           disabled: !canSave
         }}
+        secondaryActions={
+          requestedReturnTo ? (
+            <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+              {t('Return to current task')}
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       {status ? (
@@ -383,10 +414,10 @@ export default function LlmSettingsPage() {
           {requiresKeyWhenEnabled ? <InlineAlert tone="warning" description={t('Enable mode requires an API key or a saved key.')} /> : null}
         </SectionCard>
 
-        <SectionCard title={t('Test connection')} description={t('Save before testing endpoint, key, and model.')}>
+        <SectionCard title={t('Connection check')} description={t('Save before checking endpoint, key, and model.')}>
           <div className="row gap wrap align-center">
             <Button type="button" onClick={testConnection} disabled={!canTest}>
-              {testing ? t('Testing...') : t('Test connection')}
+              {testing ? t('Checking...') : t('Connection check')}
             </Button>
             <Badge tone={connectionVerified ? 'success' : 'neutral'}>
               {connectionVerified ? t('Connection verified') : t('Not verified')}

@@ -1,24 +1,24 @@
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord } from '../../shared/domain';
 import { deriveTrainingExecutionInsight, type TrainingExecutionInsight } from './trainingExecutionInsight';
 
-export interface ModelAuthenticityCounts {
+export interface ModelVerificationCounts {
   totalVersions: number;
-  realVersions: number;
+  stableVersions: number;
   riskyVersions: number;
   unknownVersions: number;
 }
 
-export const buildModelAuthenticityCountsById = (input: {
+export const buildModelVerificationCountsById = (input: {
   models: ModelRecord[];
   versions: ModelVersionRecord[];
   jobsById: Map<string, TrainingJobRecord>;
   jobInsightsById: Record<string, TrainingExecutionInsight>;
-}): Record<string, ModelAuthenticityCounts> => {
-  const countsById: Record<string, ModelAuthenticityCounts> = {};
+}): Record<string, ModelVerificationCounts> => {
+  const countsById: Record<string, ModelVerificationCounts> = {};
   input.models.forEach((model) => {
     countsById[model.id] = {
       totalVersions: 0,
-      realVersions: 0,
+      stableVersions: 0,
       riskyVersions: 0,
       unknownVersions: 0
     };
@@ -52,8 +52,8 @@ export const buildModelAuthenticityCountsById = (input: {
         artifactSummary: null
       });
 
-    if (insight.reality === 'real') {
-      current.realVersions += 1;
+    if (insight.reality === 'standard') {
+      current.stableVersions += 1;
       return;
     }
 
@@ -65,3 +65,6 @@ export const buildModelAuthenticityCountsById = (input: {
 
   return countsById;
 };
+
+export type { ModelVerificationCounts as ModelAuthenticityCounts };
+export const buildModelAuthenticityCountsById = buildModelVerificationCountsById;

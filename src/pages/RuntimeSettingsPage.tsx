@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type {
   ModelFramework,
   RuntimeConnectivityRecord,
@@ -88,6 +89,121 @@ const runtimeFrameworkTaskTypes: Record<ModelFramework, string[]> = {
   paddleocr: ['ocr'],
   doctr: ['ocr'],
   yolo: ['detection', 'classification', 'segmentation', 'obb']
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: {
+    datasetId?: string | null;
+    versionId?: string | null;
+    taskType?: string | null;
+    framework?: string | null;
+    executionTarget?: string | null;
+    workerId?: string | null;
+  }
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const appendReturnTo = (searchParams: URLSearchParams, returnTo?: string | null) => {
+  const safeReturnTo = sanitizeReturnToPath(returnTo);
+  if (safeReturnTo && !searchParams.has('return_to')) {
+    searchParams.set('return_to', safeReturnTo);
+  }
+};
+
+const buildTrainingLaunchPath = (context?: {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+},
+returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, context);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/training/jobs/new?${query}` : '/training/jobs/new';
+};
+
+const buildWorkerSettingsPath = (
+  focus: 'inventory' | 'pairing',
+  options?: {
+    profile?: ModelFramework | null;
+    context?: {
+      datasetId?: string | null;
+      versionId?: string | null;
+      taskType?: string | null;
+      framework?: string | null;
+      executionTarget?: string | null;
+      workerId?: string | null;
+    };
+    returnTo?: string | null;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', focus);
+  if (options?.profile) {
+    searchParams.set('profile', options.profile);
+  }
+  appendTrainingLaunchContext(searchParams, options?.context);
+  appendReturnTo(searchParams, options?.returnTo);
+  return `/settings/workers?${searchParams.toString()}`;
+};
+
+const buildInferenceValidationPath = (context?: {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+},
+returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, context);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/inference/validate?${query}` : '/inference/validate';
 };
 
 const buildDefaultRuntimeFrameworkDraft = (): RuntimeFrameworkDraft => ({
@@ -304,6 +420,7 @@ const resolveRuntimeApiKeyExpiryStatus = (
 
 export default function RuntimeSettingsPage() {
   const { t } = useI18n();
+  const [searchParams] = useSearchParams();
   const runtimeRecommendedLocalPythonBin = DEFAULT_RUNTIME_LOCAL_PYTHON_BIN;
   const [runtimePageMode, setRuntimePageMode] = useState<'setup' | 'readiness' | 'advanced'>('setup');
   const [checks, setChecks] = useState<RuntimeConnectivityRecord[]>([]);
@@ -344,7 +461,71 @@ export default function RuntimeSettingsPage() {
   const runtimeConfigurationRef = useRef<HTMLDivElement | null>(null);
   const runtimeAdvancedEditorRef = useRef<HTMLDivElement | null>(null);
   const readinessSectionRef = useRef<HTMLDivElement | null>(null);
+  const deepLinkFocusAppliedRef = useRef(false);
   const [frameworkFilter, setFrameworkFilter] = useState<'all' | ModelFramework>('all');
+  const prefillFocus = (searchParams.get('focus') ?? '').trim().toLowerCase();
+  const prefillFrameworkRaw = (searchParams.get('framework') ?? '').trim().toLowerCase();
+  const prefillFramework = FRAMEWORKS.includes(prefillFrameworkRaw as ModelFramework)
+    ? (prefillFrameworkRaw as ModelFramework)
+    : null;
+  const launchDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const launchVersionId = (searchParams.get('version') ?? '').trim();
+  const launchTaskType = (searchParams.get('task_type') ?? '').trim();
+  const launchExecutionTarget = (searchParams.get('execution_target') ?? '').trim();
+  const launchWorkerId = (searchParams.get('worker') ?? '').trim();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const hasTrainingLaunchContext = Boolean(
+    launchDatasetId ||
+      launchVersionId ||
+      launchTaskType ||
+      prefillFramework ||
+      launchExecutionTarget ||
+      launchWorkerId
+  );
+  const launchContext = useMemo(
+    () => ({
+      datasetId: launchDatasetId || null,
+      versionId: launchVersionId || null,
+      taskType: launchTaskType || null,
+      framework: prefillFramework || (frameworkFilter !== 'all' ? frameworkFilter : null),
+      executionTarget: launchExecutionTarget || null,
+      workerId: launchWorkerId || null
+    }),
+    [
+      frameworkFilter,
+      launchDatasetId,
+      launchExecutionTarget,
+      launchTaskType,
+      launchVersionId,
+      launchWorkerId,
+      prefillFramework
+    ]
+  );
+  const fallbackReturnPath = useMemo(
+    () => (hasTrainingLaunchContext ? buildTrainingLaunchPath(launchContext) : null),
+    [
+      hasTrainingLaunchContext,
+      launchContext.datasetId,
+      launchContext.executionTarget,
+      launchContext.framework,
+      launchContext.taskType,
+      launchContext.versionId,
+      launchContext.workerId
+    ]
+  );
+  const returnTaskPath = requestedReturnTo ?? fallbackReturnPath;
+  const inferenceValidationPath = useMemo(
+    () => buildInferenceValidationPath(launchContext, returnTaskPath),
+    [
+      launchContext.datasetId,
+      launchContext.executionTarget,
+      launchContext.framework,
+      launchContext.taskType,
+      launchContext.versionId,
+      launchContext.workerId,
+      returnTaskPath
+    ]
+  );
 
   const describeErrorKind = useCallback((kind: RuntimeConnectivityRecord['error_kind']) => {
     if (kind === 'timeout') {
@@ -1344,6 +1525,45 @@ export default function RuntimeSettingsPage() {
     readinessSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
+  useEffect(() => {
+    if (deepLinkFocusAppliedRef.current) {
+      return;
+    }
+
+    if (!prefillFocus && !prefillFramework) {
+      return;
+    }
+
+    deepLinkFocusAppliedRef.current = true;
+
+    if (prefillFramework) {
+      setFrameworkFilter(prefillFramework);
+    }
+
+    if (prefillFocus === 'readiness') {
+      setRuntimePageMode('readiness');
+      window.requestAnimationFrame(() => {
+        focusReadinessSection();
+      });
+      return;
+    }
+
+    if (prefillFocus === 'advanced' || prefillFramework) {
+      setRuntimePageMode('advanced');
+      window.requestAnimationFrame(() => {
+        focusRuntimeConfiguration();
+      });
+      return;
+    }
+
+    if (prefillFocus === 'setup') {
+      setRuntimePageMode('setup');
+      window.requestAnimationFrame(() => {
+        focusRuntimeConfiguration();
+      });
+    }
+  }, [focusReadinessSection, focusRuntimeConfiguration, prefillFocus, prefillFramework]);
+
   const openFrameworkEditor = useCallback(
     (framework: ModelFramework) => {
       setRuntimePageMode('advanced');
@@ -1459,7 +1679,7 @@ export default function RuntimeSettingsPage() {
       }
 
       return (
-        <ButtonLink to="/inference/validate" size="sm" variant={variant}>
+        <ButtonLink to={inferenceValidationPath} size="sm" variant={variant}>
           {t('Validate Inference')}
         </ButtonLink>
       );
@@ -1467,6 +1687,7 @@ export default function RuntimeSettingsPage() {
     [
       applyLocalQuickSetup,
       focusReadinessSection,
+      inferenceValidationPath,
       localQuickStartNextStep?.key,
       refreshRuntimeReadiness,
       runtimeReadinessLoading,
@@ -1649,6 +1870,60 @@ export default function RuntimeSettingsPage() {
     runtimeReadinessBadgeTone
   ];
 
+  const runtimeReadinessPath = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set('focus', 'readiness');
+    appendTrainingLaunchContext(params, launchContext);
+    appendReturnTo(params, returnTaskPath);
+    return `/settings/runtime?${params.toString()}`;
+  }, [
+    launchContext.datasetId,
+    launchContext.executionTarget,
+    launchContext.framework,
+    launchContext.taskType,
+    launchContext.versionId,
+    launchContext.workerId,
+    returnTaskPath
+  ]);
+  const runtimeAdvancedPath = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set('focus', 'advanced');
+    if (frameworkFilter !== 'all') {
+      params.set('framework', frameworkFilter);
+    }
+    appendTrainingLaunchContext(params, launchContext);
+    appendReturnTo(params, returnTaskPath);
+    return `/settings/runtime?${params.toString()}`;
+  }, [
+    frameworkFilter,
+    launchContext.datasetId,
+    launchContext.executionTarget,
+    launchContext.framework,
+    launchContext.taskType,
+    launchContext.versionId,
+    launchContext.workerId,
+    returnTaskPath
+  ]);
+  const workerSettingsPath = buildWorkerSettingsPath('inventory', {
+    profile: frameworkFilter !== 'all' ? frameworkFilter : prefillFramework,
+    context: launchContext,
+    returnTo: returnTaskPath
+  });
+  const trainingCreatePath = buildTrainingLaunchPath(launchContext, returnTaskPath);
+  const showTrainingLaunchButton = hasTrainingLaunchContext && trainingCreatePath !== returnTaskPath;
+  const runtimeHandoffTitle = !runtimeReadinessReady
+    ? t('Finish readiness before launching or retrying runs')
+    : t('Runtime is ready for strict training and validation');
+  const runtimeHandoffDetail = !runtimeReadinessReady
+    ? runtimeReadinessLoading
+      ? t('Runtime is still loading.')
+      : runtimeReadinessIssueCount > 0
+        ? t('{count} open issues remain. Open diagnostics for details.', {
+            count: runtimeReadinessIssueCount
+          })
+        : t('Check readiness once more before creating or retrying runs.')
+    : t('You can continue into training launch, inference validation, or worker coordination from here.');
+
   const heroPrimaryAction = runtimeHasUnsavedChanges
     ? {
         label: t('Save runtime settings'),
@@ -1699,6 +1974,25 @@ export default function RuntimeSettingsPage() {
         </div>
       }
       primaryAction={heroPrimaryAction}
+      secondaryActions={
+        returnTaskPath || hasTrainingLaunchContext ? (
+          <div className="row gap wrap">
+            {returnTaskPath ? (
+              <ButtonLink to={returnTaskPath} variant="secondary" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            {showTrainingLaunchButton ? (
+              <ButtonLink to={trainingCreatePath} variant="ghost" size="sm">
+                {t('Return to training launch')}
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to={workerSettingsPath} variant="ghost" size="sm">
+              {t('Open Worker Settings')}
+            </ButtonLink>
+          </div>
+        ) : undefined
+      }
     />
   );
 
@@ -1843,7 +2137,7 @@ export default function RuntimeSettingsPage() {
                     </small>
                     <div className="row gap wrap">
                       {renderLocalQuickStartAction()}
-                      <ButtonLink to="/inference/validate" size="sm" variant="ghost">
+                      <ButtonLink to={inferenceValidationPath} size="sm" variant="ghost">
                         {t('Open validation')}
                       </ButtonLink>
                     </div>
@@ -2076,7 +2370,7 @@ export default function RuntimeSettingsPage() {
                           : t('No blocking issues yet.')}
                       </small>
                       <div className="row gap wrap">
-                        <ButtonLink to="/inference/validate" variant="ghost" size="sm">
+                        <ButtonLink to={inferenceValidationPath} variant="ghost" size="sm">
                           {t('Open validation')}
                         </ButtonLink>
                       </div>
@@ -2881,6 +3175,31 @@ export default function RuntimeSettingsPage() {
                     {checking ? t('Checking...') : t('Refresh frameworks')}
                   </Button>
                 )}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title={t('Training handoff')}
+              description={t('Use scoped links so training-launch troubleshooting starts in the right settings lane.')}
+            >
+              <small className="muted">{runtimeHandoffTitle}</small>
+              <small className="muted">{runtimeHandoffDetail}</small>
+              <div className="row gap wrap">
+                {!runtimeReadinessReady ? (
+                  <ButtonLink to={runtimeReadinessPath} variant="secondary" size="sm">
+                    {t('Open Runtime Settings')}
+                  </ButtonLink>
+                ) : (
+                  <ButtonLink to={trainingCreatePath} variant="secondary" size="sm">
+                    {t('Create Training Job')}
+                  </ButtonLink>
+                )}
+                <ButtonLink to={workerSettingsPath} variant="ghost" size="sm">
+                  {t('Worker Settings')}
+                </ButtonLink>
+                <ButtonLink to={runtimeAdvancedPath} variant="ghost" size="sm">
+                  {t('Advanced')}
+                </ButtonLink>
               </div>
             </SectionCard>
           </div>

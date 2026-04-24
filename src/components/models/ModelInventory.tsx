@@ -11,7 +11,8 @@ import { WorkspaceSectionHeader } from '../ui/WorkspacePage';
 import { formatCompactTimestamp } from '../../utils/formatting';
 
 const virtualizationThreshold = 14;
-const rowHeight = 192;
+const baseRowHeight = 192;
+const rowHeightWithActions = 252;
 const viewportHeight = 620;
 
 interface TranslateVars {
@@ -34,7 +35,8 @@ interface ModelInventoryProps {
   canAdminDelete?: boolean;
   deletingModelId?: string | null;
   onDeleteModel?: (model: ModelRecord) => Promise<void> | void;
-  modelAuthenticityById?: Record<string, { tone: 'neutral' | 'success' | 'warning'; label: string; hint?: string }>;
+  modelVerificationById?: Record<string, { tone: 'neutral' | 'success' | 'warning'; label: string; hint?: string }>;
+  renderModelActions?: (model: ModelRecord) => ReactNode;
   t: (source: string, vars?: TranslateVars) => string;
 }
 
@@ -44,7 +46,8 @@ function ModelInventoryRow({
   canAdminDelete,
   deletingModelId,
   onRequestDelete,
-  authenticitySummary,
+  verificationSummary,
+  actions,
   className
 }: {
   model: ModelRecord;
@@ -52,11 +55,13 @@ function ModelInventoryRow({
   canAdminDelete?: boolean;
   deletingModelId?: string | null;
   onRequestDelete?: (model: ModelRecord) => void;
-  authenticitySummary?: { tone: 'neutral' | 'success' | 'warning'; label: string; hint?: string };
+  verificationSummary?: { tone: 'neutral' | 'success' | 'warning'; label: string; hint?: string };
+  actions?: ReactNode;
   className?: string;
 }) {
   const isProtectedFoundationModel = isCuratedFoundationModelName(model.name);
   const isDeleting = deletingModelId === model.id;
+  const hasDeleteInFlight = Boolean(deletingModelId);
 
   return (
     <Panel as="li" className={className ?? 'workspace-record-item'} tone="soft">
@@ -78,7 +83,7 @@ function ModelInventoryRow({
               type="button"
               variant="danger"
               size="sm"
-              disabled={isDeleting}
+              disabled={hasDeleteInFlight}
               onClick={() => onRequestDelete(model)}
             >
               {isDeleting ? t('Deleting...') : t('Delete')}
@@ -97,8 +102,9 @@ function ModelInventoryRow({
         {canAdminDelete && isProtectedFoundationModel ? (
           <Badge tone="info">{t('This curated base model stays available as a training foundation.')}</Badge>
         ) : null}
-        {authenticitySummary ? <Badge tone={authenticitySummary.tone}>{authenticitySummary.label}</Badge> : null}
+        {verificationSummary ? <Badge tone={verificationSummary.tone}>{verificationSummary.label}</Badge> : null}
       </div>
+      {actions ? <div className="workspace-record-actions row gap wrap">{actions}</div> : null}
     </Panel>
   );
 }
@@ -119,10 +125,12 @@ export default function ModelInventory({
   canAdminDelete = false,
   deletingModelId = null,
   onDeleteModel,
-  modelAuthenticityById,
+  modelVerificationById,
+  renderModelActions,
   t
 }: ModelInventoryProps) {
   const shouldVirtualize = models.length > virtualizationThreshold;
+  const rowHeight = renderModelActions ? rowHeightWithActions : baseRowHeight;
   const [deleteCandidate, setDeleteCandidate] = useState<ModelRecord | null>(null);
 
   const handleConfirmDelete = async () => {
@@ -178,7 +186,8 @@ export default function ModelInventory({
                 canAdminDelete={canAdminDelete}
                 deletingModelId={deletingModelId}
                 onRequestDelete={onDeleteModel ? (target) => setDeleteCandidate(target) : undefined}
-                authenticitySummary={modelAuthenticityById?.[model.id]}
+                verificationSummary={modelVerificationById?.[model.id]}
+                actions={renderModelActions?.(model)}
                 className="workspace-record-item virtualized"
               />
             )}
@@ -193,7 +202,8 @@ export default function ModelInventory({
                 canAdminDelete={canAdminDelete}
                 deletingModelId={deletingModelId}
                 onRequestDelete={onDeleteModel ? (target) => setDeleteCandidate(target) : undefined}
-                authenticitySummary={modelAuthenticityById?.[model.id]}
+                verificationSummary={modelVerificationById?.[model.id]}
+                actions={renderModelActions?.(model)}
               />
             ))}
           </ul>

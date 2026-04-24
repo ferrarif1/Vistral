@@ -9,6 +9,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
 ## Core Features
 - Natural language interaction with visual models
 - Attachment-driven workflows (images, documents, datasets)
+- Vision-task understanding and auto-orchestrated training follow-up from conversation input
 - Two-role access model (users, admins) with ownership-based model permissions
 - Model hosting and deployment
 - Training pipeline management
@@ -39,12 +40,18 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/visual-data-loop-evolution.md`
    - `docs/annotation-workflow.md`
    - `docs/model-runtime-architecture.md`
-4. Follow the single Docker deployment path in `docs/deployment.docker.md`.
-5. If a new request interrupts unfinished work, append a handoff entry to `docs/work-handoff.md` before switching context.
+   - `docs/training-engineer-quickstart.md`
+4. Review active execution docs before continuing in-progress work:
+   - `PLANS.md`
+   - `PLAN_llm.md`
+   - `docs/work-handoff.md`
+5. Follow the single Docker deployment path in `docs/deployment.docker.md`.
+6. If a new request interrupts unfinished work, append a handoff entry to `docs/work-handoff.md` before switching context.
 
 ## Repository Working Model (How Codex should work in this repo)
 - Collaboration and execution rules: `AGENTS.md`
 - Product and engineering contracts: `docs/*`
+- Active roadmap / round-by-round execution: `PLANS.md`, `PLAN_llm.md`, `docs/work-handoff.md`
 - Reusable skills: `.agents/skills/`
 - Delivery order: plan first, align contracts, then implement
 
@@ -141,6 +148,18 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - `npm run smoke:conversation-actions`
   - verifies conversation can request missing fields and then create real dataset/model-draft/training-job entities via backend APIs
   - when `EXPECTED_TRAINING_DATASET_ID` / `EXPECTED_TRAINING_DATASET_VERSION_ID` are not provided, it auto-prepares a trainable detection dataset/version target by default (`AUTO_PREPARE_TRAINING_TARGET=true`)
+- `npm run smoke:vision-task-closure`
+  - verifies the dedicated vision-task closure lane end-to-end on a fresh temp app state:
+    - understand with missing requirements
+    - create a trainable detection dataset/version
+    - `auto-continue` launches a real vision-task-linked training round
+    - explicit `register-model` and `feedback-dataset` endpoints complete the closure
+    - final `auto-advance` reports the task as fully completed
+  - default smoke portability uses `VISTRAL_RUNNER_ENABLE_REAL=0`, `VISTRAL_DISABLE_INFERENCE_FALLBACK=0`, and `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`; override those env vars when you want stricter real-evidence checks
+- `npm run smoke:conversation-next-steps-ui-wiring`
+  - guards that the full conversation page and right Dock both render shared suggested next steps and preserve guarded `/ops` inputs
+- `npm run smoke:conversation-next-steps-browser`
+  - runs a local Chrome/CDP smoke against the full conversation page and right Dock, using a temporary app state and saving screenshots under `.data/verify-reports/`
 - `npm run smoke:conversation-ops-bridge`
   - validates natural-language ops bridge end-to-end: intent routing, missing-field prompts, follow-up parameter completion, and high-risk confirmation gate
   - default mode keeps high-risk branches non-mutating to avoid local data/runtime drift; set `SMOKE_OPS_BRIDGE_EXECUTE_MUTATIONS=true` to include final mutation execution checks
@@ -155,7 +174,7 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
 - `npm run smoke:no-seed-hardcoding`
   - guards against hardcoded seed entity ids (`d-*`, `dv-*`, `mv-*`, `f-*`, etc.) in smoke/verify scripts so deployment-mode tests stay portable
 - `npm run smoke:core-closure`
-  - runs the core closure suite (`no-seed-hardcoding` + `foundation-reset` + `adapter-no-placeholder` + `training-template-guard` + `model-version-register-gate` + `account-governance` + `phase2` + `runtime-success` + `conversation-actions` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
+  - runs the core closure suite (`no-seed-hardcoding` + `foundation-reset` + `adapter-no-placeholder` + `training-template-guard` + `model-version-register-gate` + `account-governance` + `phase2` + `runtime-success` + `conversation-actions` + `conversation-history-clear` + `vision-task-closure` + `inference-feedback-guard` + `real-closure` + `ocr-closure` + `training-worker-dedicated-auth`) in one command
 - `npm run smoke:llm-settings`
   - verifies LLM settings save/edit/clear flow, including keeping the saved key while editing and loading encrypted config after API restart
 - `npm run smoke:runtime-settings-persistence`
@@ -318,6 +337,10 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - optional strict OCR closure in full verify: `OCR_CLOSURE_STRICT_LOCAL_COMMAND=true npm run docker:verify:full`
   - if your Docker runtime cannot resolve `host.docker.internal`, set `DEDICATED_AUTH_WORKER_PUBLIC_HOST` (and optionally `DEDICATED_AUTH_WORKER_BIND_HOST`) before running full verify
 - E2E verify outputs report files under `.data/verify-reports/` (JSON + Markdown)
+- `npm run smoke:plan-llm-complete` writes `plan-llm-complete-<timestamp>.json/.md/.log` to `.data/verify-reports/`, keeps the latest 10 report sets by default (`PLAN_LLM_REPORT_RETAIN` overrides this), and now includes the dedicated `smoke:vision-task-closure` lane before the heavier real-evidence checks.
+- The same command is wired to `.github/workflows/plan-llm-complete.yml` for manual/nightly CI runs; that workflow now restores `.data/runtime-python/.venv` + `.data/runtime-models`, runs `doctor/setup` readiness warmup, and uploads JSON/MD/LOG reports. Use `npm run smoke:plan-llm-ci-workflow` to guard the workflow/report wiring locally, and see `docs/setup.md` section `Remote / Nightly Runner Baseline` for the exact cache/recovery playbook.
+- `npm run proof:plan-llm-remote` checks `origin`/branch state plus `gh auth`, dispatches `plan-llm-complete.yml`, waits for completion, downloads `plan-llm-complete-reports`, and writes a fixed `plan-llm-remote-proof-<timestamp>.json/.md/.log` report under `.data/verify-reports/`. If local uncommitted edits exist but the remote HEAD already matches the dispatched commit, the helper records that as an advisory note instead of blocking the remote run.
+- `npm run proof:plan-llm-remote:self-test` validates that report plumbing without contacting GitHub.
 - Web entry: `http://127.0.0.1:8080`
 - API health: `http://127.0.0.1:8080/api/health`
 - Stop: `docker compose down`

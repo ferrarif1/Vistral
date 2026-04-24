@@ -41,7 +41,8 @@ export default function AttachmentUploader({
 }: AttachmentUploaderProps) {
   const { t } = useI18n();
   const [filename, setFilename] = useState('');
-  const [pending, setPending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
   const [error, setError] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const finalUploadButtonLabel = uploadButtonLabel ?? t('Upload');
@@ -74,7 +75,7 @@ export default function AttachmentUploader({
 
   const upload = async () => {
     const finalName = filename.trim() || `file-${Date.now()}.bin`;
-    setPending(true);
+    setUploading(true);
     setError('');
 
     try {
@@ -83,12 +84,15 @@ export default function AttachmentUploader({
     } catch (uploadError) {
       setError((uploadError as Error).message);
     } finally {
-      setPending(false);
+      setUploading(false);
     }
   };
 
   const remove = async (attachmentId: string) => {
-    setPending(true);
+    if (deletingIds.includes(attachmentId)) {
+      return;
+    }
+    setDeletingIds((prev) => [...prev, attachmentId]);
     setError('');
 
     try {
@@ -96,7 +100,7 @@ export default function AttachmentUploader({
     } catch (removeError) {
       setError((removeError as Error).message);
     } finally {
-      setPending(false);
+      setDeletingIds((prev) => prev.filter((id) => id !== attachmentId));
     }
   };
 
@@ -130,7 +134,7 @@ export default function AttachmentUploader({
       return;
     }
 
-    setPending(true);
+    setUploading(true);
     setError('');
 
     try {
@@ -138,11 +142,13 @@ export default function AttachmentUploader({
     } catch (uploadError) {
       setError((uploadError as Error).message);
     } finally {
-      setPending(false);
+      setUploading(false);
     }
   };
 
-  const isDisabled = pending || disabled;
+  const isDisabled = Boolean(disabled);
+  const uploadBusy = uploading;
+  const disableUploadActions = uploadBusy || isDisabled;
 
   return (
     <Card as="section">
@@ -155,14 +161,14 @@ export default function AttachmentUploader({
       </div>
 
       <div className="row gap">
-        <Button type="button" variant="secondary" onClick={openFilePicker} disabled={isDisabled || !onUploadFiles}>
-          {pending ? t('Working...') : t('Upload photos and files')}
+        <Button type="button" variant="secondary" onClick={openFilePicker} disabled={disableUploadActions || !onUploadFiles}>
+          {uploadBusy ? t('Working...') : t('Upload photos and files')}
         </Button>
         <HiddenFileInput
           ref={fileInputRef}
           multiple
           onChange={uploadSelectedFiles}
-          disabled={isDisabled || !onUploadFiles}
+          disabled={disableUploadActions || !onUploadFiles}
         />
       </div>
       <small className="muted">
@@ -182,10 +188,10 @@ export default function AttachmentUploader({
             value={filename}
             placeholder={t('Enter file name, for example: sample-image.jpg')}
             onChange={(event) => setFilename(event.target.value)}
-            disabled={isDisabled}
+            disabled={disableUploadActions}
           />
-          <Button onClick={upload} disabled={isDisabled}>
-            {pending ? t('Working...') : finalUploadButtonLabel}
+          <Button onClick={upload} disabled={disableUploadActions}>
+            {uploadBusy ? t('Working...') : finalUploadButtonLabel}
           </Button>
         </div>
       </AdvancedSection>
@@ -198,6 +204,9 @@ export default function AttachmentUploader({
         <ul className="workspace-record-list">
           {items.map((item) => (
             <Panel key={item.id} as="li" className="workspace-record-item stack attachment-uploader-item" tone="soft">
+              {(() => {
+                const deleting = deletingIds.includes(item.id);
+                return (
               <div className="row between gap wrap align-center">
                 <div className="stack tight">
                   <strong>{item.filename}</strong>
@@ -206,15 +215,27 @@ export default function AttachmentUploader({
                 <div className="row gap">
                   <StatusBadge status={item.status} />
                   {item.status === 'ready' && contentUrlBuilder ? (
-                    <Button variant="ghost" size="sm" onClick={() => openAttachment(item.id)} disabled={isDisabled}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openAttachment(item.id)}
+                      disabled={isDisabled || uploadBusy}
+                    >
                       {t('Open')}
                     </Button>
                   ) : null}
-                  <Button variant="ghost" size="sm" onClick={() => remove(item.id)} disabled={isDisabled}>
-                    {t('Delete')}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => remove(item.id)}
+                    disabled={isDisabled || uploadBusy || deleting}
+                  >
+                    {deleting ? t('Deleting...') : t('Delete')}
                   </Button>
                 </div>
               </div>
+                );
+              })()}
               {item.status === 'ready' && contentUrlBuilder && isImageFile(item.filename) ? (
                 <a
                   className="attachment-uploader-preview-link"

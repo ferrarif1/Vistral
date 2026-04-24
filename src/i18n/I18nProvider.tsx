@@ -167,7 +167,7 @@ const zhCNBase: Record<string, string> = {
   'Back to Datasets': '返回数据集',
   'Dataset starter task': '数据集首任务',
   'Each step links to the exact workspace page and updates from real records.':
-    '每一步都提供直达页面，并根据真实记录更新完成状态。',
+    '每一步都提供直达页面，并根据实际记录更新完成状态。',
   'Create your first dataset': '创建你的第一个数据集',
   'Prepare OCR/detection assets and define a clear data scope before training.':
     '先准备 OCR/检测数据资产，并在训练前明确数据范围。',
@@ -198,7 +198,7 @@ const zhCNBase: Record<string, string> = {
   'Review catalog': '查看目录',
   'Recognize ready vs risky models': '识别可用模型与风险模型',
   'Use approval status, visibility, and authenticity signals to decide whether a model is ready for real usage.':
-    '结合审批状态、可见性和真实性信号，判断模型是否适合真实使用。',
+    '结合审批状态、可见性和校验信号，判断模型是否适合生产使用。',
   'Inspect model signals': '查看模型信号',
   'Continue into ownership or versions': '继续进入“我的模型”或版本页',
   'Move into your owned models or registered versions when you need to continue authoring or deployment follow-up.':
@@ -275,7 +275,7 @@ const zhCNBase: Record<string, string> = {
   'When at least one dataset is ready, move directly into annotation queue or training setup.':
     '当至少一个数据集 ready 后，可直接进入标注队列或训练配置。',
   'Guide status is computed from real dataset records in this workspace.':
-    '引导完成度基于当前工作区真实数据集记录计算。',
+    '引导完成度基于当前工作区实际数据集记录计算。',
   'Training first-run guide': '训练新手引导',
   'Use this page to launch reproducible training from dataset snapshots, not ad-hoc state.':
     '在这个页面基于数据集快照发起可复现实验，而不是依赖临时状态。',
@@ -349,14 +349,14 @@ const zhCNBase: Record<string, string> = {
   'Use active queue to track queued, running, and evaluating jobs in real time.':
     '通过活跃队列实时跟踪排队中、运行中与评估中的任务。',
   'Open live queue': '打开活跃队列',
-  'Inspect job detail and authenticity': '检查任务详情与真实性',
+  'Inspect job detail and authenticity': '检查任务详情与执行状态',
   'Open one job detail to verify logs, metrics, and real/template execution evidence.':
-    '打开任一任务详情，核对日志、指标与真实/模板执行证据。',
+    '打开任一任务详情，核对日志、指标与执行证据。',
   'Continue to validation lane': '继续到验证工作线',
   'After a run is selected, jump to scoped inference validation for close-loop checks.':
     '选择任务后，直接跳转到带范围的推理验证以完成闭环检查。',
   'Guide status is computed from real queue, selection, and terminal run states.':
-    '引导完成度基于真实队列、当前选择与终态任务状态计算。',
+    '引导完成度基于实际队列、当前选择与终态任务状态计算。',
   'Next training queue step': '下一步训练队列动作',
   'Finish one clear training-control action here before checking logs or validation.':
     '先完成一个明确的训练控制动作，再去查看日志或验证结果。',
@@ -397,17 +397,17 @@ const zhCNBase: Record<string, string> = {
     '引导完成度基于已选样本、标注状态、复核动作与已通过队列数量计算。',
   'Version first-run guide': '模型版本新手引导',
   'Use this page to register real completed runs, inspect lineage, and hand off into validation.':
-    '该页面用于注册真实完成训练、检查版本血缘，并将结果交接到验证流程。',
-  'Prepare authenticity-verified completed jobs': '准备通过真实性校验的已完成任务',
+    '该页面用于注册已完成且通过校验的训练任务、检查版本血缘，并将结果交接到验证流程。',
+  'Prepare authenticity-verified completed jobs': '准备通过执行校验的已完成任务',
   'Only local-command completed jobs with real execution evidence are eligible for registration.':
-    '只有具备真实执行证据的 local-command 已完成任务，才允许用于版本注册。',
+    '只有具备完整执行证据的 local-command 已完成任务，才允许用于版本注册。',
   'Register at least one model version': '至少注册一个模型版本',
   'Bind model + completed run and create a traceable version record.':
     '绑定模型与已完成任务，创建可追溯的版本记录。',
   'Open version inventory': '打开版本清单',
   'Inspect selected version lineage': '检查已选版本血缘',
   'Open one version and verify linked model, job, artifact, and authenticity signals.':
-    '打开一个版本并核对关联模型、任务、产物与真实性信号。',
+    '打开一个版本并核对关联模型、任务、产物与校验信号。',
   'Run scoped inference validation from selected version context.':
     '从当前选中版本上下文发起带范围的推理验证。',
   'Guide status is computed from completed-job evidence, registered versions, and selected inspector state.':
@@ -424,7 +424,9 @@ const zhCNBase: Record<string, string> = {
   'Open Professional Console': '打开专业控制台',
   'Login to use conversation workspace': '登录后可使用对话工作区',
   'Sign in to access chat history, settings, attachments, and real conversation actions.':
-    '登录后即可访问聊天历史、设置、附件，以及真实对话动作能力。',
+    '登录后即可访问聊天历史、设置、附件，以及完整对话动作能力。',
+  'Sign in to access chat history, settings, attachments, and governed conversation actions.':
+    '登录后即可访问聊天历史、设置、附件，以及受治理保护的对话操作能力。',
   'Conversation actions are unavailable after logout.': '退出登录后，对话操作暂不可用。',
   'Use Login to reopen your chat workspace. Ask an administrator to provision another account if needed.':
     '你可以通过“登录”重新进入聊天工作区；如果还需要其他账号，请联系管理员开通。',
@@ -438,6 +440,8 @@ const zhCNBase: Record<string, string> = {
   'Scan shared and approved models before jumping into training or inference.':
     '先查看共享和已通过的模型，再进入训练或推理流程。',
   'Load Failed': '加载失败',
+  'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.':
+    '后台同步暂不可用，删除已在本地生效。点击“刷新”可重试。',
   'No Models': '暂无模型',
   'No models are currently visible to this account.': '当前账号暂无可见模型。',
   'Visible catalog': '可见目录',
@@ -602,7 +606,7 @@ const zhCNBase: Record<string, string> = {
   'Approved in admin queue page.': '已在管理员审批队列页通过。',
   'Approval {approvalId} approved.': '审批 {approvalId} 已通过。',
   'Unavailable model record': '模型记录暂不可用',
-  'Mock quality review failed.': 'Mock 质量审核未通过。',
+  'Quality review failed.': '质量审核未通过。',
   'Rejected in admin queue page.': '已在管理员审批队列页拒绝。',
   'Approval {approvalId} rejected.': '审批 {approvalId} 已拒绝。',
   'Model record is not currently available in the catalog.': '模型记录当前未出现在可见目录中。',
@@ -635,6 +639,20 @@ const zhCNBase: Record<string, string> = {
     '该请求仍在等待审批决定，模型在此之前不会继续推进。',
   'Approved request for {modelName}.': '已通过 {modelName} 的审批请求。',
   'Rejected request for {modelName}.': '已拒绝 {modelName} 的审批请求。',
+  'Decision handoff': '决策交接',
+  'Process requests here, then move straight into the owner lane, draft flow, or version work without guessing the next page.':
+    '在这里完成审批决策后，可直接继续进入所有者泳道、草稿补全流程或版本工作，无需再猜下一页去哪里。',
+  'Open model lane after review': '审核后进入模型泳道',
+  'Approve when the package is governance-ready, reject when the owner needs rework, and use the links below to continue immediately after each decision.':
+    '当模型包已满足治理要求时执行通过；若仍需补充则执行拒绝，并可通过下方链接在每次决策后立即继续后续页面。',
+  'Open owner pending lane': '打开所有者待审批泳道',
+  'Latest version': '最新版本',
+  'Next page after this decision': '本次决策后的下一页',
+  'Reject to send the owner back to the draft flow. Approve to keep version registration and validation nearby.':
+    '若拒绝，则将模型退回草稿补全流程；若通过，则继续把版本注册与验证页面保持在手边。',
+  'Open owner model lane': '打开所有者模型泳道',
+  'Open model draft flow': '打开模型草稿流程',
+  'Open linked training job': '打开关联训练任务',
   'Review guidance': '审核提示',
   'Approvals should include clear notes and rejections should stay actionable for follow-up.':
     '通过时应写清说明，拒绝时应保持后续可执行性。',
@@ -996,6 +1014,8 @@ const zhCNBase: Record<string, string> = {
   'Current attachment context has been cleared.': '当前附件上下文已清空。',
   'Use all ready files': '使用全部 ready 文件',
   'Clear current context': '清空当前上下文',
+  'Clear failed files': '清空失败文件',
+  'Remove file': '移除文件',
   '{count} selected': '已选择 {count} 个',
   'Selected for current message': '当前消息已选附件',
   'Drag chips to reorder send priority.': '拖拽标签可调整发送优先顺序。',
@@ -1003,6 +1023,27 @@ const zhCNBase: Record<string, string> = {
   'Draft attachments are shown only while composing this message.': '这些附件只会在当前草稿阶段显示。',
   'Wait for selected files to finish processing before sending.': '请等待已选附件处理完成后再发送。',
   'Ready: {count}': '就绪：{count}',
+  'Pending: {count}': '处理中：{count}',
+  'Failed: {count}': '失败：{count}',
+  'No selected items required updates.': '所选样本无需更新。',
+  'Batch update finished with partial failures. Updated {success} items, failed {failed}.':
+    '批量更新部分失败：成功 {success} 条，失败 {failed} 条。',
+  'Delete selected': '删除已选',
+  'Delete {count} selected sample(s)?': '确认删除已选的 {count} 条样本吗？',
+  'Deleted {count} selected sample(s).': '已删除 {count} 条已选样本。',
+  'Batch delete failed for all selected items. First error: {message}':
+    '批量删除全部失败。首条错误：{message}',
+  'Batch delete finished with partial failures. Deleted {success} items, failed {failed}. First error: {message}':
+    '批量删除部分失败：成功删除 {success} 条，失败 {failed} 条。首条错误：{message}',
+  'Open file': '打开文件',
+  'Use page context': '使用页面上下文',
+  'Ask next step': '询问下一步',
+  'Page context is ready for guided next-step orchestration.': '页面上下文已就绪，可直接编排下一步。',
+  'Please guide me through the next best action in this page context.':
+    '请基于该页面上下文给出下一步最优操作建议。',
+  Uploading: '上传中',
+  Processing: '处理中',
+  Error: '错误',
   'Enter filename, for example: invoice-sample.jpg': '输入文件名，例如：invoice-sample.jpg',
   Attach: '附加',
   Added: '已添加',
@@ -1027,9 +1068,36 @@ const zhCNBase: Record<string, string> = {
   'Missing Information': '缺失信息',
   'Collected Information': '已收集信息',
   Suggestions: '建议项',
+  'Auto fill all': '自动补全全部',
+  'Auto apply top suggestion': '自动应用首条建议',
+  'Confirm now': '立即确认',
   'Open Result': '打开结果',
   'Label Classes': '标签类别',
+  'Auto fill applied. Retrying action...': '已自动补全，正在重试操作...',
+  'Auto fill inserted into composer.': '自动补全内容已填入输入框。',
+  'Suggestion applied. Retrying action...': '已应用建议，正在重试操作...',
   'Suggestion inserted into composer.': '建议项已填入输入框。',
+  'Confirmation sent. Executing action...': '确认已发送，正在执行操作...',
+  'Confirmation inserted into composer.': '确认语已填入输入框。',
+  'Suggested next step inserted into composer.': '建议下一步已填入输入框。',
+  'Suggested next step sent. Confirm if prompted.': '建议下一步已发送；如出现确认门禁，请继续确认。',
+  'Suggested next steps': '建议下一步',
+  'Run top suggestion': '执行首条建议',
+  'Run top suggestion (auto-retry)': '执行首条建议（自动重试）',
+  'Retry on control-plane lane': '切到控制平面重试',
+  'Send a guarded retry request from this conversation and keep the confirmation step in-thread.':
+    '直接在本会话发送受控重试请求，并把确认步骤保留在线程里。',
+  'Review runtime environment': '检查 Runtime 环境',
+  'Open runtime settings when logs point to dependencies, local commands, fallback, or template evidence.':
+    '当日志指向依赖、本地命令、降级或模板证据时，打开 Runtime 设置检查。',
+  'Check worker/account permissions': '检查 Worker / 账号权限',
+  'Open worker settings when the failure looks tied to worker reachability or scheduling.':
+    '当失败像是 Worker 可达性或调度问题时，打开 Worker 设置检查。',
+  'Open training logs': '打开训练日志',
+  'Inspect the run detail with logs already selected before taking manual action.':
+    '在手动处理前，先打开已选中日志视图的训练详情。',
+  'This card failed without a training job id. Review the summary and continue with a precise follow-up.':
+    '这张卡片失败但没有训练任务 ID；请先查看摘要，再用更精确的补充继续。',
   'Started a fresh conversation.': '已开始新会话。',
   'Title cannot be empty.': '标题不能为空。',
   'Conversation renamed.': '会话已重命名。',
@@ -1037,14 +1105,17 @@ const zhCNBase: Record<string, string> = {
   'Conversation deleted.': '会话已删除。',
   'Clear history': '清空历史',
   'No conversation history to clear.': '当前没有可清空的会话历史。',
-  'Delete all conversation history visible in this account?': '确认删除当前账号可见的全部会话历史吗？',
+  'Delete all conversation history in this account?': '确认删除当前账号下的全部会话历史吗？',
   'Failed to delete {count} conversations.': '有 {count} 条会话删除失败。',
   'History cleared.': '历史记录已清空。',
   'History cleared with partial failures.': '历史记录已清空，但存在部分删除失败。',
   'Removed from sidebar (local).': '已从侧栏移除（本地）。',
   'Cleared local chat sidebar.': '已清空本地会话侧栏。',
   'Hidden chats are visible again.': '隐藏会话已重新显示。',
-  'Mock mode': 'Mock 模式',
+  'Mock mode': '兼容模式',
+  'Compatibility mode': '兼容模式',
+  'Restricted mode': '受限模式',
+  'Standard execution': '标准执行',
   Pinned: '已置顶',
   Today: '今天',
   Yesterday: '昨天',
@@ -1067,6 +1138,8 @@ const zhCNBase: Record<string, string> = {
   'Step 4. Review and Submit': '步骤 4：审核并提交',
   'Current step': '当前步骤',
   'Model Draft Studio': '模型草稿工作台',
+  'Move from metadata shell to approval-ready artifact package with a calm guided flow.':
+    '用清晰、平稳的引导流程，从元数据草稿走到可提交审批的模型产物包。',
   'Move from metadata shell to approval-ready artifact package with a calmer guided flow.':
     '用更清晰、更平稳的引导流程，从元数据草稿走到可提交审批的模型产物包。',
   'Complete metadata to create the first draft shell.': '先完善元数据，创建第一层模型草稿壳。',
@@ -1094,13 +1167,46 @@ const zhCNBase: Record<string, string> = {
   'Current draft': '当前草稿',
   'No draft yet.': '当前还没有草稿。',
   'Draft created. Continue with model file upload.': '草稿已创建，请继续上传模型文件。',
+  'The requested model draft is no longer available. Open My Models and choose another draft.':
+    '请求继续处理的模型草稿已不可用，请前往“我的模型”重新选择。',
+  'Loaded existing model submission. Track approval from the next-step panel.':
+    '已载入已有模型提交流程，请从右侧下一步面板继续跟踪审批。',
+  'Loaded existing model draft. Continue with files, review, and approval handoff.':
+    '已载入已有模型草稿，请继续补充文件、完成复核并进入审批交接。',
+  'Draft already exists. Continue with model file upload or final review.':
+    '草稿已存在，请继续上传模型文件，或直接进入最终复核。',
   'Approval request submitted. Model status is now pending approval.':
     '审批请求已提交，模型状态现为待审批。',
+  'Approval request submitted. Model status is now pending approval. Continue in My Models or the approval queue.':
+    '审批请求已提交，模型状态现为待审批。请继续在“我的模型”或审批队列中跟踪。',
+  'Approval has already been submitted or completed for this model. Continue from My Models or the approval queue.':
+    '该模型的审批已提交或已完成，请从“我的模型”或审批队列继续后续操作。',
   'Submission checklist': '提交流程清单',
   'Keep the approval path visible while you finish the wizard.': '在完成向导的过程中，持续保持审批路径可见。',
   'Review links': '跟进入口',
   'Track draft progress and approval results from the model workspace.':
     '可从模型工作区继续跟踪草稿进度和审批结果。',
+  'Metadata is locked after the draft shell is created. Continue with file packaging, review, and approval from the next steps.':
+    '草稿壳创建后，元数据将保持锁定；请在后续步骤继续完成文件包装、复核与审批。',
+  'Approval Submitted': '已提交审批',
+  'Create the model shell first, then this panel will point you to the next operational page.':
+    '请先创建模型草稿壳，随后该面板会直接指向下一步操作页面。',
+  'Approval has been submitted. Track the decision first, then continue into version registration or validation.':
+    '审批已提交，请先跟踪审批结果，再继续进入版本注册或验证。',
+  'Upload at least one ready model artifact so the package can move toward review and approval.':
+    '请先上传至少一个 ready 状态的模型产物，以便模型包继续进入复核与审批。',
+  'The package is almost ready. Move into the final review step and submit approval from there.':
+    '模型包已接近完成，请进入最终复核步骤并从那里提交审批。',
+  'Submit approval now, then continue in the ownership lane instead of searching across pages.':
+    '现在即可提交审批，随后直接回到所有者泳道继续，而不必再在多个页面中查找。',
+  'Open my pending models': '打开我的待审批模型',
+  'Keep version registration nearby': '保留版本注册入口',
+  'Go to model files': '前往模型文件',
+  'Go to final review': '前往最终复核',
+  'Open ownership lane': '打开所有者泳道',
+  'Version registration handoff': '版本注册交接',
+  'After approval finishes, return here and register the linked training output as a version.':
+    '审批完成后，请回到这里，将已关联的训练产物注册为版本。',
   'Go back to metadata step and create draft first.': '请先回到元数据步骤创建草稿。',
   'Upload model artifact files here. Status will transition from uploading to ready.':
     '在此上传模型产物文件，状态会从 uploading 流转到 ready。',
@@ -1118,6 +1224,11 @@ const zhCNBase: Record<string, string> = {
   enabled: '启用',
   disabled: '禁用',
   'Missing Draft': '缺少草稿',
+  'Continue draft package': '继续完善草稿包',
+  'Continue rework': '继续返工',
+  'Track approval': '跟踪审批',
+  'Open pending lane': '打开待审批泳道',
+  'Register first version': '注册首个版本',
   Back: '返回',
   Next: '下一步',
   'Submitting...': '提交中...',
@@ -1127,7 +1238,7 @@ const zhCNBase: Record<string, string> = {
   'Create metadata draft first.': '请先创建元数据草稿。',
   'Upload at least one ready model file before proceeding.': '继续前请至少上传一个 ready 状态的模型文件。',
   'Draft model is missing.': '缺少模型草稿。',
-  'Round-1 mock submission from create wizard.': '来自创建向导的第 1 轮 mock 提交。',
+  'Round-1 mock submission from create wizard.': '来自创建向导的第 1 轮兼容提交流转。',
   'Approval request {requestId} submitted. Model status is now pending_approval.':
     '审批请求 {requestId} 已提交，模型状态已变为 pending_approval。',
   Input: '输入',
@@ -1219,8 +1330,8 @@ const zhCNBase: Record<string, string> = {
   'Runtime Fallback Active': 'Runtime 降级生效中',
   'Degraded output active': '降级输出生效中',
   'Fallback output active': '回退输出生效中',
-  'Using mock fallback because runtime call failed: {reason}': 'Runtime 调用失败，已使用 mock 降级：{reason}',
-  'Using mock fallback because runtime endpoint is unavailable.': 'Runtime 端点不可用，已使用 mock 降级。',
+  'Using mock fallback because runtime call failed: {reason}': 'Runtime 调用失败，已切换到兼容降级：{reason}',
+  'Using mock fallback because runtime endpoint is unavailable.': 'Runtime 端点不可用，已切换到兼容降级。',
   'Using explicit fallback because runtime or local command failed: {reason}':
     'Runtime 或本地命令失败，已使用显式降级结果：{reason}',
   'Using degraded output because runtime or local execution failed: {reason}':
@@ -1242,15 +1353,16 @@ const zhCNBase: Record<string, string> = {
     '当前预测输出来自本地框架 Runner，并优先使用模型版本绑定产物。',
   'Template Runner Fallback': '模板 Runner 降级',
   'Prediction output is coming from built-in degraded runner because real framework execution is unavailable.':
-    '当前预测输出来自内置降级 Runner，真实框架执行暂不可用。',
+    '当前预测输出来自内置降级 Runner，标准框架执行暂不可用。',
   'Prediction output is coming from built-in degraded runner because real framework execution is unavailable: {reason}':
-    '当前预测输出来自内置降级 Runner，真实框架执行暂不可用：{reason}',
+    '当前预测输出来自内置降级 Runner，标准框架执行暂不可用：{reason}',
   'Prediction output is coming from bundled template runner because real framework execution is unavailable.':
-    '当前预测输出来自仓库内置模板 Runner，真实框架执行暂不可用。',
+    '当前预测输出来自仓库内置模板 Runner，标准框架执行暂不可用。',
   'Prediction output is coming from bundled template runner because real framework execution is unavailable: {reason}':
-    '当前预测输出来自仓库内置模板 Runner，真实框架执行暂不可用：{reason}',
-  'Real execution': '真实执行',
-  'Real output': '真实输出',
+    '当前预测输出来自仓库内置模板 Runner，标准框架执行暂不可用：{reason}',
+  'Real execution': '标准执行',
+  'Real output': '标准输出',
+  'Standard output': '标准输出',
   'Degraded output': '降级输出',
   'Fallback output': '回退输出',
   'Template execution': '模板执行',
@@ -1259,17 +1371,17 @@ const zhCNBase: Record<string, string> = {
   'Degraded execution': '降级执行',
   'Fallback execution': '回退执行',
   'Needs verification': '需要复核',
-  'Result authenticity': '结果真实性',
+  'Result authenticity': '结果校验状态',
   'Template/Simulated Training Result': '模板/模拟训练结果',
   'Training output needs verification': '训练输出需要复核',
   'Current training output is not produced by a fully real framework run. Verify runtime dependencies before publishing this version.':
-    '当前训练输出并非完整真实框架执行产物，发布该版本前请先确认 runtime 依赖。',
+    '当前训练输出并非完整标准框架执行产物，发布该版本前请先确认 runtime 依赖。',
   'Current training output is not from a fully verified run. Verify runtime dependencies before publishing this version.':
-    '当前训练输出尚未通过完整真实性校验，发布该版本前请先确认 runtime 依赖。',
+    '当前训练输出尚未通过完整执行校验，发布该版本前请先确认 runtime 依赖。',
   'Current training output is not produced by a fully real framework run. Verify runtime dependencies before publishing this version. Fallback reason from runner: {reason}':
-    '当前训练输出并非完整真实框架执行产物，发布该版本前请先确认 runtime 依赖。Runner 回退原因：{reason}',
+    '当前训练输出并非完整标准框架执行产物，发布该版本前请先确认 runtime 依赖。Runner 回退原因：{reason}',
   'Current training output is not from a fully verified run. Verify runtime dependencies before publishing this version. Reason: {reason}':
-    '当前训练输出尚未通过完整真实性校验，发布该版本前请先确认 runtime 依赖。原因：{reason}',
+    '当前训练输出尚未通过完整执行校验，发布该版本前请先确认 runtime 依赖。原因：{reason}',
   'Execution detail is still incomplete for this terminal run. Verify runtime dependencies and artifact metadata before publishing this version.':
     '该终态任务的执行明细仍不完整，发布该版本前请先确认 runtime 依赖与产物元数据。',
   'Execution details are still incomplete for this run. Verify runtime dependencies and artifact metadata before publishing this version.':
@@ -1278,21 +1390,21 @@ const zhCNBase: Record<string, string> = {
   'Degradation reason': '降级原因',
   'Refreshing execution summary...': '正在刷新执行摘要...',
   'Selected job finished without fully verified real training evidence. Review details before model registration.':
-    '当前任务结束时缺少完整真实训练证据，模型注册前请先复核详情。',
+    '当前任务结束时缺少完整训练证据，模型注册前请先复核详情。',
   'Selected job finished without fully verified real training evidence. Review details before model registration. Reason: {reason}':
-    '当前任务结束时缺少完整真实训练证据，模型注册前请先复核详情。原因：{reason}',
+    '当前任务结束时缺少完整训练证据，模型注册前请先复核详情。原因：{reason}',
   'Selected job ended without fully real training evidence. Review detail before model registration.':
-    '当前任务结束时缺少完整真实训练证据，模型注册前请先复核详情。',
+    '当前任务结束时缺少完整训练证据，模型注册前请先复核详情。',
   'Selected job ended without fully real training evidence. Review detail before model registration. Fallback reason from runner: {reason}':
-    '当前任务结束时缺少完整真实训练证据，模型注册前请先复核详情。Runner 回退原因：{reason}',
+    '当前任务结束时缺少完整训练证据，模型注册前请先复核详情。Runner 回退原因：{reason}',
   'Deterministic Local Fallback': '本地确定性降级',
   'Prediction output is coming from deterministic local fallback, not framework runtime.':
-    '当前预测输出来自本地确定性降级，不是真实框架 Runtime。',
+    '当前预测输出来自本地确定性降级，不是标准框架 Runtime。',
   'Prediction output is coming from deterministic local fallback: {reason}':
     '当前预测输出来自本地确定性降级：{reason}',
   'Raw Output': '原始输出',
   'Normalized Output': '统一输出',
-  'Current output is not from real OCR recognition': '当前输出并非真实 OCR 识别结果',
+  'Current output is not from real OCR recognition': '当前输出未通过 OCR 识别校验',
   'Fallback reason': '回退原因',
   'No OCR text recognized': '未识别到 OCR 文本',
   'Fix Runtime or local command settings first.': '请先修复 Runtime 或本地命令设置。',
@@ -1318,7 +1430,8 @@ const zhCNBase: Record<string, string> = {
   'Sample routed back.': '样本已回流。',
   'Run once, then route failures back.': '先运行一次，再把失败样本回流。',
   'Run one sample, inspect the result, then route it back.': '跑一张样本，检查结果后再回流。',
-  'Current result is not real OCR': '当前结果并非真实 OCR',
+  'Current result is not real OCR': '当前结果未通过 OCR 识别校验',
+  'Current result requires verification': '当前结果需要复核',
   'Inference complete.': '推理已完成。',
   'Run result': '运行结果',
   'Review status and normalized output.': '查看状态和统一输出。',
@@ -1341,11 +1454,11 @@ const zhCNBase: Record<string, string> = {
     '反馈目标仅展示任务类型为 {taskType} 的数据集。',
   'Run detail unavailable': '运行详情暂不可用',
   'Current output is degraded and not from real OCR recognition':
-    '当前结果为降级输出，不是真实 OCR 识别',
+    '当前结果为降级输出，未通过 OCR 识别校验',
   'Fix runtime or local prediction command configuration before using this result for business decisions.':
     '请先修复 runtime 或本地预测命令配置，再使用该结果做业务判断。',
   'No text recognized or this run produced no real OCR output':
-    '未识别到文本 / 本次运行未产生真实 OCR 结果',
+    '未识别到文本 / 本次运行未产生通过校验的 OCR 结果',
   'Check runtime or local command configuration and retry.':
     '请检查 runtime 或本地命令配置后重试。',
   'Refresh selected run': '刷新当前运行详情',
@@ -1511,11 +1624,11 @@ const zhCNBase: Record<string, string> = {
     '仅供需要非默认 runner 或权重路径的操作人员使用的本地覆盖项。',
   'YOLO local model path': 'YOLO 本地模型路径',
   'Optional. Recommended for YOLO real local execution.':
-    '可选。推荐为 YOLO 的真实本地执行配置。',
+    '可选。推荐为 YOLO 的标准本地执行配置。',
   'Optional. Leave blank unless this framework needs a local model asset path.':
     '可选。除非该框架需要本地模型资源路径，否则可留空。',
   'Used for local real training/inference when endpoint is unavailable or you prefer local weights.':
-    '当 endpoint 不可用，或你希望优先使用本地权重时，此路径将用于真实本地训练/推理。',
+    '当 endpoint 不可用，或你希望优先使用本地权重时，此路径将用于本地训练/推理。',
   'Only needed when this framework relies on local model assets instead of remote runtime defaults.':
     '仅当该框架依赖本地模型资源、而不是远程 Runtime 默认模型时才需要填写。',
   'LLM key configuration': 'LLM Key 配置',
@@ -1524,14 +1637,14 @@ const zhCNBase: Record<string, string> = {
   'Unable to load LLM settings. Verify account/session, then open LLM settings to confirm API key state.':
     '无法加载 LLM 设置。请先确认账户会话状态，再打开 LLM 设置检查 API key。',
   'LLM key is configured. Conversation and assistant routing can use real provider credentials.':
-    'LLM key 已配置。对话与助手路由可以使用真实提供商凭据。',
+    'LLM key 已配置。对话与助手路由可以使用提供商凭据。',
   'No active LLM API key is configured. Chat and ops bridge may stay in mock/default mode until key is set.':
-    '当前未配置有效的 LLM API key。在配置前，对话与 ops bridge 可能停留在 mock/default 模式。',
+    '当前未配置有效的 LLM API key。在配置前，对话与 ops bridge 可能停留在兼容默认模式。',
   'Runtime endpoint availability': 'Runtime 端点可用性',
   'Checking runtime endpoint reachability across frameworks.':
     '正在检查各框架 Runtime 端点可达性。',
   'At least one framework endpoint is reachable. Real runtime execution path is available.':
-    '至少一个框架端点可达，已具备真实 Runtime 执行路径。',
+    '至少一个框架端点可达，已具备标准 Runtime 执行路径。',
   'Endpoint is configured but currently unreachable. Fix connectivity, or keep safety guards enabled before production runs.':
     '端点已配置但当前不可达。请修复连通性，或在生产前保持安全保护开启。',
   'No reachable runtime endpoint. You can continue with local execution, but production runs require either a reachable endpoint or a verified local environment.':
@@ -1642,32 +1755,32 @@ const zhCNBase: Record<string, string> = {
   'Runtime safety guard is off': 'Runtime 安全保护已关闭',
   'Runtime safety guard is active': 'Runtime 安全保护已开启',
   'Version authenticity checks now use runtime safety guards. Built-in runner Python: {pythonBin}.':
-    '版本真实性检查已启用 Runtime 安全保护。内置 Runner Python：{pythonBin}。',
+    '版本执行校验已启用 Runtime 安全保护。内置 Runner Python：{pythonBin}。',
   'This page may still show jobs with degraded output. Enable runtime safety guards before registration.':
     '当前页面仍可能出现降级输出任务。注册前请先启用 Runtime 安全保护。',
   'Linked training run contains degraded-output evidence. Review training job detail before production usage. Reason: {reason}':
     '关联训练任务包含降级输出证据。生产使用前请先复核训练详情。原因：{reason}',
   'Linked training run contains non-real execution evidence. Review training job detail before production usage.':
-    '关联训练任务包含非真实执行证据。生产使用前请先复核训练详情。',
+    '关联训练任务存在受限执行证据。生产使用前请先复核训练详情。',
   'Includes degraded or non-real evidence. Review training and version details before production use.':
-    '包含降级或非真实执行证据。生产使用前请先复核训练与版本详情。',
+    '包含受限执行证据。生产使用前请先复核训练与版本详情。',
   'Only completed jobs with verified real execution can be registered as model versions.':
-    '只有完成且通过真实执行校验的训练任务，才可注册为模型版本。',
+    '只有完成且通过执行校验的训练任务，才可注册为模型版本。',
   '{count} completed jobs are hidden because they were not completed through local execution path.':
     '有 {count} 个已完成任务因非本地执行路径而被隐藏。',
-  'Checking training job authenticity...': '正在检查训练任务真实性...',
+  'Checking training job authenticity...': '正在检查训练任务执行状态...',
   'Jobs with degraded output are blocked': '含降级输出的任务已被阻断',
   '{count} completed jobs are excluded because execution evidence is degraded or incomplete.':
     '有 {count} 个已完成任务因执行证据降级或不完整而被排除。',
   'Registration keeps authenticity checks on. Jobs with degraded output are blocked by default.':
-    '版本注册默认开启真实性检查，含降级输出的任务会被阻断。',
+    '版本注册默认开启执行校验，含受限输出的任务会被阻断。',
   'Training and inference safety guards are reflected in this workspace. Built-in runner Python: {pythonBin}.':
     '该页面已同步训练与推理的安全保护状态。内置 Runner Python：{pythonBin}。',
   'This training detail may still include degraded-output evidence. Enable runtime safety guards before production approval.':
     '该训练详情仍可能包含降级输出证据。生产审批前请先启用 Runtime 安全保护。',
   'Surface degraded outputs early so production decisions stay safe.':
     '尽早暴露降级输出，保障生产决策安全。',
-  'Non-real training outputs': '非真实训练输出',
+  'Non-real training outputs': '受限训练输出',
   'Degraded training': '降级训练',
   'Degraded training (24h)': '降级训练（24h）',
   'Terminal training jobs with degraded output in the last 24 hours.':
@@ -1677,7 +1790,7 @@ const zhCNBase: Record<string, string> = {
   'Degraded inference': '降级推理',
   'Degraded inference (24h)': '降级推理（24h）',
   'Degraded inference runs': '降级推理运行',
-  'Inference runs marked as fallback/template/mock output.': '被标记为回退/模板/mock 输出的推理运行。',
+  'Inference runs marked as fallback/template/mock output.': '被标记为回退/模板/兼容输出的推理运行。',
   'Inference runs marked as degraded output.': '被标记为降级输出的推理运行。',
   'Share of inference runs without degraded-output markers.':
     '推理运行中未出现降级输出标记的占比。',
@@ -1722,7 +1835,7 @@ const zhCNBase: Record<string, string> = {
     '当本地 Runner 命令不可用时，训练仍可能回退到模拟/模板输出。请在 Runtime 设置中开启严格保护后再进行生产训练。',
   'Runtime first-run guide': 'Runtime 新手引导',
   'Use this page to prepare runtime connectivity before real inference/training.':
-    '通过本页先完成 Runtime 连通性准备，再进入真实推理/训练。',
+    '通过本页先完成 Runtime 连通性准备，再进入推理/训练。',
   'Configure at least one framework': '至少配置一个框架',
   'Complete endpoint or local command settings (or run auto-config) so framework checks can run.':
     '先完成 endpoint 或本地命令配置（或运行自动配置），让框架检查可执行。',
@@ -1736,7 +1849,7 @@ const zhCNBase: Record<string, string> = {
     '在生产运行前先解决本地环境问题，并完成安全检查。',
   'Run readiness checks': '执行就绪检查',
   'After readiness is green, run inference validation with real runtime output.':
-    '就绪状态通过后，进入推理验证并确认真实 Runtime 输出。',
+    '就绪状态通过后，进入推理验证并确认 Runtime 输出。',
   'Runtime guide status is computed from runtime settings, profile activation, readiness report, and connectivity checks.':
     'Runtime 引导完成度基于配置状态、Profile 激活、就绪报告与连通性检查实时计算。',
   'Next runtime step': '下一步 Runtime 设置动作',
@@ -1755,14 +1868,14 @@ const zhCNBase: Record<string, string> = {
   'Enable custom LLM mode': '启用自定义 LLM 模式',
   'Turn on custom mode so chat workspace uses your saved provider settings.':
     '启用自定义模式后，对话工作区会使用你已保存的提供方配置。',
-  'Run connection test and continue to chat': '执行连接测试并继续对话',
+  'Run connection test and continue to chat': '执行连接检查并继续对话',
   'Verify connection first, then return to conversation workspace for real usage.':
-    '先验证连接，再回到对话工作区进行真实使用。',
+    '先完成连接检查，再回到对话工作区进行正式使用。',
   'Guide status is computed from saved endpoint/model/key state plus latest connection test result.':
-    '引导完成度基于已保存的端点/模型/key 状态和最近一次连接测试结果计算。',
+    '引导完成度基于已保存的端点/模型/key 状态和最近一次连接检查结果计算。',
   'Next LLM step': '下一步 LLM 设置动作',
   'Finish one clear LLM setup action here before testing chat usage.':
-    '先完成一个明确的 LLM 设置动作，再去测试实际对话使用。',
+    '先完成一个明确的 LLM 设置动作，再进入实际对话使用。',
   'Account first-run guide': '账户新手引导',
   'Use this page to secure access first, then continue to the next setup tabs.':
     '先通过本页完成账号安全与身份确认，再继续后续设置。',
@@ -1966,7 +2079,7 @@ const zhCNBase: Record<string, string> = {
   'Compatibility warning': '兼容性告警',
   'Docker command': 'Docker 命令',
   'Script command': '脚本命令',
-  'Setup URL still needs a real host': 'Setup 地址仍需真实主机',
+  'Setup URL still needs a real host': 'Setup 地址仍需有效主机',
   'This pairing session was created without Worker public host / IP. Regenerate it with a reachable host so the operator can open /setup directly and the control plane can validate callbacks cleanly.':
     '这个配对会话创建时没有填写 Worker 对外主机 / IP。请用可访问的主机地址重新生成，以便操作者能直接打开 /setup，且控制平面可顺利校验回调。',
   'Docker startup command': 'Docker 启动命令',
@@ -2076,7 +2189,7 @@ const zhCNBase: Record<string, string> = {
   'Execution Status': '执行状态',
   'runtime framework': '运行框架',
   'runner mode': 'Runner 模式',
-  real: '真实',
+  real: '标准',
   template: '模板',
   'n/a': '无',
   missing_detection: '漏检',
@@ -2144,10 +2257,10 @@ const zhCNBase: Record<string, string> = {
   'Use connection advice and safety reminders before switching providers or models.':
     '切换提供商或模型前，可先查看连接建议和安全提醒。',
   'No connection advice right now.': '当前没有新的连接建议。',
-  'Run a test after changing the endpoint, key, or model.': '修改端点、密钥或模型后，建议先执行一次测试。',
+  'Run a test after changing the endpoint, key, or model.': '修改端点、密钥或模型后，建议先执行一次连接检查。',
   'No live troubleshooting advice right now.': '当前没有即时排查建议。',
   'Try a connection test after changing base URL, key, or model.':
-    '修改基础 URL、密钥或模型后，建议先执行一次连接测试。',
+    '修改基础 URL、密钥或模型后，建议先执行一次连接检查。',
   'Stored key reuse': '密钥复用',
   'Reload saved settings': '重新加载已保存设置',
   'Discard typed key': '丢弃本次输入的 key',
@@ -2161,17 +2274,17 @@ const zhCNBase: Record<string, string> = {
   'Stored key: {key}': '已存储密钥：{key}',
   'Leave API Key blank to keep using the saved key.': '保持 API Key 为空即可继续使用已保存密钥。',
   'Leave API Key blank to keep the saved key when editing or testing.':
-    '编辑或测试时若保持 API Key 为空，将继续使用已保存密钥。',
+    '编辑或检查时若保持 API Key 为空，将继续使用已保存密钥。',
   'Key handling': '密钥处理方式',
   'No key saved yet. Add one once to finish setup.': '当前还没有已保存密钥，先添加一次即可完成设置。',
   'No saved key yet. Input API key once to start managed editing.':
     '当前还没有已保存密钥，请先输入一次 API key，之后才能顺畅管理和编辑。',
   'A newly entered key will be used for this test and saved if you click Save.':
-    '新输入的 key 会优先用于本次测试；如果点击保存，它也会成为新的已保存密钥。',
+    '新输入的 key 会优先用于本次检查；如果点击保存，它也会成为新的已保存密钥。',
   'Blank API Key means save/test will keep using the saved key.':
-    'API Key 留空时，保存和测试都会继续使用当前已保存密钥。',
+    'API Key 留空时，保存和连接检查都会继续使用当前已保存密钥。',
   'Typed API Key will replace the saved key on save and be used for connection test.':
-    '当前输入的新 API Key 会在保存时替换旧密钥，并优先用于本次连接测试。',
+    '当前输入的新 API Key 会在保存时替换旧密钥，并优先用于本次连接检查。',
   'Pending changes are waiting to be saved.': '当前改动尚未保存。',
   'No pending changes.': '当前没有待处理改动。',
   'Unsaved edits are pending.': '当前有未保存修改。',
@@ -2192,11 +2305,11 @@ const zhCNBase: Record<string, string> = {
   'Rate limit reached. Wait and retry, or switch to a lower-cost model.': '已触发限流，请稍后重试，或切换到更低成本模型。',
   'Endpoint or model not found. Check Base URL and model name.': '端点或模型不存在，请检查 Base URL 与模型名。',
   'Connection timed out. Retry later or use a more stable network.': '连接超时，请稍后重试或使用更稳定的网络。',
-  'Apply ChatAnywhere preset and test with gpt-4o-mini.': '请先套用 ChatAnywhere 预设，并用 gpt-4o-mini 测试。',
+  'Apply ChatAnywhere preset and test with gpt-4o-mini.': '请先套用 ChatAnywhere 预设，并用 gpt-4o-mini 做连通检查。',
   'Free key may have per-day quota and per-IP limits.': '免费 key 可能存在每日额度与 IP 限制。',
   'Enable custom LLM in conversation workspace': '在对话工作区启用自定义 LLM',
-  'Test Connection': '测试连接',
-  'Testing...': '测试中...',
+  'Test Connection': '连接检查',
+  'Testing...': '检查中...',
   'Security note: rotate your key if it was ever exposed in public channels and keep `LLM_CONFIG_SECRET` private.':
     '安全提示：若密钥曾在公开渠道泄露请立即轮换，并确保 `LLM_CONFIG_SECRET` 私有。',
   'Base URL and model are required.': '基础 URL 与模型为必填项。',
@@ -2208,8 +2321,8 @@ const zhCNBase: Record<string, string> = {
     '配置已保存到加密本地存储。当前密钥：{key}。',
   'Configuration cleared from encrypted local storage.':
     '配置已从加密本地存储中清除。',
-  'Connection test requires API key input for this test run.': '连接测试需要在本次输入 API key。',
-  'Connection test requires API key input or a saved key.': '连接测试需要输入 API key，或先使用已保存密钥。',
+  'Connection test requires API key input for this test run.': '连接检查需要在本次输入 API key。',
+  'Connection test requires API key input or a saved key.': '连接检查需要输入 API key，或先使用已保存密钥。',
   'Saved settings reloaded.': '已重新加载已保存设置。',
   'Reloaded saved LLM settings.': '已重新加载保存的 LLM 设置。',
   'Connection succeeded. Preview: {preview}': '连接成功。预览：{preview}',
@@ -2254,6 +2367,45 @@ const zhCNBase: Record<string, string> = {
   'Review the run and decide the next step.': '查看这次运行并决定下一步。',
   'Inspect one job, then move on.': '查看一个任务，然后继续。',
   'Current job': '当前任务',
+  'No runs': '暂无运行',
+  'Pick a run': '选择一个运行',
+  'In progress': '进行中',
+  'Needs retry': '需要重试',
+  'Evidence review': '证据复核',
+  'Model needed': '需要模型',
+  'Ready to register': '可注册',
+  'Track run': '跟踪运行',
+  'Review & retry': '复核并重试',
+  'Launch the first training run': '发起第一个训练运行',
+  'Start from one dataset snapshot so logs, artifacts, and later version registration stay tied to the same run.':
+    '从一个固定的数据快照开始，让日志、产物以及后续版本注册都锚定在同一次运行上。',
+  'Open one job and keep the next step visible': '打开一个任务，并保持下一步清晰可见',
+  'Use the current list to pick the run you want to continue, then this rail will point to the next operational page.':
+    '先从当前列表选中你要继续处理的运行，随后右侧栏会直接指向下一步操作页面。',
+  'Open one completed run and continue from detail': '打开一个已完成运行，并从详情继续',
+  'Use the job detail page to inspect artifacts, linked versions, and closure objects before choosing the next governance step.':
+    '先在任务详情页检查产物、已关联版本和闭环对象，再决定下一步治理动作。',
+  'Keep training progress, evidence checks, and version handoff aligned from one lane.':
+    '在同一条工作泳道里，把训练进度、证据检查与版本交接保持一致。',
+  'Keep watching this run until artifacts are ready': '持续跟进该运行，直到产物准备完成',
+  'The job is still executing. Stay on the job detail page for logs and metrics, then continue to version registration when it completes.':
+    '当前任务仍在执行中。请在任务详情页持续查看日志和指标，待完成后再继续版本注册。',
+  'Review logs and retry this run': '先查看日志，再决定是否重试该运行',
+  'The run ended early. Check logs first, then retry with a clearer dispatch choice if needed.':
+    '该运行提前结束。请先查看日志，再按需要选择更明确的调度方式后重试。',
+  'Fix runtime evidence before registration': '注册前先修复运行证据',
+  'This run completed with incomplete or fallback evidence. Review runtime settings and closure checks before treating it as a publishable version.':
+    '该运行虽然完成，但当前证据仍不完整或存在回退。请先复核 Runtime 设置与闭环检查，再将其视为可发布版本。',
+  'Create a matching model shell first': '先创建匹配的模型壳',
+  'The training result is real, but you still need an owned model draft before this run can register a version.':
+    '当前训练结果已通过校验，但在这次运行注册版本之前，仍需先准备一个你持有的模型草稿。',
+  'The training result is standard, but you still need an owned model draft before this run can register a version.':
+    '当前训练结果已满足标准执行口径，但在这次运行注册版本之前，仍需先准备一个你持有的模型草稿。',
+  'Register this completed run as a model version': '将该已完成运行注册为模型版本',
+  'The run is real and artifacts are ready. Register one model version now so downstream validation and device delivery stay anchored to this run.':
+    '当前运行结果已通过校验且产物已就绪。请立即注册一个模型版本，让后续验证与设备交付都能锚定到这次运行。',
+  'The run is standard and artifacts are ready. Register one model version now so downstream validation and device delivery stay anchored to this run.':
+    '当前运行结果已满足标准执行口径且产物已就绪。请立即注册一个模型版本，让后续验证与设备交付都能锚定到这次运行。',
   'All checks': '全部检查',
   'Runtime guard': 'Runtime 保护',
   'Add a short run name.': '填写一个简短的运行名称。',
@@ -2413,6 +2565,16 @@ const zhCNBase: Record<string, string> = {
   'Register version': '注册版本',
   'Training run prefilled': '已预填训练任务',
   'Use the completed run as the registration anchor.': '使用这个已完成任务作为版本注册起点。',
+  'Source run prefilled': '已根据来源任务预填',
+  'Source run prefill unavailable': '来源任务预填不可用',
+  'Loading source run prefill...': '正在加载来源任务预填...',
+  'Prefilled launch settings from source run {jobId}.': '已基于来源任务 {jobId} 预填启动设置。',
+  'Loading launch fields from source run {jobId}.': '正在从来源任务 {jobId} 加载启动字段。',
+  'Launcher fields were prefilled from run {jobId}. You can adjust any value before launch.':
+    '启动表单已基于任务 {jobId} 预填，你仍可在启动前手动调整任意参数。',
+  'Source run prefill failed. Continue manually or clear source context.':
+    '来源任务预填失败，可继续手动填写，或先清除来源上下文。',
+  'Open source run': '打开来源任务',
   'Open training job': '打开训练任务',
   'Clear prefill': '清除预填',
   'This run is kept for reference; choose a verified job below.': '这次运行仅作为参考，请在下方选择一个已验证任务。',
@@ -2473,7 +2635,7 @@ const zhCNBase: Record<string, string> = {
   'Step 2. Train/Val/Test Split': '步骤 2：Train/Val/Test 切分',
   'Train Ratio': '训练集比例',
   'Val Ratio': '验证集比例',
-  'Test Ratio': '测试集比例',
+  'Test Ratio': '验证集比例',
   'Apply Split': '应用切分',
   'Adjust split ratios and apply when the dataset item set is ready.':
     '当数据集条目集准备好后，可在这里调整切分比例并应用。',
@@ -3120,7 +3282,7 @@ const zhCNBase: Record<string, string> = {
     '引导完成度基于已加载报告、当前激活的筛选条件以及本页可导出的证据计算。',
   'Load deployment evidence': '加载部署证据',
   'Start by confirming deployment verification reports are present so release review is grounded in recorded evidence.':
-    '先确认部署验收报告已经存在，让发布评审建立在真实记录的证据之上。',
+    '先确认部署验收报告已经存在，让发布评审建立在实际记录证据之上。',
   'Review reports': '查看报告',
   'Filter failed or scoped results': '筛选失败项或目标范围',
   'Use keyword, status, base URL, and date controls to narrow evidence down to the release slice you actually need.':
@@ -3187,14 +3349,14 @@ const zhCNBase: Record<string, string> = {
   archived: '已归档',
   train: '训练集',
   val: '验证集',
-  test: '测试集',
+  test: '评估集',
   unassigned: '未分配',
   pending: '待处理',
   manual: '人工',
   import: '导入',
   pre_annotation: '预标注',
-  mock_default: '默认 Mock',
-  mock_fallback: 'Mock 降级',
+  mock_default: '默认兼容',
+  mock_fallback: '兼容降级',
   base_empty: '基础空结果',
   runtime_fallback: 'Runtime 回退',
   local_command_failed: '本地命令失败',
@@ -3204,7 +3366,7 @@ const zhCNBase: Record<string, string> = {
   doctr_runtime: 'docTR Runtime',
   yolo_runtime: 'YOLO Runtime',
   local_command: '本地命令',
-  simulated: '模拟执行',
+  simulated: '兼容执行',
   passed: '通过',
   unknown: '未知',
   timeout: '超时',
@@ -3238,6 +3400,10 @@ const zhCNBase: Record<string, string> = {
   'Checking local runtime.': '正在检查本地 Runtime。',
   'Choose a setup path first, then inspect readiness only when you need to fix something. Worker lifecycle operations live in Worker Settings.':
     '先选一种配置路径，再在需要排障时查看就绪检查。Worker 生命周期操作请前往 Worker 设置。',
+  'Training handoff': '训练衔接',
+  'Use scoped links so training-launch troubleshooting starts in the right settings lane.':
+    '使用带上下文的链接，让训练启动与排障直接落到正确的设置通道。',
+  'Return to training launch': '返回训练发起页',
   'Clear saved settings': '清除已保存设置',
   'Clearing...': '清除中...',
   'Current focus': '当前焦点',
@@ -3249,7 +3415,7 @@ const zhCNBase: Record<string, string> = {
   'Disable inference fallback': '禁用推理回退',
   'Disable simulated train fallback': '禁用训练模拟回退',
   'Fallback guards default to on so runtime prefers real execution.':
-    '回退保护默认开启，这样 Runtime 会优先使用真实执行路径。',
+    '回退保护默认开启，这样 Runtime 会优先使用标准执行路径。',
   'Disable fallback guards only when you deliberately want compatibility mode.':
     '只有在你明确需要兼容模式时，才关闭回退保护。',
   Endpoint: '端点',
@@ -3312,6 +3478,8 @@ const zhCNBase: Record<string, string> = {
   'Refresh frameworks': '刷新框架',
   'Refresh readiness and resolve open issues': '刷新就绪检查并处理未解决问题',
   'Reload settings': '重新加载设置',
+  'Finish readiness before launching or retrying runs': '先完成就绪检查，再启动或重试训练',
+  'Runtime is ready for strict training and validation': 'Runtime 已可支撑严格训练与验证',
   'Review framework inventory and advanced controls': '查看框架清单与高级控制',
   'Revoke saved key': '撤销已保存密钥',
   'Rotate saved key': '轮换已保存密钥',
@@ -3328,6 +3496,8 @@ const zhCNBase: Record<string, string> = {
     '已清除 Runtime 设置，现已恢复环境默认值。',
   'Runtime settings saved.': 'Runtime 设置已保存。',
   'Runtime settings unavailable': 'Runtime 设置不可用',
+  'You can continue into training launch, inference validation, or worker coordination from here.':
+    '现在可以继续发起训练、进行推理验证，或转入 Worker 协同配置。',
   'Save runtime settings': '保存 Runtime 设置',
   Saved: '已保存',
   'Saved bindings': '已保存绑定',
@@ -3373,7 +3543,9 @@ const zhCNExtra: Record<string, string> = {
   'Preparing annotation workspace.': '准备标注工作区。',
   'Login to use conversation workspace': '登录后可使用对话工作区',
   'Sign in to access chat history, settings, attachments, and real conversation actions.':
-    '登录后即可访问会话历史、设置、附件和真实会话操作。',
+    '登录后即可访问会话历史、设置、附件和完整会话操作。',
+  'Sign in to access chat history, settings, attachments, and governed conversation actions.':
+    '登录后即可访问会话历史、设置、附件和受治理保护的会话操作。',
   'No Available Models': '暂无可用模型',
   'No model is visible for this account. Publish or authorize one first.':
     '当前账号没有可见模型，请先发布或授权一个模型。',
@@ -3452,9 +3624,15 @@ const zhCNExtra: Record<string, string> = {
   'View full detail': '查看完整详情',
   'Needs verification': '需要核实',
   'The job does not have complete real execution evidence. Review the detail first.':
-    '该任务缺少完整的真实执行证据，请先查看详情。',
+    '该任务缺少完整执行证据，请先查看详情。',
   'The job does not have complete real execution evidence. Review the detail first. Reason: {reason}':
-    '该任务缺少完整的真实执行证据，请先查看详情。原因：{reason}',
+    '该任务缺少完整执行证据，请先查看详情。原因：{reason}',
+  'The job does not have complete standard execution evidence. Review the detail first.':
+    '该任务尚未形成完整标准执行证据，请先查看详情。',
+  'The job does not have complete standard execution evidence. Review the detail first. Reason: {reason}':
+    '该任务尚未形成完整标准执行证据，请先查看详情。原因：{reason}',
+  'Job {jobId} completed, but evidence is not fully standard yet. Fix runtime or closure checks first.':
+    '任务 {jobId} 已完成，但证据尚未达到标准口径。请先修复 Runtime 或闭环检查。',
   'Job detail': '任务详情',
   'Job': '任务',
   'Task': '任务',
@@ -3463,7 +3641,7 @@ const zhCNExtra: Record<string, string> = {
   'Evidence': '证据',
   'Open': '打开',
   'Open Queue': '打开队列',
-  'Real output': '真实输出',
+  'Real output': '标准输出',
   'Fallback output': '回退输出',
   'Unknown execution': '未知执行',
   'Local command': '本地命令',
@@ -3565,19 +3743,23 @@ const zhCNPageExtras: Record<string, string> = {
   'Endpoint or model not found. Check the base URL and model name.':
     '端点或模型不存在。检查 Base URL 和模型名。',
   'Connection timed out. Try again later.': '连接超时。稍后重试。',
-  'Apply a preset before testing.': '先套预设，再测试。',
-  'Testing requires an input key or a saved key.': '测试需要输入 Key 或已保存 Key。',
+  'Apply a preset before testing.': '先套预设，再做连接检查。',
+  'Apply a preset before connection check.': '先套预设，再做连接检查。',
+  'Testing requires an input key or a saved key.': '连接检查需要输入 Key 或已保存 Key。',
+  'Connection check requires an input key or a saved key.': '连接检查需要输入 Key 或已保存 Key。',
   'Pick a preset first, then fill the fields.': '先选预设，再填字段。',
   'Load the current configuration.': '加载当前配置。',
-  'Configure, test, then enable.': '先配、再测、最后启用。',
+  'Configure, test, then enable.': '先配置、再检查、最后启用。',
   'Apply a preset, then fill base URL, key, model, and temperature.':
     '先套预设，再填 Base URL、Key、Model 和温度。',
   'ChatAnywhere preset': 'ChatAnywhere 预设',
   'Enable custom LLM': '启用自定义 LLM',
   'Discard typed key': '丢弃已输入 Key',
   'Enable mode requires an API key or a saved key.': '启用时需要输入 Key 或已保存 Key。',
-  'Test connection': '测试连接',
-  'Save before testing endpoint, key, and model.': '保存前先测端点、Key 和模型。',
+  'Test connection': '连接检查',
+  'Connection check': '连接检查',
+  'Save before testing endpoint, key, and model.': '保存前先检查端点、Key 和模型。',
+  'Save before checking endpoint, key, and model.': '保存前先检查端点、Key 和模型。',
   'Only compare or clear when needed.': '只在需要时对比或清空。',
   'Open only when you need to compare.': '只在要对比时打开。',
   'Use only when you need to clear the saved configuration.': '只在要清空配置时使用。',
@@ -3699,11 +3881,19 @@ const zhCNPageExtras: Record<string, string> = {
   'Select a model, job, and version name first.': '先选模型、任务和版本名。',
   'Select a model': '选择模型',
   'No matching owned model yet': '还没有匹配的自有模型',
+  'Includes unknown verification state. Review training and version details before production use.':
+    '包含未知校验状态。生产使用前请先复核训练与版本详情。',
+  'Includes limited-output evidence. Review training and version details before production use.':
+    '包含受限输出证据。生产使用前请先复核训练与版本详情。',
+  'Stable versions: {real}/{total}': '稳定版本：{real}/{total}',
+  'Stable versions: {stable}/{total}': '稳定版本：{stable}/{total}',
+  'Linked versions currently look verification-safe.': '关联版本当前处于可发布校验状态。',
   'This completed run is ready, but none of your owned models match the selected task type yet.':
     '这次已完成的任务已经可用，但你当前没有任何自有模型与所选任务类型匹配。',
   'Choose a model that matches the completed run before registering.':
     '注册前请选择一个与已完成任务匹配的模型。',
-  'The selected job has not passed authenticity verification.': '选中的任务还没通过真实性验证。',
+  'The selected job has not passed authenticity verification.': '选中的任务尚未通过执行校验。',
+  'The selected job has not passed execution verification.': '选中的任务尚未通过执行校验。',
   'Version registered and ready for validation and comparison.': '版本已注册，可用于验证和比较。',
   'Compare or register verified versions.': '对比或注册已验证版本。',
   'Search version name, ID, or model': '搜版本名、ID 或模型',
@@ -3727,13 +3917,15 @@ const zhCNPageExtras: Record<string, string> = {
   'Only verified jobs can be registered.': '只有已验证任务能注册。',
   'Create model draft': '新建模型草稿',
   'Create training job': '新建训练任务',
-  'Checking job authenticity...': '检查任务真实性...',
+  'Checking job authenticity...': '检查任务执行状态...',
+  'Checking job execution status...': '检查任务执行状态...',
   'Blocked degraded jobs': '降级任务已拦截',
   'For example: v2026.04.02': '例如：v2026.04.02',
   'Only use verified jobs.': '只用已验证任务。',
   'Lineage, metrics, and artifacts.': '链路、指标、产物。',
   'Pick one version from the list.': '从列表里选一个版本。',
-  'Version linked to non-real output': '版本关联到非真实输出',
+  'Version linked to non-real output': '版本关联到受限输出',
+  'Version linked to limited-output evidence': '版本关联到受限输出证据',
   'No metrics summary yet.': '暂无指标摘要。',
   'View raw metrics': '查看原始指标',
   'Select one version to view details.': '选一个版本看详情。',
@@ -3742,6 +3934,17 @@ const zhCNPageExtras: Record<string, string> = {
   'Review status, logs, and metrics for the selected training run.':
     '看状态、日志和指标。',
   'Missing Job ID': '缺少任务 ID',
+  Standard: '标准',
+  'Checking verification status': '检查校验状态',
+  'Verification status unknown': '校验状态未知',
+  'Completed verified runs should continue into model version lane.':
+    '已完成且通过校验的任务应继续进入模型版本通道。',
+  'Start from a completed verified training job, then come back here to register and compare versions.':
+    '从一个已完成且通过校验的训练任务开始，然后回到这里注册并比较版本。',
+  'The linked training job still shows limited-output evidence. Confirm the training record before using this version as a trusted external delivery target.':
+    '关联训练任务仍显示受限输出证据。在将该版本作为可信外部交付目标前，请先确认训练记录。',
+  'The linked training job contains limited-output evidence. Check training details first.':
+    '关联训练任务包含受限输出证据。请先检查训练详情。',
   'Open from training jobs list.': '从任务列表打开。',
   'Not Found': '未找到',
   'Training job does not exist.': '这个训练任务不存在。',
@@ -3779,8 +3982,8 @@ const zhCNPageExtras: Record<string, string> = {
   'Status refreshes on demand and after each action.': '状态会在手动刷新和每次操作后更新。',
   'Closure flow completed': '闭环流程已完成',
   'Next unlock depends on the current step requirement': '下一步解锁取决于当前步骤条件',
-  'Registration is strict + real evidence': '当前注册为 strict + real 证据',
-  'Registration is not strict real yet': '当前注册还不是 strict real',
+  'Registration is strict + real evidence': '当前注册满足标准门禁',
+  'Registration is not strict real yet': '当前注册尚未满足标准门禁',
   'Single next step': '单一下一步',
   'Always execute this first to avoid page-hopping confusion.':
     '优先执行这一步，避免在页面之间来回跳转。',
@@ -3849,7 +4052,15 @@ const zhCNPageExtras: Record<string, string> = {
   'No dataset version created yet. Finish annotation and create a version.':
     '还没有创建数据集版本，请先完成标注并创建版本。',
   'Open annotation workspace': '打开标注工作区',
-  'Open dataset detail': '打开数据集详情',
+  'Snapshot handoff': '快照交接',
+  'Pick a dataset first, then use these links to fix files, versions, or closure steps without losing context.':
+    '请先选择数据集，随后可通过这些入口回到文件、版本或闭环步骤继续处理，而不会丢失当前上下文。',
+  'Go to dataset detail to create a snapshot, or open the closure lane for guided loop work on this dataset.':
+    '可前往数据集详情创建快照，或打开闭环泳道继续处理该数据集的引导式流程。',
+  'This snapshot is launch-ready. If you still need annotation or split work, use the links below and come back here.':
+    '当前快照已满足启动条件；如果仍需补标注或调整切分，可先走下方入口处理后再回到这里。',
+  'This snapshot still needs annotation, split, or readiness work. Continue from dataset detail or the closure lane.':
+    '当前快照仍需补齐标注、切分或准备度，请从数据集详情或闭环泳道继续处理。',
   'Launch training': '发起训练',
   'Latest completed job: {job} ({framework}) at {time}': '最近完成任务：{job}（{framework}），时间 {time}',
   'Training job {job} is {status}. Wait for completion before registration.':
@@ -3903,6 +4114,42 @@ const zhCNPageExtras: Record<string, string> = {
     '尚无设备 API 凭据，请在下方区域先签发一条。',
   'Issue one credential to enable API-based model usage from field devices.':
     '请签发至少一条凭据，以支持现场设备通过 API 使用模型。',
+  'Remote delivery quick start': '远程交付快速入口',
+  'Use this page as the main version-scoped delivery lane when robots or remote callers need credentials, sample curls, and lifecycle proof.':
+    '当机器狗、边缘设备或远程调用方需要凭据、示例 curl 和生命周期证据时，请以本页作为版本级交付主通道。',
+  'Shift into remote ops monitoring and audit follow-up':
+    '进入远程运维监控与审计跟进',
+  'Keep collecting remote delivery evidence in the version lane':
+    '继续在版本交付通道补齐远程交付证据',
+  'Credential issuance, public inference, and encrypted package delivery are all evidenced. Continue governance and operational follow-up from Model Versions.':
+    '凭据签发、公开推理调用和加密模型包交付均已有证据，请在模型版本页继续进行治理与运维跟进。',
+  'Keep this lane open until credential issuance, public inference, and package delivery evidence are all visible for this version.':
+    '请保持在该通道持续推进，直至该版本的凭据签发、公开推理和模型包交付证据全部可见。',
+  'Remote ops ready': '远程运维已就绪',
+  'Open remote ops summary': '打开远程运维总览',
+  'Remote ops handoff': '远程运维交接',
+  'Monitoring ready': '可进入监控',
+  'Collecting evidence': '证据补齐中',
+  'Remote delivery proof is complete for this version. Continue day-2 monitoring and governance from this lane.':
+    '该版本远程交付证据已完整，可在此继续进行日常监控与治理。',
+  'Keep this lane open until credential, public inference, and package delivery evidence are all visible.':
+    '请在该通道持续跟进，直至凭据、公开推理和模型包交付证据全部可见。',
+  'Last remote activity': '最近远程活动',
+  'No remote activity recorded yet.': '尚未记录到远程活动。',
+  'Open version delivery lane': '打开版本交付通道',
+  'Open version detail': '打开版本详情',
+  'Choose a registered version first, then return here to finish remote device or API delivery.':
+    '请先选中一个已注册版本，再回到这里完成远程设备或 API 交付。',
+  'Selected version must be registered before remote delivery':
+    '远程交付前，所选版本必须处于已注册状态',
+  'Register this version first, then issue scoped credentials for devices or remote API callers.':
+    '请先完成该版本注册，再为设备或远程 API 调用方签发作用域凭据。',
+  'Open device delivery panel': '打开设备交付面板',
+  'Copy device key': '复制设备密钥',
+  'Copy inference curl': '复制推理 curl',
+  'Copy model package curl': '复制模型包 curl',
+  'Open the device delivery panel once, then the latest key and sample curls will appear here.':
+    '先打开一次设备交付面板，最近一次生成的密钥和示例 curl 就会显示在这里。',
   'Complete training and version registration first, then issue device credentials here.':
     '请先完成训练与版本注册，再在此签发设备凭据。',
   'Only registered model versions support device authorization.': '仅已注册模型版本支持设备授权。',
@@ -3940,6 +4187,32 @@ const zhCNPageExtras: Record<string, string> = {
     '当前无法获取 Worker 清单，提交时将校验 Worker ID。',
   'Worker dispatch is required. Scheduler will pick one online eligible worker.':
     '该任务要求 Worker 下发，调度器将选择一个在线且可用的 Worker。',
+  'Worker dispatch is available. Use Worker Settings only when you need to inspect inventory or open one concrete worker.':
+    '当前已具备 Worker 下发条件。只有在需要查看库存或打开某个具体 Worker 时，再进入 Worker 设置。',
+  'No online worker is visible yet. Open Worker Settings to pair a node or inspect inventory before launch.':
+    '当前还没有可见的在线 Worker。请先打开 Worker 设置完成节点配对或检查库存，再发起训练。',
+  'Runtime readiness still governs whether this run can launch safely. Open Runtime Settings when you need strict-readiness checks or fixes.':
+    '该训练任务能否安全启动，仍受 Runtime 就绪状态约束。需要严格就绪检查或修复时，请打开 Runtime 设置。',
+  'Open Worker Settings': '打开 Worker 设置',
+  'Online': '在线',
+  'Go to Pairing': '前往配对',
+  'Go to Inventory': '前往库存',
+  'Workers are ready for scheduled training': 'Worker 已就绪，可用于调度训练',
+  'No online worker yet': '还没有在线 Worker',
+  'Pairing succeeded': '配对已完成',
+  'Finish the active pairing session': '先完成当前配对会话',
+  'Use the selected worker context to launch a worker-dispatched training run without re-picking the lane.':
+    '可直接基于当前所选 Worker 发起下发训练，无需重新选择执行通道。',
+  'At least one worker is online. You can launch a worker-dispatched training run now.':
+    '当前至少有一个 Worker 在线，现在就可以发起 Worker 下发训练。',
+  'Create a pairing session and bring one worker online before you rely on worker dispatch.':
+    '在依赖 Worker 下发前，请先创建配对会话并让至少一个 Worker 上线。',
+  'The worker is online. Return to inventory or go straight to training launch.':
+    '该 Worker 已上线。现在可以返回库存页，或直接进入训练创建。',
+  'Open the active pairing session, complete /setup on the worker host, then validate the callback here.':
+    '打开当前配对会话，在 Worker 主机完成 /setup 后，再回到这里验证回调。',
+  'Generate a session to get the pairing token, setup URL, and startup command.':
+    '先生成配对会话，以获取配对令牌、Setup URL 和启动命令。',
   'Selected worker is not in current inventory.': '所选 Worker 不在当前清单中。',
   Dispatch: '下发',
   '4. Dispatch strategy': '4. 下发策略',
@@ -3991,16 +4264,46 @@ const zhCNPageExtras: Record<string, string> = {
   key: '密钥',
   'Dataset Version': '数据集版本',
   'Feedback dataset': '反馈数据集',
-  'Reality & gate status': '真实性与门禁状态',
+  'Reality & gate status': '产物状态与门禁状态',
+  'Evidence & gate status': '产物状态与门禁状态',
   'Keep evidence mode and registration gate visible for every handoff.':
     '在每次交接中保持 evidence mode 和 gate 状态可见。',
   'evidence mode': '证据模式',
   'gate status': '门禁状态',
   'gate interpretation': '门禁解读',
+  'Standard evidence': '标准产物',
+  'Calibrated evidence': '校验产物',
+  'Compatibility evidence': '兼容产物',
+  'Pending evidence': '待判定',
+  'Policy override': '策略例外',
+  'Standard gate': '标准门禁',
+  'Gate pending': '门禁待判定',
+  'Orchestration mode': '编排模式',
+  'Orchestration strategy': '编排策略',
+  'Auto-created model': '自动创建模型',
+  'Auto-selected dataset': '自动选择数据集',
+  'Auto-selected dataset version': '自动选择数据版本',
+  'Auto-created dataset version': '自动创建数据版本',
+  'Auto split': '自动切分',
+  'Auto pre-annotation': '自动预标注',
+  'Full pipeline': '全流程编排',
+  'Training only': '仅训练任务',
+  Conservative: '保守',
+  Aggressive: '激进',
   'This version can be treated as strict real-evidence registration.':
-    '该版本可视为严格 real 证据注册。',
+    '该版本满足标准注册门禁。',
   'This version is usable, but not yet a strict real-evidence registration.':
-    '该版本可用，但还不是严格 real 证据注册。',
+    '该版本可用，但尚未满足标准注册门禁。',
+  'This version meets the standard registration gate.': '该版本满足标准注册门禁。',
+  'This version is usable, but still requires gate review.': '该版本可用，但仍需门禁复核。',
+  'Registration meets standard gate': '当前注册满足标准门禁',
+  'Registration still requires gate review': '当前注册仍需门禁复核',
+  'Continue in version delivery lane': '继续进入版本交付通道',
+  'Use Model Versions as the main remote-delivery lane': '请以模型版本页作为远程交付主通道',
+  'Keep this page for quick closure checks, but continue in Model Versions when you need version-scoped device/API delivery, public inference proof, encrypted package delivery, and audit follow-up.':
+    '本页适合快速查看闭环状态；当你需要版本级设备/API 交付、公开推理证据、加密模型包交付证据和审计跟踪时，请继续进入模型版本页。',
+  'Use this page for cross-workspace visibility. Open the version lane when you need the exact credential, inference curl, model package curl, and lifecycle proof for one concrete version.':
+    '本页更适合跨工作区总览；当你需要针对某个具体版本查看精确凭据、推理 curl、模型包 curl 和生命周期证据时，请打开版本交付通道。',
   'Quick routes': '快捷跳转',
   'If you must jump, use these scoped links so context is preserved.':
     '如需跳转，请使用这些带上下文的链接，避免丢失流程信息。',
@@ -4010,6 +4313,170 @@ const zhCNPageExtras: Record<string, string> = {
   'dataset': '数据集',
   'No dataset version created yet.': '还没有创建数据集版本。',
   'For example: Invoice OCR Batch A': '例如：发票 OCR 批次 A',
+  'Need version': '需要版本',
+  'Need input': '需要输入',
+  'Need dataset': '需要数据集',
+  'Selection needed': '需要完成选择',
+  'Ready to run': '可开始运行',
+  'Runtime check': '运行时检查',
+  'Auto-prepare snapshot before launch': '启动前自动准备快照',
+  'Prepare snapshot now': '立即准备快照',
+  'Preparing snapshot...': '正在准备快照...',
+  'Auto-split applied': '已自动完成数据切分',
+  'Auto pre-annotation added {count} item(s).': '已自动预标注 {count} 条样本',
+  'Auto pre-annotation skipped': '自动预标注已跳过',
+  'Auto dataset version created': '已自动创建数据版本',
+  'Training-ready snapshot selected automatically.': '已自动选择可训练快照',
+  'Auto snapshot preparation failed: {message}': '自动准备快照失败：{message}',
+  'Snapshot will be auto-prepared at launch.': '将在启动时自动准备快照。',
+  'Snapshot is still not launch-ready. Please complete annotation or dataset versioning in dataset lane.':
+    '快照仍未达到可启动条件，请在数据集流程中补齐标注或版本。',
+  'Use recommended params': '使用推荐参数',
+  'Applied recommended params for {framework}/{task}.': '已应用推荐参数：{framework}/{task}',
+  'Smart Launch': '智能一键启动',
+  'Launching...': '正在启动...',
+  'Upload sample files': '上传样本文件',
+  'Clear files': '清空文件',
+  '{count} local sample file(s) queued': '已加入 {count} 个本地样本文件',
+  'Drag and drop sample files here': '将样本文件拖拽到这里',
+  'No local sample files queued yet.': '尚未加入本地样本文件。',
+  'Sample filenames for Smart Launch': '智能启动样本文件名',
+  'One filename per line, e.g. wagon_001.jpg': '每行一个文件名，例如 wagon_001.jpg',
+  'When no dataset is selected, Smart Launch can auto-create dataset from these filenames and continue training setup.':
+    '未选择数据集时，智能启动可根据这些文件名自动创建数据集并继续训练准备。',
+  'When no dataset is selected, Smart Launch can auto-create dataset from local files and filenames, then continue training setup.':
+    '未选择数据集时，智能启动可根据本地文件与文件名自动创建数据集并继续训练准备。',
+  'Only {count} sample files are kept for Smart Launch. Remove duplicates or extra files if needed.':
+    '智能启动最多保留 {count} 个样本文件，请移除重复项或多余文件。',
+  'Add sample files or filenames so Smart Launch can create dataset automatically.':
+    '请先添加样本文件或文件名，智能启动才能自动创建数据集。',
+  'Paste sample filenames so Smart Launch can create dataset automatically.':
+    '请先填写样本文件名，智能启动才能自动创建数据集。',
+  'Auto-created by Smart Launch from sample filenames.': '由智能启动根据样本文件名自动创建。',
+  'Auto-created by Smart Launch from sample inputs.': '由智能启动根据样本输入自动创建。',
+  'Dataset files are still processing. Smart Launch will continue once they are ready.':
+    '数据文件仍在处理中，智能启动将在就绪后继续。',
+  'Some sample files failed to process: {files}': '部分样本文件处理失败：{files}',
+  'Smart Launch created dataset from {count} sample file(s).': '智能启动已基于 {count} 个样本文件创建数据集。',
+  'Smart dataset bootstrap failed: {message}': '智能数据初始化失败：{message}',
+  'Preparing dataset...': '正在准备数据集...',
+  'Output risk': '结果风险',
+  'Feedback needed': '需要回流',
+  'Feedback linked': '已关联反馈',
+  'Feedback scoped': '已锁定反馈样本',
+  'Prediction ready': '已有预标注结果',
+  'Closed loop visible': '闭环已可见',
+  'Choose a registered version first': '先选择一个已注册版本',
+  'Validation, feedback routing, and remote delivery should stay anchored to one concrete model version.':
+    '验证、反馈回流和远程交付都应锚定到一个具体模型版本上。',
+  'Upload one ready validation input': '先上传一个可用验证输入',
+  'Add at least one image input here before you judge runtime quality or send anything back for rework.':
+    '在判断运行质量或回流问题样本之前，请先在这里准备至少一个可用图像输入。',
+  'Jump to input upload': '跳转到输入上传区',
+  'Select version and input': '选择版本与输入',
+  'Choose both the model version and the ready input so the next run is attached to the correct scope.':
+    '请同时选定模型版本和可用输入，使下一次运行挂到正确的上下文范围内。',
+  'Run the first validation sample': '先运行一个验证样本',
+  'Execute one concrete sample first so output quality, feedback routing, and downstream delivery all have a visible record.':
+    '先执行一个具体样本，使结果质量、反馈回流和后续交付都有可追踪记录。',
+  'Jump to run result': '跳转到运行结果',
+  'Fix execution path before trusting this result': '先修正执行链路，再信任当前结果',
+  'Create or choose a matching feedback dataset': '创建或选择匹配的反馈数据集',
+  'This run is ready to review, but there is no dataset with task type {taskType} available for feedback routing yet.':
+    '当前运行已经可以复核，但还没有可用于回流的 {taskType} 类型数据集。',
+  'Route one validation result back to feedback': '把一条验证结果回流到反馈数据集',
+  'Send this run back to one dataset so annotation, versioning, and retraining can continue from the exact bad case instead of a vague note.':
+    '请把这次运行回流到一个数据集，使后续标注、版本冻结和再训练都能围绕具体问题样本展开，而不是停留在笼统备注上。',
+  'Open feedback dataset': '打开反馈数据集',
+  'Open latest run': '打开最新运行',
+  'Continue into annotation or controlled delivery': '继续进入标注修订或受控交付',
+  'Feedback is already linked to dataset {dataset}. Continue in annotation to correct the sample, or move into the version delivery lane for device and API rollout.':
+    '反馈样本已关联到数据集 {dataset}。现在可以进入标注工作区修订样本，或转到版本交付通道继续设备/API 发布。',
+  'Continue into annotation and dataset iteration': '继续进入标注修订与数据迭代',
+  'Feedback is already linked to dataset {dataset}. Finish correction there, then continue into dataset versioning and training from the dataset lane.':
+    '反馈样本已关联到数据集 {dataset}。请先在那里完成修订，再从数据集通道继续进行版本冻结与训练。',
+  'Validation handoff': '验证衔接提示',
+  'Keep the next validation action obvious while you inspect one run at a time.':
+    '在逐条查看运行结果时，始终把下一步动作保持清晰可见。',
+  'Clear needs-work samples': '优先清理待补充样本',
+  'Finish pending review decisions': '完成待定复核结论',
+  'Promote one version to launch-ready': '把一个版本推进到可发起状态',
+  'Launch-ready version is available': '已有可直接发起的版本',
+  'Continue directly into training, closure verification, or inference validation from the selected ready snapshot.':
+    '可以基于当前已就绪快照，直接继续进入训练、闭环核验或推理验证。',
+  'Feedback sample is outside the current queue': '反馈样本不在当前队列范围内',
+  'This workspace is scoped to inference run {runId}, but the current queue filters do not expose a matching sample. Return to validation or reopen the broader dataset lane.':
+    '当前工作区已锁定到推理运行 {runId}，但现有队列筛选未显示对应样本。请返回验证页，或重新打开更宽范围的数据集视图。',
+  'Review the routed feedback sample': '处理已回流的反馈样本',
+  'This queue is already scoped to inference run {runId}. Correct the sample here, then continue into dataset versioning or training from the dataset lane.':
+    '当前队列已经锁定到推理运行 {runId}。请在这里修订样本，然后再从数据集通道继续版本冻结或训练。',
+  'Review model suggestions before redrawing': '先核对模型建议，再决定是否重画',
+  'This sample already carries pre-annotation output. Inspect the prediction panel first, then keep or correct what you need.':
+    '当前样本已经带有预标注结果。建议先查看预测面板，再决定保留或修正哪些内容。',
+  'Open prediction panel': '打开预测面板',
+  'Open dataset detail': '打开数据集详情',
+  'Open closure wizard': '打开闭环向导',
+  'Focus feedback panel': '聚焦反馈面板',
+  '{count} samples still need annotation before you freeze a trustworthy version snapshot.':
+    '还有 {count} 个样本需要补充标注后，才能冻结出可信版本快照。',
+  '{count} samples were rejected and should be corrected before training handoff.':
+    '还有 {count} 个样本处于驳回状态，需修正后再进入训练交接。',
+  '{count} samples are still waiting for review approval or rejection.':
+    '还有 {count} 个样本等待复核通过或驳回。',
+  'Dataset handoff': '数据集衔接提示',
+  'Keep the selected dataset on one obvious path from upload to versioning and training.':
+    '让当前选中的数据集始终沿着一条清晰路径完成上传、标注、版本冻结和训练。',
+  'Create your first dataset in one place': '先在这里创建第一个数据集',
+  'Start with a dataset shell here, then continue into upload, annotation, and versioning with the same context.':
+    '先在这里创建数据集壳，再带着同一上下文继续进入上传、标注和版本冻结。',
+  'No datasets': '暂无数据集',
+  'Inspect one dataset and keep the next operational step obvious': '先选中一个数据集，再看明确下一步',
+  'Choose one dataset from the inventory first, then this rail will point to the exact next page.':
+    '请先从清单中选中一个数据集，侧栏会继续指向准确的下一页。',
+  'Pick dataset': '选择数据集',
+  'Loading selected dataset summary': '正在加载所选数据集摘要',
+  'Fetching files, annotation state, and version readiness for the current dataset.':
+    '正在获取当前数据集的文件、标注状态和版本就绪情况。',
+  'Selected dataset summary unavailable': '所选数据集摘要暂不可用',
+  'Open the selected dataset and recover context': '打开当前数据集并恢复上下文',
+  'The quick summary could not be loaded from the inventory view. Open dataset detail directly to continue.':
+    '总览页暂时无法加载该数据集的快速摘要，请直接打开详情页继续操作。',
+  'Open dataset detail directly when summary data is not ready yet.':
+    '当摘要数据尚未准备好时，请直接打开数据集详情页继续。',
+  'Need detail': '需要详情页',
+  'Upload files into the selected dataset': '先把文件上传到当前数据集',
+  'No ready files are attached yet. Open the dataset detail page at the upload section first.':
+    '当前还没有可用文件，请先打开数据集详情页的上传区域。',
+  'Open upload section': '打开上传区域',
+  'Start annotation from the selected dataset': '从当前数据集开始标注',
+  'Files are ready, but annotation records have not been created yet. Open the annotation workspace and begin with the current queue.':
+    '文件已经就绪，但还没有形成标注记录。请打开标注工作区，从当前队列开始处理。',
+  'Need annotation': '需要标注',
+  'Open annotation queue': '打开标注队列',
+  'Resolve outstanding annotation work': '先处理未完成的标注工作',
+  'This dataset still has samples in needs-work, rejected, or in-review state. Clear those before freezing a reusable version.':
+    '当前数据集仍有待补充、已驳回或待复核样本，需先处理完这些样本，再冻结可复用版本。',
+  'Queue pending': '队列待清理',
+  'Create the first version snapshot from this dataset': '基于当前数据集创建首个版本快照',
+  'The annotation set is stable. Freeze one version so training, validation, and feedback reuse the same snapshot.':
+    '当前标注集合已经稳定，可以冻结一个版本，使训练、验证和反馈回流都复用同一快照。',
+  'Open workflow controls': '打开流程控制区',
+  'Promote one version to launch-ready from the dataset lane': '在数据集通道内把一个版本推进到可发起状态',
+  'Use dataset detail to apply split and create a version with train coverage before training or validation.':
+    '请在数据集详情页完成切分，并生成带有训练覆盖度的版本后，再进入训练或验证。',
+  'Launch training from the ready dataset snapshot': '基于已就绪数据快照发起训练',
+  'This dataset already has a launch-ready version. Move straight into training, closure verification, or inference validation.':
+    '当前数据集已经具备可直接发起的版本，可以直接进入训练、闭环核验或推理验证。',
+  'Open training lane': '打开训练通道',
+  'Ready to launch': '可直接发起',
+  'Preferred version': '建议版本',
+  'Move the linked version into validation or delivery': '把已关联版本继续推进到验证或交付阶段',
+  'Version {version} is already linked to this run. Continue with inference validation, governance follow-up, or device delivery from the version page.':
+    '版本 {version} 已与当前训练任务关联。请从版本页继续进行推理验证、治理跟进或设备交付。',
+  'Linked version ready': '已有关联版本',
+  'Version handoff': '版本交接',
+  'This run already has linked version {version}. Use the version delivery lane for validation, device authorization, and remote API handoff.':
+    '当前训练任务已经关联版本 {version}。后续请以版本交付通道继续完成验证、设备授权和远程 API 交接。',
 };
 
 const zhCN: Record<string, string> = {
@@ -4042,6 +4509,47 @@ const withVars = (template: string, vars?: TranslateVars): string =>
     return String(vars[key]);
   });
 
+const enUSOverrides: Record<string, string> = {
+  'Each step links to the exact workspace page and updates from real records.':
+    'Each step links to the exact workspace page and updates from live records.',
+  'Use approval status, visibility, and authenticity signals to decide whether a model is ready for real usage.':
+    'Use approval status, visibility, and verification signals to decide whether a model is ready for production usage.',
+  'Open one job detail to verify logs, metrics, and real/template execution evidence.':
+    'Open one job detail to verify logs, metrics, and standard/compatibility execution evidence.',
+  'Guide status is computed from real queue, selection, and terminal run states.':
+    'Guide status is computed from live queue, selection, and terminal run states.',
+  'Use this page to register real completed runs, inspect lineage, and hand off into validation.':
+    'Use this page to register completed runs with verified evidence, inspect lineage, and hand off into validation.',
+  'Use this page to prepare runtime connectivity before real inference/training.':
+    'Use this page to prepare runtime connectivity before inference/training.',
+  'After readiness is green, run inference validation with real runtime output.':
+    'After readiness is green, run inference validation with standard runtime output.',
+  'Verify connection first, then return to conversation workspace for real usage.':
+    'Verify connection first, then return to conversation workspace for production usage.',
+  'Version authenticity checks now use runtime safety guards. Built-in runner Python: {pythonBin}.':
+    'Version verification checks now use runtime safety guards. Built-in runner Python: {pythonBin}.',
+  'Linked training run contains non-real execution evidence. Review training job detail before production usage.':
+    'Linked training run contains restricted execution evidence. Review training job detail before production usage.',
+  'Includes degraded or non-real evidence. Review training and version details before production use.':
+    'Includes degraded or restricted evidence. Review training and version details before production use.',
+  'Only completed jobs with verified real execution can be registered as model versions.':
+    'Only completed jobs with verified standard execution can be registered as model versions.',
+  'Checking training job authenticity...': 'Checking training job execution status...',
+  'Checking job authenticity...': 'Checking job execution status...',
+  'The selected job has not passed authenticity verification.':
+    'The selected job has not passed execution verification.',
+  'Version linked to non-real output': 'Version linked to restricted output',
+  'Registration is not strict real yet': 'Registration still requires gate review',
+  'This version can be treated as strict real-evidence registration.':
+    'This version can be treated as standard-gate registration.',
+  'This version is usable, but not yet a strict real-evidence registration.':
+    'This version is usable, but still requires gate review.',
+  'Inference runs marked as fallback/template/mock output.':
+    'Inference runs marked as fallback/template/compatibility output.',
+  'No active LLM API key is configured. Chat and ops bridge may stay in mock/default mode until key is set.':
+    'No active LLM API key is configured. Chat and ops bridge may stay in compatibility/default mode until key is set.'
+};
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<AppLanguage>(resolveInitialLanguage);
 
@@ -4056,7 +4564,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const t = useCallback(
     (source: string, vars?: TranslateVars): string => {
-      const template = language === 'zh-CN' ? zhCN[source] ?? source : source;
+      const template =
+        language === 'zh-CN' ? zhCN[source] ?? source : enUSOverrides[source] ?? source;
       return withVars(template, vars);
     },
     [language]

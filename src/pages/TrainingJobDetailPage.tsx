@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
   DatasetRecord,
   ModelRecord,
@@ -12,11 +12,12 @@ import type {
 } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import VirtualList from '../components/VirtualList';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { DetailList, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
-import { Select } from '../components/ui/Field';
+import { Input, Select } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import {
   WorkspacePage,
@@ -47,22 +48,146 @@ const metricTimelineVirtualViewportHeight = 420;
 const logsBatchSize = 300;
 const backgroundRefreshIntervalMs = 5000;
 const adminAccessMessagePattern = /(forbidden|permission|unauthorized|not allowed|admin|管理员|权限)/i;
+const errorHintMaxLength = 200;
+const errorHintPreviewLimit = 5;
+const errorHintContextRadius = 2;
 
 type LoadMode = 'initial' | 'manual' | 'background';
+type LaunchContext = {
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+};
+type TroubleshootingRecommendation = {
+  id: string;
+  title: string;
+  detail: string;
+  action: 'runtime' | 'worker_settings' | 'control_plane_retry' | 'refresh_logs' | 'none';
+};
 
-const buildScopedTrainingJobsPath = (datasetId: string, versionId?: string | null): string => {
-  const searchParams = new URLSearchParams();
-  searchParams.set('dataset', datasetId);
-  if (versionId?.trim()) {
-    searchParams.set('version', versionId.trim());
+const deriveTroubleshootingRecommendations = (input: {
+  t: (source: string, vars?: Record<string, string | number>) => string;
+  summaryText: string;
+  jobStatus: TrainingJobRecord['status'] | null;
+  executionTarget: TrainingJobRecord['execution_target'] | null;
+  hasMatches: boolean;
+  queryLength: number;
+}): TroubleshootingRecommendation[] => {
+  const { t, summaryText, jobStatus, executionTarget, hasMatches, queryLength } = input;
+  const text = summaryText.toLowerCase();
+  const items: TroubleshootingRecommendation[] = [];
+  const append = (item: TroubleshootingRecommendation) => {
+    if (items.some((existing) => existing.id === item.id)) {
+      return;
+    }
+    items.push(item);
+  };
+
+  if (queryLength > 0 && queryLength < 3) {
+    append({
+      id: 'query_too_short',
+      title: t('Use a longer keyword'),
+      detail: t('Use at least 3 characters so matching is more stable and less noisy.'),
+      action: 'none'
+    });
   }
-  return `/training/jobs?${searchParams.toString()}`;
+  if (!hasMatches && queryLength >= 3) {
+    append({
+      id: 'no_matches',
+      title: t('Broaden keyword and check full logs'),
+      detail: t('Current keyword has no matches. Try a shorter core phrase and inspect nearby logs.'),
+      action: 'refresh_logs'
+    });
+  }
+  if (/(module not found|no module named|importerror|pip|python|dependency|command not found)/i.test(text)) {
+    append({
+      id: 'runtime_issue',
+      title: t('Review runtime environment'),
+      detail: t('The error hints at missing runtime dependencies or python configuration.'),
+      action: 'runtime'
+    });
+  }
+  if (/(worker|offline|heartbeat|timeout|connection refused|unreachable)/i.test(text)) {
+    append({
+      id: 'worker_path_issue',
+      title: t('Retry on control-plane lane'),
+      detail: t('Worker availability seems unstable. Switch retry dispatch to control-plane to unblock quickly.'),
+      action: 'control_plane_retry'
+    });
+  }
+  if (/(permission|forbidden|unauthorized|access denied|eacces|权限|拒绝)/i.test(text)) {
+    append({
+      id: 'permission_issue',
+      title: t('Check worker/account permissions'),
+      detail: t('The error hints at authorization or access limits on current execution path.'),
+      action: executionTarget === 'worker' ? 'worker_settings' : 'runtime'
+    });
+  }
+  if (/(dataset|annotation|label|file not found|no such file|missing|not found)/i.test(text)) {
+    append({
+      id: 'data_issue',
+      title: t('Verify dataset and artifact paths'),
+      detail: t('The error hints at missing files, labels, or dataset path mismatches.'),
+      action: 'refresh_logs'
+    });
+  }
+  if (items.length === 0 && (jobStatus === 'failed' || jobStatus === 'cancelled')) {
+    append({
+      id: 'generic_retry',
+      title: t('Recheck logs then retry'),
+      detail: t('Open full logs once, then retry with a clear dispatch choice to collect cleaner evidence.'),
+      action: executionTarget === 'worker' ? 'control_plane_retry' : 'refresh_logs'
+    });
+  }
+  return items;
+};
+
+const appendTrainingLaunchContext = (searchParams: URLSearchParams, context?: LaunchContext) => {
+  if (!context) {
+    return;
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const appendReturnTo = (searchParams: URLSearchParams, returnTo?: string | null) => {
+  const safeReturnTo = sanitizeReturnToPath(returnTo);
+  if (safeReturnTo && !searchParams.has('return_to')) {
+    searchParams.set('return_to', safeReturnTo);
+  }
 };
 
 const buildScopedInferencePath = (
   datasetId: string,
   versionId?: string | null,
-  modelVersionId?: string | null
+  modelVersionId?: string | null,
+  launchContext?: LaunchContext
 ): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
@@ -72,22 +197,29 @@ const buildScopedInferencePath = (
   if (modelVersionId?.trim()) {
     searchParams.set('modelVersion', modelVersionId.trim());
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/inference/validate?${searchParams.toString()}`;
 };
 
-const buildScopedClosurePath = (datasetId: string, versionId?: string | null): string => {
+const buildScopedClosurePath = (
+  datasetId: string,
+  versionId?: string | null,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId?.trim()) {
     searchParams.set('version', versionId.trim());
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/workflow/closure?${searchParams.toString()}`;
 };
 
 const buildScopedModelVersionsPath = (
   job: TrainingJobRecord,
   versionName?: string,
-  selectedVersionId?: string
+  selectedVersionId?: string,
+  launchContext?: LaunchContext
 ): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('job', job.id);
@@ -97,6 +229,26 @@ const buildScopedModelVersionsPath = (
   if (selectedVersionId?.trim()) {
     searchParams.set('selectedVersion', selectedVersionId.trim());
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/models/versions?${searchParams.toString()}`;
+};
+
+const buildScopedVersionDeliveryPath = (
+  job: TrainingJobRecord,
+  versionName?: string,
+  selectedVersionId?: string,
+  launchContext?: LaunchContext
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('job', job.id);
+  if (versionName?.trim()) {
+    searchParams.set('version_name', versionName.trim());
+  }
+  if (selectedVersionId?.trim()) {
+    searchParams.set('selectedVersion', selectedVersionId.trim());
+    searchParams.set('focus', 'device');
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/models/versions?${searchParams.toString()}`;
 };
 
@@ -105,9 +257,11 @@ const buildCreateModelDraftPath = (
   options?: {
     jobId?: string;
     versionName?: string;
-  }
+  },
+  launchContext?: LaunchContext
 ): string => {
   const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
   if (taskType?.trim()) {
     searchParams.set('task_type', taskType.trim());
   }
@@ -121,10 +275,61 @@ const buildCreateModelDraftPath = (
   return query ? `/models/create?${query}` : '/models/create';
 };
 
+const buildRuntimeSettingsPath = (
+  focus: 'setup' | 'readiness' | 'advanced' = 'readiness',
+  framework?: string | null,
+  launchContext?: LaunchContext,
+  returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', focus);
+  if (framework?.trim()) {
+    searchParams.set('framework', framework.trim());
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  return `/settings/runtime?${searchParams.toString()}`;
+};
+
+const buildWorkerSettingsPath = (
+  job?: TrainingJobRecord | null,
+  launchContext?: LaunchContext,
+  returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', 'inventory');
+  if (job?.framework) {
+    searchParams.set('profile', job.framework);
+  }
+  if (job?.scheduled_worker_id) {
+    searchParams.set('worker', job.scheduled_worker_id);
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  return `/settings/workers?${searchParams.toString()}`;
+};
+
 export default function TrainingJobDetailPage() {
   const { t } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { jobId } = useParams<{ jobId: string }>();
   const [searchParams] = useSearchParams();
+  const operationErrorHint = useMemo(
+    () => (searchParams.get('error_hint') ?? '').trim().slice(0, errorHintMaxLength),
+    [searchParams]
+  );
+  const errorMatchQueryFromQuery = useMemo(
+    () => (searchParams.get('error_match') ?? '').trim().slice(0, errorHintMaxLength),
+    [searchParams]
+  );
+  const resolvedErrorMatchQuery = errorMatchQueryFromQuery || operationErrorHint;
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const [job, setJob] = useState<TrainingJobRecord | null>(null);
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
@@ -152,10 +357,84 @@ export default function TrainingJobDetailPage() {
   const [exportingMetrics, setExportingMetrics] = useState(false);
   const [exportingMetricsCsv, setExportingMetricsCsv] = useState(false);
   const [visibleLogCount, setVisibleLogCount] = useState(logsBatchSize);
-  const [evidenceView, setEvidenceView] = useState<'overview' | 'metrics' | 'logs'>('overview');
+  const [errorMatchQuery, setErrorMatchQuery] = useState(resolvedErrorMatchQuery);
+  const [activeMatchedErrorIndex, setActiveMatchedErrorIndex] = useState(0);
+  const [copiedTroubleshootingBundle, setCopiedTroubleshootingBundle] = useState(false);
+  const [troubleshootingBundleCopyError, setTroubleshootingBundleCopyError] = useState('');
+  const [recommendationActionBusy, setRecommendationActionBusy] = useState('');
+  const [recommendationActionFeedback, setRecommendationActionFeedback] = useState<{
+    variant: 'success' | 'warning' | 'error';
+    text: string;
+  } | null>(null);
+  const [scopedContextSyncHint, setScopedContextSyncHint] = useState('');
+  const [evidenceView, setEvidenceView] = useState<'overview' | 'metrics' | 'logs'>(() => {
+    const value = (searchParams.get('evidence') ?? '').trim().toLowerCase();
+    if (value === 'metrics' || value === 'logs') {
+      return value;
+    }
+    return 'overview';
+  });
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const detailSignatureRef = useRef('');
   const retryDispatchTouchedRef = useRef(false);
+  const scopedContextSyncAppliedRef = useRef('');
+  const logsBlockRef = useRef<HTMLPreElement | null>(null);
+  const scopedDatasetIdFromQuery = (searchParams.get('dataset') ?? '').trim();
+  const scopedVersionIdFromQuery = (searchParams.get('version') ?? '').trim();
+  const launchTaskTypeFromQuery = (searchParams.get('task_type') ?? '').trim();
+  const launchFrameworkFromQuery = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
+  const launchExecutionTargetFromQuery = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
+  const launchWorkerFromQuery = (searchParams.get('worker') ?? '').trim();
+  const launchContextForDetail = useMemo(
+    () => ({
+      taskType: launchTaskTypeFromQuery || job?.task_type || null,
+      framework: launchFrameworkFromQuery || job?.framework || null,
+      executionTarget: launchExecutionTargetFromQuery || job?.execution_target || null,
+      workerId: launchWorkerFromQuery || job?.scheduled_worker_id || null
+    }),
+    [
+      job?.execution_target,
+      job?.framework,
+      job?.scheduled_worker_id,
+      job?.task_type,
+      launchExecutionTargetFromQuery,
+      launchFrameworkFromQuery,
+      launchTaskTypeFromQuery,
+      launchWorkerFromQuery
+    ]
+  );
+  const backToJobsSearchParams = new URLSearchParams(searchParams);
+  backToJobsSearchParams.delete('created');
+  const backToJobsQuery = backToJobsSearchParams.toString();
+  const backToJobsPath = backToJobsQuery ? `/training/jobs?${backToJobsQuery}` : '/training/jobs';
+  const clearOperationErrorHintPath = useMemo(() => {
+    if (!operationErrorHint) {
+      return '';
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('error_hint');
+    next.delete('error_match');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, operationErrorHint, searchParams]);
+  const fallbackBackToJobsPath = requestedReturnTo ?? backToJobsPath;
+  const backToJobsActionLabel =
+    requestedReturnTo && !requestedReturnTo.startsWith('/training/jobs')
+      ? t('Return to current task')
+      : t('Back to jobs');
+  const clearScopedContextPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('dataset');
+    next.delete('version');
+    next.delete('task_type');
+    next.delete('model_type');
+    next.delete('framework');
+    next.delete('profile');
+    next.delete('execution_target');
+    next.delete('worker');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
 
   const load = useCallback(async (mode: LoadMode) => {
     if (!jobId) {
@@ -242,6 +521,114 @@ export default function TrainingJobDetailPage() {
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
       .finally(() => setLoading(false));
   }, [jobId, load]);
+
+  useEffect(() => {
+    const evidenceValue = (searchParams.get('evidence') ?? '').trim().toLowerCase();
+    const nextEvidenceView: 'overview' | 'metrics' | 'logs' =
+      evidenceValue === 'metrics' || evidenceValue === 'logs' ? evidenceValue : 'overview';
+    if (nextEvidenceView !== evidenceView) {
+      setEvidenceView(nextEvidenceView);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    if (evidenceView === 'overview') {
+      next.delete('evidence');
+    } else {
+      next.set('evidence', evidenceView);
+    }
+
+    const currentQuery = searchParams.toString();
+    const nextQuery = next.toString();
+    if (nextQuery === currentQuery) {
+      return;
+    }
+
+    navigate(nextQuery ? `${location.pathname}?${nextQuery}` : location.pathname, {
+      replace: true
+    });
+  }, [evidenceView, location.pathname, navigate, searchParams]);
+
+  useEffect(() => {
+    setScopedContextSyncHint('');
+    scopedContextSyncAppliedRef.current = '';
+  }, [jobId]);
+
+  useEffect(() => {
+    if (!job) {
+      return;
+    }
+
+    const next = new URLSearchParams(searchParams);
+    const mismatchTokens: string[] = [];
+    const expectedVersionId = job.dataset_version_id ?? '';
+    const expectedWorkerId = job.scheduled_worker_id ?? '';
+
+    if (scopedDatasetIdFromQuery && scopedDatasetIdFromQuery !== job.dataset_id) {
+      mismatchTokens.push('dataset');
+      next.set('dataset', job.dataset_id);
+    }
+    if (scopedVersionIdFromQuery && scopedVersionIdFromQuery !== expectedVersionId) {
+      mismatchTokens.push('version');
+      if (expectedVersionId) {
+        next.set('version', expectedVersionId);
+      } else {
+        next.delete('version');
+      }
+    }
+    if (launchTaskTypeFromQuery && launchTaskTypeFromQuery !== job.task_type) {
+      mismatchTokens.push('task_type');
+      next.set('task_type', job.task_type);
+    }
+    if (launchFrameworkFromQuery && launchFrameworkFromQuery !== job.framework) {
+      mismatchTokens.push('framework');
+      next.set('framework', job.framework);
+      next.delete('profile');
+    }
+    if (launchExecutionTargetFromQuery && launchExecutionTargetFromQuery !== job.execution_target) {
+      mismatchTokens.push('execution_target');
+      next.set('execution_target', job.execution_target);
+    }
+    if (launchWorkerFromQuery && launchWorkerFromQuery !== expectedWorkerId) {
+      mismatchTokens.push('worker');
+      if (expectedWorkerId) {
+        next.set('worker', expectedWorkerId);
+      } else {
+        next.delete('worker');
+      }
+    }
+
+    if (mismatchTokens.length === 0) {
+      return;
+    }
+
+    const syncKey = `${job.id}:${mismatchTokens.join(',')}:${searchParams.toString()}`;
+    if (scopedContextSyncAppliedRef.current === syncKey) {
+      return;
+    }
+    scopedContextSyncAppliedRef.current = syncKey;
+    setScopedContextSyncHint(t('Synced scoped context to match job {jobId}.', { jobId: job.id }));
+
+    const nextQuery = next.toString();
+    const currentQuery = searchParams.toString();
+    if (nextQuery === currentQuery) {
+      return;
+    }
+    navigate(nextQuery ? `${location.pathname}?${nextQuery}` : location.pathname, { replace: true });
+  }, [
+    job,
+    launchExecutionTargetFromQuery,
+    launchFrameworkFromQuery,
+    launchTaskTypeFromQuery,
+    launchWorkerFromQuery,
+    location.pathname,
+    navigate,
+    scopedDatasetIdFromQuery,
+    scopedVersionIdFromQuery,
+    searchParams,
+    t
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -482,6 +869,70 @@ export default function TrainingJobDetailPage() {
     const startIndex = Math.max(0, logs.length - visibleLogCount);
     return logs.slice(startIndex);
   }, [logs, visibleLogCount]);
+  const trimmedErrorMatchQuery = errorMatchQuery.trim();
+  const normalizedErrorMatchQuery = trimmedErrorMatchQuery.toLowerCase();
+  const matchedErrorLogLines = useMemo(() => {
+    if (!normalizedErrorMatchQuery || normalizedErrorMatchQuery.length < 3) {
+      return [] as Array<{ lineNumber: number; content: string }>;
+    }
+    const matches: Array<{ lineNumber: number; content: string }> = [];
+    logs.forEach((line, index) => {
+      if (matches.length >= errorHintPreviewLimit) {
+        return;
+      }
+      if (line.toLowerCase().includes(normalizedErrorMatchQuery)) {
+        matches.push({
+          lineNumber: index + 1,
+          content: line
+        });
+      }
+    });
+    return matches;
+  }, [logs, normalizedErrorMatchQuery]);
+  const activeMatchedErrorLine =
+    matchedErrorLogLines.length > 0 ? matchedErrorLogLines[activeMatchedErrorIndex] ?? null : null;
+  const activeMatchedErrorContextLines = useMemo(() => {
+    if (!activeMatchedErrorLine) {
+      return [] as Array<{ lineNumber: number; content: string; active: boolean }>;
+    }
+    const startLine = Math.max(1, activeMatchedErrorLine.lineNumber - errorHintContextRadius);
+    const endLine = Math.min(logs.length, activeMatchedErrorLine.lineNumber + errorHintContextRadius);
+    const context: Array<{ lineNumber: number; content: string; active: boolean }> = [];
+    for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+      context.push({
+        lineNumber,
+        content: logs[lineNumber - 1] ?? '',
+        active: lineNumber === activeMatchedErrorLine.lineNumber
+      });
+    }
+    return context;
+  }, [activeMatchedErrorLine, logs]);
+  const troubleshootingRecommendations = useMemo(
+    () =>
+      deriveTroubleshootingRecommendations({
+        t,
+        summaryText: [
+          operationErrorHint,
+          trimmedErrorMatchQuery,
+          activeMatchedErrorLine?.content ?? ''
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        jobStatus: job?.status ?? null,
+        executionTarget: job?.execution_target ?? null,
+        hasMatches: matchedErrorLogLines.length > 0,
+        queryLength: trimmedErrorMatchQuery.length
+      }),
+    [
+      activeMatchedErrorLine?.content,
+      job?.execution_target,
+      job?.status,
+      matchedErrorLogLines.length,
+      operationErrorHint,
+      t,
+      trimmedErrorMatchQuery
+    ]
+  );
   useEffect(() => {
     setVisibleLogCount((previous) => {
       if (logs.length === 0) {
@@ -499,6 +950,256 @@ export default function TrainingJobDetailPage() {
       return Math.min(logs.length, Math.max(previous, logsBatchSize));
     });
   }, [logs.length]);
+  useEffect(() => {
+    if (evidenceView !== 'logs' || !operationErrorHint || logs.length === 0) {
+      return;
+    }
+    setVisibleLogCount(logs.length);
+  }, [evidenceView, logs.length, operationErrorHint]);
+  useEffect(() => {
+    setErrorMatchQuery(resolvedErrorMatchQuery);
+  }, [resolvedErrorMatchQuery]);
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const current = (searchParams.get('error_match') ?? '').trim();
+    if (!operationErrorHint) {
+      if (!current) {
+        return;
+      }
+      next.delete('error_match');
+      const query = next.toString();
+      navigate(query ? `${location.pathname}?${query}` : location.pathname, { replace: true });
+      return;
+    }
+
+    const nextMatchQuery = errorMatchQuery.trim().slice(0, errorHintMaxLength);
+    const persistedMatchQuery =
+      nextMatchQuery.length > 0 && nextMatchQuery !== operationErrorHint ? nextMatchQuery : '';
+    if (persistedMatchQuery) {
+      next.set('error_match', persistedMatchQuery);
+    } else {
+      next.delete('error_match');
+    }
+    const currentQuery = searchParams.toString();
+    const nextQuery = next.toString();
+    if (currentQuery === nextQuery) {
+      return;
+    }
+    navigate(nextQuery ? `${location.pathname}?${nextQuery}` : location.pathname, {
+      replace: true
+    });
+  }, [errorMatchQuery, location.pathname, navigate, operationErrorHint, searchParams]);
+  useEffect(() => {
+    if (matchedErrorLogLines.length === 0) {
+      setActiveMatchedErrorIndex(0);
+      return;
+    }
+    setActiveMatchedErrorIndex((previous) =>
+      Math.min(Math.max(previous, 0), matchedErrorLogLines.length - 1)
+    );
+  }, [matchedErrorLogLines]);
+  const jumpToActiveMatchedLogInFullLogs = useCallback(() => {
+    if (!activeMatchedErrorLine) {
+      return;
+    }
+    const requiredVisibleCount = Math.max(
+      logsBatchSize,
+      logs.length - activeMatchedErrorLine.lineNumber + 1
+    );
+    setVisibleLogCount((previous) => Math.max(previous, requiredVisibleCount));
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        logsBlockRef.current?.scrollIntoView({
+          block: 'nearest',
+          behavior: 'smooth'
+        });
+      });
+    });
+  }, [activeMatchedErrorLine, logs.length]);
+  const copyTroubleshootingBundle = useCallback(async () => {
+    setTroubleshootingBundleCopyError('');
+    setCopiedTroubleshootingBundle(false);
+    try {
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+        throw new Error(t('Clipboard API unavailable.'));
+      }
+      const contextSnippet = activeMatchedErrorContextLines
+        .map((line) => `${line.active ? '>' : '-'} #${line.lineNumber} ${line.content}`)
+        .join('\n');
+      const pageLink =
+        typeof window !== 'undefined' && window.location?.href
+          ? window.location.href
+          : `${location.pathname}${location.search}`;
+      const recommendationSummary = troubleshootingRecommendations
+        .map((item, index) => `${index + 1}. ${item.title} — ${item.detail}`)
+        .join('\n');
+      const bundle = [
+        t('Troubleshooting bundle'),
+        `${t('Job ID')}: ${job?.id ?? '-'}`,
+        `${t('Job name')}: ${job?.name ?? '-'}`,
+        `${t('Match keyword')}: ${trimmedErrorMatchQuery || '-'}`,
+        `${t('Original hint')}: ${operationErrorHint || '-'}`,
+        `${t('Current match')}: ${
+          activeMatchedErrorLine
+            ? `#${activeMatchedErrorLine.lineNumber} ${activeMatchedErrorLine.content}`
+            : t('No active match')
+        }`,
+        `${t('Match count')}: ${matchedErrorLogLines.length}`,
+        `${t('Suggested next steps')}:\n${recommendationSummary || '-'}`,
+        `${t('Context snippet')}:\n${contextSnippet || '-'}`,
+        `${t('Page link')}: ${pageLink}`
+      ].join('\n');
+      await navigator.clipboard.writeText(bundle);
+      setCopiedTroubleshootingBundle(true);
+      window.setTimeout(() => {
+        setCopiedTroubleshootingBundle(false);
+      }, 1800);
+    } catch (error) {
+      setTroubleshootingBundleCopyError(
+        t('Copy failed. Please copy manually. Error: {message}', {
+          message: (error as Error).message || t('Unknown')
+        })
+      );
+    }
+  }, [
+    activeMatchedErrorContextLines,
+    activeMatchedErrorLine,
+    job?.id,
+    job?.name,
+    location.pathname,
+    location.search,
+    matchedErrorLogLines.length,
+    operationErrorHint,
+    t,
+    troubleshootingRecommendations,
+    trimmedErrorMatchQuery
+  ]);
+  const primaryTroubleshootingRecommendation = useMemo(
+    () =>
+      troubleshootingRecommendations.find((item) => item.action !== 'none') ??
+      troubleshootingRecommendations[0] ??
+      null,
+    [troubleshootingRecommendations]
+  );
+  const canAutoRetryFromSuggestion = Boolean(
+    jobId &&
+      !busy &&
+      primaryTroubleshootingRecommendation?.action === 'control_plane_retry' &&
+      (job?.status === 'failed' || job?.status === 'cancelled')
+  );
+  const recommendationActionLabel = useCallback(
+    (item: TroubleshootingRecommendation) => {
+      if (item.action === 'runtime') {
+        return t('Open runtime settings');
+      }
+      if (item.action === 'worker_settings') {
+        return t('Open worker settings');
+      }
+      if (item.action === 'control_plane_retry') {
+        return t('Use control-plane retry');
+      }
+      if (item.action === 'refresh_logs') {
+        return t('Refresh detail');
+      }
+      return t('Review suggestion');
+    },
+    [t]
+  );
+  const runTroubleshootingRecommendation = useCallback(
+    async (item: TroubleshootingRecommendation, options?: { autoRetry?: boolean }) => {
+      const busyKey = `${item.id}:${item.action}`;
+      setRecommendationActionBusy(busyKey);
+      setRecommendationActionFeedback(null);
+      try {
+        if (item.action === 'runtime') {
+          navigate(
+            buildRuntimeSettingsPath('readiness', job?.framework, launchContextForDetail, outboundReturnTo)
+          );
+          setRecommendationActionFeedback({
+            variant: 'success',
+            text: t('Opened runtime settings.')
+          });
+          return;
+        }
+        if (item.action === 'worker_settings') {
+          navigate(buildWorkerSettingsPath(job, launchContextForDetail, outboundReturnTo));
+          setRecommendationActionFeedback({
+            variant: 'success',
+            text: t('Opened worker settings.')
+          });
+          return;
+        }
+        if (item.action === 'control_plane_retry') {
+          setRetryDispatchPreference('control_plane');
+          setRetryWorkerId('');
+          if (
+            options?.autoRetry &&
+            jobId &&
+            (job?.status === 'failed' || job?.status === 'cancelled')
+          ) {
+            setBusy(true);
+            setFeedback(null);
+            await api.retryTrainingJob(jobId, {
+              execution_target: 'control_plane'
+            });
+            await load('manual');
+            setFeedback({
+              variant: 'success',
+              text: t('Training job retried with selected dispatch strategy.')
+            });
+            setEvidenceView('logs');
+            setRecommendationActionFeedback({
+              variant: 'success',
+              text: t('Applied control-plane strategy, retried run, and switched to logs view.')
+            });
+            setBusy(false);
+            return;
+          }
+          setRecommendationActionFeedback({
+            variant: 'success',
+            text: t('Retry dispatch switched to control-plane.')
+          });
+          return;
+        }
+        if (item.action === 'refresh_logs') {
+          await load('manual');
+          setRecommendationActionFeedback({
+            variant: 'success',
+            text: t('Detail refreshed.')
+          });
+          return;
+        }
+        setRecommendationActionFeedback({
+          variant: 'warning',
+          text: t('This suggestion is informational and has no direct action.')
+        });
+      } catch (error) {
+        setRecommendationActionFeedback({
+          variant: 'error',
+          text: (error as Error).message || t('Unknown')
+        });
+        setBusy(false);
+      } finally {
+        setRecommendationActionBusy('');
+      }
+    },
+    [busy, job, jobId, launchContextForDetail, load, navigate, outboundReturnTo, t]
+  );
+  const runTopTroubleshootingSuggestion = useCallback(() => {
+    if (!primaryTroubleshootingRecommendation) {
+      return Promise.resolve();
+    }
+    const autoRetry =
+      primaryTroubleshootingRecommendation.action === 'control_plane_retry' &&
+      canAutoRetryFromSuggestion;
+    return runTroubleshootingRecommendation(primaryTroubleshootingRecommendation, {
+      autoRetry
+    });
+  }, [
+    canAutoRetryFromSuggestion,
+    primaryTroubleshootingRecommendation,
+    runTroubleshootingRecommendation
+  ]);
 
   const cancelJob = async () => {
     if (!jobId) {
@@ -627,11 +1328,11 @@ export default function TrainingJobDetailPage() {
       <WorkspacePage>
         <PageHeader
         eyebrow={t('Training detail')}
-        title={t('Job detail')}
-        description={t('Review status, logs, and metrics for the selected training run.')}
+          title={t('Job detail')}
+          description={t('Review status, logs, and metrics for the selected training run.')}
           secondaryActions={
-            <ButtonLink to="/training/jobs" variant="ghost" size="sm">
-              {t('Back to jobs')}
+            <ButtonLink to={fallbackBackToJobsPath} variant="ghost" size="sm">
+              {backToJobsActionLabel}
             </ButtonLink>
           }
         />
@@ -645,11 +1346,11 @@ export default function TrainingJobDetailPage() {
       <WorkspacePage>
         <PageHeader
         eyebrow={t('Training detail')}
-        title={t('Job detail')}
-        description={t('Review status, logs, and metrics for the selected training run.')}
+          title={t('Job detail')}
+          description={t('Review status, logs, and metrics for the selected training run.')}
           secondaryActions={
-            <ButtonLink to="/training/jobs" variant="ghost" size="sm">
-              {t('Back to jobs')}
+            <ButtonLink to={fallbackBackToJobsPath} variant="ghost" size="sm">
+              {backToJobsActionLabel}
             </ButtonLink>
           }
         />
@@ -663,11 +1364,11 @@ export default function TrainingJobDetailPage() {
       <WorkspacePage>
         <PageHeader
         eyebrow={t('Training detail')}
-        title={t('Job detail')}
-        description={t('Review status, logs, and metrics for the selected training run.')}
+          title={t('Job detail')}
+          description={t('Review status, logs, and metrics for the selected training run.')}
           secondaryActions={
-            <ButtonLink to="/training/jobs" variant="ghost" size="sm">
-              {t('Back to jobs')}
+            <ButtonLink to={fallbackBackToJobsPath} variant="ghost" size="sm">
+              {backToJobsActionLabel}
             </ButtonLink>
           }
         />
@@ -680,28 +1381,37 @@ export default function TrainingJobDetailPage() {
   const canRetry = ['failed', 'cancelled'].includes(job.status);
   const isInterrupted = job.status === 'failed' || job.status === 'cancelled';
   const linkedDataset = datasetsById.get(job.dataset_id);
-  const linkedVersions = useMemo(
-    () =>
-      modelVersions
-        .filter((version) => version.training_job_id === job.id)
-        .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at)),
-    [job.id, modelVersions]
-  );
+  const linkedVersions = modelVersions
+    .filter((version) => version.training_job_id === job.id)
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
   const latestLinkedVersion = linkedVersions[0] ?? null;
   const linkedVersionModel = latestLinkedVersion ? modelsById.get(latestLinkedVersion.model_id) ?? null : null;
-  const queryScopedDatasetId = (searchParams.get('dataset') ?? '').trim();
-  const queryScopedVersionId = (searchParams.get('version') ?? '').trim();
   const createdFromWizard = searchParams.get('created') === '1';
-  const scopedDatasetId = queryScopedDatasetId || job.dataset_id;
-  const scopedVersionId = queryScopedVersionId || job.dataset_version_id;
+  const scopedDatasetId = scopedDatasetIdFromQuery || job.dataset_id;
+  const scopedVersionId = scopedVersionIdFromQuery || job.dataset_version_id;
   const datasetDisplayName = linkedDataset?.name ?? t('Dataset record unavailable');
-  const scopedJobsPath = buildScopedTrainingJobsPath(scopedDatasetId, scopedVersionId);
+  const scopedJobsSearchParams = new URLSearchParams(searchParams);
+  scopedJobsSearchParams.delete('created');
+  if (scopedDatasetId) {
+    scopedJobsSearchParams.set('dataset', scopedDatasetId);
+  } else {
+    scopedJobsSearchParams.delete('dataset');
+  }
+  if (scopedVersionId) {
+    scopedJobsSearchParams.set('version', scopedVersionId);
+  } else {
+    scopedJobsSearchParams.delete('version');
+  }
+  const scopedJobsQuery = scopedJobsSearchParams.toString();
+  const scopedJobsPath = scopedJobsQuery ? `/training/jobs?${scopedJobsQuery}` : '/training/jobs';
+  const backToJobsActionPath = requestedReturnTo ?? scopedJobsPath;
   const scopedInferencePath = buildScopedInferencePath(
     scopedDatasetId,
     scopedVersionId,
-    latestLinkedVersion?.id ?? undefined
+    latestLinkedVersion?.id ?? undefined,
+    launchContextForDetail
   );
-  const scopedClosurePath = buildScopedClosurePath(scopedDatasetId, scopedVersionId);
+  const scopedClosurePath = buildScopedClosurePath(scopedDatasetId, scopedVersionId, launchContextForDetail);
   const versionSnapshotLabel = job.dataset_version_id ? t('Version set') : t('Version pending');
   const executionTargetLabel = job.execution_target === 'worker' ? t('Worker lane') : t('Control plane');
   const describeSelectedWorker = (
@@ -724,20 +1434,28 @@ export default function TrainingJobDetailPage() {
     executionMode: job.execution_mode,
     artifactSummary
   });
-  const canRegisterVersion = job.status === 'completed' && executionInsight.reality === 'real';
-  const versionRegistryPath = buildScopedModelVersionsPath(job, job.name, latestLinkedVersion?.id ?? undefined);
+  const canRegisterVersion = job.status === 'completed' && executionInsight.reality === 'standard';
+  const versionRegistryPath = buildScopedModelVersionsPath(
+    job,
+    job.name,
+    latestLinkedVersion?.id ?? undefined,
+    launchContextForDetail
+  );
+  const versionDeliveryPath = latestLinkedVersion
+    ? buildScopedVersionDeliveryPath(job, latestLinkedVersion.version_name, latestLinkedVersion.id, launchContextForDetail)
+    : versionRegistryPath;
   const createModelDraftPath = buildCreateModelDraftPath(job.task_type, {
     jobId: job.id,
     versionName: job.name
-  });
+  }, launchContextForDetail);
   const myModelsPath = '/models/my-models';
   const completionAction =
     job.status !== 'completed'
       ? null
       : latestLinkedVersion
         ? {
-            label: t('Open linked version'),
-            to: buildScopedModelVersionsPath(job, latestLinkedVersion.version_name, latestLinkedVersion.id),
+            label: t('Continue in version delivery lane'),
+            to: versionDeliveryPath,
             variant: 'secondary' as const
           }
         : canRegisterVersion
@@ -758,8 +1476,8 @@ export default function TrainingJobDetailPage() {
               variant: 'ghost' as const
             };
   const executionRealityLabel =
-    executionInsight.reality === 'real'
-      ? t('Real execution')
+    executionInsight.reality === 'standard'
+      ? t('Standard execution')
       : executionInsight.reality === 'template'
         ? t('Fallback')
         : executionInsight.reality === 'simulated'
@@ -806,7 +1524,7 @@ export default function TrainingJobDetailPage() {
     actions: GuidanceAction[];
   };
 
-  const trainingNextStep = useMemo<TrainingNextStepState>(() => {
+  const trainingNextStep: TrainingNextStepState = (() => {
     if (['queued', 'preparing', 'running', 'evaluating'].includes(job.status)) {
       return {
         current: 2,
@@ -837,6 +1555,15 @@ export default function TrainingJobDetailPage() {
               setEvidenceView('logs');
             }
           },
+	          ...(job.execution_target === 'worker'
+	            ? [
+	                {
+	                  label: t('Worker Settings'),
+	                  to: buildWorkerSettingsPath(job, launchContextForDetail, outboundReturnTo),
+	                  variant: 'ghost' as const
+	                }
+	              ]
+            : []),
           canRetry
             ? {
                 label: t('Retry run'),
@@ -848,7 +1575,7 @@ export default function TrainingJobDetailPage() {
               }
             : {
                 label: t('Open jobs'),
-                to: scopedJobsPath,
+                to: backToJobsActionPath,
                 variant: 'ghost'
               }
         ]
@@ -865,12 +1592,16 @@ export default function TrainingJobDetailPage() {
         badgeLabel: t('Artifact pending'),
         actions: [
           { label: t('Refresh now'), onClick: refreshDetail },
-          { label: t('Open runtime settings'), to: '/settings/runtime', variant: 'ghost' }
-        ]
+	          {
+	            label: t('Open runtime settings'),
+	            to: buildRuntimeSettingsPath('readiness', job.framework, launchContextForDetail, outboundReturnTo),
+	            variant: 'ghost'
+	          }
+	        ]
       };
     }
 
-    if (executionInsight.reality !== 'real') {
+    if (executionInsight.reality !== 'standard') {
       return {
         current: 4,
         total: 5,
@@ -878,11 +1609,14 @@ export default function TrainingJobDetailPage() {
         detail: t('This run completed with incomplete or fallback evidence. Review runtime settings and closure checks before treating it as a publishable version.'),
         badgeTone: 'warning',
         badgeLabel: t('Evidence review'),
-        actions: [
-          { label: t('Open runtime settings'), to: '/settings/runtime' },
-          { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
-        ]
-      };
+	        actions: [
+	          {
+	            label: t('Open runtime settings'),
+	            to: buildRuntimeSettingsPath('readiness', job.framework, launchContextForDetail, outboundReturnTo)
+	          },
+	          { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
+	        ]
+	      };
     }
 
     if (modelsLoaded && !matchingOwnedModel) {
@@ -890,7 +1624,7 @@ export default function TrainingJobDetailPage() {
         current: 4,
         total: 5,
         title: t('Create a matching model shell first'),
-        detail: t('The training result is real, but you still need an owned model draft before this run can register a version.'),
+        detail: t('The training result is standard, but you still need an owned model draft before this run can register a version.'),
         badgeTone: 'info',
         badgeLabel: t('Model needed'),
         actions: [
@@ -905,7 +1639,7 @@ export default function TrainingJobDetailPage() {
         current: 5,
         total: 5,
         title: t('Register this completed run as a model version'),
-        detail: t('The run is real and artifacts are ready. Register one model version now so downstream validation and device delivery stay anchored to this run.'),
+        detail: t('The run is standard and artifacts are ready. Register one model version now so downstream validation and device delivery stay anchored to this run.'),
         badgeTone: 'success',
         badgeLabel: t('Ready to register'),
         actions: [
@@ -926,33 +1660,14 @@ export default function TrainingJobDetailPage() {
       badgeLabel: t('Linked version ready'),
       actions: [
         {
-          label: t('Open linked version'),
-          to: buildScopedModelVersionsPath(job, latestLinkedVersion?.version_name ?? job.name, latestLinkedVersion?.id ?? undefined)
+          label: t('Continue in version delivery lane'),
+          to: versionDeliveryPath
         },
         { label: t('Validate inference'), to: scopedInferencePath, variant: 'secondary' },
         { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
       ]
     };
-  }, [
-    artifactAttachmentId,
-    busy,
-    canRetry,
-    createModelDraftPath,
-    executionInsight.reality,
-    job,
-    latestLinkedVersion?.id,
-    latestLinkedVersion?.version_name,
-    linkedVersions.length,
-    matchingOwnedModel,
-    modelsLoaded,
-    myModelsPath,
-    refreshDetail,
-    scopedClosurePath,
-    scopedInferencePath,
-    scopedJobsPath,
-    t,
-    versionRegistryPath
-  ]);
+  })();
 
   return (
     <WorkspacePage>
@@ -961,11 +1676,20 @@ export default function TrainingJobDetailPage() {
         title={job.name}
         description={t('Review the run and decide the next step.')}
         meta={
-          <div className="row gap wrap align-center">
-            <StatusTag status={job.status}>{t(job.status)}</StatusTag>
-            <Badge tone={artifactAttachmentId ? 'success' : 'neutral'}>
-              {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('Pending')}
-            </Badge>
+          <div className="stack tight">
+            <div className="row gap wrap align-center">
+              <StatusTag status={job.status}>{t(job.status)}</StatusTag>
+              <Badge tone={artifactAttachmentId ? 'success' : 'neutral'}>
+                {t('Artifact')}: {artifactAttachmentId ? t('Ready') : t('Pending')}
+              </Badge>
+            </div>
+            <TrainingLaunchContextPills
+              taskType={launchContextForDetail.taskType}
+              framework={launchContextForDetail.framework}
+              executionTarget={launchContextForDetail.executionTarget}
+              workerId={launchContextForDetail.workerId}
+              t={t}
+            />
           </div>
         }
         primaryAction={{
@@ -983,8 +1707,8 @@ export default function TrainingJobDetailPage() {
             <ButtonLink to={scopedClosurePath} variant="ghost" size="sm">
               {t('Continue to next loop lane')}
             </ButtonLink>
-            <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
-              {t('Back to jobs')}
+            <ButtonLink to={backToJobsActionPath} variant="ghost" size="sm">
+              {backToJobsActionLabel}
             </ButtonLink>
           </div>
         }
@@ -995,6 +1719,18 @@ export default function TrainingJobDetailPage() {
           tone={feedback.variant === 'success' ? 'success' : 'danger'}
           title={feedback.variant === 'success' ? t('Done') : t('Failed')}
           description={feedback.text}
+        />
+      ) : null}
+      {scopedContextSyncHint ? (
+        <InlineAlert
+          tone="info"
+          title={t('Selection synced')}
+          description={scopedContextSyncHint}
+          actions={
+            <ButtonLink to={clearScopedContextPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
         />
       ) : null}
 
@@ -1010,8 +1746,8 @@ export default function TrainingJobDetailPage() {
                   {t('Create model draft')}
                 </ButtonLink>
               ) : null}
-              <ButtonLink to={scopedJobsPath} variant="ghost" size="sm">
-                {t('Back to jobs')}
+              <ButtonLink to={backToJobsActionPath} variant="ghost" size="sm">
+                {backToJobsActionLabel}
               </ButtonLink>
             </div>
           }
@@ -1183,7 +1919,11 @@ export default function TrainingJobDetailPage() {
                   }
                   actions={
                     executionInsight.showWarning ? (
-                      <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                      <ButtonLink
+                        to={buildRuntimeSettingsPath('readiness', job.framework, launchContextForDetail, outboundReturnTo)}
+                        variant="secondary"
+                        size="sm"
+                      >
                         {t('Open runtime settings')}
                       </ButtonLink>
                     ) : !createdFromWizard ? (
@@ -1373,6 +2113,236 @@ export default function TrainingJobDetailPage() {
               ) : (
                 <div className="stack">
                   <small className="muted">{t('Logs live here.')}</small>
+                  {operationErrorHint ? (
+                    <Panel tone="soft" className="stack tight">
+                      <strong>{t('Failure context from previous step')}</strong>
+                      <small className="muted">{operationErrorHint}</small>
+                      <label className="stack tight">
+                        <small className="muted">{t('Match keyword')}</small>
+                        <Input
+                          value={errorMatchQuery}
+                          onChange={(event) => setErrorMatchQuery(event.target.value)}
+                          placeholder={t('Edit keyword to retry matching')}
+                        />
+                      </label>
+                      <div className="row gap wrap">
+                        {clearOperationErrorHintPath ? (
+                          <ButtonLink to={clearOperationErrorHintPath} variant="ghost" size="sm">
+                            {t('Clear failure context')}
+                          </ButtonLink>
+                        ) : null}
+                        {errorMatchQuery.trim() !== operationErrorHint ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setErrorMatchQuery(operationErrorHint)}
+                          >
+                            {t('Restore original keyword')}
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setEvidenceView('overview')}
+                        >
+                          {t('Back to overview')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            copyTroubleshootingBundle().catch(() => {
+                              // no-op
+                            });
+                          }}
+                        >
+                          {copiedTroubleshootingBundle
+                            ? t('Copied troubleshooting bundle')
+                            : t('Copy troubleshooting bundle')}
+                        </Button>
+                      </div>
+                      {troubleshootingBundleCopyError ? (
+                        <InlineAlert
+                          tone="warning"
+                          title={t('Copy failed')}
+                          description={troubleshootingBundleCopyError}
+                        />
+                      ) : null}
+                      {recommendationActionFeedback ? (
+                        <InlineAlert
+                          tone={
+                            recommendationActionFeedback.variant === 'success'
+                              ? 'success'
+                              : recommendationActionFeedback.variant === 'warning'
+                                ? 'warning'
+                                : 'danger'
+                          }
+                          title={
+                            recommendationActionFeedback.variant === 'error'
+                              ? t('Action failed')
+                              : recommendationActionFeedback.variant === 'warning'
+                                ? t('Notice')
+                                : t('Action complete')
+                          }
+                          description={recommendationActionFeedback.text}
+                        />
+                      ) : null}
+                      {troubleshootingRecommendations.length > 0 ? (
+                        <div className="stack tight">
+                          <div className="row between align-center gap wrap">
+                            <small className="muted">{t('Suggested next steps')}</small>
+                            <div className="row gap wrap">
+                              {primaryTroubleshootingRecommendation ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    runTopTroubleshootingSuggestion().catch(() => {
+                                      // no-op
+                                    });
+                                  }}
+                                  disabled={Boolean(recommendationActionBusy) || busy}
+                                >
+                                  {recommendationActionBusy
+                                    ? t('Applying...')
+                                    : canAutoRetryFromSuggestion
+                                      ? t('Run top suggestion (auto-retry)')
+                                      : t('Run top suggestion')}
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                          {troubleshootingRecommendations.map((item) => (
+                            <Panel key={item.id} tone="soft" className="stack tight">
+                              <strong>{item.title}</strong>
+                              <small className="muted">{item.detail}</small>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  runTroubleshootingRecommendation(item).catch(() => {
+                                    // no-op
+                                  });
+                                }}
+                                disabled={Boolean(recommendationActionBusy)}
+                              >
+                                {recommendationActionBusy === `${item.id}:${item.action}`
+                                  ? t('Applying...')
+                                  : recommendationActionLabel(item)}
+                              </Button>
+                            </Panel>
+                          ))}
+                        </div>
+                      ) : null}
+                      {matchedErrorLogLines.length > 0 ? (
+                        <div className="stack tight">
+                          <div className="row between align-center gap wrap">
+                            <small className="muted">
+                              {t('Matched log lines')} ({activeMatchedErrorIndex + 1}/{matchedErrorLogLines.length})
+                            </small>
+                            <div className="row gap">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() =>
+                                  setActiveMatchedErrorIndex((previous) =>
+                                    previous <= 0 ? 0 : previous - 1
+                                  )
+                                }
+                                disabled={activeMatchedErrorIndex <= 0}
+                              >
+                                {t('Previous match')}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() =>
+                                  setActiveMatchedErrorIndex((previous) =>
+                                    previous >= matchedErrorLogLines.length - 1
+                                      ? matchedErrorLogLines.length - 1
+                                      : previous + 1
+                                  )
+                                }
+                                disabled={activeMatchedErrorIndex >= matchedErrorLogLines.length - 1}
+                              >
+                                {t('Next match')}
+                              </Button>
+                            </div>
+                          </div>
+                          {activeMatchedErrorLine ? (
+                            <pre className="code-block">
+                              {t('Current match')} #{activeMatchedErrorLine.lineNumber} {activeMatchedErrorLine.content}
+                            </pre>
+                          ) : null}
+                          {activeMatchedErrorLine ? (
+                            <div className="row gap wrap">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={jumpToActiveMatchedLogInFullLogs}
+                              >
+                                {t('View in full logs')}
+                              </Button>
+                            </div>
+                          ) : null}
+                          {activeMatchedErrorContextLines.length > 0 ? (
+                            <div className="stack tight">
+                              <small className="muted">{t('Match context')}</small>
+                              {activeMatchedErrorContextLines.map((line) => (
+                                <pre
+                                  key={`context-${line.lineNumber}-${line.content}`}
+                                  className="code-block"
+                                  style={{
+                                    border: line.active ? '1px solid #60a5fa' : undefined,
+                                    background: line.active ? 'rgba(59, 130, 246, 0.08)' : undefined
+                                  }}
+                                >
+                                  #{line.lineNumber} {line.content}
+                                </pre>
+                              ))}
+                            </div>
+                          ) : null}
+                          {matchedErrorLogLines.map((line, index) => (
+                            <button
+                              key={`${line.lineNumber}-${line.content}`}
+                              type="button"
+                              className="workspace-record-row"
+                              style={{
+                                textAlign: 'left',
+                                borderRadius: '0.5rem',
+                                border:
+                                  index === activeMatchedErrorIndex
+                                    ? '1px solid #60a5fa'
+                                    : '1px solid transparent',
+                                background:
+                                  index === activeMatchedErrorIndex
+                                    ? 'rgba(59, 130, 246, 0.08)'
+                                    : 'transparent'
+                              }}
+                              onClick={() => setActiveMatchedErrorIndex(index)}
+                            >
+                              <small className="muted">#{line.lineNumber}</small>
+                              <div>{line.content}</div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <small className="muted">
+                          {trimmedErrorMatchQuery.length < 3
+                            ? t('Enter at least 3 characters for matching.')
+                            : t('No exact match found in current logs. Review full logs below.')}
+                        </small>
+                      )}
+                    </Panel>
+                  ) : null}
                   {logs.length === 0 ? (
                     <small className="muted">{t('No logs yet.')}</small>
                   ) : (
@@ -1389,7 +2359,7 @@ export default function TrainingJobDetailPage() {
                           {t('Load earlier logs')} ({hiddenLogCount})
                         </Button>
                       ) : null}
-                      <pre className="code-block">{visibleLogs.join('\n')}</pre>
+                      <pre ref={logsBlockRef} className="code-block">{visibleLogs.join('\n')}</pre>
                     </div>
                   )}
                 </div>
@@ -1459,8 +2429,8 @@ export default function TrainingJobDetailPage() {
                 ]}
               />
               <div className="row gap wrap">
-                <ButtonLink to={versionRegistryPath} variant="ghost" size="sm">
-                  {linkedVersions.length > 0 ? t('Open version registry') : t('Register version')}
+                <ButtonLink to={linkedVersions.length > 0 ? versionDeliveryPath : versionRegistryPath} variant="ghost" size="sm">
+                  {linkedVersions.length > 0 ? t('Continue in version delivery lane') : t('Register version')}
                 </ButtonLink>
                 <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
                   {t('Validate inference')}
@@ -1482,7 +2452,7 @@ export default function TrainingJobDetailPage() {
                   <Badge tone="neutral">{t(job.task_type)}</Badge>
                   <Badge tone="neutral">{t(job.framework)}</Badge>
                   <Badge tone="info">{describeSelectedWorker(job.execution_target, job.scheduled_worker_id)}</Badge>
-                  <Badge tone={executionInsight.reality === 'real' ? 'success' : 'warning'}>
+                  <Badge tone={executionInsight.reality === 'standard' ? 'success' : 'warning'}>
                     {t('Result')}: {executionRealityLabel}
                   </Badge>
                 </div>
@@ -1496,7 +2466,11 @@ export default function TrainingJobDetailPage() {
               title={t('Runtime')}
               description={t('Python path and readiness.')}
               actions={
-                <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
+                <ButtonLink
+                  to={buildRuntimeSettingsPath('readiness', job.framework, launchContextForDetail, outboundReturnTo)}
+                  variant="ghost"
+                  size="sm"
+                >
                   {t('Open runtime settings')}
                 </ButtonLink>
               }
@@ -1508,7 +2482,11 @@ export default function TrainingJobDetailPage() {
                     title={t('Runtime unavailable')}
                     description={t('Go to Runtime settings.')}
                     actions={
-                      <ButtonLink to="/settings/runtime" variant="secondary" size="sm">
+                      <ButtonLink
+                        to={buildRuntimeSettingsPath('readiness', job.framework, launchContextForDetail, outboundReturnTo)}
+                        variant="secondary"
+                        size="sm"
+                      >
                         {t('Open runtime settings')}
                       </ButtonLink>
                     }

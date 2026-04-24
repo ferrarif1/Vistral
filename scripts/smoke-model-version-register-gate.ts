@@ -132,8 +132,8 @@ const run = async () => {
   );
   assert.match(
     templateBlockedMessage,
-    /non-real local execution evidence/i,
-    'blocked error should explain non-real local-command evidence'
+    /(non-real|restricted) local execution evidence/i,
+    'blocked error should explain restricted local-command evidence'
   );
   assert.match(
     templateBlockedMessage,

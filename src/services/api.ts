@@ -43,6 +43,7 @@ import type {
   UpdateTrainingWorkerInput,
   UpdateUserStatusInput,
   VerificationReportRecord,
+  VisionModelingTaskRecord,
   User
 } from '../../shared/domain';
 import {
@@ -499,6 +500,11 @@ export const api = {
       method: 'DELETE'
     }),
 
+  clearConversations: () =>
+    request<{ deleted_ids: string[]; failed_ids: string[] }>('/api/conversations/clear', {
+      method: 'POST'
+    }),
+
   sendConversationMessage: (input: {
     conversation_id: string;
     content: string;
@@ -570,6 +576,14 @@ export const api = {
       {
         method: 'PATCH',
         body: JSON.stringify(input)
+      }
+    ),
+
+  deleteDatasetItem: (datasetId: string, itemId: string) =>
+    request<{ deleted: boolean }>(
+      `/api/datasets/${encodeURIComponent(datasetId)}/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'DELETE'
       }
     ),
 
@@ -676,6 +690,90 @@ export const api = {
       body: JSON.stringify({ description })
     }),
 
+  understandVisionTask: (input: {
+    prompt: string;
+    attachment_ids?: string[];
+    dataset_id?: string;
+    dataset_version_id?: string;
+  }) =>
+    request<{ task: VisionModelingTaskRecord; can_start_training: boolean }>(
+      '/api/vision/tasks/understand',
+      {
+        method: 'POST',
+        body: JSON.stringify(input)
+      }
+    ),
+
+  listVisionTasks: () => request<VisionModelingTaskRecord[]>('/api/vision/tasks'),
+
+  getVisionTask: (taskId: string) =>
+    request<VisionModelingTaskRecord>(`/api/vision/tasks/${encodeURIComponent(taskId)}`),
+
+  generateVisionTaskFeedbackDataset: (taskId: string, input?: { max_samples?: number }) =>
+    request<{
+      task: VisionModelingTaskRecord;
+      dataset_id: string;
+      selected_run_ids: string[];
+      sample_count: number;
+    }>(`/api/vision/tasks/${encodeURIComponent(taskId)}/feedback-dataset`, {
+      method: 'POST',
+      body: JSON.stringify(input ?? {})
+    }),
+
+  autoContinueVisionTask: (
+    taskId: string,
+    input?: {
+      max_rounds?: number;
+      force?: boolean;
+    }
+  ) =>
+    request<{
+      task: VisionModelingTaskRecord;
+      launched: boolean;
+      reason: string;
+      next_round: number | null;
+      training_job_id: string | null;
+    }>(`/api/vision/tasks/${encodeURIComponent(taskId)}/auto-continue`, {
+      method: 'POST',
+      body: JSON.stringify(input ?? {})
+    }),
+
+  autoAdvanceVisionTask: (
+    taskId: string,
+    input?: {
+      max_rounds?: number;
+      force?: boolean;
+    }
+  ) =>
+    request<{
+      task: VisionModelingTaskRecord;
+      action: 'requires_input' | 'training_started' | 'waiting_training' | 'registered' | 'feedback_mined' | 'completed';
+      message: string;
+      training_job_id: string | null;
+      model_version_id: string | null;
+      feedback_dataset_id: string | null;
+    }>(`/api/vision/tasks/${encodeURIComponent(taskId)}/auto-advance`, {
+      method: 'POST',
+      body: JSON.stringify(input ?? {})
+    }),
+
+  registerVisionTaskModel: (
+    taskId: string,
+    input?: {
+      version_name?: string;
+      model_id?: string;
+      allow_ocr_calibrated_registration?: boolean;
+      require_pure_real_evidence?: boolean;
+    }
+  ) =>
+    request<{
+      task: VisionModelingTaskRecord;
+      model_version: ModelVersionRecord;
+    }>(`/api/vision/tasks/${encodeURIComponent(taskId)}/register-model`, {
+      method: 'POST',
+      body: JSON.stringify(input ?? {})
+    }),
+
   listTrainingJobs: async () =>
     filterVisibleTrainingJobs(await request<TrainingJobRecord[]>('/api/training/jobs')),
 
@@ -760,12 +858,27 @@ export const api = {
     model_id: string;
     training_job_id: string;
     version_name: string;
-    allow_ocr_real_probe_registration?: boolean;
-  }) =>
-    request<ModelVersionRecord>('/api/model-versions/register', {
+    allow_ocr_calibrated_registration?: boolean;
+    require_pure_real_evidence?: boolean;
+  }) => {
+    const payload = {
+      model_id: input.model_id,
+      training_job_id: input.training_job_id,
+      version_name: input.version_name,
+      ...(typeof input.allow_ocr_calibrated_registration === 'boolean'
+        ? {
+            allow_ocr_calibrated_registration: input.allow_ocr_calibrated_registration
+          }
+        : {}),
+      ...(typeof input.require_pure_real_evidence === 'boolean'
+        ? { require_pure_real_evidence: input.require_pure_real_evidence }
+        : {})
+    };
+    return request<ModelVersionRecord>('/api/model-versions/register', {
       method: 'POST',
-      body: JSON.stringify(input)
-    }),
+      body: JSON.stringify(payload)
+    });
+  },
 
   listInferenceRuns: () => request<InferenceRunRecord[]>('/api/inference/runs'),
 

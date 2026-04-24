@@ -7,7 +7,9 @@ START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 OCR_CLOSURE_STRICT_LOCAL_COMMAND="${OCR_CLOSURE_STRICT_LOCAL_COMMAND:-true}"
-OCR_CLOSURE_REQUIRE_REAL_MODE="${OCR_CLOSURE_REQUIRE_REAL_MODE:-false}"
+OCR_CLOSURE_REQUIRE_REAL_MODE="${OCR_CLOSURE_REQUIRE_REAL_MODE:-${OCR_CLOSURE_STRICT_LOCAL_COMMAND}}"
+OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION="${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION:-false}"
+OCR_CLOSURE_ALLOW_NON_REAL_LOCAL_COMMAND="${OCR_CLOSURE_ALLOW_NON_REAL_LOCAL_COMMAND:-false}"
 OCR_CLOSURE_GENERATE_TEXT_SAMPLE="${OCR_CLOSURE_GENERATE_TEXT_SAMPLE:-true}"
 DEMO_DIR="${DEMO_DIR:-${ROOT_DIR}/demo_data}"
 DEFAULT_VENV_PYTHON="${ROOT_DIR}/.data/runtime-python/.venv/bin/python"
@@ -26,6 +28,10 @@ RUNNER_ENABLE_REAL_VALUE="${VISTRAL_RUNNER_ENABLE_REAL:-0}"
 if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
   RUNNER_ENABLE_REAL_VALUE="1"
 fi
+ALLOW_NON_REAL_LOCAL_COMMAND_VALUE="${MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND:-0}"
+if [[ "${OCR_CLOSURE_ALLOW_NON_REAL_LOCAL_COMMAND}" == "true" ]]; then
+  ALLOW_NON_REAL_LOCAL_COMMAND_VALUE="1"
+fi
 VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE="${VISTRAL_DISABLE_INFERENCE_FALLBACK:-}"
 if [[ -z "${VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE}" ]]; then
   if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
@@ -38,7 +44,9 @@ fi
 if [[ "${OCR_CLOSURE_REQUIRE_REAL_MODE}" == "true" ]]; then
   OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS:-720}"
 else
-  OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS:-140}"
+  # Non-real-mode local OCR runners can still take several minutes on loaded hosts.
+  # Keep defaults resilient for docker:verify:full to avoid flaky timeouts.
+  OCR_CLOSURE_WAIT_POLLS="${OCR_CLOSURE_WAIT_POLLS:-2400}"
 fi
 OCR_CLOSURE_WAIT_SLEEP_SEC="${OCR_CLOSURE_WAIT_SLEEP_SEC:-0.25}"
 
@@ -153,7 +161,7 @@ is_registration_gate_rejection() {
   local response="$1"
   local error_message=""
   error_message="$(echo "${response}" | jq -r '.error.message // empty')"
-  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
+  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"restricted local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
 }
 
 pick_registered_model_version_id() {
@@ -186,7 +194,7 @@ if [[ "${START_API}" == "true" ]]; then
   VISTRAL_RUNNER_ENABLE_REAL="${RUNNER_ENABLE_REAL_VALUE}" \
   VISTRAL_DISABLE_INFERENCE_FALLBACK="${VISTRAL_DISABLE_INFERENCE_FALLBACK_VALUE}" \
   LLM_CONFIG_SECRET="${LLM_CONFIG_SECRET:-smoke-ocr-closure-${API_PORT}}" \
-  MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 \
+  MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND="${ALLOW_NON_REAL_LOCAL_COMMAND_VALUE}" \
   API_HOST="${API_HOST}" \
   API_PORT="${API_PORT}" \
   npm run dev:api >"${API_LOG}" 2>&1 &
@@ -451,9 +459,11 @@ paddle_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/model-versions/register" \
-  -d "{\"model_id\":\"${paddle_model_id}\",\"training_job_id\":\"${paddle_job_id}\",\"version_name\":\"ocr-closure-paddle-v1\"}")"
+  -d "{\"model_id\":\"${paddle_model_id}\",\"training_job_id\":\"${paddle_job_id}\",\"version_name\":\"ocr-closure-paddle-v1\",\"require_pure_real_evidence\":${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}}")"
 paddle_model_version_id="$(echo "${paddle_register_resp}" | jq -r '.data.id // empty')"
 paddle_artifact_attachment_id="$(echo "${paddle_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+paddle_registration_evidence_mode="$(echo "${paddle_register_resp}" | jq -r '.data.registration_evidence_mode // empty')"
+paddle_registration_gate_exempted="$(echo "${paddle_register_resp}" | jq -r 'if .data.registration_gate_exempted == true then "true" elif .data.registration_gate_exempted == false then "false" else "" end')"
 paddle_register_mode="created"
 if [[ -z "${paddle_model_version_id}" || -z "${paddle_artifact_attachment_id}" ]]; then
   if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" || "$(is_registration_gate_rejection "${paddle_register_resp}" && echo true || echo false)" != "true" ]]; then
@@ -474,6 +484,18 @@ if [[ -z "${paddle_model_version_id}" || -z "${paddle_artifact_attachment_id}" ]
   paddle_model_version_id="${fallback_paddle_version_id}"
   paddle_artifact_attachment_id="fallback-existing-version"
   paddle_register_mode="blocked_gate_reused_existing"
+fi
+if [[ "${paddle_register_mode}" == "created" && "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
+  if [[ "${paddle_registration_gate_exempted}" == "true" || "${paddle_registration_evidence_mode}" == "non_real_local_command" ]]; then
+    echo "[smoke-ocr-closure] PaddleOCR registration should stay strict (no exemption / non-real evidence)."
+    echo "${paddle_register_resp}"
+    exit 1
+  fi
+  if [[ "${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" == "true" && "${paddle_registration_evidence_mode}" != "real" ]]; then
+    echo "[smoke-ocr-closure] PaddleOCR registration expected pure real evidence mode."
+    echo "${paddle_register_resp}"
+    exit 1
+  fi
 fi
 
 doctr_train_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -560,9 +582,11 @@ doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/model-versions/register" \
-  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"ocr-closure-doctr-v1\"}")"
+  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"ocr-closure-doctr-v1\",\"require_pure_real_evidence\":${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}}")"
 doctr_model_version_id="$(echo "${doctr_register_resp}" | jq -r '.data.id // empty')"
 doctr_artifact_attachment_id="$(echo "${doctr_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+doctr_registration_evidence_mode="$(echo "${doctr_register_resp}" | jq -r '.data.registration_evidence_mode // empty')"
+doctr_registration_gate_exempted="$(echo "${doctr_register_resp}" | jq -r 'if .data.registration_gate_exempted == true then "true" elif .data.registration_gate_exempted == false then "false" else "" end')"
 doctr_register_mode="created"
 if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_attachment_id}" ]]; then
   if [[ "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" || "$(is_registration_gate_rejection "${doctr_register_resp}" && echo true || echo false)" != "true" ]]; then
@@ -586,6 +610,18 @@ if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_attachment_id}" ]];
     doctr_register_mode="blocked_gate_reused_ocr_any"
   fi
   doctr_artifact_attachment_id="fallback-existing-version"
+fi
+if [[ "${doctr_register_mode}" == "created" && "${OCR_CLOSURE_STRICT_LOCAL_COMMAND}" == "true" ]]; then
+  if [[ "${doctr_registration_gate_exempted}" == "true" || "${doctr_registration_evidence_mode}" == "non_real_local_command" ]]; then
+    echo "[smoke-ocr-closure] docTR registration should stay strict (no exemption / non-real evidence)."
+    echo "${doctr_register_resp}"
+    exit 1
+  fi
+  if [[ "${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" == "true" && "${doctr_registration_evidence_mode}" != "real" ]]; then
+    echo "[smoke-ocr-closure] docTR registration expected pure real evidence mode."
+    echo "${doctr_register_resp}"
+    exit 1
+  fi
 fi
 
 inference_upload_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -718,10 +754,14 @@ echo "dataset_version_id=${dataset_version_id}"
 echo "paddle_job_id=${paddle_job_id}"
 echo "paddle_model_version_id=${paddle_model_version_id}"
 echo "paddle_register_mode=${paddle_register_mode}"
+echo "paddle_registration_evidence_mode=${paddle_registration_evidence_mode}"
+echo "paddle_registration_gate_exempted=${paddle_registration_gate_exempted}"
 echo "paddle_accuracy=${paddle_accuracy}"
 echo "doctr_job_id=${doctr_job_id}"
 echo "doctr_model_version_id=${doctr_model_version_id}"
 echo "doctr_register_mode=${doctr_register_mode}"
+echo "doctr_registration_evidence_mode=${doctr_registration_evidence_mode}"
+echo "doctr_registration_gate_exempted=${doctr_registration_gate_exempted}"
 echo "doctr_f1=${doctr_f1}"
 echo "doctr_accuracy=${doctr_accuracy}"
 echo "doctr_primary_metric_name=${doctr_primary_metric_name}"
@@ -730,3 +770,4 @@ echo "inference_attachment_id=${inference_attachment_id}"
 echo "paddle_execution_source=${paddle_execution_source}"
 echo "doctr_execution_source=${doctr_execution_source}"
 echo "ocr_closure_require_real_mode=${OCR_CLOSURE_REQUIRE_REAL_MODE}"
+echo "ocr_closure_require_pure_real_registration=${OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}"

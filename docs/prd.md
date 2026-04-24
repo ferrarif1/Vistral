@@ -45,6 +45,7 @@ Vistral must provide one closed-loop platform where engineers can:
 6. evaluation and model version registration
 7. inference validation and error feedback loop
 8. conversation-driven backend actions for dataset/model/training setup
+9. conversation-assisted vision-task understanding and auto-orchestrated training follow-up
 
 ## 6. Access Model Clarification
 - System roles: `user`, `admin`
@@ -63,6 +64,8 @@ Vistral must provide one closed-loop platform where engineers can:
 - for operational requests (for example dataset creation, model draft creation, training job creation), the conversation layer can call backend APIs and return real execution results
 - when required fields are missing, assistant must explicitly ask for the missing inputs instead of silently guessing critical parameters
 - assistant execution results should stay readable in the timeline as compact action cards with status, missing inputs, and created-entity summary
+- conversation actions may create or update a `VisionTask` so users can continue the same requirement from a dedicated detail page instead of repeating the prompt
+- completed/failed operation cards may surface derived next-step actions that either navigate to the correct page or send the guarded follow-up `/ops` input back into the same thread
 
 ### FR-002 File Attachment Baseline
 - conversation draft attachments appear as current-message chips while composing
@@ -125,6 +128,7 @@ Vistral must provide one closed-loop platform where engineers can:
 - every new training job must bind to an explicit dataset version snapshot instead of an implicit "latest" dataset state
 - training launch readiness must surface at least dataset status, selected dataset-version split summary, and annotation coverage before submit
 - training launch must be blocked when selected dataset version has zero annotation coverage (`annotation_coverage <= 0`)
+- training launch may also be initiated from a structured `VisionTask`, but the actual submitted job must still persist the explicit dataset + dataset-version snapshot + framework + base model choices
 - base model choices exposed in normal workspace flows must come from a curated foundation catalog suitable for future fine-tuning
 - internal smoke/verification/demo fixtures must not remain visible in the default workspace catalog; when sample records are needed, keep at most 1-2 curated examples
 - configure parameters and submit
@@ -143,6 +147,7 @@ Vistral must provide one closed-loop platform where engineers can:
 - register model version with training linkage
 - register model version must reject jobs with `execution_mode=simulated|unknown`
 - register model version must reject local-command jobs with template/fallback artifact evidence (`mode=template`, explicit `fallback_reason`, or `training_performed=false`) unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
+- a completed `VisionTask` may register its linked model version directly from task detail, but the same evidence gate remains mandatory
 - compare model versions
 - administrators can remove non-foundation model records from the catalog when those models have no dependent model versions or conversations
 - curated foundation/base models remain protected from deletion so the training entry catalog always keeps the intended baseline choices
@@ -154,6 +159,7 @@ Vistral must provide one closed-loop platform where engineers can:
 - persist inference runs
 - one-click feedback sample back to dataset
 - feedback target dataset must match the inference run task type (for example detection run -> detection dataset)
+- `VisionTask` follow-up may mine low-confidence inference runs into a feedback dataset, but the created dataset/items must still remain traceable through the same dataset/inference contracts
 
 ### FR-012 Adapter Abstraction
 Framework integrations must follow unified trainer interface:
@@ -215,6 +221,22 @@ Framework integrations must follow unified trainer interface:
   - usable as loop signals for review routing and training scope preparation
 - implementation should prioritize information architecture and operational throughput over feature count
 
+### FR-016 Vision Modeling Task Orchestration
+- users can start from a natural-language requirement plus 1-10 sample image attachments and receive a structured `VisionTask`
+- the task record must persist:
+  - prompt understanding result (`task_type`, expected output, constraints)
+  - dataset inspection result
+  - recipe-based training plan
+  - validation summary from linked training jobs
+  - missing requirements and next-step guidance
+- the product must expose both `/vision/tasks` and `/vision/tasks/:taskId` so engineers can reopen or continue the workflow outside the original chat turn
+- task detail must provide one obvious follow-up action at each stage:
+  - fix missing requirements
+  - start or continue the next round
+  - register the model version after metrics pass
+  - mine badcases into a feedback dataset after registration
+- auto-advance is allowed to choose the current best next step, but it must still respect the same training launch and model-registration safety gates as the manual path
+
 Reference planning document:
 - `docs/visual-data-loop-evolution.md`
 
@@ -242,7 +264,7 @@ Reference planning document:
 - Phase 2: minimal online annotation loop
 - Phase 3: PaddleOCR/docTR/YOLO adapters
 - Phase 4: OCR + detection business loop closure
-- Phase 5: pre-annotation scale-up, active learning, distributed execution
+- Phase 5: vision-task orchestration hardening, pre-annotation scale-up, active learning, distributed execution
 
 ## 10. Out of Scope (Current Round)
 - production-grade distributed training orchestration

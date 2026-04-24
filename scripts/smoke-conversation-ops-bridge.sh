@@ -824,6 +824,39 @@ if [[ "$confirm_status" != "completed" && "$confirm_status" != "failed" ]]; then
   exit 1
 fi
 
+msg_retry_control_plane="$(send_message "/ops {\"api\":\"retry_training_job\",\"params\":{\"job_id\":\"tj-det-1\",\"execution_target\":\"control_plane\"}}")"
+retry_cp_status="$(echo "$msg_retry_control_plane" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+retry_cp_missing="$(echo "$msg_retry_control_plane" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+retry_cp_requires_confirm="$(echo "$msg_retry_control_plane" | jq -r '.data.messages[-1].metadata.conversation_action.requires_confirmation // false')"
+retry_cp_execution_target="$(echo "$msg_retry_control_plane" | jq -r '.data.messages[-1].metadata.conversation_action.collected_fields.payload_json | fromjson | .params.execution_target // empty')"
+retry_cp_first_link="$(echo "$msg_retry_control_plane" | jq -r '.data.messages[-1].metadata.conversation_action.action_links[0].href // empty')"
+if [[ "$retry_cp_status" != "requires_input" || "$retry_cp_missing" != *"confirmation"* || "$retry_cp_requires_confirm" != "true" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected retry_training_job control-plane suggestion to stay behind confirmation"
+  echo "$msg_retry_control_plane"
+  exit 1
+fi
+if [[ "$retry_cp_execution_target" != "control_plane" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected retry_training_job payload to preserve execution_target=control_plane"
+  echo "$msg_retry_control_plane"
+  exit 1
+fi
+if [[ "$retry_cp_first_link" != "/training/jobs/tj-det-1" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected retry_training_job action link to point at job detail"
+  echo "$msg_retry_control_plane"
+  exit 1
+fi
+retry_context_reset_payload="$(curl -sS -X POST -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -d "$(jq -nc --arg model_id "$model_id" '{model_id:$model_id,initial_message:"continue ops bridge checks"}')" \
+  "${BASE_URL}/api/conversations/start")"
+conversation_id="$(echo "$retry_context_reset_payload" | jq -r '.data.conversation.id // empty')"
+if [[ -z "$conversation_id" ]]; then
+  echo "[smoke-conversation-ops-bridge] failed to reset conversation after retry confirmation-gate check"
+  echo "$retry_context_reset_payload"
+  exit 1
+fi
+
 msg_export_missing="$(send_message "导出标注")"
 export_status="$(echo "$msg_export_missing" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
 export_missing="$(echo "$msg_export_missing" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
@@ -934,20 +967,44 @@ fi
 msg_create_job_missing="$(send_message "/ops {\"api\":\"create_training_job\",\"params\":{\"task_type\":\"detection\",\"framework\":\"yolo\"}}")"
 create_job_missing_status="$(echo "$msg_create_job_missing" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
 create_job_missing_fields="$(echo "$msg_create_job_missing" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
-if [[ "$create_job_missing_status" != "requires_input" || "$create_job_missing_fields" != *"name"* || "$create_job_missing_fields" != *"dataset_id"* || "$create_job_missing_fields" != *"dataset_version_id"* || "$create_job_missing_fields" != *"base_model"* ]]; then
-  echo "[smoke-conversation-ops-bridge] expected /ops create_training_job to report all required missing fields"
+create_job_missing_requires_confirm="$(echo "$msg_create_job_missing" | jq -r '.data.messages[-1].metadata.conversation_action.requires_confirmation // false')"
+if [[ "$create_job_missing_status" != "requires_input" ]]; then
+  echo "[smoke-conversation-ops-bridge] expected /ops create_training_job to enter requires_input"
   echo "$msg_create_job_missing"
   exit 1
 fi
 
-msg_create_job_fill_name="$(send_message "'ops-bridge-train-job'")"
-create_job_fill_name_status="$(echo "$msg_create_job_fill_name" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
-create_job_fill_name_fields="$(echo "$msg_create_job_fill_name" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
-create_job_fill_name_requires_confirm="$(echo "$msg_create_job_fill_name" | jq -r '.data.messages[-1].metadata.conversation_action.requires_confirmation // false')"
-if [[ "$create_job_fill_name_status" != "requires_input" || "$create_job_fill_name_fields" == *"name"* || "$create_job_fill_name_fields" != *"dataset_id"* || "$create_job_fill_name_requires_confirm" != "false" ]]; then
-  echo "[smoke-conversation-ops-bridge] expected /ops create_training_job follow-up to consume name and keep remaining required fields"
-  echo "$msg_create_job_fill_name"
-  exit 1
+if [[ "$create_job_missing_fields" == *"confirmation"* ]]; then
+  if [[ "$create_job_missing_requires_confirm" != "true" ]]; then
+    echo "[smoke-conversation-ops-bridge] expected /ops create_training_job confirmation gate when auto defaults are applied"
+    echo "$msg_create_job_missing"
+    exit 1
+  fi
+
+  msg_create_job_wrong_followup="$(send_message "random text")"
+  create_job_wrong_followup_status="$(echo "$msg_create_job_wrong_followup" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+  create_job_wrong_followup_fields="$(echo "$msg_create_job_wrong_followup" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+  if [[ "$create_job_wrong_followup_status" != "requires_input" || "$create_job_wrong_followup_fields" != *"confirmation"* ]]; then
+    echo "[smoke-conversation-ops-bridge] expected /ops create_training_job confirmation to remain pending after non-confirmation follow-up"
+    echo "$msg_create_job_wrong_followup"
+    exit 1
+  fi
+else
+  if [[ "$create_job_missing_fields" != *"name"* || "$create_job_missing_fields" != *"dataset_id"* || "$create_job_missing_fields" != *"dataset_version_id"* || "$create_job_missing_fields" != *"base_model"* ]]; then
+    echo "[smoke-conversation-ops-bridge] expected /ops create_training_job to report required missing fields"
+    echo "$msg_create_job_missing"
+    exit 1
+  fi
+
+  msg_create_job_fill_name="$(send_message "'ops-bridge-train-job'")"
+  create_job_fill_name_status="$(echo "$msg_create_job_fill_name" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
+  create_job_fill_name_fields="$(echo "$msg_create_job_fill_name" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | join(",")')"
+  create_job_fill_name_requires_confirm="$(echo "$msg_create_job_fill_name" | jq -r '.data.messages[-1].metadata.conversation_action.requires_confirmation // false')"
+  if [[ "$create_job_fill_name_status" != "requires_input" || "$create_job_fill_name_fields" == *"name"* || "$create_job_fill_name_fields" != *"dataset_id"* || "$create_job_fill_name_requires_confirm" != "false" ]]; then
+    echo "[smoke-conversation-ops-bridge] expected /ops create_training_job follow-up to consume name and keep remaining required fields"
+    echo "$msg_create_job_fill_name"
+    exit 1
+  fi
 fi
 
 # /ops json branch: missing params -> continue fill -> high-risk confirmation -> execute

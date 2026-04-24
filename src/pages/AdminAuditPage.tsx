@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import type { AuditLogRecord, User } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import { Badge } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
+import { Button, ButtonLink } from '../components/ui/Button';
 import {
   DetailDrawer,
   DetailList,
@@ -37,8 +39,112 @@ const humanizeAuditToken = (value: string) => {
     .join(' ');
 };
 
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: LaunchContext
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const buildAdminVerificationReportsPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/admin/verification-reports?${query}` : '/admin/verification-reports';
+};
+
+const buildAdminPendingApprovalsPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/admin/models/pending?${query}` : '/admin/models/pending';
+};
+
 export default function AdminAuditPage() {
   const { t } = useI18n();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
+  const launchContext = useMemo<LaunchContext>(
+    () => ({
+      datasetId: (searchParams.get('dataset') ?? '').trim() || null,
+      versionId: (searchParams.get('version') ?? '').trim() || null,
+      taskType: (searchParams.get('task_type') ?? '').trim() || null,
+      framework: (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase() || null,
+      executionTarget: (searchParams.get('execution_target') ?? '').trim().toLowerCase() || null,
+      workerId: (searchParams.get('worker') ?? '').trim() || null,
+      returnTo: outboundReturnTo
+    }),
+    [outboundReturnTo, searchParams]
+  );
+  const verificationReportsPath = useMemo(
+    () => buildAdminVerificationReportsPath(launchContext),
+    [launchContext]
+  );
+  const pendingApprovalsPath = useMemo(
+    () => buildAdminPendingApprovalsPath(launchContext),
+    [launchContext]
+  );
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [items, setItems] = useState<AuditLogRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -236,6 +342,15 @@ export default function AdminAuditPage() {
         eyebrow={t('Governance Trail')}
         title={t('Admin Audit Logs')}
         description={t('Search governance history and inspect one record at a time.')}
+        meta={
+          <TrainingLaunchContextPills
+            taskType={launchContext.taskType}
+            framework={launchContext.framework}
+            executionTarget={launchContext.executionTarget}
+            workerId={launchContext.workerId}
+            t={t}
+          />
+        }
         primaryAction={{
           label: loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh'),
           onClick: () => {
@@ -245,6 +360,21 @@ export default function AdminAuditPage() {
           },
           disabled: loading || refreshing
         }}
+        secondaryActions={
+          <div className="row gap wrap">
+            {requestedReturnTo ? (
+              <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to={pendingApprovalsPath} variant="ghost" size="sm">
+              {t('Open pending requests')}
+            </ButtonLink>
+            <ButtonLink to={verificationReportsPath} variant="ghost" size="sm">
+              {t('Open verification reports')}
+            </ButtonLink>
+          </div>
+        }
       />
 
       {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}

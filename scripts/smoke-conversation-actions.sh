@@ -108,6 +108,7 @@ prepare_trainable_detection_target() {
   local upload_resp=""
   local attachment_id=""
   local dataset_detail_resp=""
+  local dataset_item_ids=""
   local dataset_item_id=""
   local annotation_resp=""
   local annotation_status=""
@@ -132,46 +133,53 @@ prepare_trainable_detection_target() {
     exit 1
   fi
 
-  upload_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
-    -H 'Content-Type: application/json' \
-    -H "x-csrf-token: $csrf_token" \
-    -X POST \
-    -d "{\"filename\":\"conversation-training-target-${run_tag}.jpg\"}" \
-    "${BASE_URL}/api/files/dataset/${dataset_id}/upload")"
-  attachment_id="$(echo "${upload_resp}" | jq -r '.data.id // empty')"
-  if [[ -z "${attachment_id}" ]]; then
-    echo "[smoke-conversation-actions] failed to upload sample for dedicated training dataset target"
-    echo "${upload_resp}"
-    exit 1
-  fi
-  wait_dataset_attachment_ready "${dataset_id}" "${attachment_id}"
+  for suffix in 1 2; do
+    upload_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+      -H 'Content-Type: application/json' \
+      -H "x-csrf-token: $csrf_token" \
+      -X POST \
+      -d "{\"filename\":\"conversation-training-target-${run_tag}-${suffix}.jpg\"}" \
+      "${BASE_URL}/api/files/dataset/${dataset_id}/upload")"
+    attachment_id="$(echo "${upload_resp}" | jq -r '.data.id // empty')"
+    if [[ -z "${attachment_id}" ]]; then
+      echo "[smoke-conversation-actions] failed to upload sample ${suffix} for dedicated training dataset target"
+      echo "${upload_resp}"
+      exit 1
+    fi
+    wait_dataset_attachment_ready "${dataset_id}" "${attachment_id}"
+  done
 
   dataset_detail_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" "${BASE_URL}/api/datasets/${dataset_id}")"
-  dataset_item_id="$(echo "${dataset_detail_resp}" | jq -r '.data.items[0].id // empty')"
-  if [[ -z "${dataset_item_id}" ]]; then
-    echo "[smoke-conversation-actions] dataset item was not generated for dedicated training target"
+  dataset_item_ids="$(echo "${dataset_detail_resp}" | jq -r '.data.items[].id // empty')"
+  if [[ -z "${dataset_item_ids}" ]]; then
+    echo "[smoke-conversation-actions] dataset items were not generated for dedicated training target"
     echo "${dataset_detail_resp}"
     exit 1
   fi
 
-  annotation_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
-    -H 'Content-Type: application/json' \
-    -H "x-csrf-token: $csrf_token" \
-    -X POST \
-    -d "{\"dataset_item_id\":\"${dataset_item_id}\",\"task_type\":\"detection\",\"source\":\"manual\",\"status\":\"annotated\",\"payload\":{\"boxes\":[{\"id\":\"box-1\",\"x\":48,\"y\":56,\"width\":132,\"height\":96,\"label\":\"defect\"}]}}" \
-    "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
-  annotation_status="$(echo "${annotation_resp}" | jq -r '.data.status // empty')"
-  if [[ "${annotation_status}" != "annotated" ]]; then
-    echo "[smoke-conversation-actions] failed to annotate dedicated training target dataset item"
-    echo "${annotation_resp}"
-    exit 1
-  fi
+  while IFS= read -r dataset_item_id; do
+    if [[ -z "${dataset_item_id}" ]]; then
+      continue
+    fi
+    annotation_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+      -H 'Content-Type: application/json' \
+      -H "x-csrf-token: $csrf_token" \
+      -X POST \
+      -d "{\"dataset_item_id\":\"${dataset_item_id}\",\"task_type\":\"detection\",\"source\":\"manual\",\"status\":\"annotated\",\"payload\":{\"boxes\":[{\"id\":\"box-1\",\"x\":48,\"y\":56,\"width\":132,\"height\":96,\"label\":\"defect\"}]}}" \
+      "${BASE_URL}/api/datasets/${dataset_id}/annotations")"
+    annotation_status="$(echo "${annotation_resp}" | jq -r '.data.status // empty')"
+    if [[ "${annotation_status}" != "annotated" ]]; then
+      echo "[smoke-conversation-actions] failed to annotate dedicated training target dataset item ${dataset_item_id}"
+      echo "${annotation_resp}"
+      exit 1
+    fi
+  done <<< "${dataset_item_ids}"
 
   split_resp="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
     -H 'Content-Type: application/json' \
     -H "x-csrf-token: $csrf_token" \
     -X POST \
-    -d '{"train_ratio":1,"val_ratio":0,"test_ratio":0,"seed":19}' \
+    -d '{"train_ratio":0.5,"val_ratio":0.5,"test_ratio":0,"seed":19}' \
     "${BASE_URL}/api/datasets/${dataset_id}/split")"
   split_train_count="$(echo "${split_resp}" | jq -r '.data.split_summary.train // 0')"
   if [[ "${split_train_count}" -lt 1 ]]; then
@@ -416,18 +424,39 @@ training_followup="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   "${BASE_URL}/api/conversations/message")"
 
 training_followup_status="$(echo "$training_followup" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
-training_missing_version="$(echo "$training_followup" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields[]? | select(.=="dataset_version_id")')"
+training_followup_missing_count="$(echo "$training_followup" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields | length')"
+training_followup_has_missing_split="$(echo "$training_followup" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields[]? | select(.=="dataset_issue:missing_validation_split")')"
 
-if [[ "$training_followup_status" != "requires_input" || "$training_missing_version" != "dataset_version_id" ]]; then
-  echo "[smoke-conversation-actions] Training conversation action did not request dataset version input"
+if [[ "$training_followup_status" != "requires_input" || "$training_followup_missing_count" -lt 1 ]]; then
+  echo "[smoke-conversation-actions] Training conversation action did not enter requires_input after dataset selection"
   echo "$training_followup"
   exit 1
 fi
 
+if [[ "$training_followup_has_missing_split" == "dataset_issue:missing_validation_split" ]]; then
+  echo "[smoke-conversation-actions] Prepared training dataset unexpectedly missed validation split"
+  echo "$training_followup"
+  exit 1
+fi
+
+training_example_upload="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
+  -H 'Content-Type: application/json' \
+  -H "x-csrf-token: $csrf_token" \
+  -X POST \
+  -d "{\"filename\":\"conversation-training-example-$(date +%s).jpg\"}" \
+  "${BASE_URL}/api/files/conversation/upload")"
+training_example_attachment_id="$(echo "$training_example_upload" | jq -r '.data.id // empty')"
+if [[ -z "$training_example_attachment_id" ]]; then
+  echo "[smoke-conversation-actions] failed to upload training example image attachment"
+  echo "$training_example_upload"
+  exit 1
+fi
+wait_conversation_attachment_ready "${training_example_attachment_id}"
+
 training_final="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
   -H 'Content-Type: application/json' \
   -H "x-csrf-token: $csrf_token" \
-  -d "{\"conversation_id\":\"${training_conversation_id}\",\"content\":\"版本用 ${selected_training_dataset_version_id}\",\"attachment_ids\":[]}" \
+  -d "{\"conversation_id\":\"${training_conversation_id}\",\"content\":\"版本用 ${selected_training_dataset_version_id}，验收目标 mAP50>=0.60\",\"attachment_ids\":[\"${training_example_attachment_id}\"]}" \
   "${BASE_URL}/api/conversations/message")"
 
 training_final_status="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
@@ -438,12 +467,12 @@ training_dataset_version_id="$(echo "$training_final" | jq -r '.data.messages[-1
 if [[ "$training_final_status" == "requires_input" ]]; then
   training_missing_confirmation="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.missing_fields[]? | select(.=="confirmation")')"
   if [[ "$training_missing_confirmation" == "confirmation" ]]; then
-    training_confirmation_phrase="$(echo "$training_final" | jq -r '.data.messages[-1].metadata.conversation_action.confirmation_phrase // "确认执行"')"
     training_confirmed="$(curl -sS -c "$COOKIE_FILE" -b "$COOKIE_FILE" \
       -H 'Content-Type: application/json' \
       -H "x-csrf-token: $csrf_token" \
-      -d "{\"conversation_id\":\"${training_conversation_id}\",\"content\":\"${training_confirmation_phrase}\",\"attachment_ids\":[]}" \
+      -d "{\"conversation_id\":\"${training_conversation_id}\",\"content\":\"确认执行\",\"attachment_ids\":[\"${training_example_attachment_id}\"]}" \
       "${BASE_URL}/api/conversations/message")"
+    training_final="$training_confirmed"
     training_final_status="$(echo "$training_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.status // empty')"
     training_job_id="$(echo "$training_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.created_entity_id // empty')"
     training_dataset_id="$(echo "$training_confirmed" | jq -r '.data.messages[-1].metadata.conversation_action.collected_fields.dataset_id // empty')"

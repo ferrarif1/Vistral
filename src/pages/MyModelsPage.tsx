@@ -1,14 +1,15 @@
-import { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, User } from '../../shared/domain';
 import ModelInventory from '../components/models/ModelInventory';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { DetailList, FilterToolbar, InlineAlert, PageHeader, SectionCard } from '../components/ui/ConsolePage';
 import { Input, Select } from '../components/ui/Field';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
-import { buildModelAuthenticityCountsById } from '../features/modelAuthenticity';
+import { buildModelVerificationCountsById } from '../features/modelAuthenticity';
 import { deriveTrainingExecutionInsight, type TrainingExecutionInsight } from '../features/trainingExecutionInsight';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
@@ -16,11 +17,179 @@ import { api } from '../services/api';
 const readyStatusSet = new Set<ModelRecord['status']>(['approved', 'published']);
 const terminalTrainingStatuses = new Set<TrainingJobRecord['status']>(['completed', 'failed', 'cancelled']);
 const modelStatusOptions = ['draft', 'pending_approval', 'approved', 'rejected', 'published', 'deprecated'] as const;
-type LoadMode = 'initial' | 'manual';
+type LoadMode = 'initial' | 'manual' | 'background';
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const toTime = (value: string | null | undefined): number => {
+  if (!value) {
+    return 0;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const appendTrainingLaunchContext = (searchParams: URLSearchParams, context?: LaunchContext) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const buildCreateModelContinuationPath = (modelId: string, launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('model', modelId);
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/models/create?${searchParams.toString()}`;
+};
+
+const buildAdminApprovalQueuePath = (model: ModelRecord, launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('model', model.id);
+  searchParams.set('q', model.name);
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/admin/models/pending?${searchParams.toString()}`;
+};
+
+const buildAdminApprovalQueueLandingPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/admin/models/pending?${query}` : '/admin/models/pending';
+};
+
+const buildVersionRegistryPath = (
+  model: ModelRecord,
+  version?: ModelVersionRecord | null,
+  launchContext?: LaunchContext
+): string => {
+  const searchParams = new URLSearchParams();
+  if (version?.id) {
+    searchParams.set('selectedVersion', version.id);
+  } else {
+    searchParams.set('model', model.id);
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/models/versions?${searchParams.toString()}`;
+};
+
+const buildVersionRegistryLandingPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', 'register');
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/models/versions?${searchParams.toString()}`;
+};
+
+const buildInferenceValidationPath = (
+  versionId: string,
+  options?: {
+    datasetId?: string | null;
+    versionId?: string | null;
+    launchContext?: LaunchContext;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('modelVersion', versionId);
+  if (options?.datasetId?.trim()) {
+    searchParams.set('dataset', options.datasetId.trim());
+  }
+  if (options?.versionId?.trim()) {
+    searchParams.set('version', options.versionId.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  return `/inference/validate?${searchParams.toString()}`;
+};
 
 export default function MyModelsPage() {
   const { t } = useI18n();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
+  const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const preferredVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredTaskType = (searchParams.get('task_type') ?? '').trim();
+  const preferredFramework = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
+  const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
+  const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
+  const preferredModelId = (searchParams.get('model') ?? searchParams.get('model_id') ?? '').trim();
+  const launchContext: LaunchContext = {
+    datasetId: preferredDatasetId || null,
+    versionId: preferredVersionId || null,
+    taskType: preferredTaskType || null,
+    framework: preferredFramework || null,
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
+  const versionRegistryLandingPath = useMemo(
+    () => buildVersionRegistryLandingPath(launchContext),
+    [launchContext]
+  );
+  const adminApprovalQueueLandingPath = useMemo(
+    () => buildAdminApprovalQueueLandingPath(launchContext),
+    [launchContext]
+  );
+  const createModelPath = useMemo(() => {
+    const searchParams = new URLSearchParams();
+    appendTrainingLaunchContext(searchParams, launchContext);
+    const query = searchParams.toString();
+    return query ? `/models/create?${query}` : '/models/create';
+  }, [launchContext]);
   const initialLaneFilter = (() => {
     const value = (searchParams.get('lane') ?? '').trim();
     return value === 'ready' || value === 'pending' || value === 'draft_rework' ? value : 'all';
@@ -51,11 +220,18 @@ export default function MyModelsPage() {
   const deferredSearchText = useDeferredValue(searchText);
   const [statusFilter, setStatusFilter] = useState<'all' | ModelRecord['status']>(initialStatusFilter);
   const [laneFilter, setLaneFilter] = useState<'all' | 'ready' | 'pending' | 'draft_rework'>(initialLaneFilter);
+  const [preferredModelFilterHint, setPreferredModelFilterHint] = useState('');
+  const preferredModelFilterRecoveryAppliedRef = useRef(false);
+  const deleteModelLockRef = useRef(false);
 
-  const load = async (mode: LoadMode = 'initial') => {
+  const backgroundSyncHint = t(
+    'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
+  );
+
+  const load = async (mode: LoadMode = 'initial'): Promise<boolean> => {
     if (mode === 'initial') {
       setLoading(true);
-    } else {
+    } else if (mode === 'manual') {
       setRefreshing(true);
     }
 
@@ -71,12 +247,23 @@ export default function MyModelsPage() {
       setModelVersions(versionsResult);
       setTrainingJobs(jobsResult);
       setError('');
+      return true;
     } catch (loadError) {
+      if (mode === 'background') {
+        setResult((previous) => {
+          if (previous?.includes(backgroundSyncHint)) {
+            return previous;
+          }
+          return previous ? `${previous} ${backgroundSyncHint}` : backgroundSyncHint;
+        });
+        return false;
+      }
       setError((loadError as Error).message);
+      return false;
     } finally {
       if (mode === 'initial') {
         setLoading(false);
-      } else {
+      } else if (mode === 'manual') {
         setRefreshing(false);
       }
     }
@@ -93,6 +280,19 @@ export default function MyModelsPage() {
     () => modelVersions.filter((version) => relevantModelIdSet.has(version.model_id)),
     [modelVersions, relevantModelIdSet]
   );
+  const latestVersionByModelId = useMemo(() => {
+    const next = new Map<string, ModelVersionRecord>();
+
+    [...relevantVersions]
+      .sort((left, right) => toTime(right.created_at) - toTime(left.created_at))
+      .forEach((version) => {
+        if (!next.has(version.model_id)) {
+          next.set(version.model_id, version);
+        }
+      });
+
+    return next;
+  }, [relevantVersions]);
   const relevantTrainingJobIdSet = useMemo(
     () =>
       new Set(
@@ -181,6 +381,21 @@ export default function MyModelsPage() {
       }),
     [models]
   );
+  const preferredModelRecord = useMemo(
+    () => (preferredModelId ? sortedModels.find((model) => model.id === preferredModelId) ?? null : null),
+    [preferredModelId, sortedModels]
+  );
+  const preferredModelMissing = useMemo(
+    () => Boolean(preferredModelId && !loading && sortedModels.length > 0 && !preferredModelRecord),
+    [loading, preferredModelId, preferredModelRecord, sortedModels.length]
+  );
+  const clearPreferredModelContextPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('model');
+    next.delete('model_id');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
   const filteredModels = useMemo(() => {
     const keyword = deferredSearchText.trim().toLowerCase();
 
@@ -222,9 +437,9 @@ export default function MyModelsPage() {
     [filteredModels]
   );
   const trainingJobsById = useMemo(() => new Map(trainingJobs.map((job) => [job.id, job])), [trainingJobs]);
-  const modelAuthenticityCountsById = useMemo(
+  const modelVerificationCountsById = useMemo(
     () =>
-      buildModelAuthenticityCountsById({
+      buildModelVerificationCountsById({
         models: filteredModels,
         versions: relevantVersions,
         jobsById: trainingJobsById,
@@ -232,13 +447,13 @@ export default function MyModelsPage() {
       }),
     [filteredModels, jobExecutionInsights, relevantVersions, trainingJobsById]
   );
-  const modelAuthenticitySummaryById = useMemo(
+  const modelVerificationSummaryById = useMemo(
     () =>
       Object.fromEntries(
         filteredModels.map((model) => {
-          const counts = modelAuthenticityCountsById[model.id] ?? {
+          const counts = modelVerificationCountsById[model.id] ?? {
             totalVersions: 0,
-            realVersions: 0,
+            stableVersions: 0,
             riskyVersions: 0,
             unknownVersions: 0
           };
@@ -265,39 +480,97 @@ export default function MyModelsPage() {
                 }),
                 hint:
                   counts.unknownVersions > 0
-                    ? t('Includes unknown authenticity evidence. Review training and version details before production use.')
-                    : t('Includes degraded or non-real evidence. Review training and version details before production use.')
+                    ? t('Includes unknown verification state. Review training and version details before production use.')
+                    : t('Includes limited-output evidence. Review training and version details before production use.')
               }
             ];
           }
 
           return [
             model.id,
-            {
-              tone: 'success' as const,
-              label: t('Real versions: {real}/{total}', {
-                real: counts.realVersions,
-                total: counts.totalVersions
-              }),
-              hint: t('Linked versions currently look authenticity-safe.')
-            }
-          ];
+              {
+                tone: 'success' as const,
+                label: t('Stable versions: {stable}/{total}', {
+                  stable: counts.stableVersions,
+                  total: counts.totalVersions
+                }),
+                hint: t('Linked versions currently look verification-safe.')
+              }
+            ];
         })
       ),
-    [filteredModels, modelAuthenticityCountsById, t]
+    [filteredModels, modelVerificationCountsById, t]
   );
   const filteredRiskyModels = useMemo(
     () =>
       filteredModels.filter((model) => {
-        const counts = modelAuthenticityCountsById[model.id];
+        const counts = modelVerificationCountsById[model.id];
         return Boolean(counts) && counts.riskyVersions > 0;
       }).length,
-    [filteredModels, modelAuthenticityCountsById]
+    [filteredModels, modelVerificationCountsById]
   );
   const hasActiveFilters =
     searchText.trim().length > 0 ||
     statusFilter !== 'all' ||
     laneFilter !== 'all';
+  const laneEligibleCount = useMemo(
+    () =>
+      sortedModels.filter((model) => {
+        if (laneFilter === 'ready') {
+          return readyStatusSet.has(model.status);
+        }
+        if (laneFilter === 'pending') {
+          return model.status === 'pending_approval';
+        }
+        if (laneFilter === 'draft_rework') {
+          return model.status === 'draft' || model.status === 'rejected';
+        }
+        return true;
+      }).length,
+    [laneFilter, sortedModels]
+  );
+  const statusEligibleCount = useMemo(
+    () => (statusFilter === 'all' ? sortedModels.length : sortedModels.filter((model) => model.status === statusFilter).length),
+    [sortedModels, statusFilter]
+  );
+  const searchEligibleCount = useMemo(() => {
+    const keyword = searchText.trim().toLowerCase();
+    if (!keyword) {
+      return sortedModels.length;
+    }
+    return sortedModels.filter((model) =>
+      [model.name, model.description, model.model_type, model.visibility, model.status]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword)
+    ).length;
+  }, [searchText, sortedModels]);
+  const filterBlockerHint = useMemo(() => {
+    if (filteredModels.length > 0 || !hasActiveFilters) {
+      return '';
+    }
+    if (searchText.trim() && searchEligibleCount === 0) {
+      return t('Search keyword currently matches 0 models.');
+    }
+    if (laneFilter !== 'all' && laneEligibleCount === 0) {
+      return t('Lane filter currently has no matching models.');
+    }
+    if (statusFilter !== 'all' && statusEligibleCount === 0) {
+      return t('Status filter currently has no matching models.');
+    }
+    return t('Current filters are too strict. Clear one or more filters to recover models.');
+  }, [
+    filteredModels.length,
+    hasActiveFilters,
+    laneEligibleCount,
+    laneFilter,
+    searchEligibleCount,
+    searchText,
+    statusEligibleCount,
+    statusFilter,
+    t
+  ]);
   const overallSummary = useMemo(
     () => ({
       total: models.length,
@@ -307,24 +580,68 @@ export default function MyModelsPage() {
     }),
     [models]
   );
+  useEffect(() => {
+    preferredModelFilterRecoveryAppliedRef.current = false;
+    setPreferredModelFilterHint('');
+  }, [preferredModelId]);
+
+  useEffect(() => {
+    if (preferredModelFilterRecoveryAppliedRef.current || !preferredModelId || !preferredModelRecord) {
+      return;
+    }
+    if (filteredModels.some((model) => model.id === preferredModelId)) {
+      return;
+    }
+
+    preferredModelFilterRecoveryAppliedRef.current = true;
+    if (laneFilter !== 'all') {
+      setLaneFilter('all');
+    }
+    if (statusFilter !== 'all') {
+      setStatusFilter('all');
+    }
+    if (!searchText.trim().toLowerCase().includes(preferredModelRecord.name.toLowerCase())) {
+      setSearchText(preferredModelRecord.name);
+    }
+    setPreferredModelFilterHint(
+      t('Adjusted filters to show the requested model {modelId}.', { modelId: preferredModelRecord.id })
+    );
+  }, [
+    filteredModels,
+    laneFilter,
+    preferredModelId,
+    preferredModelRecord,
+    searchText,
+    statusFilter,
+    t
+  ]);
 
   const deleteModel = async (model: ModelRecord) => {
+    if (deleteModelLockRef.current) {
+      return;
+    }
+    deleteModelLockRef.current = true;
     setDeletingModelId(model.id);
     setError('');
     setResult('');
 
     try {
       await api.removeModelByAdmin(model.id);
+      setModels((prev) => prev.filter((item) => item.id !== model.id));
+      setModelVersions((prev) => prev.filter((version) => version.model_id !== model.id));
       setResult(
         t('Deleted model {modelName}.', {
           modelName: model.name
         })
       );
-      await load('manual');
+      load('background').catch(() => {
+        // no-op
+      });
     } catch (actionError) {
       setError((actionError as Error).message);
     } finally {
       setDeletingModelId(null);
+      deleteModelLockRef.current = false;
     }
   };
   const resetFilters = () => {
@@ -358,7 +675,7 @@ export default function MyModelsPage() {
         detail: t('Start with a model shell so completed training runs have a governance target for version registration and approval.'),
         badgeTone: 'warning',
         badgeLabel: t('No models'),
-        actions: [{ label: t('Create model draft'), to: '/models/create' }]
+        actions: [{ label: t('Create model draft'), to: createModelPath }]
       };
     }
 
@@ -380,7 +697,7 @@ export default function MyModelsPage() {
               setStatusFilter('all');
             }
           },
-          { label: t('Open version registry'), to: '/models/versions', variant: 'ghost' }
+          { label: t('Open version registry'), to: versionRegistryLandingPath, variant: 'ghost' }
         ]
       };
     }
@@ -403,7 +720,9 @@ export default function MyModelsPage() {
               setStatusFilter('all');
             }
           },
-          { label: t('Open version registry'), to: '/models/versions', variant: 'ghost' }
+          currentUser?.role === 'admin'
+            ? { label: t('Open admin queue'), to: adminApprovalQueueLandingPath, variant: 'ghost' }
+            : { label: t('Open version registry'), to: versionRegistryLandingPath, variant: 'ghost' }
         ]
       };
     }
@@ -416,11 +735,102 @@ export default function MyModelsPage() {
       badgeTone: 'success',
       badgeLabel: t('Governance ready'),
       actions: [
-        { label: t('Open version registry'), to: '/models/versions' },
-        { label: t('Create another model'), to: '/models/create', variant: 'ghost' }
+        { label: t('Open version registry'), to: versionRegistryLandingPath },
+        { label: t('Create another model'), to: createModelPath, variant: 'ghost' }
       ]
     };
-  }, [models.length, overallSummary.draftOrRework, overallSummary.pending, t]);
+  }, [
+    createModelPath,
+    adminApprovalQueueLandingPath,
+    currentUser?.role,
+    models.length,
+    overallSummary.draftOrRework,
+    overallSummary.pending,
+    t,
+    versionRegistryLandingPath
+  ]);
+
+  const focusPendingModel = useCallback(
+    (model: ModelRecord) => {
+      setLaneFilter('pending');
+      setStatusFilter('pending_approval');
+      setSearchText(model.name);
+    },
+    []
+  );
+
+  const renderOwnedModelActions = useCallback(
+    (model: ModelRecord) => {
+      const latestVersion = latestVersionByModelId.get(model.id) ?? null;
+
+      if (model.status === 'draft') {
+        return (
+          <>
+            <ButtonLink to={buildCreateModelContinuationPath(model.id, launchContext)} variant="secondary" size="sm">
+              {t('Continue draft package')}
+            </ButtonLink>
+          </>
+        );
+      }
+
+      if (model.status === 'rejected') {
+        return (
+          <>
+            <ButtonLink to={buildCreateModelContinuationPath(model.id, launchContext)} variant="secondary" size="sm">
+              {t('Continue rework')}
+            </ButtonLink>
+          </>
+        );
+      }
+
+      if (model.status === 'pending_approval') {
+        return (
+          <>
+            <Button type="button" variant="secondary" size="sm" onClick={() => focusPendingModel(model)}>
+              {t('Track approval')}
+            </Button>
+            {currentUser?.role === 'admin' ? (
+              <ButtonLink to={buildAdminApprovalQueuePath(model, launchContext)} variant="ghost" size="sm">
+                {t('Open admin queue')}
+              </ButtonLink>
+            ) : (
+              <Button type="button" variant="ghost" size="sm" onClick={() => focusPendingModel(model)}>
+                {t('Open pending lane')}
+              </Button>
+            )}
+          </>
+        );
+      }
+
+      return (
+        <>
+          <ButtonLink to={buildVersionRegistryPath(model, latestVersion, launchContext)} variant="secondary" size="sm">
+            {latestVersion ? t('Open model versions') : t('Register first version')}
+          </ButtonLink>
+          {latestVersion?.status === 'registered' ? (
+            <ButtonLink
+              to={buildInferenceValidationPath(latestVersion.id, {
+                launchContext,
+                datasetId:
+                  latestVersion.training_job_id && trainingJobsById.get(latestVersion.training_job_id)?.dataset_id
+                    ? trainingJobsById.get(latestVersion.training_job_id)?.dataset_id ?? null
+                    : null,
+                versionId:
+                  latestVersion.training_job_id && trainingJobsById.get(latestVersion.training_job_id)?.dataset_version_id
+                    ? trainingJobsById.get(latestVersion.training_job_id)?.dataset_version_id ?? null
+                    : null
+              })}
+              variant="ghost"
+              size="sm"
+            >
+              {t('Validate inference')}
+            </ButtonLink>
+          ) : null}
+        </>
+      );
+    },
+    [currentUser?.role, focusPendingModel, launchContext, latestVersionByModelId, t, trainingJobsById]
+  );
 
   return (
     <WorkspacePage>
@@ -428,6 +838,15 @@ export default function MyModelsPage() {
         eyebrow={t('Ownership lane')}
         title={t('My Models')}
         description={t('Track your draft, pending, and ready models in one place.')}
+        meta={
+          <TrainingLaunchContextPills
+            taskType={launchContext.taskType}
+            framework={launchContext.framework}
+            executionTarget={launchContext.executionTarget}
+            workerId={launchContext.workerId}
+            t={t}
+          />
+        }
         primaryAction={{
           label: loading ? t('Loading') : refreshing ? t('Refreshing...') : t('Refresh'),
           onClick: () => {
@@ -438,14 +857,48 @@ export default function MyModelsPage() {
           disabled: loading || refreshing
         }}
         secondaryActions={
-          <ButtonLink to="/models/create" variant="secondary" size="sm">
-            {t('Create New Model')}
-          </ButtonLink>
+          <div className="row gap wrap">
+            {requestedReturnTo ? (
+              <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to={createModelPath} variant="secondary" size="sm">
+              {t('Create New Model')}
+            </ButtonLink>
+          </div>
         }
       />
 
       {error ? <InlineAlert tone="danger" title={t('Load Failed')} description={error} /> : null}
       {result ? <InlineAlert tone="success" title={t('Action Completed')} description={result} /> : null}
+      {preferredModelFilterHint ? (
+        <InlineAlert tone="info" title={t('Focused on requested model')} description={preferredModelFilterHint} />
+      ) : null}
+      {preferredModelMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested model not found')}
+          description={t('The model from the incoming link is unavailable. Showing available owned models instead.')}
+          actions={
+            <ButtonLink to={clearPreferredModelContextPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
+        />
+      ) : null}
+      {filterBlockerHint ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Filters are hiding all models')}
+          description={filterBlockerHint}
+          actions={
+            <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+              {t('Clear filters')}
+            </Button>
+          }
+        />
+      ) : null}
 
       <WorkspaceWorkbench
         toolbar={
@@ -517,7 +970,7 @@ export default function MyModelsPage() {
               emptyTitle={t('No owned models yet.')}
               emptyDescription={t('Your created models will appear here once you start a draft.')}
               emptyExtra={
-                <ButtonLink to="/models/create" variant="secondary" size="sm">
+                <ButtonLink to={createModelPath} variant="secondary" size="sm">
                   {t('Create Model Draft')}
                 </ButtonLink>
               }
@@ -533,7 +986,8 @@ export default function MyModelsPage() {
               canAdminDelete={currentUser?.role === 'admin'}
               deletingModelId={deletingModelId}
               onDeleteModel={deleteModel}
-              modelAuthenticityById={modelAuthenticitySummaryById}
+              modelVerificationById={modelVerificationSummaryById}
+              renderModelActions={renderOwnedModelActions}
               t={t}
             />
           </div>
@@ -587,10 +1041,10 @@ export default function MyModelsPage() {
                       : t('Drafts / rework')}
               </small>
               <div className="row gap wrap">
-                <ButtonLink to="/models/versions" variant="ghost" size="sm">
+                <ButtonLink to={versionRegistryLandingPath} variant="ghost" size="sm">
                   {t('Open version registry')}
                 </ButtonLink>
-                <ButtonLink to="/models/create" variant="ghost" size="sm">
+                <ButtonLink to={createModelPath} variant="ghost" size="sm">
                   {t('Create model draft')}
                 </ButtonLink>
               </div>

@@ -36,9 +36,11 @@ Operational branch inside the same flow:
 5. user confirms execution in follow-up turn
 6. system calls the corresponding backend API only after confirmation is received
 7. assistant returns a `completed` or `failed` action card with created entity summary and next-step guidance
+7a. when a request needs structured vision-task understanding before or alongside training orchestration, assistant may create/update a `VisionTask` and return its deep link as the primary continuation surface
 8. for power users / agentic bridge, user can use `/ops {json}`; for normal users, natural-language intents can also be mapped to the same bridge APIs automatically; high-risk calls still require confirmation before mutation
 8a. when `/ops {json}` or natural-language bridge intent has missing required parameters, assistant must return `requires_input` with explicit missing fields and allow the user to continue by supplying only those fields in follow-up turns
 8b. runtime setup operations can also run from bridge (`activate_runtime_profile`, `auto_configure_runtime_settings`); both remain behind explicit high-risk confirmation
+8c. conversation action cards may surface a derived "suggested next step" for training-job failures or incomplete operations; clicking an executable suggestion sends the equivalent bridge action in-thread, and mutating actions such as `retry_training_job` still pause at the same explicit confirmation gate before execution
 
 Attachment states:
 - `uploading`
@@ -237,6 +239,32 @@ Actor: `user`
 11. for cross-machine model handoff, worker can deploy encrypted artifact via:
    - `POST /api/worker/models/pull-encrypted` (worker-auth protected)
    - worker internally calls `POST /api/runtime/public/model-package` (runtime bearer key) and decrypts payload locally
+
+## 6.1 Flow E1: Vision Modeling Task Orchestration (implemented MVP)
+Actor: `user`
+
+1. start from `/workspace/chat` (natural-language requirement + optional sample images) or from a direct API call to `POST /api/vision/tasks/understand`
+2. system builds a structured `VisionTask`:
+   - task understanding/spec
+   - dataset inspection profile
+   - recipe-based training plan
+   - missing requirements list
+3. when critical inputs are missing (`dataset_id`, non-image examples, trainability issues, unknown task type), task lands in `requires_input` and the assistant/task page exposes direct follow-up links
+4. operator opens `/vision/tasks/:taskId` from chat or `/vision/tasks` list to continue outside the original conversation turn
+5. task detail keeps one recommended next action visible:
+   - `Launch training` when no job exists and requirements are already complete
+   - `Start round 1` / `Run next round` for auto-tune iteration
+   - `Register model` once metrics pass and no model version exists yet
+   - `Mine badcases` after model registration when no feedback dataset exists yet
+6. `Auto advance` follows the same state-aware sequence:
+   - `requires_input` -> return missing requirements only
+   - no training job yet -> start next round
+   - job still running -> wait
+   - metrics passed and no model version -> register model
+   - model version exists but no feedback dataset -> mine badcases
+   - otherwise -> closed-loop state, no further mutation
+7. task detail keeps deep links to dataset, training job, model version, and feedback dataset so the engineer can move into the owning page for deeper work
+8. owner/admin visibility applies to task list/detail, and runtime sync keeps validation report + status aligned with the linked training job/model version
 
 ## 7. Flow F: Model Version Registration
 Actor: `user`

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   DatasetRecord,
   DatasetVersionRecord,
@@ -12,7 +12,8 @@ import type {
   RuntimeReadinessReport,
   TaskType,
   TrainingWorkerNodeView,
-  TrainingJobRecord
+  TrainingJobRecord,
+  User
 } from '../../shared/domain';
 import AttachmentUploader from '../components/AttachmentUploader';
 import StateBlock from '../components/StateBlock';
@@ -28,6 +29,11 @@ import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
+import {
+  isStandardGateReady,
+  resolveRegistrationEvidenceLevel,
+  resolveRegistrationGateLevel
+} from '../utils/registrationEvidence';
 
 type LoadMode = 'initial' | 'manual' | 'background';
 type NextActionKind = 'route' | 'scroll';
@@ -110,6 +116,50 @@ const buildPath = (base: string, params: Record<string, string | null | undefine
   return queryString ? `${base}?${queryString}` : base;
 };
 
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const appendTrainingLaunchContext = (
+  params: Record<string, string | null | undefined>,
+  context?: LaunchContext
+): Record<string, string | null | undefined> => ({
+  ...params,
+  dataset: params.dataset ?? context?.datasetId ?? null,
+  version: params.version ?? context?.versionId ?? null,
+  task_type: params.task_type ?? context?.taskType ?? null,
+  framework: params.framework ?? context?.framework ?? null,
+  execution_target:
+    params.execution_target ?? (context?.executionTarget && context.executionTarget !== 'auto' ? context.executionTarget : null),
+  worker: params.worker ?? context?.workerId ?? null,
+  return_to:
+    params.return_to ??
+    (() => {
+      const returnTo = context?.returnTo?.trim() ?? '';
+      if (!returnTo || !returnTo.startsWith('/') || returnTo.startsWith('//') || returnTo.includes('://')) {
+        return null;
+      }
+      return returnTo;
+    })()
+});
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
 const readStoredDatasetId = (): string => {
   if (typeof window === 'undefined') {
     return '';
@@ -135,14 +185,21 @@ const writeStoredDatasetId = (datasetId: string) => {
     }
     window.localStorage.removeItem(selectedDatasetStorageKey);
   } catch {
-    // Ignore storage errors in prototype mode.
+    // Ignore storage errors in local client mode.
   }
 };
 
 export default function TrainingClosurePage() {
   const { t } = useI18n();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
   const preferredDatasetAppliedRef = useRef(false);
   const selectedDatasetIdRef = useRef('');
@@ -164,6 +221,7 @@ export default function TrainingClosurePage() {
   const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
   const [workersAccessDenied, setWorkersAccessDenied] = useState(false);
   const [workersError, setWorkersError] = useState('');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [selectedDatasetId, setSelectedDatasetId] = useState(() => readStoredDatasetId());
 
   const [newDatasetName, setNewDatasetName] = useState('');
@@ -177,6 +235,9 @@ export default function TrainingClosurePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
+  const backgroundSyncHint = t(
+    'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
+  );
 
   const copyToClipboard = useCallback(
     async (text: string, label: string) => {
@@ -219,6 +280,26 @@ export default function TrainingClosurePage() {
     writeStoredDatasetId(selectedDatasetId);
   }, [selectedDatasetId]);
 
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const normalizedDatasetId = selectedDatasetId.trim();
+    if (normalizedDatasetId) {
+      next.set('dataset', normalizedDatasetId);
+    } else {
+      next.delete('dataset');
+    }
+
+    const currentQuery = searchParams.toString();
+    const nextQuery = next.toString();
+    if (nextQuery === currentQuery) {
+      return;
+    }
+
+    navigate(nextQuery ? `${location.pathname}?${nextQuery}` : location.pathname, {
+      replace: true
+    });
+  }, [location.pathname, navigate, searchParams, selectedDatasetId]);
+
   const loadAll = useCallback(
     async (mode: LoadMode = 'initial', datasetIdHint?: string) => {
       if (mode === 'initial') {
@@ -229,25 +310,28 @@ export default function TrainingClosurePage() {
       }
 
       try {
-        const [datasetList, jobs, versions, runs, runtimeReadinessResult, workerInventoryResult] = await Promise.all([
-          api.listDatasets(),
-          api.listTrainingJobs(),
-          api.listModelVersions(),
-          api.listInferenceRuns(),
-          api
-            .getRuntimeReadiness()
-            .then((report) => ({ ok: true as const, report }))
-            .catch((error) => ({ ok: false as const, error: error as Error })),
-          api
-            .listTrainingWorkers()
-            .then((inventory) => ({ ok: true as const, inventory }))
-            .catch((error) => ({ ok: false as const, error: error as Error }))
-        ]);
+        const [datasetList, jobs, versions, runs, runtimeReadinessResult, workerInventoryResult, currentUserResult] =
+          await Promise.all([
+            api.listDatasets(),
+            api.listTrainingJobs(),
+            api.listModelVersions(),
+            api.listInferenceRuns(),
+            api
+              .getRuntimeReadiness()
+              .then((report) => ({ ok: true as const, report }))
+              .catch((error) => ({ ok: false as const, error: error as Error })),
+            api
+              .listTrainingWorkers()
+              .then((inventory) => ({ ok: true as const, inventory }))
+              .catch((error) => ({ ok: false as const, error: error as Error })),
+            api.me().catch(() => null)
+          ]);
 
         setDatasets(datasetList);
         setTrainingJobs(jobs);
         setModelVersions(versions);
         setInferenceRuns(runs);
+        setCurrentUser(currentUserResult);
         if (runtimeReadinessResult.ok) {
           setRuntimeReadiness(runtimeReadinessResult.report);
           setRuntimeReadinessError('');
@@ -307,7 +391,9 @@ export default function TrainingClosurePage() {
           setDatasetVersions([]);
         }
       } catch (error) {
-        setFeedback({ tone: 'danger', text: (error as Error).message });
+        if (mode !== 'background') {
+          setFeedback({ tone: 'danger', text: (error as Error).message });
+        }
       } finally {
         if (mode === 'initial') {
           setLoading(false);
@@ -346,6 +432,17 @@ export default function TrainingClosurePage() {
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
     [datasets, selectedDatasetId]
   );
+  const requestedDatasetMissing = useMemo(
+    () => Boolean(preferredDatasetId && datasets.length > 0 && !datasets.some((dataset) => dataset.id === preferredDatasetId)),
+    [datasets, preferredDatasetId]
+  );
+  const clearRequestedDatasetPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('dataset');
+    next.delete('version');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
   const readyAttachments = useMemo(
     () => datasetAttachments.filter((attachment) => attachment.status === 'ready'),
     [datasetAttachments]
@@ -426,6 +523,12 @@ export default function TrainingClosurePage() {
     deviceLifecycle?.public_inference_invocations[0] ?? null;
   const latestModelPackageDelivery =
     deviceLifecycle?.model_package_deliveries[0] ?? null;
+  const hasRemoteOpsProof = Boolean(
+    latestRegisteredVersion &&
+      deviceAccessRecords.length > 0 &&
+      latestPublicInferenceInvocation &&
+      latestModelPackageDelivery
+  );
   const deviceLifecycleTimeline = useMemo(() => {
     const credentialEvents = deviceAccessRecords.map((record) => ({
       id: `credential-${record.binding_key}`,
@@ -570,39 +673,184 @@ export default function TrainingClosurePage() {
     if (!latestRegisteredVersion) {
       return '-';
     }
-    return latestRegisteredVersion.registration_gate_exempted ? 'exempted' : 'strict';
-  }, [latestRegisteredVersion]);
+    const gateLevel = resolveRegistrationGateLevel(latestRegisteredVersion);
+    return gateLevel === 'override'
+      ? t('Policy override')
+      : gateLevel === 'standard'
+        ? t('Standard gate')
+        : t('Gate pending');
+  }, [latestRegisteredVersion, t]);
+  const registrationEvidenceLabel = useMemo(() => {
+    if (!latestRegisteredVersion) {
+      return '-';
+    }
+    const evidenceLevel = resolveRegistrationEvidenceLevel(latestRegisteredVersion.registration_evidence_mode);
+    if (evidenceLevel === 'standard') {
+      return t('Standard evidence');
+    }
+    if (evidenceLevel === 'calibrated') {
+      return t('Calibrated evidence');
+    }
+    if (evidenceLevel === 'compatibility') {
+      return t('Compatibility evidence');
+    }
+    return t('Pending evidence');
+  }, [latestRegisteredVersion, t]);
 
-  const strictRealRegistration = useMemo(
+  const standardGateReady = useMemo(
     () =>
       Boolean(
         latestRegisteredVersion &&
-          !latestRegisteredVersion.registration_gate_exempted &&
-          latestRegisteredVersion.registration_evidence_mode === 'real'
+          isStandardGateReady(latestRegisteredVersion)
       ),
     [latestRegisteredVersion]
   );
+  const canReviewAudit = currentUser?.role === 'admin';
+  const launchTaskType = selectedDataset?.task_type ?? latestCompletedJob?.task_type ?? null;
+  const launchFramework =
+    latestRegisteredVersion?.framework ??
+    latestCompletedJob?.framework ??
+    (launchTaskType === 'ocr'
+      ? 'paddleocr'
+      : launchTaskType === 'detection' ||
+          launchTaskType === 'classification' ||
+          launchTaskType === 'segmentation' ||
+          launchTaskType === 'obb'
+        ? 'yolo'
+        : null);
+  const launchContext: LaunchContext = {
+    datasetId: selectedDatasetId || null,
+    versionId: latestTrainableVersion?.id ?? null,
+    taskType: launchTaskType,
+    framework: launchFramework,
+    executionTarget: preferredLaunchWorker ? 'worker' : null,
+    workerId: preferredLaunchWorker?.id ?? null,
+    returnTo: outboundReturnTo
+  };
 
-  const datasetDetailPath = selectedDatasetId ? `/datasets/${selectedDatasetId}` : '/datasets';
-  const annotationPath = selectedDatasetId ? `/datasets/${selectedDatasetId}/annotate` : '/datasets';
-  const trainingCreatePath = buildPath('/training/jobs/new', {
-    dataset: selectedDatasetId || null,
-    version: latestTrainableVersion?.id ?? null,
-    task_type: selectedDataset?.task_type ?? null,
-    execution_target: preferredLaunchWorker ? 'worker' : null,
-    worker: preferredLaunchWorker?.id ?? null
-  });
-  const registerVersionPath = buildPath('/models/versions', {
-    job: latestCompletedJob?.id ?? null,
-    version_name: latestCompletedJob
-      ? `${selectedDataset?.name ?? 'model'}-${latestCompletedJob.framework}-v1`
-      : null
-  });
-  const inferencePath = buildPath('/inference/validate', {
-    modelVersion: latestRegisteredVersion?.id ?? null,
-    dataset: selectedDatasetId || null,
-    version: latestTrainableVersion?.id ?? null
-  });
+  const datasetDetailPath = selectedDatasetId
+    ? buildPath(`/datasets/${encodeURIComponent(selectedDatasetId)}`, appendTrainingLaunchContext({}, launchContext))
+    : '/datasets';
+  const annotationPath = selectedDatasetId
+    ? buildPath(`/datasets/${encodeURIComponent(selectedDatasetId)}/annotate`, appendTrainingLaunchContext({}, launchContext))
+    : '/datasets';
+  const trainingCreatePath = buildPath(
+    '/training/jobs/new',
+    appendTrainingLaunchContext(
+      {
+        dataset: selectedDatasetId || null,
+        version: latestTrainableVersion?.id ?? null,
+        task_type: selectedDataset?.task_type ?? null
+      },
+      launchContext
+    )
+  );
+  const trainingJobsPath = buildPath(
+    '/training/jobs',
+    appendTrainingLaunchContext({}, launchContext)
+  );
+  const registerVersionPath = buildPath(
+    '/models/versions',
+    appendTrainingLaunchContext(
+      {
+        job: latestCompletedJob?.id ?? null,
+        version_name: latestCompletedJob
+          ? `${selectedDataset?.name ?? 'model'}-${latestCompletedJob.framework}-v1`
+          : null
+      },
+      launchContext
+    )
+  );
+  const versionDeliveryPath = buildPath(
+    '/models/versions',
+    appendTrainingLaunchContext(
+      {
+        selectedVersion: latestRegisteredVersion?.id ?? null,
+        focus: latestRegisteredVersion ? (hasRemoteOpsProof ? 'ops' : 'device') : null
+      },
+      launchContext
+    )
+  );
+  const inferencePath = buildPath(
+    '/inference/validate',
+    appendTrainingLaunchContext(
+      {
+        modelVersion: latestRegisteredVersion?.id ?? null,
+        dataset: selectedDatasetId || null,
+        version: latestTrainableVersion?.id ?? null,
+        task_type: launchTaskType,
+        framework: launchFramework,
+        execution_target: preferredLaunchWorker ? 'worker' : null,
+        worker: preferredLaunchWorker?.id ?? null
+      },
+      launchContext
+    )
+  );
+  const latestRunPath = buildPath(
+    '/inference/validate',
+    appendTrainingLaunchContext(
+      {
+        modelVersion: latestRegisteredVersion?.id ?? null,
+        dataset: selectedDatasetId || null,
+        version: latestTrainableVersion?.id ?? null,
+        run: latestRun?.id ?? null,
+        focus: latestRun ? 'result' : null,
+        task_type: launchTaskType,
+        framework: launchFramework,
+        execution_target: preferredLaunchWorker ? 'worker' : null,
+        worker: preferredLaunchWorker?.id ?? null
+      },
+      launchContext
+    )
+  );
+  const latestFeedbackDatasetPath = buildPath(
+    latestFeedbackRun?.feedback_dataset_id
+      ? `/datasets/${encodeURIComponent(latestFeedbackRun.feedback_dataset_id)}`
+      : '/datasets',
+    appendTrainingLaunchContext(
+      {
+        focus: latestFeedbackRun ? 'workflow' : null
+      },
+      launchContext
+    )
+  );
+  const runtimeSettingsPath = buildPath(
+    '/settings/runtime',
+    appendTrainingLaunchContext(
+      {
+        focus: 'readiness',
+        framework: launchFramework
+      },
+      launchContext
+    )
+  );
+  const workerSettingsPath = buildPath(
+    '/settings/workers',
+    appendTrainingLaunchContext(
+      {
+        focus: 'inventory',
+        profile: launchFramework
+      },
+      launchContext
+    )
+  );
+  const runtimeTemplatesPath = buildPath(
+    '/settings/runtime/templates',
+    appendTrainingLaunchContext(
+      {
+        framework: launchFramework
+      },
+      launchContext
+    )
+  );
+  const workspaceConsolePath = buildPath(
+    '/workspace/console',
+    appendTrainingLaunchContext({}, launchContext)
+  );
+  const adminAuditPath = buildPath(
+    '/admin/audit',
+    appendTrainingLaunchContext({}, launchContext)
+  );
 
   const scrollToUploader = useCallback(() => {
     uploaderAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -744,7 +992,7 @@ export default function TrainingClosurePage() {
         detail: hasRegisteredVersion
           ? t('Model version {version} registered. evidence={mode}, gate={gate}', {
               version: latestRegisteredVersion?.id ?? '-',
-              mode: latestRegisteredVersion?.registration_evidence_mode ?? 'unknown',
+              mode: registrationEvidenceLabel,
               gate: registrationGateLabel
             })
           : t('Bind your completed training job into a new model version.'),
@@ -762,7 +1010,7 @@ export default function TrainingClosurePage() {
             }
           : {
               label: t('Complete training first'),
-              to: '/training/jobs'
+              to: trainingJobsPath
             }
       },
       {
@@ -816,13 +1064,19 @@ export default function TrainingClosurePage() {
         done: hasRegisteredVersion && hasFeedbackLoop && hasDeviceAuthorization,
         primary: hasRegisteredVersion
           ? {
-              label: t('Open device authorization'),
-              onClick: scrollToDeviceAccess
+              label: t('Continue in version delivery lane'),
+              to: versionDeliveryPath
             }
           : {
               label: t('Register a version first'),
               to: registerVersionPath
+            },
+        secondary: hasRegisteredVersion
+          ? {
+              label: t('Open device authorization'),
+              onClick: scrollToDeviceAccess
             }
+          : undefined
       }
     ];
   }, [
@@ -837,16 +1091,20 @@ export default function TrainingClosurePage() {
     latestRun,
     latestTrainableVersion,
     latestVersion,
+    hasRemoteOpsProof,
     datasetAttachments,
     readyAttachments.length,
+    registrationEvidenceLabel,
     registrationGateLabel,
     registerVersionPath,
+    versionDeliveryPath,
     scrollToDeviceAccess,
     scrollToUploader,
     selectedDataset,
     preferredLaunchWorker,
     t,
-    trainingCreatePath
+    trainingCreatePath,
+    trainingJobsPath
   ]);
 
   const completedStepCount = useMemo(
@@ -898,10 +1156,24 @@ export default function TrainingClosurePage() {
     nextStep.primary.onClick?.();
   }, [navigate, nextAction, nextStep]);
 
-  const handleDatasetSwitch = async (nextDatasetId: string) => {
-    setSelectedDatasetId(nextDatasetId);
-    await loadAll('manual', nextDatasetId);
-  };
+  const handleDatasetSwitch = useCallback(
+    async (nextDatasetId: string) => {
+      setSelectedDatasetId(nextDatasetId);
+      await loadAll('manual', nextDatasetId);
+    },
+    [loadAll]
+  );
+
+  useEffect(() => {
+    const queryDatasetId = (searchParams.get('dataset') ?? '').trim();
+    if (!queryDatasetId || queryDatasetId === selectedDatasetIdRef.current) {
+      return;
+    }
+    if (!datasets.some((dataset) => dataset.id === queryDatasetId)) {
+      return;
+    }
+    void handleDatasetSwitch(queryDatasetId);
+  }, [datasets, handleDatasetSwitch, searchParams]);
 
   const createDataset = async () => {
     const trimmedName = newDatasetName.trim();
@@ -956,7 +1228,10 @@ export default function TrainingClosurePage() {
 
   const deleteDatasetAttachment = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
-    await loadAll('manual', selectedDatasetId);
+    setDatasetAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
+    loadAll('background', selectedDatasetId).catch(() => {
+      setFeedback({ tone: 'success', text: backgroundSyncHint });
+    });
   };
 
   const issueDeviceAccess = async () => {
@@ -1121,17 +1396,24 @@ export default function TrainingClosurePage() {
               }
         }
         secondaryActions={
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              void loadAll('manual');
-            }}
-            disabled={busy || refreshing}
-          >
-            {refreshing ? t('Refreshing...') : t('Refresh')}
-          </Button>
+          <div className="row gap wrap">
+            {requestedReturnTo ? (
+              <ButtonLink to={requestedReturnTo} variant="secondary" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                void loadAll('manual');
+              }}
+              disabled={busy || refreshing}
+            >
+              {refreshing ? t('Refreshing...') : t('Refresh')}
+            </Button>
+          </div>
         }
       />
 
@@ -1140,6 +1422,18 @@ export default function TrainingClosurePage() {
           tone={feedback.tone}
           title={feedback.tone === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
+        />
+      ) : null}
+      {requestedDatasetMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested dataset context not found')}
+          description={t('The dataset from the incoming link is unavailable. The page now uses the latest available dataset context.')}
+          actions={
+            <ButtonLink to={clearRequestedDatasetPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
         />
       ) : null}
 
@@ -1244,11 +1538,11 @@ export default function TrainingClosurePage() {
                     : t('Next unlock depends on the current step requirement')}
                 </Badge>
                 {latestRegisteredVersion ? (
-                  <Badge tone={strictRealRegistration ? 'success' : 'warning'}>
-                    {strictRealRegistration
-                      ? t('Registration is strict + real evidence')
-                      : t('Registration is not strict real yet')}
-                  </Badge>
+                <Badge tone={standardGateReady ? 'success' : 'warning'}>
+                  {standardGateReady
+                    ? t('Registration meets standard gate')
+                    : t('Registration still requires gate review')}
+                </Badge>
                 ) : null}
               </div>
             </Card>
@@ -1390,17 +1684,22 @@ export default function TrainingClosurePage() {
                   description={t('Issue scoped credentials so robots/edge clients can call runtime inference and pull model packages.')}
                   actions={
                     latestRegisteredVersion ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          void loadDeviceSurface(latestRegisteredVersion.id);
-                        }}
-                        disabled={busy || refreshing}
-                      >
-                        {t('Refresh credentials')}
-                      </Button>
+                      <div className="row gap wrap">
+                        <ButtonLink to={versionDeliveryPath} variant="secondary" size="sm">
+                          {t('Continue in version delivery lane')}
+                        </ButtonLink>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            void loadDeviceSurface(latestRegisteredVersion.id);
+                          }}
+                          disabled={busy || refreshing}
+                        >
+                          {t('Refresh credentials')}
+                        </Button>
+                      </div>
                     ) : null
                   }
                 />
@@ -1412,6 +1711,18 @@ export default function TrainingClosurePage() {
                   />
                 ) : (
                   <div className="stack">
+                    <InlineAlert
+                      tone="info"
+                      title={t('Use Model Versions as the main remote-delivery lane')}
+                      description={t(
+                        'Keep this page for quick closure checks, but continue in Model Versions when you need version-scoped device/API delivery, public inference proof, encrypted package delivery, and audit follow-up.'
+                      )}
+                      actions={
+                        <ButtonLink to={versionDeliveryPath} variant="secondary" size="sm">
+                          {t('Continue in version delivery lane')}
+                        </ButtonLink>
+                      }
+                    />
                     <div className="row gap wrap">
                       <Badge tone="neutral">
                         {t('Model Version')}: {latestRegisteredVersion.id}
@@ -1421,6 +1732,9 @@ export default function TrainingClosurePage() {
                       </Badge>
                       <Badge tone={deviceAccessRecords.length > 0 ? 'success' : 'warning'}>
                         {t('Credentials')}: {deviceAccessRecords.length}
+                      </Badge>
+                      <Badge tone={hasRemoteOpsProof ? 'success' : 'warning'}>
+                        {hasRemoteOpsProof ? t('Remote ops ready') : t('Collecting evidence')}
                       </Badge>
                     </div>
                     <div className="row gap wrap">
@@ -1596,7 +1910,7 @@ export default function TrainingClosurePage() {
                         <ButtonLink to={inferencePath} variant="ghost" size="sm">
                           {t('Open Validation')}
                         </ButtonLink>
-                        <ButtonLink to="/workspace/console" variant="ghost" size="sm">
+                        <ButtonLink to={workspaceConsolePath} variant="ghost" size="sm">
                           {t('Open Console')}
                         </ButtonLink>
                       </div>
@@ -1605,6 +1919,35 @@ export default function TrainingClosurePage() {
                           'Check whether the issued credential has already been used for public inference and encrypted package delivery.'
                         )}
                       </small>
+                      <InlineAlert
+                        tone={hasRemoteOpsProof ? 'success' : 'info'}
+                        title={
+                          hasRemoteOpsProof
+                            ? t('Shift into remote ops monitoring and audit follow-up')
+                            : t('Keep collecting remote delivery evidence in the version lane')
+                        }
+                        description={
+                          hasRemoteOpsProof
+                            ? t(
+                                'Credential issuance, public inference, and encrypted package delivery are all evidenced. Continue governance and operational follow-up from Model Versions.'
+                              )
+                            : t(
+                                'Keep this lane open until credential issuance, public inference, and package delivery evidence are all visible for this version.'
+                              )
+                        }
+                        actions={
+                          <div className="row gap wrap">
+                            <ButtonLink to={versionDeliveryPath} variant="secondary" size="sm">
+                              {t('Open remote ops summary')}
+                            </ButtonLink>
+                            {canReviewAudit ? (
+                              <ButtonLink to={adminAuditPath} variant="ghost" size="sm">
+                                {t('Open audit logs')}
+                              </ButtonLink>
+                            ) : null}
+                          </div>
+                        }
+                      />
                       {deviceLifecycleLoading ? (
                         <small className="muted">{t('Loading device lifecycle...')}</small>
                       ) : deviceLifecycleError ? (
@@ -1711,6 +2054,25 @@ export default function TrainingClosurePage() {
               <WorkspaceSectionHeader
                 title={t('Loop objects')}
                 description={t('Track exactly what has been produced in this loop.')}
+                actions={
+                  <div className="row gap wrap">
+                    {latestCompletedJob ? (
+                      <ButtonLink to={registerVersionPath} variant="ghost" size="sm">
+                        {t('Open version registration')}
+                      </ButtonLink>
+                    ) : null}
+                    {latestRun ? (
+                      <ButtonLink to={latestRunPath} variant="ghost" size="sm">
+                        {t('Open latest run')}
+                      </ButtonLink>
+                    ) : null}
+                    {latestFeedbackRun?.feedback_dataset_id ? (
+                      <ButtonLink to={latestFeedbackDatasetPath} variant="ghost" size="sm">
+                        {t('Open feedback dataset')}
+                      </ButtonLink>
+                    ) : null}
+                  </div>
+                }
               />
               <ul className="workspace-record-list compact">
                 <Panel as="li" className="workspace-record-item compact stack tight" tone="soft">
@@ -1742,17 +2104,17 @@ export default function TrainingClosurePage() {
 
             <Card as="section">
               <WorkspaceSectionHeader
-                title={t('Reality & gate status')}
+                title={t('Evidence & gate status')}
                 description={t('Keep evidence mode and registration gate visible for every handoff.')}
               />
               <ul className="workspace-record-list compact">
                 <Panel
                   as="li"
                   className="workspace-record-item compact stack tight"
-                  tone={strictRealRegistration ? 'accent' : 'soft'}
+                  tone={standardGateReady ? 'accent' : 'soft'}
                 >
                   <strong>{t('evidence mode')}</strong>
-                  <small className="muted">{latestRegisteredVersion?.registration_evidence_mode ?? '-'}</small>
+                  <small className="muted">{registrationEvidenceLabel}</small>
                 </Panel>
                 <Panel
                   as="li"
@@ -1766,9 +2128,9 @@ export default function TrainingClosurePage() {
                   <strong>{t('gate interpretation')}</strong>
                   <small className="muted">
                     {latestRegisteredVersion
-                      ? strictRealRegistration
-                        ? t('This version can be treated as strict real-evidence registration.')
-                        : t('This version is usable, but not yet a strict real-evidence registration.')
+                      ? standardGateReady
+                        ? t('This version meets the standard registration gate.')
+                        : t('This version is usable, but still requires gate review.')
                       : '-'}
                   </small>
                 </Panel>
@@ -1827,13 +2189,13 @@ export default function TrainingClosurePage() {
                 </Panel>
               </ul>
               <div className="row gap wrap">
-                <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
+                <ButtonLink to={runtimeSettingsPath} variant="ghost" size="sm">
                   {t('Open Runtime Settings')}
                 </ButtonLink>
-                <ButtonLink to="/settings/workers" variant="ghost" size="sm">
+                <ButtonLink to={workerSettingsPath} variant="ghost" size="sm">
                   {t('Worker Settings')}
                 </ButtonLink>
-                <ButtonLink to="/settings/runtime/templates" variant="ghost" size="sm">
+                <ButtonLink to={runtimeTemplatesPath} variant="ghost" size="sm">
                   {t('Runtime Templates')}
                 </ButtonLink>
               </div>

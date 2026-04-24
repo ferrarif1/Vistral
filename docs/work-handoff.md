@@ -13,7 +13,11 @@ Rules:
 ```markdown
 ## YYYY-MM-DD HH:mm (timezone)
 - context:
+- plan_md:
+  - ...
 - done:
+  - ...
+- code_changes:
   - ...
 - next:
   1. ...
@@ -21,6 +25,8 @@ Rules:
 - risks:
   - ...
 - verification:
+  - ...
+- doc_backfill:
   - ...
 ```
 
@@ -212,10 +218,62 @@ Rules:
   - `npm run lint`
   - `npm run build`
   - `npm run smoke:runner-real-fallback`
+
+## 2026-04-23 21:03 (Asia/Shanghai)
+- context: Continue the planning/docs completion round for `PLAN_llm.md`, `PLANS.md`, and related contracts; interrupted by a new request to clean invalid/expired Docker content because the local system is lagging.
+- plan_md:
+  - `PLAN_llm.md`
+  - `PLANS.md`
+- done:
+  - Re-opened the required repository guidance and contract entry points for the docs-first round.
+  - Confirmed the current workspace already contains ongoing uncommitted updates across product docs, backend, frontend, and smoke scripts.
+  - Identified that the next docs pass should focus on closing gaps between `PLAN_llm.md`, `PLANS.md`, `docs/flows.md`, `docs/api-contract.md`, and `docs/training-engineer-quickstart.md`.
+- code_changes:
+  - No new code/doc edits landed in this interrupted round before task switching.
+- next:
+  1. Audit `PLAN_llm.md` against `PLANS.md` and product contracts to find incomplete capability tracks and missing acceptance checks.
+  2. Update the planning docs so phases, ownership, verification commands, and rollout order are consistent and directly usable by an engineer.
+  3. Backfill `docs/work-handoff.md` again after the next interruption or once the docs round is completed.
+- risks:
+  - The worktree is already dirty in many files, so the next docs pass must avoid overwriting user or prior in-progress changes.
+  - There may already be partial contract updates in `docs/flows.md` and `docs/api-contract.md`; those need careful reconciliation before any new planning language is added.
+- verification:
+  - `git status --short`
+  - Manual cross-check of `PLAN_llm.md`, `PLANS.md`, `docs/flows.md`, `docs/api-contract.md`, and `docs/work-handoff.md`
+- doc_backfill:
+  - If the next round changes milestones or rollout order materially, sync `PLANS.md` together with the detailed local plan doc.
   - `npm run smoke:local-command`
   - `npm run smoke:execution-fields`
   - `npm run smoke:real-closure`
   - `npm run smoke:restart-resume`
+
+## 2026-04-23 21:17 (CST)
+- date_time: 2026-04-23 21:17 (CST)
+- context: Finish the docs-first continuation round for `PLAN_llm.md`, `PLANS.md`, and related contracts so the shipped `VisionTask` orchestration and engineer handoff path are discoverable without reading source files first.
+- plan_md:
+  - `PLAN_llm.md`
+  - `PLANS.md`
+- done:
+  - Updated `README.md` and `README.zh-CN.md` so continuing engineers are directed to `PLANS.md`, `PLAN_llm.md`, and `docs/work-handoff.md` before implementation.
+  - Reworked `PLANS.md` from the older phase-only view into current delivery tracks, maturity assessment, and next-step priorities.
+  - Synced the primary contracts (`docs/prd.md`, `docs/ia.md`, `docs/flows.md`, `docs/data-model.md`, `docs/api-contract.md`) with the already shipped `VisionTask` list/detail/API flow and chat `Suggested next steps` behavior.
+  - Expanded `docs/training-engineer-quickstart.md` so it covers both the assisted lane (`chat -> vision task -> auto advance`) and the direct console lane.
+  - Added P7 completion plus the next real backlog (P8-P10) into `PLAN_llm.md`.
+- code_changes:
+  - Docs-only round; no frontend/backend/runtime implementation changes landed in this pass.
+- next:
+  1. Add a dedicated `VisionTask` closure smoke or acceptance script covering `understand -> auto-continue/auto-advance -> register-model -> feedback-dataset`.
+  2. Run `plan-llm-complete` on a real remote/nightly runner, or document exact runner prerequisites/cache warmup steps if remote infra is still not ready.
+  3. Run a manual mobile/narrow-screen and cross-browser UX pass for `/workspace/chat`, the right Dock, `/vision/tasks`, `/vision/tasks/:taskId`, and `/training/jobs/:jobId`.
+- risks:
+  - The English primary contracts are now synced, but the Chinese mirror contract docs were not fully mirrored in this round (only `README.zh-CN.md` was updated).
+  - `VisionTask` is now documented as a primary capability, but it still lacks a dedicated smoke lane; neighboring chat/training checks may not catch every future regression.
+  - Remote/nightly `plan-llm-complete` remains unproven outside the local environment.
+- verification:
+  - `rg -n '/vision/tasks|VisionTask|Suggested next steps|training-engineer-quickstart|PLAN_llm|PLANS.md' README.md README.zh-CN.md PLANS.md PLAN_llm.md docs/prd.md docs/ia.md docs/flows.md docs/data-model.md docs/api-contract.md docs/training-engineer-quickstart.md`
+  - `git diff --check -- README.md README.zh-CN.md PLANS.md PLAN_llm.md docs/prd.md docs/ia.md docs/flows.md docs/data-model.md docs/api-contract.md docs/training-engineer-quickstart.md`
+- doc_backfill:
+  - Future UI/API changes touching `VisionTask` or chat next-step behavior should update the primary contracts first, not only `PLAN_llm.md`.
 
 ## 2026-04-03 22:10 (Asia/Shanghai)
 - context: Continue realification hardening after execution-field/metric-series rollout.

@@ -4,6 +4,7 @@ export type UserAccountStatus = 'active' | 'disabled';
 
 export type TaskType = 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
 export type ModelFramework = 'paddleocr' | 'doctr' | 'yolo';
+export type VisionTaskType = 'ocr' | 'detection' | 'classification' | 'segmentation' | 'unknown';
 
 export type ModelVisibility = 'private' | 'workspace' | 'public';
 export type ModelStatus =
@@ -161,9 +162,94 @@ export interface ConversationActionMetadata {
   suggestions?: string[];
   requires_confirmation?: boolean;
   confirmation_phrase?: string | null;
-  created_entity_type?: 'Dataset' | 'TrainingJob' | 'Model' | null;
+  created_entity_type?: 'Dataset' | 'TrainingJob' | 'Model' | 'VisionTask' | null;
   created_entity_id?: string | null;
   created_entity_label?: string | null;
+}
+
+export interface VisionTaskSpec {
+  task_type: VisionTaskType;
+  target_description: string;
+  expected_output: 'text' | 'bbox' | 'class' | 'mask';
+  annotation_type: 'transcription' | 'bbox' | 'class_label' | 'polygon' | 'mask';
+  recommended_metrics: string[];
+  deployment_hint: 'edge' | 'server' | 'both';
+  constraints: {
+    latency_ms: number | null;
+    model_size_mb: number | null;
+    input_resolution: string | null;
+  };
+  missing_requirements: string[];
+  confidence: number;
+}
+
+export interface DatasetProfile {
+  dataset_id: string;
+  detected_task_type: VisionTaskType;
+  sample_count: number;
+  splits: {
+    train: number;
+    val: number;
+    test: number;
+  };
+  annotation_format: string;
+  label_coverage: number;
+  class_names: string[];
+  charset: string[];
+  issues: string[];
+  is_trainable: boolean;
+}
+
+export interface TrainingPlan {
+  recipe_id: string;
+  task_type: VisionTaskType;
+  base_model: string;
+  dataset_id: string;
+  train_args: Record<string, string>;
+  eval_args: Record<string, string>;
+  export_args: Record<string, string>;
+  human_review_required: boolean;
+}
+
+export interface ValidationReport {
+  summary: {
+    primary_metric: string;
+    primary_value: number;
+    pass_status: 'pass' | 'fail' | 'needs_review';
+  };
+  metrics: Record<string, number | string>;
+  badcases: Array<Record<string, string>>;
+  recommendations: string[];
+}
+
+export type VisionModelingTaskStatus =
+  | 'draft'
+  | 'requires_input'
+  | 'plan_ready'
+  | 'training_started'
+  | 'training_completed'
+  | 'failed';
+
+export interface VisionModelingTaskRecord {
+  id: string;
+  conversation_id: string | null;
+  status: VisionModelingTaskStatus;
+  source_prompt: string;
+  sample_attachment_ids: string[];
+  dataset_id: string | null;
+  dataset_version_id: string | null;
+  spec: VisionTaskSpec;
+  dataset_profile: DatasetProfile | null;
+  training_plan: TrainingPlan | null;
+  validation_report: ValidationReport | null;
+  missing_requirements: string[];
+  training_job_id: string | null;
+  model_id: string | null;
+  model_version_id: string | null;
+  metadata: Record<string, string>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface MessageMetadata {
@@ -444,6 +530,8 @@ export interface ModelVersionRecord {
   status: ModelVersionStatus;
   metrics_summary: Record<string, string>;
   artifact_attachment_id: string | null;
+  registration_evidence_level?: 'standard' | 'calibrated' | 'compatibility' | 'pending';
+  registration_gate_status?: 'standard' | 'override' | 'pending';
   registration_evidence_mode?: 'real' | 'real_probe' | 'non_real_local_command';
   registration_gate_exempted?: boolean;
   registration_gate_exemption_reason?: string | null;
@@ -746,7 +834,8 @@ export interface RegisterModelVersionInput {
   model_id: string;
   training_job_id: string;
   version_name: string;
-  allow_ocr_real_probe_registration?: boolean;
+  allow_ocr_calibrated_registration?: boolean;
+  require_pure_real_evidence?: boolean;
 }
 
 export interface RunInferenceInput {

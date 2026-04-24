@@ -7,8 +7,9 @@ START_API="${START_API:-true}"
 AUTH_USERNAME="${AUTH_USERNAME:-}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-}"
 REAL_CLOSURE_STRICT_REGISTRATION="${REAL_CLOSURE_STRICT_REGISTRATION:-true}"
-REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION="${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION:-false}"
+REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION="${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION:-false}"
 REAL_CLOSURE_REQUIRE_REAL_MODE="${REAL_CLOSURE_REQUIRE_REAL_MODE:-false}"
+REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION="${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION:-false}"
 REAL_CLOSURE_GENERATE_TEXT_SAMPLE="${REAL_CLOSURE_GENERATE_TEXT_SAMPLE:-true}"
 REAL_CLOSURE_YOLO_EPOCHS="${REAL_CLOSURE_YOLO_EPOCHS:-}"
 DEMO_DIR="${DEMO_DIR:-${ROOT_DIR}/demo_data}"
@@ -120,7 +121,7 @@ is_registration_gate_rejection() {
   local response="$1"
   local error_message=""
   error_message="$(echo "${response}" | jq -r '.error.message // empty')"
-  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
+  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"restricted local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
 }
 
 pick_registered_model_version_id() {
@@ -148,8 +149,11 @@ normalize_bool_flag() {
   esac
 }
 
-REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION="$(
-  normalize_bool_flag "${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION}"
+REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION="$(
+  normalize_bool_flag "${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION}"
+)"
+REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION="$(
+  normalize_bool_flag "${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}"
 )"
 
 if [[ "${START_API}" == "true" ]]; then
@@ -563,9 +567,11 @@ register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/model-versions/register" \
-  -d "{\"model_id\":\"${model_id}\",\"training_job_id\":\"${job_id}\",\"version_name\":\"real-yolo-v1\"}")"
+  -d "{\"model_id\":\"${model_id}\",\"training_job_id\":\"${job_id}\",\"version_name\":\"real-yolo-v1\",\"require_pure_real_evidence\":${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}}")"
 model_version_id="$(echo "${register_resp}" | jq -r '.data.id // empty')"
 version_artifact_id="$(echo "${register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+yolo_registration_evidence_mode="$(echo "${register_resp}" | jq -r '.data.registration_evidence_mode // empty')"
+yolo_registration_gate_exempted="$(echo "${register_resp}" | jq -r 'if .data.registration_gate_exempted == true then "true" elif .data.registration_gate_exempted == false then "false" else "" end')"
 yolo_register_mode="created"
 if [[ -z "${model_version_id}" || -z "${version_artifact_id}" ]]; then
   if [[ "${REAL_CLOSURE_STRICT_REGISTRATION}" == "true" || "$(is_registration_gate_rejection "${register_resp}" && echo true || echo false)" != "true" ]]; then
@@ -586,6 +592,18 @@ if [[ -z "${model_version_id}" || -z "${version_artifact_id}" ]]; then
   model_version_id="${fallback_detection_version_id}"
   version_artifact_id="fallback-existing-version"
   yolo_register_mode="blocked_gate_reused_existing"
+fi
+if [[ "${yolo_register_mode}" == "created" && "${REAL_CLOSURE_STRICT_REGISTRATION}" == "true" ]]; then
+  if [[ "${yolo_registration_gate_exempted}" == "true" || "${yolo_registration_evidence_mode}" == "non_real_local_command" ]]; then
+    echo "[smoke-real-closure] yolo registration should stay strict (no exemption / non-real evidence)."
+    echo "${register_resp}"
+    exit 1
+  fi
+  if [[ "${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" == "true" && "${yolo_registration_evidence_mode}" != "real" ]]; then
+    echo "[smoke-real-closure] yolo registration expected pure real evidence mode."
+    echo "${register_resp}"
+    exit 1
+  fi
 fi
 
 # Add a fresh unannotated sample so pre-annotation assertion is deterministic
@@ -986,9 +1004,11 @@ doctr_register_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: ${csrf_token}" \
   -X POST "${BASE_URL}/api/model-versions/register" \
-  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"real-doctr-v1\",\"allow_ocr_real_probe_registration\":${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION}}")"
+  -d "{\"model_id\":\"${doctr_model_id}\",\"training_job_id\":\"${doctr_job_id}\",\"version_name\":\"real-doctr-v1\",\"allow_ocr_calibrated_registration\":${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION},\"require_pure_real_evidence\":${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}}")"
 doctr_model_version_id="$(echo "${doctr_register_resp}" | jq -r '.data.id // empty')"
 doctr_artifact_id="$(echo "${doctr_register_resp}" | jq -r '.data.artifact_attachment_id // empty')"
+doctr_registration_evidence_mode="$(echo "${doctr_register_resp}" | jq -r '.data.registration_evidence_mode // empty')"
+doctr_registration_gate_exempted="$(echo "${doctr_register_resp}" | jq -r 'if .data.registration_gate_exempted == true then "true" elif .data.registration_gate_exempted == false then "false" else "" end')"
 doctr_register_mode="created"
 if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_id}" ]]; then
   if [[ "${REAL_CLOSURE_STRICT_REGISTRATION}" == "true" || "$(is_registration_gate_rejection "${doctr_register_resp}" && echo true || echo false)" != "true" ]]; then
@@ -1013,10 +1033,22 @@ if [[ -z "${doctr_model_version_id}" || -z "${doctr_artifact_id}" ]]; then
   fi
   doctr_artifact_id="fallback-existing-version"
 fi
-if [[ "${REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION}" == "true" && "${doctr_register_mode}" != "created" ]]; then
+if [[ "${REAL_CLOSURE_ALLOW_OCR_CALIBRATED_REGISTRATION}" == "true" && "${doctr_register_mode}" != "created" ]]; then
   echo "[smoke-real-closure] OCR bypass path expected a newly registered doctr model version, but registration was not created."
   echo "${doctr_register_resp}"
   exit 1
+fi
+if [[ "${doctr_register_mode}" == "created" && "${REAL_CLOSURE_STRICT_REGISTRATION}" == "true" ]]; then
+  if [[ "${doctr_registration_gate_exempted}" == "true" || "${doctr_registration_evidence_mode}" == "non_real_local_command" ]]; then
+    echo "[smoke-real-closure] doctr registration should stay strict (no exemption / non-real evidence)."
+    echo "${doctr_register_resp}"
+    exit 1
+  fi
+  if [[ "${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}" == "true" && "${doctr_registration_evidence_mode}" != "real" ]]; then
+    echo "[smoke-real-closure] doctr registration expected pure real evidence mode."
+    echo "${doctr_register_resp}"
+    exit 1
+  fi
 fi
 
 doctr_infer_resp="$(curl -sS -c "${COOKIE_FILE}" -b "${COOKIE_FILE}" \
@@ -1086,6 +1118,10 @@ echo "ocr_run_id=${ocr_run_id}"
 echo "doctr_run_id=${doctr_run_id}"
 echo "yolo_register_mode=${yolo_register_mode}"
 echo "doctr_register_mode=${doctr_register_mode}"
+echo "yolo_registration_evidence_mode=${yolo_registration_evidence_mode}"
+echo "yolo_registration_gate_exempted=${yolo_registration_gate_exempted}"
+echo "doctr_registration_evidence_mode=${doctr_registration_evidence_mode}"
+echo "doctr_registration_gate_exempted=${doctr_registration_gate_exempted}"
 echo "yolo_source=${yolo_source}"
 echo "ocr_source=${ocr_source}"
 echo "doctr_source=${doctr_source}"
@@ -1093,4 +1129,5 @@ echo "new_ocr_model_id=${doctr_model_id}"
 echo "new_ocr_model_version_id=${doctr_model_version_id}"
 echo "new_ocr_training_job_id=${doctr_job_id}"
 echo "new_ocr_inference_run_id=${doctr_run_id}"
+echo "real_closure_require_pure_real_registration=${REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION}"
 echo "new_ocr_feedback_dataset_id=${doctr_feedback_dataset_id}"

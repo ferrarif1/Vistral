@@ -12,7 +12,7 @@ const writeDismissedState = (storageKey: string, dismissed: boolean): void => {
   try {
     localStorage.setItem(storageKey, dismissed ? 'true' : 'false');
   } catch {
-    // Ignore storage failures in prototype mode.
+    // Ignore storage failures in local client mode.
   }
 };
 

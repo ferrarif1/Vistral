@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import StateBlock from '../components/StateBlock';
 import Button from '../components/ui/Button';
+import { ButtonLink } from '../components/ui/Button';
 import { Input } from '../components/ui/Field';
 import { Card, Panel } from '../components/ui/Surface';
 import { PageHeader } from '../components/ui/ConsolePage';
@@ -13,10 +15,31 @@ import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { emitAuthUpdated } from '../services/authSession';
 
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  if (trimmed.startsWith('/auth/login') || trimmed.startsWith('/auth/register')) {
+    return null;
+  }
+  return trimmed;
+};
+
 export default function AuthLoginPage() {
   const { t, roleLabel } = useI18n();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedReturnTo = useMemo(
+    () => sanitizeReturnToPath(searchParams.get('return_to')),
+    [searchParams]
+  );
+  const postLoginPath = requestedReturnTo ?? '/workspace/chat';
   const [username, setUsername] = useState('alice');
-  const [password, setPassword] = useState('mock-pass');
+  const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [variant, setVariant] = useState<'success' | 'error'>('success');
 
@@ -27,6 +50,7 @@ export default function AuthLoginPage() {
       emitAuthUpdated();
       setVariant('success');
       setMessage(t('Logged in as {username} ({role}).', { username: user.username, role: roleLabel(user.role) }));
+      navigate(postLoginPath, { replace: true });
     } catch (error) {
       setVariant('error');
       setMessage((error as Error).message);
@@ -49,6 +73,13 @@ export default function AuthLoginPage() {
           label: t('Login'),
           onClick: submit
         }}
+        secondaryActions={
+          requestedReturnTo ? (
+            <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+              {t('Return to current task')}
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       <WorkspaceSplit

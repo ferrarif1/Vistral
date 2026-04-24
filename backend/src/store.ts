@@ -36,6 +36,7 @@ import type {
   TrainingWorkerNodeRecord,
   TrainingMetricRecord,
   TrainingExecutionMode,
+  VisionModelingTaskRecord,
   User
 } from '../../shared/domain';
 
@@ -80,6 +81,7 @@ interface AppStatePayload {
   inferenceRuns: InferenceRunRecord[];
   runtimePublicInferenceInvocations: RuntimePublicInferenceInvocationRecord[];
   runtimePublicModelPackageDeliveries: RuntimePublicModelPackageDeliveryRecord[];
+  visionModelingTasks: VisionModelingTaskRecord[];
   approvalRequests: ApprovalRequest[];
   auditLogs: AuditLogRecord[];
 }
@@ -611,6 +613,7 @@ export const modelVersions: ModelVersionRecord[] = [
 export const inferenceRuns: InferenceRunRecord[] = [];
 export const runtimePublicInferenceInvocations: RuntimePublicInferenceInvocationRecord[] = [];
 export const runtimePublicModelPackageDeliveries: RuntimePublicModelPackageDeliveryRecord[] = [];
+export const visionModelingTasks: VisionModelingTaskRecord[] = [];
 
 export const approvalRequests: ApprovalRequest[] = [];
 export const auditLogs: AuditLogRecord[] = [];
@@ -724,6 +727,7 @@ const applyMinimalBootstrapState = (): void => {
   replaceArray(inferenceRuns, []);
   replaceArray(runtimePublicInferenceInvocations, []);
   replaceArray(runtimePublicModelPackageDeliveries, []);
+  replaceArray(visionModelingTasks, []);
   replaceArray(approvalRequests, []);
   replaceArray(auditLogs, []);
 };
@@ -1182,6 +1186,66 @@ const normalizeAnnotationReview = (entry: AnnotationReviewRecord): AnnotationRev
       : null
 });
 
+const normalizeVisionModelingTaskStatus = (
+  value: unknown
+): VisionModelingTaskRecord['status'] => {
+  if (
+    value === 'draft' ||
+    value === 'requires_input' ||
+    value === 'plan_ready' ||
+    value === 'training_started' ||
+    value === 'training_completed' ||
+    value === 'failed'
+  ) {
+    return value;
+  }
+  return 'draft';
+};
+
+const normalizeVisionModelingTask = (entry: VisionModelingTaskRecord): VisionModelingTaskRecord => ({
+  ...entry,
+  status: normalizeVisionModelingTaskStatus(entry.status),
+  conversation_id:
+    typeof entry.conversation_id === 'string' && entry.conversation_id.trim()
+      ? entry.conversation_id
+      : null,
+  dataset_id: typeof entry.dataset_id === 'string' && entry.dataset_id.trim() ? entry.dataset_id : null,
+  dataset_version_id:
+    typeof entry.dataset_version_id === 'string' && entry.dataset_version_id.trim()
+      ? entry.dataset_version_id
+      : null,
+  sample_attachment_ids: Array.isArray(entry.sample_attachment_ids)
+    ? entry.sample_attachment_ids.filter((item) => typeof item === 'string' && item.trim().length > 0)
+    : [],
+  missing_requirements: Array.isArray(entry.missing_requirements)
+    ? entry.missing_requirements
+        .filter((item) => typeof item === 'string' && item.trim().length > 0)
+        .slice(0, 200)
+    : [],
+  training_job_id:
+    typeof entry.training_job_id === 'string' && entry.training_job_id.trim()
+      ? entry.training_job_id
+      : null,
+  model_id: typeof entry.model_id === 'string' && entry.model_id.trim() ? entry.model_id : null,
+  model_version_id:
+    typeof entry.model_version_id === 'string' && entry.model_version_id.trim()
+      ? entry.model_version_id
+      : null,
+  metadata:
+    entry.metadata && typeof entry.metadata === 'object' && !Array.isArray(entry.metadata)
+      ? Object.fromEntries(
+          Object.entries(entry.metadata)
+            .filter(
+              ([key, value]) =>
+                typeof key === 'string' &&
+                key.trim().length > 0 &&
+                typeof value === 'string'
+            )
+            .map(([key, value]) => [key.trim(), value.trim()])
+        )
+      : {}
+});
+
 const promoteDatasetsWithReadyItems = (
   sourceDatasets: DatasetRecord[],
   sourceDatasetItems: DatasetItemRecord[]
@@ -1252,6 +1316,9 @@ const sanitizeAppStatePayload = (
     : [];
   const sourceRuntimePublicModelPackageDeliveries = Array.isArray(payload.runtimePublicModelPackageDeliveries)
     ? payload.runtimePublicModelPackageDeliveries
+    : [];
+  const sourceVisionModelingTasks = Array.isArray(payload.visionModelingTasks)
+    ? payload.visionModelingTasks.map(normalizeVisionModelingTask)
     : [];
   const sourceAttachments = Array.isArray(payload.attachments) ? payload.attachments : [];
   const sourceDatasetItems = Array.isArray(payload.datasetItems) ? payload.datasetItems : [];
@@ -1353,6 +1420,22 @@ const sanitizeAppStatePayload = (
     return true;
   });
   const keptAttachmentIds = new Set(keptAttachments.map((attachment) => attachment.id));
+  const keptVisionModelingTasks = sourceVisionModelingTasks
+    .filter(
+      (task) =>
+        (!task.conversation_id || keptConversationIds.has(task.conversation_id)) &&
+        (!task.dataset_id || keptDatasetIds.has(task.dataset_id)) &&
+        (!task.dataset_version_id || keptDatasetVersionIds.has(task.dataset_version_id)) &&
+        (!task.training_job_id || keptTrainingJobIds.has(task.training_job_id)) &&
+        (!task.model_id || keptModelIds.has(task.model_id)) &&
+        (!task.model_version_id || keptModelVersionIds.has(task.model_version_id))
+    )
+    .map((task) => ({
+      ...task,
+      sample_attachment_ids: task.sample_attachment_ids.filter((attachmentId) =>
+        keptAttachmentIds.has(attachmentId)
+      )
+    }));
   const normalizedModelVersions = keptModelVersions.map((version) => ({
     ...version,
     artifact_attachment_id:
@@ -1400,6 +1483,7 @@ const sanitizeAppStatePayload = (
     ...keptModelVersionIds,
     ...keptConversationIds,
     ...keptInferenceRunIds,
+    ...keptVisionModelingTasks.map((task) => task.id),
     ...keptAttachmentIds,
     ...keptDatasetItemIds,
     ...keptAnnotationIds,
@@ -1425,6 +1509,7 @@ const sanitizeAppStatePayload = (
     inferenceRuns: keptInferenceRuns,
     runtimePublicInferenceInvocations: keptRuntimePublicInferenceInvocations,
     runtimePublicModelPackageDeliveries: keptRuntimePublicModelPackageDeliveries,
+    visionModelingTasks: keptVisionModelingTasks,
     attachments: keptAttachments,
     datasetItems: keptDatasetItems,
     annotations: keptAnnotations,
@@ -1467,6 +1552,7 @@ const sanitizeAppStatePayload = (
     keptInferenceRuns.length !== sourceInferenceRuns.length ||
     keptRuntimePublicInferenceInvocations.length !== sourceRuntimePublicInferenceInvocations.length ||
     keptRuntimePublicModelPackageDeliveries.length !== sourceRuntimePublicModelPackageDeliveries.length ||
+    keptVisionModelingTasks.length !== sourceVisionModelingTasks.length ||
     keptAttachments.length !== sourceAttachments.length ||
     keptDatasetItems.length !== sourceDatasetItems.length ||
     keptAnnotations.length !== sourceAnnotations.length ||
@@ -1511,6 +1597,7 @@ const buildAppStatePayload = (): AppStatePayload => ({
   inferenceRuns: inferenceRuns.map(normalizeInferenceRun),
   runtimePublicInferenceInvocations: [...runtimePublicInferenceInvocations],
   runtimePublicModelPackageDeliveries: [...runtimePublicModelPackageDeliveries],
+  visionModelingTasks: visionModelingTasks.map(normalizeVisionModelingTask),
   approvalRequests: [...approvalRequests],
   auditLogs: [...auditLogs]
 });
@@ -1604,6 +1691,9 @@ export const loadPersistedAppState = async (): Promise<void> => {
     }
     if (Array.isArray(state.runtimePublicModelPackageDeliveries)) {
       replaceArray(runtimePublicModelPackageDeliveries, state.runtimePublicModelPackageDeliveries);
+    }
+    if (Array.isArray(state.visionModelingTasks)) {
+      replaceArray(visionModelingTasks, state.visionModelingTasks.map(normalizeVisionModelingTask));
     }
     if (Array.isArray(state.approvalRequests)) {
       replaceArray(approvalRequests, state.approvalRequests);

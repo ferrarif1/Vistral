@@ -628,9 +628,168 @@ const parseTaskDraftBody = (raw: unknown): ParseResult<{ description: string }> 
   };
 };
 
+const parseVisionTaskUnderstandBody = (
+  raw: unknown
+): ParseResult<{
+  prompt: string;
+  attachment_ids: string[];
+  dataset_id?: string;
+  dataset_version_id?: string;
+}> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Vision task understanding payload must be a JSON object.'
+    };
+  }
+  const prompt = toNonEmptyString(raw.prompt);
+  if (!prompt) {
+    return {
+      ok: false,
+      message: 'prompt is required.'
+    };
+  }
+  const datasetId = toOptionalTrimmedString(raw.dataset_id);
+  const datasetVersionId = toOptionalTrimmedString(raw.dataset_version_id);
+  return {
+    ok: true,
+    value: {
+      prompt,
+      attachment_ids: normalizeAttachmentIdsInput(raw.attachment_ids),
+      ...(datasetId ? { dataset_id: datasetId } : {}),
+      ...(datasetVersionId ? { dataset_version_id: datasetVersionId } : {})
+    }
+  };
+};
+
+const parseVisionTaskFeedbackDatasetBody = (
+  raw: unknown
+): ParseResult<{ max_samples?: number }> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Vision feedback payload must be a JSON object.'
+    };
+  }
+  if (raw.max_samples !== undefined) {
+    if (typeof raw.max_samples !== 'number' || !Number.isFinite(raw.max_samples)) {
+      return {
+        ok: false,
+        message: 'max_samples must be a finite number when provided.'
+      };
+    }
+  }
+  return {
+    ok: true,
+    value:
+      typeof raw.max_samples === 'number'
+        ? {
+            max_samples: raw.max_samples
+          }
+        : {}
+  };
+};
+
+const parseVisionTaskAutoContinueBody = (
+  raw: unknown
+): ParseResult<{ max_rounds?: number; force?: boolean }> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Vision auto-continue payload must be a JSON object.'
+    };
+  }
+  if (raw.max_rounds !== undefined) {
+    if (typeof raw.max_rounds !== 'number' || !Number.isFinite(raw.max_rounds)) {
+      return {
+        ok: false,
+        message: 'max_rounds must be a finite number when provided.'
+      };
+    }
+  }
+  if (raw.force !== undefined && typeof raw.force !== 'boolean') {
+    return {
+      ok: false,
+      message: 'force must be boolean when provided.'
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      ...(typeof raw.max_rounds === 'number' ? { max_rounds: raw.max_rounds } : {}),
+      ...(typeof raw.force === 'boolean' ? { force: raw.force } : {})
+    }
+  };
+};
+
+const parseVisionTaskRegisterModelBody = (
+  raw: unknown
+): ParseResult<{
+  version_name?: string;
+  model_id?: string;
+  allow_ocr_calibrated_registration?: boolean;
+  require_pure_real_evidence?: boolean;
+}> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Vision register-model payload must be a JSON object.'
+    };
+  }
+  if (raw.version_name !== undefined && typeof raw.version_name !== 'string') {
+    return {
+      ok: false,
+      message: 'version_name must be string when provided.'
+    };
+  }
+  if (raw.model_id !== undefined && typeof raw.model_id !== 'string') {
+    return {
+      ok: false,
+      message: 'model_id must be string when provided.'
+    };
+  }
+  if (
+    raw.allow_ocr_calibrated_registration !== undefined &&
+    typeof raw.allow_ocr_calibrated_registration !== 'boolean'
+  ) {
+    return {
+      ok: false,
+      message: 'allow_ocr_calibrated_registration must be boolean when provided.'
+    };
+  }
+  if (
+    raw.require_pure_real_evidence !== undefined &&
+    typeof raw.require_pure_real_evidence !== 'boolean'
+  ) {
+    return {
+      ok: false,
+      message: 'require_pure_real_evidence must be boolean when provided.'
+    };
+  }
+  const versionName = toOptionalTrimmedString(raw.version_name);
+  const modelId = toOptionalTrimmedString(raw.model_id);
+  return {
+    ok: true,
+    value: {
+      ...(versionName ? { version_name: versionName } : {}),
+      ...(modelId ? { model_id: modelId } : {}),
+      ...(typeof raw.allow_ocr_calibrated_registration === 'boolean'
+        ? { allow_ocr_calibrated_registration: raw.allow_ocr_calibrated_registration }
+        : {}),
+      ...(typeof raw.require_pure_real_evidence === 'boolean'
+        ? { require_pure_real_evidence: raw.require_pure_real_evidence }
+        : {})
+    }
+  };
+};
+
 const parseRegisterModelVersionBody = (
   raw: unknown
-): ParseResult<RegisterModelVersionInput> => {
+): ParseResult<
+  RegisterModelVersionInput & {
+    legacy_allow_ocr_real_probe_registration_used?: boolean;
+  }
+> => {
   if (!isPlainObject(raw)) {
     return {
       ok: false,
@@ -659,6 +818,15 @@ const parseRegisterModelVersionBody = (
     };
   }
   if (
+    raw.allow_ocr_calibrated_registration !== undefined &&
+    typeof raw.allow_ocr_calibrated_registration !== 'boolean'
+  ) {
+    return {
+      ok: false,
+      message: 'allow_ocr_calibrated_registration must be boolean when provided.'
+    };
+  }
+  if (
     raw.allow_ocr_real_probe_registration !== undefined &&
     typeof raw.allow_ocr_real_probe_registration !== 'boolean'
   ) {
@@ -667,15 +835,54 @@ const parseRegisterModelVersionBody = (
       message: 'allow_ocr_real_probe_registration must be boolean when provided.'
     };
   }
+  if (
+    typeof raw.allow_ocr_calibrated_registration === 'boolean' &&
+    typeof raw.allow_ocr_real_probe_registration === 'boolean' &&
+    raw.allow_ocr_calibrated_registration !== raw.allow_ocr_real_probe_registration
+  ) {
+    return {
+      ok: false,
+      message:
+        'allow_ocr_calibrated_registration and allow_ocr_real_probe_registration must match when both are provided.'
+    };
+  }
+  if (
+    raw.require_pure_real_evidence !== undefined &&
+    typeof raw.require_pure_real_evidence !== 'boolean'
+  ) {
+    return {
+      ok: false,
+      message: 'require_pure_real_evidence must be boolean when provided.'
+    };
+  }
+  const allowOcrCalibratedRegistration =
+    typeof raw.allow_ocr_calibrated_registration === 'boolean'
+      ? raw.allow_ocr_calibrated_registration
+      : typeof raw.allow_ocr_real_probe_registration === 'boolean'
+        ? raw.allow_ocr_real_probe_registration
+        : undefined;
+  const legacyAllowOcrRealProbeRegistrationUsed =
+    typeof raw.allow_ocr_real_probe_registration === 'boolean';
   return {
     ok: true,
     value: {
       model_id: modelId,
       training_job_id: trainingJobId,
       version_name: versionName,
-      ...(typeof raw.allow_ocr_real_probe_registration === 'boolean'
+      ...(typeof allowOcrCalibratedRegistration === 'boolean'
         ? {
-            allow_ocr_real_probe_registration: raw.allow_ocr_real_probe_registration
+            // Normalize legacy request field into the calibrated flag.
+            allow_ocr_calibrated_registration: allowOcrCalibratedRegistration
+          }
+        : {}),
+      ...(typeof raw.require_pure_real_evidence === 'boolean'
+        ? {
+            require_pure_real_evidence: raw.require_pure_real_evidence
+          }
+        : {}),
+      ...(legacyAllowOcrRealProbeRegistrationUsed
+        ? {
+            legacy_allow_ocr_real_probe_registration_used: true
           }
         : {})
     }
@@ -3005,19 +3212,26 @@ const server = createServer(async (req, res) => {
     if (datasetItemDetailMatch) {
       const datasetId = decodeURIComponent(datasetItemDetailMatch[1]);
       const itemId = decodeURIComponent(datasetItemDetailMatch[2]);
-      if (req.method !== 'PATCH') {
-        return methodNotAllowed(res);
+      if (req.method === 'PATCH') {
+        const parsed = parseDatasetItemMutationBody(await readBody(req), {
+          requireAttachmentOrFilename: false
+        });
+        if (!parsed.ok) {
+          return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+        }
+        return withUserMutation(req, res, () =>
+          handlers.updateDatasetItem(datasetId, itemId, parsed.value)
+        );
       }
 
-      const parsed = parseDatasetItemMutationBody(await readBody(req), {
-        requireAttachmentOrFilename: false
-      });
-      if (!parsed.ok) {
-        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      if (req.method === 'DELETE') {
+        return withUserMutation(req, res, async () => {
+          await handlers.removeDatasetItem(datasetId, itemId);
+          return { deleted: true };
+        });
       }
-      return withUserMutation(req, res, () =>
-        handlers.updateDatasetItem(datasetId, itemId, parsed.value)
-      );
+
+      return methodNotAllowed(res);
     }
 
     const datasetSplitMatch = path.match(/^\/api\/datasets\/([^/]+)\/split$/);
@@ -3230,6 +3444,13 @@ const server = createServer(async (req, res) => {
       return withUser(req, res, () => handlers.listConversations());
     }
 
+    if (path === '/api/conversations/clear') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      return withUserMutation(req, res, () => handlers.clearConversations());
+    }
+
     const modelFilesMatch = path.match(/^\/api\/files\/model\/([^/]+)$/);
     if (modelFilesMatch) {
       const modelId = decodeURIComponent(modelFilesMatch[1]);
@@ -3371,6 +3592,102 @@ const server = createServer(async (req, res) => {
       }
 
       return withUserMutation(req, res, () => handlers.draftTaskFromRequirement(parsed.value));
+    }
+
+    if (path === '/api/vision/tasks/understand') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const parsed = parseVisionTaskUnderstandBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () => handlers.understandVisionTask(parsed.value));
+    }
+
+    if (path === '/api/vision/tasks' && req.method === 'GET') {
+      return withUser(req, res, () => handlers.listVisionModelingTasks());
+    }
+
+    const visionTaskFeedbackMatch = path.match(/^\/api\/vision\/tasks\/([^/]+)\/feedback-dataset$/);
+    if (visionTaskFeedbackMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const taskId = decodeURIComponent(visionTaskFeedbackMatch[1]);
+      const parsed = parseVisionTaskFeedbackDatasetBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () =>
+        handlers.generateVisionTaskFeedbackDataset({
+          task_id: taskId,
+          ...parsed.value
+        })
+      );
+    }
+
+    const visionTaskAutoContinueMatch = path.match(/^\/api\/vision\/tasks\/([^/]+)\/auto-continue$/);
+    if (visionTaskAutoContinueMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const taskId = decodeURIComponent(visionTaskAutoContinueMatch[1]);
+      const parsed = parseVisionTaskAutoContinueBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () =>
+        handlers.autoContinueVisionTask({
+          task_id: taskId,
+          ...parsed.value
+        })
+      );
+    }
+
+    const visionTaskAutoAdvanceMatch = path.match(/^\/api\/vision\/tasks\/([^/]+)\/auto-advance$/);
+    if (visionTaskAutoAdvanceMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const taskId = decodeURIComponent(visionTaskAutoAdvanceMatch[1]);
+      const parsed = parseVisionTaskAutoContinueBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () =>
+        handlers.autoAdvanceVisionTask({
+          task_id: taskId,
+          ...parsed.value
+        })
+      );
+    }
+
+    const visionTaskRegisterModelMatch = path.match(/^\/api\/vision\/tasks\/([^/]+)\/register-model$/);
+    if (visionTaskRegisterModelMatch) {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const taskId = decodeURIComponent(visionTaskRegisterModelMatch[1]);
+      const parsed = parseVisionTaskRegisterModelBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () =>
+        handlers.registerVisionTaskModelVersion({
+          task_id: taskId,
+          ...parsed.value
+        })
+      );
+    }
+
+    const visionTaskDetailMatch = path.match(/^\/api\/vision\/tasks\/([^/]+)$/);
+    if (visionTaskDetailMatch) {
+      if (req.method !== 'GET') {
+        return methodNotAllowed(res);
+      }
+      const taskId = decodeURIComponent(visionTaskDetailMatch[1]);
+      return withUser(req, res, () => handlers.getVisionModelingTask(taskId));
     }
 
     const conversationDetailMatch = path.match(/^\/api\/conversations\/([^/]+)$/);

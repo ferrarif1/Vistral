@@ -115,7 +115,7 @@ is_registration_gate_rejection() {
   local response="$1"
   local error_message=""
   error_message="$(echo "${response}" | jq -r '.error.message // empty')"
-  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
+  [[ "${error_message}" == *"non-real local execution evidence"* || "${error_message}" == *"restricted local execution evidence"* || "${error_message}" == *"execution_mode=local_command"* ]]
 }
 
 is_fallback_like_source() {

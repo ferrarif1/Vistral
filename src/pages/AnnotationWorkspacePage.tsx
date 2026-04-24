@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import type {
   AnnotationReviewReasonCode,
   AnnotationWithReview,
@@ -27,6 +27,7 @@ import { Card, Panel } from '../components/ui/Surface';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import {
   annotationStatusSortWeight,
+  filterItemsByAnnotationQueue,
   getAnnotationByItemId,
   getItemAnnotationStatus,
   matchesAnnotationQueue,
@@ -226,40 +227,198 @@ const normalizeBinaryParam = (value: string | null, fallback: boolean): boolean 
   return value === '1' || value === 'true';
 };
 
-const buildDatasetDetailPath = (datasetId: string): string => `/datasets/${datasetId}`;
+const extractMetadataFilterValue = (filter: string, key: string): string => {
+  const normalizedFilter = filter.trim();
+  const normalizedKey = `${key.trim()}=`;
+  if (!normalizedFilter.startsWith(normalizedKey)) {
+    return '';
+  }
+  return normalizedFilter.slice(normalizedKey.length).trim();
+};
 
-const buildTrainingJobCreatePath = (datasetId: string, versionId: string): string => {
+type LaunchContext = {
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: LaunchContext
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const resolvePreferredFrameworkForTask = (
+  taskType: DatasetRecord['task_type'] | string | null | undefined,
+  preferredFramework?: string | null
+): string | null => {
+  const normalizedPreferred = preferredFramework?.trim().toLowerCase() ?? '';
+  if (normalizedPreferred === 'paddleocr' || normalizedPreferred === 'doctr' || normalizedPreferred === 'yolo') {
+    return normalizedPreferred;
+  }
+  if (taskType === 'ocr') {
+    return 'paddleocr';
+  }
+  if (taskType === 'detection' || taskType === 'classification' || taskType === 'segmentation' || taskType === 'obb') {
+    return 'yolo';
+  }
+  return null;
+};
+
+const buildDatasetDetailPath = (
+  datasetId: string,
+  options?: {
+    versionId?: string | null;
+    focus?: string | null;
+    launchContext?: LaunchContext;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (options?.versionId?.trim()) {
+    searchParams.set('version', options.versionId.trim());
+  }
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  const query = searchParams.toString();
+  return query ? `/datasets/${datasetId}?${query}` : `/datasets/${datasetId}`;
+};
+
+const buildTrainingJobCreatePath = (
+  datasetId: string,
+  versionId: string,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   searchParams.set('version', versionId);
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/training/jobs/new?${searchParams.toString()}`;
 };
 
-const buildTrainingJobsPath = (datasetId: string, versionId?: string): string => {
+const buildTrainingJobsPath = (
+  datasetId: string,
+  versionId?: string,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId?.trim()) {
     searchParams.set('version', versionId.trim());
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/training/jobs?${searchParams.toString()}`;
 };
 
-const buildInferenceValidationPath = (datasetId: string, versionId?: string): string => {
+const buildInferenceValidationPath = (
+  datasetId: string,
+  versionId?: string,
+  options?: {
+    modelVersionId?: string;
+    runId?: string;
+    focus?: string;
+    launchContext?: LaunchContext;
+  }
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId?.trim()) {
     searchParams.set('version', versionId.trim());
   }
+  if (options?.modelVersionId?.trim()) {
+    searchParams.set('modelVersion', options.modelVersionId.trim());
+  }
+  if (options?.runId?.trim()) {
+    searchParams.set('run', options.runId.trim());
+  }
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
   return `/inference/validate?${searchParams.toString()}`;
 };
 
-const buildClosureWizardPath = (datasetId: string, versionId?: string): string => {
+const buildClosureWizardPath = (
+  datasetId: string,
+  versionId?: string,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId?.trim()) {
     searchParams.set('version', versionId.trim());
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/workflow/closure?${searchParams.toString()}`;
+};
+
+const buildDatasetsPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/datasets?${query}` : '/datasets';
+};
+
+const buildModelVersionsPath = (
+  launchContext?: LaunchContext,
+  options?: {
+    selectedVersionId?: string | null;
+    focus?: string | null;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (options?.selectedVersionId?.trim()) {
+    searchParams.set('selectedVersion', options.selectedVersionId.trim());
+  }
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/models/versions?${query}` : '/models/versions';
 };
 
 const buildAnnotationWorkspaceSignature = (payload: {
@@ -415,9 +574,35 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
 
 export default function AnnotationWorkspacePage() {
   const { t } = useI18n();
+  const location = useLocation();
   const { datasetId } = useParams<{ datasetId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const scopedDatasetVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredTaskTypeRaw = (searchParams.get('task_type') ?? '').trim().toLowerCase();
+  const preferredTaskType =
+    preferredTaskTypeRaw === 'ocr' ||
+    preferredTaskTypeRaw === 'detection' ||
+    preferredTaskTypeRaw === 'classification' ||
+    preferredTaskTypeRaw === 'segmentation' ||
+    preferredTaskTypeRaw === 'obb'
+      ? preferredTaskTypeRaw
+      : null;
+  const preferredFrameworkRaw = (searchParams.get('framework') ?? searchParams.get('profile') ?? '')
+    .trim()
+    .toLowerCase();
+  const preferredFramework =
+    preferredFrameworkRaw === 'paddleocr' || preferredFrameworkRaw === 'doctr' || preferredFrameworkRaw === 'yolo'
+      ? preferredFrameworkRaw
+      : null;
+  const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim();
+  const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
+  const preferredModelVersionId = (searchParams.get('modelVersion') ?? searchParams.get('model_version') ?? '').trim();
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
@@ -612,7 +797,10 @@ export default function AnnotationWorkspacePage() {
         setAnnotations(annotationList);
         setModelVersions(matchedVersions);
         setSelectedModelVersionId((prev) =>
-          prev && matchedVersions.some((version) => version.id === prev) ? prev : matchedVersions[0]?.id || ''
+          (preferredModelVersionId && matchedVersions.some((version) => version.id === preferredModelVersionId)
+            ? preferredModelVersionId
+            : '') ||
+          (prev && matchedVersions.some((version) => version.id === prev) ? prev : matchedVersions[0]?.id || '')
         );
         setSelectedItemId((prev) =>
           prev && detail.items.some((item) => item.id === prev) ? prev : detail.items[0]?.id || ''
@@ -627,7 +815,7 @@ export default function AnnotationWorkspacePage() {
         setRefreshing(false);
       }
     }
-  }, [datasetId]);
+  }, [datasetId, preferredModelVersionId]);
 
   useEffect(() => {
     if (!datasetId) {
@@ -735,6 +923,10 @@ export default function AnnotationWorkspacePage() {
   const filteredItems = useMemo(() => {
     const normalizedSearch = queueSearchText.trim().toLowerCase();
     return queueItems.filter((item) => {
+      if (!matchesAnnotationQueue(getItemAnnotationStatus(item.id, annotationByItemId), queueFilter)) {
+        return false;
+      }
+
       if (queueSplitFilter !== 'all' && item.split !== queueSplitFilter) {
         return false;
       }
@@ -768,11 +960,59 @@ export default function AnnotationWorkspacePage() {
     annotationByItemId,
     numericPredictionConfidenceThreshold,
     onlyLowConfidenceCandidates,
+    queueFilter,
     queueItemStatusFilter,
     queueItems,
     queueMetadataFilter,
     queueSearchText,
     queueSplitFilter
+  ]);
+  const hasActiveQueueFilters = Boolean(
+    queueFilter !== 'all' ||
+      queueSearchText.trim() ||
+      queueSplitFilter !== 'all' ||
+      queueItemStatusFilter !== 'all' ||
+      queueMetadataFilter.trim() ||
+      onlyLowConfidenceCandidates
+  );
+  const queueFilterBlockerHint = useMemo(() => {
+    if (items.length === 0 || filteredItems.length > 0 || !hasActiveQueueFilters) {
+      return '';
+    }
+
+    const queueScopedItems = filterItemsByAnnotationQueue(queueItems, annotations, queueFilter);
+    if (queueFilter !== 'all' && queueScopedItems.length === 0) {
+      return t('Queue filter currently has no matching samples.');
+    }
+    if (queueSearchText.trim()) {
+      return t('Search keyword currently matches 0 samples in this queue.');
+    }
+    if (queueSplitFilter !== 'all') {
+      return t('Split filter currently has no matching samples in this queue.');
+    }
+    if (queueItemStatusFilter !== 'all') {
+      return t('Item status filter currently has no matching samples in this queue.');
+    }
+    if (queueMetadataFilter.trim()) {
+      return t('Metadata filter currently has no matching samples in this queue.');
+    }
+    if (onlyLowConfidenceCandidates) {
+      return t('No low-confidence prediction samples match the current queue yet.');
+    }
+    return t('Current queue filters are too strict. Clear one or more filters to continue.');
+  }, [
+    annotations,
+    filteredItems.length,
+    hasActiveQueueFilters,
+    items.length,
+    onlyLowConfidenceCandidates,
+    queueFilter,
+    queueItemStatusFilter,
+    queueItems,
+    queueMetadataFilter,
+    queueSearchText,
+    queueSplitFilter,
+    t
   ]);
   const selectedQueueIndex = useMemo(
     () => filteredItems.findIndex((item) => item.id === selectedItemId),
@@ -949,6 +1189,23 @@ export default function AnnotationWorkspacePage() {
     () => datasetVersions.find((version) => version.id === scopedDatasetVersionId) ?? null,
     [datasetVersions, scopedDatasetVersionId]
   );
+  const scopedDatasetVersionMissing = useMemo(
+    () => Boolean(scopedDatasetVersionId && datasetVersions.length > 0 && !selectedDatasetVersion),
+    [datasetVersions.length, scopedDatasetVersionId, selectedDatasetVersion]
+  );
+  const selectedModelVersion = useMemo(
+    () => modelVersions.find((version) => version.id === selectedModelVersionId) ?? null,
+    [modelVersions, selectedModelVersionId]
+  );
+  const preferredModelVersionMissing = useMemo(
+    () =>
+      Boolean(
+        preferredModelVersionId &&
+          modelVersions.length > 0 &&
+          !modelVersions.some((version) => version.id === preferredModelVersionId)
+      ),
+    [modelVersions, preferredModelVersionId]
+  );
   const launchReadyDatasetVersions = useMemo(
     () =>
       datasetVersions.filter(
@@ -985,15 +1242,76 @@ export default function AnnotationWorkspacePage() {
   }, [annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected]);
   const currentVersionLabel = selectedDatasetVersion?.version_name ?? (scopedDatasetVersionId || t('Unlocked'));
   const resolvedDatasetId = datasetId ?? '';
-  const datasetDetailPath = buildDatasetDetailPath(resolvedDatasetId);
+  const scopedInferenceRunId = useMemo(
+    () => extractMetadataFilterValue(queueMetadataFilter, 'inference_run_id'),
+    [queueMetadataFilter]
+  );
+  const launchContextForAnnotationFlow: LaunchContext = {
+    taskType: preferredTaskType ?? dataset?.task_type ?? null,
+    framework: resolvePreferredFrameworkForTask(
+      preferredTaskType ?? dataset?.task_type ?? null,
+      preferredFramework ?? selectedModelVersion?.framework ?? null
+    ),
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
+  const datasetsPath = buildDatasetsPath(launchContextForAnnotationFlow);
+  const modelVersionsPath = buildModelVersionsPath(launchContextForAnnotationFlow, {
+    selectedVersionId: selectedModelVersionId || undefined
+  });
+  const datasetDetailPath = buildDatasetDetailPath(resolvedDatasetId, {
+    versionId: scopedDatasetVersionId || undefined,
+    launchContext: launchContextForAnnotationFlow
+  });
+  const clearVersionScopePath = useMemo(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('version');
+    nextParams.delete('item');
+    const query = nextParams.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
+  const clearModelVersionContextPath = useMemo(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('modelVersion');
+    nextParams.delete('model_version');
+    const query = nextParams.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
+  const clearQueueFiltersPath = useMemo(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('queue');
+    nextParams.delete('item');
+    nextParams.delete('q');
+    nextParams.delete('split');
+    nextParams.delete('item_status');
+    nextParams.delete('meta');
+    nextParams.delete('low_conf');
+    nextParams.delete('conf');
+    const query = nextParams.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
   const preferredWorkspaceVersionId = scopedDatasetVersionId || preferredTrainingDatasetVersion?.id || undefined;
   const closureWizardPath = buildClosureWizardPath(
     resolvedDatasetId,
-    preferredLaunchReadyDatasetVersion?.id ?? preferredTrainingDatasetVersion?.id
+    preferredLaunchReadyDatasetVersion?.id ?? preferredTrainingDatasetVersion?.id,
+    launchContextForAnnotationFlow
   );
   const inferenceValidationPath = buildInferenceValidationPath(
     resolvedDatasetId,
-    preferredLaunchReadyDatasetVersion?.id ?? preferredTrainingDatasetVersion?.id
+    preferredLaunchReadyDatasetVersion?.id ?? preferredTrainingDatasetVersion?.id,
+    {
+      launchContext: launchContextForAnnotationFlow
+    }
+  );
+  const feedbackValidationPath = buildInferenceValidationPath(
+    resolvedDatasetId,
+    preferredLaunchReadyDatasetVersion?.id ?? preferredWorkspaceVersionId,
+    {
+      runId: scopedInferenceRunId || undefined,
+      focus: scopedInferenceRunId ? 'feedback' : undefined,
+      launchContext: launchContextForAnnotationFlow
+    }
   );
   const canUsePredictionInOcrEditor = dataset?.task_type === 'ocr' && !isEditLocked;
   const predictionCandidateCount = useMemo(() => {
@@ -1597,6 +1915,67 @@ export default function AnnotationWorkspacePage() {
       };
     }
 
+    if (scopedInferenceRunId && filteredItems.length === 0) {
+      return {
+        current: 2,
+        total: 4,
+        title: t('Feedback sample is outside the current queue'),
+        description: t('This workspace is scoped to inference run {runId}, but the current queue filters do not expose a matching sample. Return to validation or reopen the broader dataset lane.', {
+          runId: scopedInferenceRunId
+        }),
+        badgeTone: 'warning',
+        badgeLabel: t('Feedback scoped'),
+        actions: [
+          { label: t('Clear queue filters'), to: clearQueueFiltersPath },
+          { label: t('Open validation page'), to: feedbackValidationPath },
+          { label: t('Open dataset detail'), to: datasetDetailPath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (scopedInferenceRunId) {
+      return {
+        current: 2,
+        total: 4,
+        title: t('Review the routed feedback sample'),
+        description: t('This queue is already scoped to inference run {runId}. Correct the sample here, then continue into dataset versioning or training from the dataset lane.', {
+          runId: scopedInferenceRunId
+        }),
+        badgeTone: 'info',
+        badgeLabel: t('Feedback scoped'),
+        actions: [
+          { label: t('Open validation page'), to: feedbackValidationPath },
+          { label: t('Open dataset detail'), to: datasetDetailPath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (hasPredictionOverlay && predictionCandidateCount > 0 && !isEditLocked) {
+      return {
+        current: 2,
+        total: 4,
+        title: t('Review model suggestions before redrawing'),
+        description: t('This sample already carries pre-annotation output. Inspect the prediction panel first, then keep or correct what you need.'),
+        badgeTone: 'info',
+        badgeLabel: t('Prediction ready'),
+        actions: [
+          { label: t('Open prediction panel'), onClick: () => setAnnotationSidebarTab('prediction') },
+          {
+            label: t('Open validation page'),
+            to: buildInferenceValidationPath(
+              resolvedDatasetId,
+              preferredLaunchReadyDatasetVersion?.id ?? preferredWorkspaceVersionId,
+              {
+                modelVersionId: selectedModelVersionId || undefined,
+                launchContext: launchContextForAnnotationFlow
+              }
+            ),
+            variant: 'ghost'
+          }
+        ]
+      };
+    }
+
     if (annotationSummary.needs_work > 0) {
       return {
         current: 2,
@@ -1687,7 +2066,11 @@ export default function AnnotationWorkspacePage() {
           { label: t('Open dataset detail'), to: datasetDetailPath },
           {
             label: t('Open training jobs'),
-            to: buildTrainingJobsPath(dataset.id, preferredTrainingDatasetVersion?.id),
+            to: buildTrainingJobsPath(
+              dataset.id,
+              preferredTrainingDatasetVersion?.id,
+              launchContextForAnnotationFlow
+            ),
             variant: 'ghost'
           }
         ]
@@ -1706,7 +2089,11 @@ export default function AnnotationWorkspacePage() {
       actions: [
         {
           label: t('Create training job'),
-          to: buildTrainingJobCreatePath(dataset.id, preferredLaunchReadyDatasetVersion.id)
+          to: buildTrainingJobCreatePath(
+            dataset.id,
+            preferredLaunchReadyDatasetVersion.id,
+            launchContextForAnnotationFlow
+          )
         },
         { label: t('Open closure wizard'), to: closureWizardPath, variant: 'secondary' },
         { label: t('Validate inference'), to: inferenceValidationPath, variant: 'ghost' }
@@ -1717,14 +2104,25 @@ export default function AnnotationWorkspacePage() {
     annotationSummary.needs_work,
     annotationSummary.rejected,
     closureWizardPath,
+    clearQueueFiltersPath,
     dataset,
     datasetDetailPath,
     datasetVersions.length,
+    feedbackValidationPath,
+    filteredItems.length,
     focusQueueFilter,
+    hasPredictionOverlay,
     inferenceValidationPath,
+    isEditLocked,
+    launchContextForAnnotationFlow,
+    predictionCandidateCount,
     preferredLaunchReadyDatasetVersion,
     preferredTrainingDatasetVersion?.id,
+    preferredWorkspaceVersionId,
     readyFileCount,
+    resolvedDatasetId,
+    scopedInferenceRunId,
+    selectedModelVersionId,
     t
   ]);
 
@@ -1908,7 +2306,7 @@ export default function AnnotationWorkspacePage() {
       <WorkspacePage>
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
-            <ButtonLink to="/datasets" variant="ghost" size="sm">
+            <ButtonLink to={requestedReturnTo ?? datasetsPath} variant="ghost" size="sm">
               {t('Back to dataset')}
             </ButtonLink>
           </div>
@@ -1931,7 +2329,7 @@ export default function AnnotationWorkspacePage() {
       <WorkspacePage>
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
-            <ButtonLink to={`/datasets/${datasetId}`} variant="ghost" size="sm">
+            <ButtonLink to={requestedReturnTo ?? datasetDetailPath} variant="ghost" size="sm">
               {t('Back to dataset')}
             </ButtonLink>
           </div>
@@ -1954,7 +2352,7 @@ export default function AnnotationWorkspacePage() {
       <WorkspacePage>
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
-            <ButtonLink to="/datasets" variant="ghost" size="sm">
+            <ButtonLink to={requestedReturnTo ?? datasetsPath} variant="ghost" size="sm">
               {t('Back to dataset')}
             </ButtonLink>
           </div>
@@ -2040,6 +2438,9 @@ export default function AnnotationWorkspacePage() {
           </ButtonLink>
           <ButtonLink to={closureWizardPath} variant="ghost" size="sm">
             {t('Open closure wizard')}
+          </ButtonLink>
+          <ButtonLink to={inferenceValidationPath} variant="ghost" size="sm">
+            {t('Validate inference')}
           </ButtonLink>
         </div>
         {preferredWorkspaceVersionId ? (
@@ -2299,7 +2700,7 @@ export default function AnnotationWorkspacePage() {
                   title={t('No Matching Model Version')}
                   description={t('Register a model version with same task type before pre-annotation.')}
                   extra={
-                    <ButtonLink to="/models/versions" variant="secondary" size="sm">
+                    <ButtonLink to={modelVersionsPath} variant="secondary" size="sm">
                       {t('Open Model Versions')}
                     </ButtonLink>
                   }
@@ -2323,7 +2724,11 @@ export default function AnnotationWorkspacePage() {
                     <ButtonLink
                       to={buildInferenceValidationPath(
                         resolvedDatasetId,
-                        preferredLaunchReadyDatasetVersion?.id ?? preferredWorkspaceVersionId
+                        preferredLaunchReadyDatasetVersion?.id ?? preferredWorkspaceVersionId,
+                        {
+                          modelVersionId: selectedModelVersionId || undefined,
+                          launchContext: launchContextForAnnotationFlow
+                        }
                       )}
                       variant="ghost"
                       size="sm"
@@ -2478,7 +2883,7 @@ export default function AnnotationWorkspacePage() {
       <div ref={workspaceRootRef} className="annotation-focus-page">
         <Card as="header" className="annotation-focus-header">
           <div className="annotation-focus-header__left">
-            <ButtonLink size="sm" variant="ghost" to={`/datasets/${dataset.id}`}>
+            <ButtonLink size="sm" variant="ghost" to={requestedReturnTo ?? datasetDetailPath}>
               {t('Back to dataset')}
             </ButtonLink>
           </div>
@@ -2546,6 +2951,47 @@ export default function AnnotationWorkspacePage() {
 
         {feedback?.variant === 'error' ? (
         <InlineAlert tone="danger" title={t('Action failed')} description={feedback.text} />
+        ) : null}
+        {scopedDatasetVersionMissing ? (
+          <InlineAlert
+            tone="warning"
+            title={t('Requested version not found')}
+            description={t('The dataset version from the incoming link is unavailable. Showing the current dataset scope instead.')}
+            actions={
+              <ButtonLink to={clearVersionScopePath} variant="ghost" size="sm">
+                {t('Clear context')}
+              </ButtonLink>
+            }
+          />
+        ) : null}
+        {preferredModelVersionMissing ? (
+          <InlineAlert
+            tone="warning"
+            title={t('Requested model version not found')}
+            description={t('The pre-annotation model version from the incoming link is unavailable. Choose another one from the current list.')}
+            actions={
+              <div className="row gap wrap">
+                <ButtonLink to={clearModelVersionContextPath} variant="ghost" size="sm">
+                  {t('Clear context')}
+                </ButtonLink>
+                <ButtonLink to={modelVersionsPath} variant="secondary" size="sm">
+                  {t('Open Model Versions')}
+                </ButtonLink>
+              </div>
+            }
+          />
+        ) : null}
+        {queueFilterBlockerHint ? (
+          <InlineAlert
+            tone="info"
+            title={t('Queue filters are hiding all samples')}
+            description={queueFilterBlockerHint}
+            actions={
+              <ButtonLink to={clearQueueFiltersPath} variant="secondary" size="sm">
+                {t('Clear filters')}
+              </ButtonLink>
+            }
+          />
         ) : null}
 
         <WorkspaceWorkbench

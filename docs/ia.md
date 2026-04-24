@@ -42,6 +42,8 @@ Define executable route and page structure for the AI-native conversation worksp
   - attachment tray background refresh stays quiet and only updates visible draft/file state when attachment data actually changes
   - assistant messages can render compact operation cards for real backend actions (`create_dataset`, `create_model_draft`, `create_training_job`)
   - when operation input is incomplete, conversation stays in the same thread and requests only the missing fields needed to continue
+  - action cards may deep-link to `/vision/tasks/:taskId` when the backend creates or updates a structured `VisionTask`
+  - completed or failed action cards may surface `Suggested next steps`; navigation links open the correct page, while executable next steps still go back through the guarded in-thread `/ops` path
 
 ### 3.4 Professional Console
 - `/workspace/console`
@@ -164,6 +166,24 @@ Define executable route and page structure for the AI-native conversation worksp
   - first screen should prioritize evidence inspection (status/logs/metrics/artifacts), while cross-domain next steps stay as lightweight links
   - completed runs should expose a direct version-registration handoff into `/models/versions` with the job context prefilled
   - when no owned model matches the completed job's task type, the detail page should also expose a direct model-draft creation path prefilled to that task type
+
+### 3.7A Vision Orchestration Domain
+- `/vision/tasks`
+  - list of visible vision-task records for the current owner/admin scope
+  - first screen should answer only three questions:
+    - which task is blocked by missing requirements
+    - which task is currently training
+    - which task is ready for the next operator action
+  - filters should stay lightweight (`status` first); row click opens detail; `Auto advance` remains an explicit action, not an always-on background mutation
+- `/vision/tasks/:taskId`
+  - dedicated continuation page for one structured vision-task record
+  - top of page should keep:
+    - prompt summary
+    - current status
+    - primary metric snapshot
+    - next recommended action
+  - main sections should expose structured understanding, dataset inspection, training plan, auto-tune history, validation report, and missing requirements without forcing the engineer back into the chat thread
+  - quick actions can open linked dataset, training job, model version, or feedback dataset directly, but those linked domains still own their own primary workflows
 
 ### 3.8 Inference Validation Domain
 - `/inference/validate`
@@ -338,6 +358,13 @@ Define executable route and page structure for the AI-native conversation worksp
 - when runtime strict training fallback guard is off, launch action also requires explicit operator confirmation in the review step before submit
 - when runtime strict mode status is unavailable (runtime settings load failure), launch action remains disabled until status is recoverable
 - advanced hyperparameters remain collapsed initially
+
+### 5.3A Vision Modeling Task
+- list page should keep filters and actions lightweight enough for operators to decide in seconds whether to open detail or press `Auto advance`
+- detail page should always keep one visible "next step" summary above the raw structured panels
+- quick actions may launch training, continue the next round, register a model version, or mine badcases, but they must remain contextual to the task's current state
+- structured JSON panels are acceptable in the MVP, but the surrounding page chrome must still make the workflow understandable without reading raw payload keys first
+- task detail must remain a bridge page, not a second full implementation of dataset/training/model workflows
 
 ### 5.4 Inference Validation
 - reusable uploader and state blocks

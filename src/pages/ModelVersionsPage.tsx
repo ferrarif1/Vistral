@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   DatasetRecord,
   InferenceRunRecord,
@@ -8,9 +8,11 @@ import type {
   RuntimeDeviceAccessIssueResult,
   RuntimeDeviceAccessRecord,
   RuntimeDeviceLifecycleSnapshot,
-  TrainingJobRecord
+  TrainingJobRecord,
+  User
 } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import WorkspaceNextStepCard from '../components/onboarding/WorkspaceNextStepCard';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
@@ -36,6 +38,10 @@ import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
+import {
+  resolveRegistrationEvidenceLevel,
+  resolveRegistrationGateLevel
+} from '../utils/registrationEvidence';
 import { bucketRuntimeFallbackReason, runtimeFallbackReasonLabelKey } from '../utils/runtimeFallbackReason';
 
 const backgroundRefreshIntervalMs = 6000;
@@ -60,7 +66,9 @@ const buildVersionSignature = (items: ModelVersionRecord[]): string =>
         created_at: item.created_at,
         training_job_id: item.training_job_id,
         artifact_attachment_id: item.artifact_attachment_id,
+        registration_evidence_level: item.registration_evidence_level ?? '',
         registration_evidence_mode: item.registration_evidence_mode ?? '',
+        registration_gate_status: item.registration_gate_status ?? '',
         registration_gate_exempted: item.registration_gate_exempted ?? null
       }))
   );
@@ -135,7 +143,11 @@ const buildMetricsPreview = (
   };
 };
 
-const buildScopedTrainingJobDetailPath = (jobId: string, job?: TrainingJobRecord | null): string => {
+const buildScopedTrainingJobDetailPath = (
+  jobId: string,
+  job?: TrainingJobRecord | null,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   if (job?.dataset_id) {
     searchParams.set('dataset', job.dataset_id);
@@ -143,17 +155,40 @@ const buildScopedTrainingJobDetailPath = (jobId: string, job?: TrainingJobRecord
   if (job?.dataset_version_id) {
     searchParams.set('version', job.dataset_version_id);
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   const query = searchParams.toString();
   return query ? `/training/jobs/${jobId}?${query}` : `/training/jobs/${jobId}`;
 };
 
-const buildScopedInferenceValidationPath = (versionId: string): string => {
+const buildScopedInferenceValidationPath = (
+  versionId: string,
+  options?: {
+    datasetId?: string | null;
+    versionId?: string | null;
+    runId?: string | null;
+    focus?: string | null;
+    launchContext?: LaunchContext;
+  }
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('modelVersion', versionId);
+  if (options?.datasetId?.trim()) {
+    searchParams.set('dataset', options.datasetId.trim());
+  }
+  if (options?.versionId?.trim()) {
+    searchParams.set('version', options.versionId.trim());
+  }
+  if (options?.runId?.trim()) {
+    searchParams.set('run', options.runId.trim());
+  }
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
   return `/inference/validate?${searchParams.toString()}`;
 };
 
-const buildScopedClosurePath = (job?: TrainingJobRecord | null): string => {
+const buildScopedClosurePath = (job?: TrainingJobRecord | null, launchContext?: LaunchContext): string => {
   const searchParams = new URLSearchParams();
   if (job?.dataset_id) {
     searchParams.set('dataset', job.dataset_id);
@@ -161,8 +196,42 @@ const buildScopedClosurePath = (job?: TrainingJobRecord | null): string => {
   if (job?.dataset_version_id) {
     searchParams.set('version', job.dataset_version_id);
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   const query = searchParams.toString();
   return query ? `/workflow/closure?${query}` : '/workflow/closure';
+};
+
+const buildDatasetDetailPath = (
+  datasetId: string,
+  options?: { focus?: string | null; launchContext?: LaunchContext }
+): string => {
+  const normalizedDatasetId = datasetId.trim();
+  if (!normalizedDatasetId) {
+    return '/datasets';
+  }
+  const searchParams = new URLSearchParams();
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  const query = searchParams.toString();
+  return query
+    ? `/datasets/${encodeURIComponent(normalizedDatasetId)}?${query}`
+    : `/datasets/${encodeURIComponent(normalizedDatasetId)}`;
+};
+
+const buildScopedVersionDeliveryPath = (
+  versionId?: string | null,
+  launchContext?: LaunchContext
+): string => {
+  const searchParams = new URLSearchParams();
+  if (versionId?.trim()) {
+    searchParams.set('selectedVersion', versionId.trim());
+    searchParams.set('focus', 'device');
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/models/versions?${query}` : '/models/versions';
 };
 
 const buildCreateModelDraftPath = (
@@ -170,9 +239,11 @@ const buildCreateModelDraftPath = (
   options?: {
     jobId?: string;
     versionName?: string;
-  }
+  },
+  launchContext?: LaunchContext
 ): string => {
   const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
   if (taskType?.trim()) {
     searchParams.set('task_type', taskType.trim());
   }
@@ -186,9 +257,137 @@ const buildCreateModelDraftPath = (
   return query ? `/models/create?${query}` : '/models/create';
 };
 
+const buildTrainingJobsPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/training/jobs?${query}` : '/training/jobs';
+};
+
+const buildWorkspaceConsolePath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/workspace/console?${query}` : '/workspace/console';
+};
+
+const buildMyModelsPath = (
+  launchContext?: LaunchContext,
+  options?: {
+    lane?: 'draft_rework' | 'pending' | 'ready' | 'all';
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  if (options?.lane && options.lane !== 'all') {
+    searchParams.set('lane', options.lane);
+  }
+  const query = searchParams.toString();
+  return query ? `/models/my-models?${query}` : '/models/my-models';
+};
+
+const buildAdminAuditPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/admin/audit?${query}` : '/admin/audit';
+};
+
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: LaunchContext
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const buildTrainingJobCreatePath = (context?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, context);
+  const query = searchParams.toString();
+  return query ? `/training/jobs/new?${query}` : '/training/jobs/new';
+};
+
+const parseCompareIds = (searchParams: URLSearchParams): string[] => {
+  const raw = (searchParams.get('compare_ids') ?? searchParams.get('compare') ?? '').trim();
+  if (!raw) {
+    return [];
+  }
+  const unique = new Set<string>();
+  raw.split(',').forEach((token) => {
+    const normalized = token.trim();
+    if (normalized) {
+      unique.add(normalized);
+    }
+  });
+  return Array.from(unique).slice(0, 2);
+};
+
 export default function ModelVersionsPage() {
   const { t } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const [versions, setVersions] = useState<ModelVersionRecord[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [jobs, setJobs] = useState<TrainingJobRecord[]>([]);
@@ -197,24 +396,66 @@ export default function ModelVersionsPage() {
   const [modelId, setModelId] = useState('');
   const [jobId, setJobId] = useState('');
   const [versionName, setVersionName] = useState('');
-  const [searchText, setSearchText] = useState('');
+  const [searchText, setSearchText] = useState(() => (searchParams.get('q') ?? '').trim());
   const [taskFilter, setTaskFilter] = useState<'all' | 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>(
-    'all'
+    () => {
+      const value = (
+        searchParams.get('task_filter') ??
+        searchParams.get('task') ??
+        searchParams.get('task_type') ??
+        ''
+      ).trim();
+      return value === 'ocr' ||
+        value === 'detection' ||
+        value === 'classification' ||
+        value === 'segmentation' ||
+        value === 'obb'
+        ? value
+        : 'all';
+    }
   );
-  const [frameworkFilter, setFrameworkFilter] = useState<'all' | 'yolo' | 'paddleocr' | 'doctr'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'registered' | 'deprecated'>('all');
-  const [selectedVersionId, setSelectedVersionId] = useState('');
-  const [versionDetailOpen, setVersionDetailOpen] = useState(false);
+  const [frameworkFilter, setFrameworkFilter] = useState<'all' | 'yolo' | 'paddleocr' | 'doctr'>(() => {
+    const value = (
+      searchParams.get('framework_filter') ??
+      searchParams.get('framework') ??
+      searchParams.get('profile') ??
+      ''
+    ).trim();
+    return value === 'yolo' || value === 'paddleocr' || value === 'doctr' ? value : 'all';
+  });
+  const [statusFilter, setStatusFilter] = useState<'all' | 'registered' | 'deprecated'>(() => {
+    const value = (searchParams.get('status_filter') ?? '').trim();
+    return value === 'registered' || value === 'deprecated' ? value : 'all';
+  });
+  const [selectedVersionId, setSelectedVersionId] = useState(() =>
+    (searchParams.get('selectedVersion') ?? searchParams.get('versionId') ?? '').trim()
+  );
+  const [versionDetailOpen, setVersionDetailOpen] = useState(() => {
+    const value = (searchParams.get('drawer') ?? '').trim().toLowerCase();
+    if (value === 'open' || value === '1') {
+      return true;
+    }
+    if (value === 'closed' || value === '0') {
+      return false;
+    }
+    const selectedVersion = (searchParams.get('selectedVersion') ?? searchParams.get('versionId') ?? '').trim();
+    return selectedVersion.length > 0;
+  });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [selectedVersionFilterHint, setSelectedVersionFilterHint] = useState('');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [compareIds, setCompareIds] = useState<string[]>(() => parseCompareIds(searchParams));
   const [compareVersions, setCompareVersions] = useState<ModelVersionRecord[]>([]);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState('');
-  const [versionToolMode, setVersionToolMode] = useState<'compare' | 'register'>('register');
+  const [versionToolMode, setVersionToolMode] = useState<'compare' | 'register'>(() => {
+    const value = (searchParams.get('tool') ?? '').trim().toLowerCase();
+    return value === 'compare' || parseCompareIds(searchParams).length > 0 ? 'compare' : 'register';
+  });
   const [jobExecutionInsights, setJobExecutionInsights] = useState<Record<string, TrainingExecutionInsight>>({});
   const [jobInsightsLoading, setJobInsightsLoading] = useState(false);
   const [deviceAccessRecords, setDeviceAccessRecords] = useState<RuntimeDeviceAccessRecord[]>([]);
@@ -234,15 +475,36 @@ export default function ModelVersionsPage() {
   const prefillJobId = (searchParams.get('job') ?? '').trim();
   const prefillVersionName = (searchParams.get('version_name') ?? searchParams.get('versionName') ?? '').trim();
   const prefillSelectedVersionId = (searchParams.get('selectedVersion') ?? searchParams.get('versionId') ?? '').trim();
+  const prefillFocus = (searchParams.get('focus') ?? '').trim();
+  const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const preferredVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredTaskType = (searchParams.get('task_type') ?? '').trim();
+  const preferredFramework = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
+  const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
+  const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
+  const launchContextFromQuery: LaunchContext = {
+    datasetId: preferredDatasetId || null,
+    versionId: preferredVersionId || null,
+    taskType: preferredTaskType || null,
+    framework: preferredFramework || null,
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
   const modelTouchedRef = useRef(false);
   const jobTouchedRef = useRef(false);
   const versionNameTouchedRef = useRef(false);
   const selectedVersionPrefillAppliedRef = useRef(false);
+  const selectedVersionFocusAppliedRef = useRef('');
+  const selectedVersionFilterRecoveryAppliedRef = useRef(false);
   const versionsSignatureRef = useRef('');
   const modelsSignatureRef = useRef('');
   const jobsSignatureRef = useRef('');
   const inferenceRunsSignatureRef = useRef('');
   const datasetsSignatureRef = useRef('');
+  const deviceQuickStartRef = useRef<HTMLDivElement | null>(null);
+  const deviceAuthorizationSectionRef = useRef<HTMLDivElement | null>(null);
+  const deviceLifecycleSectionRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async (mode: LoadMode = 'initial') => {
     if (mode === 'initial') {
@@ -260,6 +522,7 @@ export default function ModelVersionsPage() {
         api.listInferenceRuns(),
         api.listDatasets()
       ]);
+      const currentUserResult = await api.me().catch(() => null);
 
       const completed = jobResult
         .filter((job) => job.status === 'completed' && job.execution_mode === 'local_command')
@@ -298,6 +561,7 @@ export default function ModelVersionsPage() {
         datasetsSignatureRef.current = nextDatasetSignature;
         setDatasets(datasetResult);
       }
+      setCurrentUser(currentUserResult);
 
       const prefilledModel = prefillModelId
         ? modelResult.find((model) => model.id === prefillModelId) ?? null
@@ -361,6 +625,172 @@ export default function ModelVersionsPage() {
       // no-op
     });
   }, [load]);
+
+  useEffect(() => {
+    const querySearchText = (searchParams.get('q') ?? '').trim();
+    if (querySearchText !== searchText) {
+      setSearchText(querySearchText);
+    }
+
+    const queryTaskFilter = (() => {
+      const value = (
+        searchParams.get('task_filter') ??
+        searchParams.get('task') ??
+        searchParams.get('task_type') ??
+        ''
+      ).trim();
+      return value === 'ocr' ||
+        value === 'detection' ||
+        value === 'classification' ||
+        value === 'segmentation' ||
+        value === 'obb'
+        ? value
+        : 'all';
+    })();
+    if (queryTaskFilter !== taskFilter) {
+      setTaskFilter(queryTaskFilter);
+    }
+
+    const queryFrameworkFilter = (() => {
+      const value = (
+        searchParams.get('framework_filter') ??
+        searchParams.get('framework') ??
+        searchParams.get('profile') ??
+        ''
+      ).trim();
+      return value === 'yolo' || value === 'paddleocr' || value === 'doctr' ? value : 'all';
+    })();
+    if (queryFrameworkFilter !== frameworkFilter) {
+      setFrameworkFilter(queryFrameworkFilter);
+    }
+
+    const queryStatusFilter = (() => {
+      const value = (searchParams.get('status_filter') ?? '').trim();
+      return value === 'registered' || value === 'deprecated' ? value : 'all';
+    })();
+    if (queryStatusFilter !== statusFilter) {
+      setStatusFilter(queryStatusFilter);
+    }
+
+    const queryToolMode = (() => {
+      const value = (searchParams.get('tool') ?? '').trim().toLowerCase();
+      return value === 'compare' || parseCompareIds(searchParams).length > 0 ? 'compare' : 'register';
+    })();
+    if (queryToolMode !== versionToolMode) {
+      setVersionToolMode(queryToolMode);
+    }
+
+    const queryCompareIds = parseCompareIds(searchParams);
+    const compareIdsChanged =
+      queryCompareIds.length !== compareIds.length ||
+      queryCompareIds.some((id, index) => id !== compareIds[index]);
+    if (compareIdsChanged) {
+      setCompareIds(queryCompareIds);
+    }
+
+    const querySelectedVersionId = (searchParams.get('selectedVersion') ?? searchParams.get('versionId') ?? '').trim();
+    if (querySelectedVersionId !== selectedVersionId) {
+      setSelectedVersionId(querySelectedVersionId);
+    }
+
+    const drawerState = (searchParams.get('drawer') ?? '').trim().toLowerCase();
+    if ((drawerState === 'open' || drawerState === '1') && !versionDetailOpen) {
+      setVersionDetailOpen(true);
+    } else if ((drawerState === 'closed' || drawerState === '0') && versionDetailOpen) {
+      setVersionDetailOpen(false);
+    }
+  }, [
+    compareIds,
+    frameworkFilter,
+    searchParams,
+    searchText,
+    selectedVersionId,
+    statusFilter,
+    taskFilter,
+    versionDetailOpen,
+    versionToolMode
+  ]);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const normalizedSearchText = searchText.trim();
+
+    if (normalizedSearchText) {
+      next.set('q', normalizedSearchText);
+    } else {
+      next.delete('q');
+    }
+
+    if (taskFilter === 'all') {
+      next.delete('task_filter');
+    } else {
+      next.set('task_filter', taskFilter);
+    }
+    // Backward compatibility cleanup for older list-filter key.
+    next.delete('task');
+
+    if (frameworkFilter === 'all') {
+      next.delete('framework_filter');
+    } else {
+      next.set('framework_filter', frameworkFilter);
+    }
+
+    if (statusFilter === 'all') {
+      next.delete('status_filter');
+    } else {
+      next.set('status_filter', statusFilter);
+    }
+
+    if (versionToolMode === 'compare') {
+      next.set('tool', 'compare');
+    } else {
+      next.delete('tool');
+    }
+
+    if (compareIds.length > 0) {
+      next.set('compare_ids', compareIds.join(','));
+    } else {
+      next.delete('compare_ids');
+    }
+    // Backward compatibility cleanup for older compare key.
+    next.delete('compare');
+
+    if (selectedVersionId.trim()) {
+      next.set('selectedVersion', selectedVersionId.trim());
+    } else {
+      next.delete('selectedVersion');
+    }
+    // Backward compatibility cleanup for older selected-version key.
+    next.delete('versionId');
+
+    if (selectedVersionId.trim() && versionDetailOpen) {
+      next.set('drawer', 'open');
+    } else {
+      next.delete('drawer');
+    }
+
+    const currentQuery = searchParams.toString();
+    const nextQuery = next.toString();
+    if (nextQuery === currentQuery) {
+      return;
+    }
+
+    navigate(nextQuery ? `${location.pathname}?${nextQuery}` : location.pathname, {
+      replace: true
+    });
+  }, [
+    compareIds,
+    frameworkFilter,
+    location.pathname,
+    navigate,
+    searchParams,
+    searchText,
+    selectedVersionId,
+    statusFilter,
+    taskFilter,
+    versionDetailOpen,
+    versionToolMode
+  ]);
 
   const hasTransientJobState = useMemo(
     () => jobs.some((job) => ['queued', 'preparing', 'running', 'evaluating'].includes(job.status)),
@@ -465,7 +895,7 @@ export default function ModelVersionsPage() {
     () =>
       localCommandCompletedJobs.filter((job) => {
         const insight = jobExecutionInsights[job.id];
-        return Boolean(insight) && insight.reality === 'real';
+        return Boolean(insight) && insight.reality === 'standard';
       }),
     [jobExecutionInsights, localCommandCompletedJobs]
   );
@@ -486,7 +916,7 @@ export default function ModelVersionsPage() {
               })
           };
         })
-        .filter(({ insight }) => insight.reality !== 'real'),
+        .filter(({ insight }) => insight.reality !== 'standard'),
     [jobExecutionInsights, localCommandCompletedJobs]
   );
 
@@ -499,6 +929,10 @@ export default function ModelVersionsPage() {
     () => (prefillJobId ? jobs.find((job) => job.id === prefillJobId) ?? null : null),
     [jobs, prefillJobId]
   );
+  const registrationPrefillJobMissing = useMemo(
+    () => Boolean(prefillJobId && jobs.length > 0 && !registrationPrefillJob),
+    [jobs.length, prefillJobId, registrationPrefillJob]
+  );
   const registrationPrefillMatchingModel = useMemo(() => {
     if (!registrationPrefillJob) {
       return null;
@@ -510,17 +944,44 @@ export default function ModelVersionsPage() {
   const prefilledJobRegisterable =
     Boolean(registrationPrefillJob) &&
     registerableJobs.some((job) => job.id === registrationPrefillJob?.id);
+  const registrationPrefillInsight = useMemo(() => {
+    if (!registrationPrefillJob) {
+      return null;
+    }
+    return (
+      jobExecutionInsights[registrationPrefillJob.id] ??
+      deriveTrainingExecutionInsight({
+        status: registrationPrefillJob.status,
+        executionMode: registrationPrefillJob.execution_mode,
+        artifactSummary: null
+      })
+    );
+  }, [jobExecutionInsights, registrationPrefillJob]);
+  const registrationPrefillJobOutOfRegisterable = useMemo(
+    () => Boolean(registrationPrefillJob && !prefilledJobRegisterable),
+    [prefilledJobRegisterable, registrationPrefillJob]
+  );
   const registrationPrefillNeedsMatchingModel =
     Boolean(registrationPrefillJob) && !registrationPrefillMatchingModel && !modelTouchedRef.current;
+  const registrationPrefillTrainingContext: LaunchContext = {
+    datasetId: registrationPrefillJob?.dataset_id ?? launchContextFromQuery.datasetId ?? null,
+    versionId: registrationPrefillJob?.dataset_version_id ?? launchContextFromQuery.versionId ?? null,
+    taskType: registrationPrefillJob?.task_type ?? launchContextFromQuery.taskType ?? null,
+    framework: registrationPrefillJob?.framework ?? launchContextFromQuery.framework ?? null,
+    executionTarget: launchContextFromQuery.executionTarget ?? null,
+    workerId: launchContextFromQuery.workerId ?? null,
+    returnTo: launchContextFromQuery.returnTo ?? outboundReturnTo
+  };
   const registrationPrefillCreateModelPath = registrationPrefillJob
     ? buildCreateModelDraftPath(registrationPrefillJob.task_type, {
         jobId: registrationPrefillJob.id,
         versionName: registrationPrefillJob.name
-      })
+      }, registrationPrefillTrainingContext)
     : '/models/create';
   const registrationPrefillJobPath = registrationPrefillJob
-    ? buildScopedTrainingJobDetailPath(registrationPrefillJob.id, registrationPrefillJob)
+    ? buildScopedTrainingJobDetailPath(registrationPrefillJob.id, registrationPrefillJob, registrationPrefillTrainingContext)
     : '';
+  const registrationPrefillTrainingCreatePath = buildTrainingJobCreatePath(registrationPrefillTrainingContext);
 
   const sortedVersions = useMemo(
     () =>
@@ -555,6 +1016,74 @@ export default function ModelVersionsPage() {
     });
   }, [frameworkFilter, searchText, sortedVersions, statusFilter, taskFilter]);
 
+  const prefilledSelectedVersion = useMemo(
+    () =>
+      prefillSelectedVersionId
+        ? versions.find((version) => version.id === prefillSelectedVersionId) ?? null
+        : null,
+    [prefillSelectedVersionId, versions]
+  );
+  const selectedVersionPrefillMissing = useMemo(
+    () => Boolean(prefillSelectedVersionId && versions.length > 0 && !prefilledSelectedVersion),
+    [prefilledSelectedVersion, prefillSelectedVersionId, versions.length]
+  );
+
+  useEffect(() => {
+    selectedVersionFilterRecoveryAppliedRef.current = false;
+    setSelectedVersionFilterHint('');
+  }, [prefillSelectedVersionId]);
+
+  useEffect(() => {
+    if (
+      selectedVersionFilterRecoveryAppliedRef.current ||
+      !prefillSelectedVersionId ||
+      !prefilledSelectedVersion
+    ) {
+      return;
+    }
+
+    if (filteredVersions.some((version) => version.id === prefillSelectedVersionId)) {
+      return;
+    }
+
+    selectedVersionFilterRecoveryAppliedRef.current = true;
+
+    if (taskFilter !== prefilledSelectedVersion.task_type) {
+      setTaskFilter(prefilledSelectedVersion.task_type);
+    }
+    if (frameworkFilter !== prefilledSelectedVersion.framework) {
+      setFrameworkFilter(prefilledSelectedVersion.framework);
+    }
+    if (statusFilter !== prefilledSelectedVersion.status) {
+      setStatusFilter(prefilledSelectedVersion.status);
+    }
+    if (searchText.trim()) {
+      setSearchText('');
+    }
+
+    setSelectedVersionFilterHint(
+      t('Adjusted filters to show the requested version {versionId}.', {
+        versionId: prefilledSelectedVersion.id
+      })
+    );
+  }, [
+    filteredVersions,
+    frameworkFilter,
+    prefilledSelectedVersion,
+    prefillSelectedVersionId,
+    searchText,
+    statusFilter,
+    t,
+    taskFilter
+  ]);
+
+  useEffect(() => {
+    if (!selectedVersionFilterHint || selectedVersionId !== prefillSelectedVersionId) {
+      return;
+    }
+    setSelectedVersionFilterHint('');
+  }, [prefillSelectedVersionId, selectedVersionFilterHint, selectedVersionId]);
+
   useEffect(() => {
     if (!filteredVersions.length) {
       setSelectedVersionId('');
@@ -571,6 +1100,10 @@ export default function ModelVersionsPage() {
     if (selectedVersionPrefillAppliedRef.current || !prefillSelectedVersionId) {
       return;
     }
+    if (selectedVersionId === prefillSelectedVersionId) {
+      selectedVersionPrefillAppliedRef.current = true;
+      return;
+    }
     if (!versions.some((version) => version.id === prefillSelectedVersionId)) {
       return;
     }
@@ -578,7 +1111,7 @@ export default function ModelVersionsPage() {
     selectedVersionPrefillAppliedRef.current = true;
     setSelectedVersionId(prefillSelectedVersionId);
     setVersionDetailOpen(true);
-  }, [prefillSelectedVersionId, versions]);
+  }, [prefillSelectedVersionId, selectedVersionId, versions]);
 
   useEffect(() => {
     if (!registerableJobs.length) {
@@ -712,36 +1245,241 @@ export default function ModelVersionsPage() {
     [selectedVersionRelatedRuns]
   );
   const selectedVersionLatestRun = selectedVersionRelatedRuns[0] ?? null;
+  const selectedVersionLatestFeedbackRun =
+    selectedVersionRelatedRuns.find((run) => Boolean(run.feedback_dataset_id)) ?? null;
   const selectedVersionJob = selectedVersion?.training_job_id
     ? jobsById.get(selectedVersion.training_job_id) ?? null
     : null;
   const selectedVersionJobInsight = selectedVersionJob ? jobExecutionInsights[selectedVersionJob.id] ?? null : null;
+  const activeLaunchContext = useMemo<LaunchContext>(
+    () => ({
+      datasetId: selectedVersionJob?.dataset_id ?? registrationPrefillTrainingContext.datasetId ?? null,
+      versionId: selectedVersionJob?.dataset_version_id ?? registrationPrefillTrainingContext.versionId ?? null,
+      taskType:
+        selectedVersion?.task_type ??
+        selectedVersionJob?.task_type ??
+        registrationPrefillTrainingContext.taskType ??
+        null,
+      framework:
+        selectedVersion?.framework ??
+        selectedVersionJob?.framework ??
+        registrationPrefillTrainingContext.framework ??
+        null,
+      executionTarget:
+        registrationPrefillTrainingContext.executionTarget ??
+        launchContextFromQuery.executionTarget ??
+        null,
+      workerId: registrationPrefillTrainingContext.workerId ?? launchContextFromQuery.workerId ?? null,
+      returnTo: registrationPrefillTrainingContext.returnTo ?? launchContextFromQuery.returnTo ?? outboundReturnTo
+    }),
+    [
+      launchContextFromQuery.executionTarget,
+      launchContextFromQuery.returnTo,
+      launchContextFromQuery.workerId,
+      registrationPrefillTrainingContext.datasetId,
+      registrationPrefillTrainingContext.executionTarget,
+      registrationPrefillTrainingContext.framework,
+      registrationPrefillTrainingContext.returnTo,
+      registrationPrefillTrainingContext.taskType,
+      registrationPrefillTrainingContext.versionId,
+      registrationPrefillTrainingContext.workerId,
+      outboundReturnTo,
+      selectedVersion?.framework,
+      selectedVersion?.task_type,
+      selectedVersionJob?.dataset_id,
+      selectedVersionJob?.dataset_version_id,
+      selectedVersionJob?.framework,
+      selectedVersionJob?.task_type
+    ]
+  );
+  const scopedTrainingJobsPath = useMemo(
+    () => buildTrainingJobsPath(activeLaunchContext),
+    [activeLaunchContext]
+  );
+  const scopedWorkspaceConsolePath = useMemo(
+    () => buildWorkspaceConsolePath(activeLaunchContext),
+    [activeLaunchContext]
+  );
+  const scopedMyModelsPath = useMemo(
+    () => buildMyModelsPath(activeLaunchContext),
+    [activeLaunchContext]
+  );
+  const scopedAdminAuditPath = useMemo(
+    () => buildAdminAuditPath(activeLaunchContext),
+    [activeLaunchContext]
+  );
+  const scopedDraftReworkMyModelsPath = useMemo(
+    () => buildMyModelsPath(activeLaunchContext, { lane: 'draft_rework' }),
+    [activeLaunchContext]
+  );
+  const scopedPendingMyModelsPath = useMemo(
+    () => buildMyModelsPath(activeLaunchContext, { lane: 'pending' }),
+    [activeLaunchContext]
+  );
   const selectedVersionMetricsPreview = selectedVersion ? buildMetricsPreview(selectedVersion.metrics_summary, 4) : null;
   const selectedVersionSupportsDeviceAccess = Boolean(
     selectedVersion && selectedVersion.status === 'registered'
   );
+  const canReviewAudit = currentUser?.role === 'admin';
   const selectedVersionInferencePath = useMemo(() => {
-    const searchParams = new URLSearchParams();
-    if (selectedVersion?.id) {
-      searchParams.set('modelVersion', selectedVersion.id);
+    if (!selectedVersion?.id) {
+      return '/inference/validate';
     }
-    if (selectedVersionJob?.dataset_id) {
-      searchParams.set('dataset', selectedVersionJob.dataset_id);
+    return buildScopedInferenceValidationPath(selectedVersion.id, {
+      datasetId: selectedVersionJob?.dataset_id ?? null,
+      versionId: selectedVersionJob?.dataset_version_id ?? null,
+      launchContext: activeLaunchContext
+    });
+  }, [
+    activeLaunchContext,
+    selectedVersion?.id,
+    selectedVersionJob?.dataset_id,
+    selectedVersionJob?.dataset_version_id
+  ]);
+  const selectedVersionLatestRunPath = useMemo(() => {
+    if (!selectedVersion?.id) {
+      return '/inference/validate';
     }
-    if (selectedVersionJob?.dataset_version_id) {
-      searchParams.set('version', selectedVersionJob.dataset_version_id);
-    }
-    const query = searchParams.toString();
-    return query ? `/inference/validate?${query}` : '/inference/validate';
-  }, [selectedVersion?.id, selectedVersionJob?.dataset_id, selectedVersionJob?.dataset_version_id]);
+    return buildScopedInferenceValidationPath(selectedVersion.id, {
+      datasetId: selectedVersionJob?.dataset_id ?? null,
+      versionId: selectedVersionJob?.dataset_version_id ?? null,
+      runId: selectedVersionLatestRun?.id ?? null,
+      focus: selectedVersionLatestRun?.id ? 'result' : null,
+      launchContext: activeLaunchContext
+    });
+  }, [
+    activeLaunchContext,
+    selectedVersion?.id,
+    selectedVersionJob?.dataset_id,
+    selectedVersionJob?.dataset_version_id,
+    selectedVersionLatestRun?.id
+  ]);
+  const selectedVersionFeedbackDatasetPath = useMemo(
+    () =>
+      selectedVersionLatestFeedbackRun?.feedback_dataset_id
+        ? buildDatasetDetailPath(selectedVersionLatestFeedbackRun.feedback_dataset_id, {
+            focus: 'workflow',
+            launchContext: activeLaunchContext
+          })
+        : '',
+    [activeLaunchContext, selectedVersionLatestFeedbackRun?.feedback_dataset_id]
+  );
   const selectedVersionClosurePath = useMemo(
-    () => buildScopedClosurePath(selectedVersionJob),
-    [selectedVersionJob]
+    () => buildScopedClosurePath(selectedVersionJob, activeLaunchContext),
+    [activeLaunchContext, selectedVersionJob]
+  );
+  const selectedVersionDeviceDeliveryPath = useMemo(
+    () => buildScopedVersionDeliveryPath(selectedVersion?.id, activeLaunchContext),
+    [
+      activeLaunchContext.datasetId,
+      activeLaunchContext.executionTarget,
+      activeLaunchContext.framework,
+      activeLaunchContext.taskType,
+      activeLaunchContext.versionId,
+      activeLaunchContext.workerId,
+      selectedVersion?.id
+    ]
+  );
+  const clearRegistrationPrefillPath = useMemo(
+    () => buildScopedVersionDeliveryPath(undefined, launchContextFromQuery),
+    [
+      launchContextFromQuery.datasetId,
+      launchContextFromQuery.executionTarget,
+      launchContextFromQuery.framework,
+      launchContextFromQuery.taskType,
+      launchContextFromQuery.versionId,
+      launchContextFromQuery.workerId
+    ]
   );
   const latestPublicInferenceInvocation =
     deviceLifecycle?.public_inference_invocations[0] ?? null;
   const latestModelPackageDelivery =
     deviceLifecycle?.model_package_deliveries[0] ?? null;
+  const focusDeviceDeliverySurface = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.setTimeout(() => {
+      const target = deviceAuthorizationSectionRef.current ?? deviceQuickStartRef.current;
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  }, []);
+  const focusDeviceLifecycleSurface = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.setTimeout(() => {
+      const target = deviceLifecycleSectionRef.current ?? deviceAuthorizationSectionRef.current ?? deviceQuickStartRef.current;
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  }, []);
+  const openSelectedVersionDeviceDelivery = useCallback(() => {
+    if (!selectedVersion) {
+      return;
+    }
+    setVersionDetailOpen(true);
+    focusDeviceDeliverySurface();
+  }, [focusDeviceDeliverySurface, selectedVersion]);
+  const openSelectedVersionOpsMonitoring = useCallback(() => {
+    if (!selectedVersion) {
+      return;
+    }
+    setVersionDetailOpen(true);
+    focusDeviceLifecycleSurface();
+  }, [focusDeviceLifecycleSurface, selectedVersion]);
+
+  useEffect(() => {
+    if (!selectedVersion || (prefillFocus !== 'device' && prefillFocus !== 'ops' && prefillFocus !== 'lifecycle')) {
+      return;
+    }
+    const focusKey = `${prefillFocus}:${selectedVersion.id}`;
+    if (selectedVersionFocusAppliedRef.current === focusKey) {
+      return;
+    }
+    selectedVersionFocusAppliedRef.current = focusKey;
+    setVersionDetailOpen(true);
+    if (prefillFocus === 'ops' || prefillFocus === 'lifecycle') {
+      focusDeviceLifecycleSurface();
+      return;
+    }
+    focusDeviceDeliverySurface();
+  }, [focusDeviceDeliverySurface, focusDeviceLifecycleSurface, prefillFocus, selectedVersion]);
+
+  const copyToClipboard = useCallback(
+    async (text: string, label: string) => {
+      const value = text.trim();
+      if (!value) {
+        return;
+      }
+
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(value);
+        } else {
+          const textArea = document.createElement('textarea');
+          textArea.value = value;
+          textArea.setAttribute('readonly', 'readonly');
+          textArea.style.position = 'fixed';
+          textArea.style.opacity = '0';
+          document.body.appendChild(textArea);
+          textArea.focus();
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+        }
+        setError('');
+        setSuccess(t('{label} copied.', { label }));
+      } catch (copyError) {
+        setSuccess('');
+        setError(
+          t('Copy failed: {message}', {
+            message: copyError instanceof Error ? copyError.message : String(copyError)
+          })
+        );
+      }
+    },
+    [t]
+  );
   const deviceLifecycleTimeline = useMemo(() => {
     const credentialEvents = deviceAccessRecords.map((record) => ({
       id: `credential-${record.binding_key}`,
@@ -781,6 +1519,121 @@ export default function ModelVersionsPage() {
       .sort((left, right) => toTime(right.timestamp) - toTime(left.timestamp))
       .slice(0, 6);
   }, [deviceAccessRecords, deviceLifecycle, t]);
+  const selectedVersionHasRemoteProof = Boolean(
+    selectedVersionSupportsDeviceAccess &&
+      deviceAccessRecords.length > 0 &&
+      latestPublicInferenceInvocation &&
+      latestModelPackageDelivery
+  );
+  const remoteDeliveryChecklist = useMemo(() => {
+    if (!selectedVersion || !selectedVersionSupportsDeviceAccess) {
+      return [];
+    }
+    return [
+      {
+        key: 'credential',
+        title: t('1) Issue scoped device credential'),
+        done: deviceAccessRecords.length > 0,
+        detail: t('Create one credential so the device can call inference and pull model packages.')
+      },
+      {
+        key: 'inference',
+        title: t('2) Verify remote inference once'),
+        done: Boolean(latestPublicInferenceInvocation),
+        detail: t('Run one authorized inference from the target device and confirm the invocation record appears.')
+      },
+      {
+        key: 'package',
+        title: t('3) Verify encrypted package pull'),
+        done: Boolean(latestModelPackageDelivery),
+        detail: t('Trigger one encrypted package delivery so deployment evidence is complete.')
+      }
+    ];
+  }, [
+    deviceAccessRecords.length,
+    latestModelPackageDelivery,
+    latestPublicInferenceInvocation,
+    selectedVersion,
+    selectedVersionSupportsDeviceAccess,
+    t
+  ]);
+  const remoteDeliveryCompletedCount = useMemo(
+    () => remoteDeliveryChecklist.filter((item) => item.done).length,
+    [remoteDeliveryChecklist]
+  );
+  const remoteDeliveryNextAction = useMemo<{
+    label: string;
+    to?: string;
+    onClick?: () => void;
+    variant?: 'primary' | 'secondary' | 'ghost';
+  } | null>(() => {
+    if (!selectedVersion || !selectedVersionSupportsDeviceAccess) {
+      return null;
+    }
+    if (deviceAccessRecords.length === 0) {
+      return {
+        label: t('Issue device credential now'),
+        onClick: openSelectedVersionDeviceDelivery,
+        variant: 'secondary'
+      };
+    }
+    if (!latestPublicInferenceInvocation) {
+      return {
+        label: t('Validate one remote inference'),
+        to: selectedVersionInferencePath,
+        variant: 'secondary'
+      };
+    }
+    if (!latestModelPackageDelivery) {
+      return {
+        label: t('Complete package delivery check'),
+        onClick: openSelectedVersionDeviceDelivery,
+        variant: 'secondary'
+      };
+    }
+    return {
+      label: t('Open remote ops summary'),
+      onClick: openSelectedVersionOpsMonitoring,
+      variant: 'ghost'
+    };
+  }, [
+    deviceAccessRecords.length,
+    latestModelPackageDelivery,
+    latestPublicInferenceInvocation,
+    openSelectedVersionDeviceDelivery,
+    openSelectedVersionOpsMonitoring,
+    selectedVersion,
+    selectedVersionInferencePath,
+    selectedVersionSupportsDeviceAccess,
+    t
+  ]);
+  const selectedVersionRemoteOpsSummary = useMemo(() => {
+    if (!selectedVersionSupportsDeviceAccess) {
+      return null;
+    }
+    const latestLifecycleTimestamp = [
+      latestPublicInferenceInvocation?.created_at,
+      latestModelPackageDelivery?.generated_at,
+      deviceAccessRecords[0]?.last_used_at,
+      deviceAccessRecords[0]?.issued_at
+    ]
+      .map((value) => toTime(value))
+      .filter((value) => value > 0)
+      .sort((left, right) => right - left)[0];
+    return {
+      credentialCount: deviceAccessRecords.length,
+      publicInferenceCount: deviceLifecycle?.public_inference_invocations.length ?? 0,
+      packageDeliveryCount: deviceLifecycle?.model_package_deliveries.length ?? 0,
+      lastActivityAt: latestLifecycleTimestamp ? new Date(latestLifecycleTimestamp).toISOString() : ''
+    };
+  }, [
+    deviceAccessRecords,
+    deviceLifecycle?.model_package_deliveries.length,
+    deviceLifecycle?.public_inference_invocations.length,
+    latestModelPackageDelivery?.generated_at,
+    latestPublicInferenceInvocation?.created_at,
+    selectedVersionSupportsDeviceAccess
+  ]);
 
   const loadDeviceSurface = useCallback(async (versionId: string, options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -1010,10 +1863,10 @@ export default function ModelVersionsPage() {
         return t('Not registerable');
       }
       if (!insight) {
-        return jobInsightsLoading ? t('Checking authenticity') : t('Authenticity unknown');
+        return jobInsightsLoading ? t('Checking verification status') : t('Verification status unknown');
       }
-      if (insight.reality === 'real') {
-        return t('Real');
+      if (insight.reality === 'standard') {
+        return t('Standard');
       }
       if (insight.reality === 'template') {
         return t('Degraded output');
@@ -1027,32 +1880,30 @@ export default function ModelVersionsPage() {
   );
   const formatRegistrationEvidenceMode = useCallback(
     (value: ModelVersionRecord['registration_evidence_mode']) => {
-      if (value === 'real') {
-        return t('real');
+      const evidenceLevel = resolveRegistrationEvidenceLevel(value);
+      if (evidenceLevel === 'standard') {
+        return t('Standard evidence');
       }
-      if (value === 'real_probe') {
-        return t('real_probe');
+      if (evidenceLevel === 'calibrated') {
+        return t('Calibrated evidence');
       }
-      if (value === 'non_real_local_command') {
-        return t('non_real_local_command');
+      if (evidenceLevel === 'compatibility') {
+        return t('Compatibility evidence');
       }
-      return t('unknown');
+      return t('Pending evidence');
     },
     [t]
   );
   const formatRegistrationGateStatus = useCallback(
     (version: ModelVersionRecord) => {
-      if (version.registration_gate_exempted === true) {
-        return t('exempted');
+      const gateLevel = resolveRegistrationGateLevel(version);
+      if (gateLevel === 'override') {
+        return t('Policy override');
       }
-      if (
-        version.registration_gate_exempted === false ||
-        version.registration_evidence_mode === 'real' ||
-        version.registration_evidence_mode === 'real_probe'
-      ) {
-        return t('strict');
+      if (gateLevel === 'standard') {
+        return t('Standard gate');
       }
-      return t('unknown');
+      return t('Gate pending');
     },
     [t]
   );
@@ -1112,12 +1963,12 @@ export default function ModelVersionsPage() {
         current: 1,
         total: 5,
         title: t('Register the first verified model version'),
-        detail: t('Start from a completed real training job, then come back here to register and compare versions.'),
+        detail: t('Start from a completed verified training job, then come back here to register and compare versions.'),
         badgeTone: 'warning',
         badgeLabel: t('No versions'),
         actions: [
-          { label: t('Open Training Jobs'), to: '/training/jobs' },
-          { label: t('Create model draft'), to: '/models/create', variant: 'ghost' }
+          { label: t('Open Training Jobs'), to: scopedTrainingJobsPath },
+          { label: t('Create model draft'), to: buildCreateModelDraftPath(undefined, undefined, activeLaunchContext), variant: 'ghost' }
         ]
       };
     }
@@ -1166,9 +2017,10 @@ export default function ModelVersionsPage() {
             to: selectedVersion.training_job_id
               ? buildScopedTrainingJobDetailPath(
                   selectedVersion.training_job_id,
-                  jobsById.get(selectedVersion.training_job_id) ?? null
+                  jobsById.get(selectedVersion.training_job_id) ?? null,
+                  activeLaunchContext
                 )
-              : '/training/jobs',
+              : scopedTrainingJobsPath,
             variant: 'ghost'
           }
         ]
@@ -1178,19 +2030,19 @@ export default function ModelVersionsPage() {
     if (
       selectedVersionJob &&
       selectedVersionJob.execution_mode === 'local_command' &&
-      selectedVersionJobInsight?.reality !== 'real'
+      selectedVersionJobInsight?.reality !== 'standard'
     ) {
       return {
         current: 3,
         total: 5,
         title: t('Review linked training evidence first'),
-        detail: t('The linked training job still shows non-real or degraded evidence. Confirm the training record before using this version as a trusted external delivery target.'),
+        detail: t('The linked training job still shows limited-output evidence. Confirm the training record before using this version as a trusted external delivery target.'),
         badgeTone: 'warning',
         badgeLabel: t('Evidence review'),
         actions: [
           {
             label: t('Open training job'),
-            to: buildScopedTrainingJobDetailPath(selectedVersionJob.id, selectedVersionJob)
+            to: buildScopedTrainingJobDetailPath(selectedVersionJob.id, selectedVersionJob, activeLaunchContext)
           },
           {
             label: t('Open version detail'),
@@ -1210,7 +2062,7 @@ export default function ModelVersionsPage() {
         badgeTone: 'info',
         badgeLabel: t('Governance pending'),
         actions: [
-          { label: t('Open My Models'), to: '/models/my-models?lane=draft_rework' },
+          { label: t('Open My Models'), to: scopedDraftReworkMyModelsPath },
           { label: t('Open version detail'), onClick: () => setVersionDetailOpen(true), variant: 'ghost' }
         ]
       };
@@ -1225,7 +2077,7 @@ export default function ModelVersionsPage() {
         badgeTone: 'info',
         badgeLabel: t('Pending approval'),
         actions: [
-          { label: t('Open My Models'), to: '/models/my-models?lane=pending' },
+          { label: t('Open My Models'), to: scopedPendingMyModelsPath },
           { label: t('Validate inference'), to: selectedVersionInferencePath, variant: 'ghost' }
         ]
       };
@@ -1270,8 +2122,8 @@ export default function ModelVersionsPage() {
         badgeTone: 'success',
         badgeLabel: t('Ready for device'),
         actions: [
-          { label: t('Open version detail'), onClick: () => setVersionDetailOpen(true) },
-          { label: t('Open console'), to: '/workspace/console', variant: 'ghost' }
+          { label: t('Open device delivery panel'), onClick: openSelectedVersionDeviceDelivery },
+          { label: t('Open console'), to: scopedWorkspaceConsolePath, variant: 'ghost' }
         ]
       };
     }
@@ -1285,7 +2137,7 @@ export default function ModelVersionsPage() {
         badgeTone: 'info',
         badgeLabel: t('Remote verify'),
         actions: [
-          { label: t('Open version detail'), onClick: () => setVersionDetailOpen(true) },
+          { label: t('Open device delivery panel'), onClick: openSelectedVersionDeviceDelivery },
           { label: t('Open validation page'), to: selectedVersionInferencePath, variant: 'ghost' }
         ]
       };
@@ -1300,8 +2152,26 @@ export default function ModelVersionsPage() {
         badgeTone: 'info',
         badgeLabel: t('Package verify'),
         actions: [
-          { label: t('Open version detail'), onClick: () => setVersionDetailOpen(true) },
-          { label: t('Open console'), to: '/workspace/console', variant: 'ghost' }
+          { label: t('Open device delivery panel'), onClick: openSelectedVersionDeviceDelivery },
+          { label: t('Open console'), to: scopedWorkspaceConsolePath, variant: 'ghost' }
+        ]
+      };
+    }
+
+    if (selectedVersionHasRemoteProof) {
+      return {
+        current: 5,
+        total: 5,
+        title: t('Shift into remote ops monitoring and audit follow-up'),
+        detail: t('Credential issuance, public inference, and encrypted package delivery are all evidenced. Keep this version in monitored operation and continue governance follow-up from audit logs.'),
+        badgeTone: 'success',
+        badgeLabel: t('Remote ops ready'),
+        actions: [
+          { label: t('Open remote ops summary'), onClick: openSelectedVersionOpsMonitoring },
+          canReviewAudit
+            ? { label: t('Open audit logs'), to: scopedAdminAuditPath, variant: 'ghost' }
+            : { label: t('Open Console'), to: scopedWorkspaceConsolePath, variant: 'ghost' },
+          { label: t('Open closure lane'), to: selectedVersionClosurePath, variant: 'ghost' }
         ]
       };
     }
@@ -1320,16 +2190,26 @@ export default function ModelVersionsPage() {
       ]
     };
   }, [
+    activeLaunchContext,
     deviceAccessRecords.length,
     filteredVersions,
     jobsById,
     latestModelPackageDelivery,
     latestPublicInferenceInvocation,
     openVersionDetail,
+    openSelectedVersionDeviceDelivery,
+    openSelectedVersionOpsMonitoring,
+    canReviewAudit,
+    scopedAdminAuditPath,
+    scopedDraftReworkMyModelsPath,
+    scopedPendingMyModelsPath,
+    scopedTrainingJobsPath,
+    scopedWorkspaceConsolePath,
     selectedModel,
     selectedVersion,
     selectedVersionClosurePath,
     selectedVersionFeedbackDatasetIds.length,
+    selectedVersionHasRemoteProof,
     selectedVersionInferencePath,
     selectedVersionJob,
     selectedVersionJobInsight?.reality,
@@ -1385,6 +2265,7 @@ export default function ModelVersionsPage() {
         cell: (version) => {
           const linkedJob = version.training_job_id ? jobsById.get(version.training_job_id) : null;
           const linkedJobInsight = linkedJob ? jobExecutionInsights[linkedJob.id] ?? null : null;
+          const evidenceLevel = resolveRegistrationEvidenceLevel(version.registration_evidence_mode);
           return (
             <div className="stack tight">
               <StatusTag status={version.status}>{t(version.status)}</StatusTag>
@@ -1394,11 +2275,13 @@ export default function ModelVersionsPage() {
                 </Badge>
                 <Badge
                   tone={
-                    version.registration_evidence_mode === 'non_real_local_command'
+                    evidenceLevel === 'compatibility'
                       ? 'warning'
-                      : version.registration_evidence_mode === 'real_probe'
+                      : evidenceLevel === 'calibrated'
                         ? 'info'
-                        : 'success'
+                        : evidenceLevel === 'standard'
+                          ? 'success'
+                          : 'neutral'
                   }
                 >
                   {t('Evidence')}: {formatRegistrationEvidenceMode(version.registration_evidence_mode)}
@@ -1407,7 +2290,7 @@ export default function ModelVersionsPage() {
                   {t('Gate')}: {formatRegistrationGateStatus(version)}
                 </Badge>
                 {linkedJob ? (
-                  <Badge tone={linkedJobInsight?.reality === 'real' ? 'success' : 'warning'}>
+                  <Badge tone={linkedJobInsight?.reality === 'standard' ? 'success' : 'warning'}>
                     {describeJobExecutionReality(linkedJob, linkedJobInsight)}
                   </Badge>
                 ) : null}
@@ -1491,7 +2374,7 @@ export default function ModelVersionsPage() {
     }
 
     if (!registerableJobs.some((job) => job.id === jobId)) {
-      setError(t('The selected job has not passed authenticity verification.'));
+      setError(t('The selected job has not passed execution verification.'));
       setSuccess('');
       return;
     }
@@ -1548,6 +2431,70 @@ export default function ModelVersionsPage() {
     !submitting && Boolean(modelId && jobId && versionName.trim() && registerableJobs.some((job) => job.id === jobId));
   const hasActiveFilters =
     searchText.trim().length > 0 || taskFilter !== 'all' || frameworkFilter !== 'all' || statusFilter !== 'all';
+  const taskEligibleCount = useMemo(
+    () =>
+      taskFilter === 'all'
+        ? sortedVersions.length
+        : sortedVersions.filter((version) => version.task_type === taskFilter).length,
+    [sortedVersions, taskFilter]
+  );
+  const frameworkEligibleCount = useMemo(
+    () =>
+      frameworkFilter === 'all'
+        ? sortedVersions.length
+        : sortedVersions.filter((version) => version.framework === frameworkFilter).length,
+    [frameworkFilter, sortedVersions]
+  );
+  const statusEligibleCount = useMemo(
+    () =>
+      statusFilter === 'all'
+        ? sortedVersions.length
+        : sortedVersions.filter((version) => version.status === statusFilter).length,
+    [sortedVersions, statusFilter]
+  );
+  const searchEligibleCount = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    if (!query) {
+      return sortedVersions.length;
+    }
+    return sortedVersions.filter((version) => {
+      return (
+        version.version_name.toLowerCase().includes(query) ||
+        version.id.toLowerCase().includes(query) ||
+        version.model_id.toLowerCase().includes(query)
+      );
+    }).length;
+  }, [searchText, sortedVersions]);
+  const filterBlockerHint = useMemo(() => {
+    if (filteredVersions.length > 0 || !hasActiveFilters) {
+      return '';
+    }
+    if (searchText.trim() && searchEligibleCount === 0) {
+      return t('Search keyword currently matches 0 versions.');
+    }
+    if (taskFilter !== 'all' && taskEligibleCount === 0) {
+      return t('Task filter currently has no matching versions.');
+    }
+    if (frameworkFilter !== 'all' && frameworkEligibleCount === 0) {
+      return t('Framework filter currently has no matching versions.');
+    }
+    if (statusFilter !== 'all' && statusEligibleCount === 0) {
+      return t('Status filter currently has no matching versions.');
+    }
+    return t('Current filters are too strict. Clear one or more filters to recover versions.');
+  }, [
+    filteredVersions.length,
+    frameworkEligibleCount,
+    frameworkFilter,
+    hasActiveFilters,
+    searchEligibleCount,
+    searchText,
+    statusEligibleCount,
+    statusFilter,
+    t,
+    taskEligibleCount,
+    taskFilter
+  ]);
   const versionsSummary = {
     total: sortedVersions.length,
     visible: filteredVersions.length,
@@ -1569,16 +2516,25 @@ export default function ModelVersionsPage() {
         title={t('Model Versions')}
         description={t('Compare or register verified versions.')}
         meta={
-          <div className="row gap wrap align-center">
-            <Badge tone="neutral">
-              {t('Total')}: {versionsSummary.total}
-            </Badge>
-            <Badge tone={versionsSummary.registerable > 0 ? 'success' : 'warning'}>
-              {t('Registerable')}: {versionsSummary.registerable}
-            </Badge>
-            <Badge tone="info">
-              {t('Compared')}: {versionsSummary.compared}
-            </Badge>
+          <div className="stack tight">
+            <div className="row gap wrap align-center">
+              <Badge tone="neutral">
+                {t('Total')}: {versionsSummary.total}
+              </Badge>
+              <Badge tone={versionsSummary.registerable > 0 ? 'success' : 'warning'}>
+                {t('Registerable')}: {versionsSummary.registerable}
+              </Badge>
+              <Badge tone="info">
+                {t('Compared')}: {versionsSummary.compared}
+              </Badge>
+            </div>
+            <TrainingLaunchContextPills
+              taskType={registrationPrefillTrainingContext.taskType}
+              framework={registrationPrefillTrainingContext.framework}
+              executionTarget={registrationPrefillTrainingContext.executionTarget}
+              workerId={registrationPrefillTrainingContext.workerId}
+              t={t}
+            />
           </div>
         }
         primaryAction={{
@@ -1590,6 +2546,13 @@ export default function ModelVersionsPage() {
           },
           disabled: loading || refreshing
         }}
+        secondaryActions={
+          requestedReturnTo ? (
+            <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+              {t('Return to current task')}
+            </ButtonLink>
+          ) : undefined
+        }
       />
 
       {error ? <InlineAlert tone="danger" title={t('Action Failed')} description={error} /> : null}
@@ -1599,29 +2562,127 @@ export default function ModelVersionsPage() {
           title={t('Action Completed')}
           description={success}
           actions={
-            selectedVersion ? (
-              <div className="row gap wrap">
-                <ButtonLink
-                  to={buildScopedInferenceValidationPath(selectedVersion.id)}
-                  variant="secondary"
-                  size="sm"
-                >
-                  {t('Validate inference')}
-                </ButtonLink>
-                {selectedVersion.training_job_id ? (
-                  <ButtonLink
-                    to={buildScopedTrainingJobDetailPath(
-                      selectedVersion.training_job_id,
-                      jobsById.get(selectedVersion.training_job_id) ?? null
-                    )}
-                    variant="ghost"
-                    size="sm"
-                  >
+	            selectedVersion ? (
+	              <div className="row gap wrap">
+	                <ButtonLink
+	                  to={buildScopedInferenceValidationPath(selectedVersion.id, {
+	                    datasetId: selectedVersionJob?.dataset_id ?? null,
+	                    versionId: selectedVersionJob?.dataset_version_id ?? null,
+	                    launchContext: activeLaunchContext
+	                  })}
+	                  variant="secondary"
+	                  size="sm"
+	                >
+	                  {t('Validate inference')}
+	                </ButtonLink>
+	                {selectedVersion.training_job_id ? (
+	                  <ButtonLink
+	                    to={buildScopedTrainingJobDetailPath(
+	                      selectedVersion.training_job_id,
+	                      jobsById.get(selectedVersion.training_job_id) ?? null,
+	                      activeLaunchContext
+	                    )}
+	                    variant="ghost"
+	                    size="sm"
+	                  >
                     {t('Open training job')}
                   </ButtonLink>
                 ) : null}
               </div>
             ) : null
+          }
+        />
+      ) : null}
+      {selectedVersionFilterHint ? (
+        <InlineAlert
+          tone="info"
+          title={t('Focused on requested version')}
+          description={selectedVersionFilterHint}
+        />
+      ) : null}
+      {selectedVersionPrefillMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested version not found')}
+          description={t('The selected version from the incoming link is unavailable. Showing available versions instead.')}
+          actions={
+            <ButtonLink to={clearRegistrationPrefillPath} variant="ghost" size="sm">
+              {t('Clear prefill')}
+            </ButtonLink>
+          }
+        />
+      ) : null}
+      {registrationPrefillJobMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested training job not found')}
+          description={t('The training job from the incoming link is unavailable. Showing the current version inventory instead.')}
+          actions={
+            <ButtonLink to={clearRegistrationPrefillPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
+        />
+      ) : null}
+      {registrationPrefillJobOutOfRegisterable && registrationPrefillJob ? (
+        <InlineAlert
+          tone={registrationPrefillInsight?.reality === 'standard' ? 'info' : 'warning'}
+          title={t('Requested training job cannot register yet')}
+          description={
+            registrationPrefillJob.status !== 'completed'
+              ? t('Job {jobId} is currently {status}. Wait for completion before version registration.', {
+                  jobId: registrationPrefillJob.id,
+                  status: t(registrationPrefillJob.status)
+                })
+              : registrationPrefillInsight?.reality !== 'standard'
+                ? t('Job {jobId} completed, but evidence is not fully standard yet. Fix runtime or closure checks first.', {
+                    jobId: registrationPrefillJob.id
+                  })
+                : !registrationPrefillMatchingModel
+                  ? t('Job {jobId} is complete, but no matching owned model draft is available yet.', {
+                      jobId: registrationPrefillJob.id
+                    })
+                  : t('Job {jobId} is not registerable in the current lane yet. Review the job detail first.', {
+                      jobId: registrationPrefillJob.id
+                    })
+          }
+          actions={
+            <div className="row gap wrap">
+              {registrationPrefillJobPath ? (
+                <ButtonLink to={registrationPrefillJobPath} variant="secondary" size="sm">
+                  {t('Open training job')}
+                </ButtonLink>
+              ) : null}
+              {registrationPrefillJob.dataset_id && registrationPrefillInsight?.reality !== 'standard' ? (
+                <ButtonLink
+                  to={buildScopedClosurePath(registrationPrefillJob, registrationPrefillTrainingContext)}
+                  variant="ghost"
+                  size="sm"
+                >
+                  {t('Open closure lane')}
+                </ButtonLink>
+              ) : null}
+              {!registrationPrefillMatchingModel ? (
+                <ButtonLink to={registrationPrefillCreateModelPath} variant="ghost" size="sm">
+                  {t('Create model draft')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={clearRegistrationPrefillPath} variant="ghost" size="sm">
+                {t('Clear context')}
+              </ButtonLink>
+            </div>
+          }
+        />
+      ) : null}
+      {filterBlockerHint ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Filters are hiding all versions')}
+          description={filterBlockerHint}
+          actions={
+            <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+              {t('Clear filters')}
+            </Button>
           }
         />
       ) : null}
@@ -1752,11 +2813,11 @@ export default function ModelVersionsPage() {
                       <small className="muted">
                         {t('Relax the search or filter.')}
                       </small>
-                    ) : (
-                      <ButtonLink to="/training/jobs" variant="secondary" size="sm">
-                        {t('Open Training Jobs')}
-                      </ButtonLink>
-                    )
+	                    ) : (
+	                      <ButtonLink to={scopedTrainingJobsPath} variant="secondary" size="sm">
+	                        {t('Open Training Jobs')}
+	                      </ButtonLink>
+	                    )
                   }
                 />
               ) : (
@@ -1832,20 +2893,321 @@ export default function ModelVersionsPage() {
                     {t('Validate inference')}
                   </ButtonLink>
                 ) : null}
-                {selectedVersionJob ? (
-                  <ButtonLink
-                    to={buildScopedTrainingJobDetailPath(selectedVersionJob.id, selectedVersionJob)}
-                    variant="ghost"
-                    size="sm"
-                  >
+                {selectedVersionSupportsDeviceAccess ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={openSelectedVersionDeviceDelivery}>
+                    {t('Open device delivery panel')}
+                  </Button>
+                ) : null}
+	                {selectedVersionJob ? (
+	                  <ButtonLink
+	                    to={buildScopedTrainingJobDetailPath(
+	                      selectedVersionJob.id,
+	                      selectedVersionJob,
+	                      activeLaunchContext
+	                    )}
+	                    variant="ghost"
+	                    size="sm"
+	                  >
+	                    {t('Open training job')}
+	                  </ButtonLink>
+	                ) : null}
+	                <ButtonLink to={scopedMyModelsPath} variant="ghost" size="sm">
+	                  {t('Open My Models')}
+	                </ButtonLink>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title={t('Loop objects')}
+              description={t('Track exactly what has been produced in this loop.')}
+            >
+              <DetailList
+                items={[
+                  {
+                    label: t('Dataset'),
+                    value: selectedVersionJob?.dataset_id || '-'
+                  },
+                  {
+                    label: t('Dataset Version'),
+                    value: selectedVersionJob?.dataset_version_id || '-'
+                  },
+                  {
+                    label: t('Training Job'),
+                    value: selectedVersion?.training_job_id || t('manual')
+                  },
+                  {
+                    label: t('Model Version'),
+                    value: selectedVersion?.id || '-'
+                  },
+                  {
+                    label: t('Inference run'),
+                    value: selectedVersionLatestRun?.id || '-'
+                  },
+                  {
+                    label: t('Feedback dataset'),
+                    value: selectedVersionLatestFeedbackRun?.feedback_dataset_id || '-'
+                  },
+                  {
+                    label: t('evidence mode'),
+                    value: selectedVersion ? formatRegistrationEvidenceMode(selectedVersion.registration_evidence_mode) : '-'
+                  },
+                  {
+                    label: t('gate status'),
+                    value: selectedVersion ? formatRegistrationGateStatus(selectedVersion) : '-'
+                  }
+                ]}
+              />
+              <div className="row gap wrap">
+	                {selectedVersionJob ? (
+	                  <ButtonLink
+	                    to={buildScopedTrainingJobDetailPath(
+	                      selectedVersionJob.id,
+	                      selectedVersionJob,
+	                      activeLaunchContext
+	                    )}
+	                    variant="ghost"
+	                    size="sm"
+	                  >
                     {t('Open training job')}
                   </ButtonLink>
                 ) : null}
-                <ButtonLink to="/models/my-models" variant="ghost" size="sm">
-                  {t('Open My Models')}
-                </ButtonLink>
+                {selectedVersionLatestRun ? (
+                  <ButtonLink to={selectedVersionLatestRunPath} variant="ghost" size="sm">
+                    {t('Open latest run')}
+                  </ButtonLink>
+                ) : null}
+                {selectedVersionFeedbackDatasetPath ? (
+                  <ButtonLink to={selectedVersionFeedbackDatasetPath} variant="ghost" size="sm">
+                    {t('Open feedback dataset')}
+                  </ButtonLink>
+                ) : null}
+                {selectedVersion ? (
+                  <ButtonLink to={selectedVersionInferencePath} variant="ghost" size="sm">
+                    {t('Validate inference')}
+                  </ButtonLink>
+                ) : null}
+                {selectedVersion ? (
+                  <ButtonLink to={selectedVersionClosurePath} variant="ghost" size="sm">
+                    {t('Open closure lane')}
+                  </ButtonLink>
+                ) : null}
               </div>
             </SectionCard>
+
+            <div ref={deviceQuickStartRef}>
+              <SectionCard
+                title={t('Remote delivery quick start')}
+                description={t(
+                  'Use this page as the main version-scoped delivery lane when robots or remote callers need credentials, sample curls, and lifecycle proof.'
+                )}
+                actions={
+                  selectedVersion ? (
+                    <ButtonLink to={selectedVersionDeviceDeliveryPath} variant="ghost" size="sm">
+                      {t('Open version delivery lane')}
+                    </ButtonLink>
+                  ) : null
+                }
+              >
+                {!selectedVersion ? (
+                  <StateBlock
+                    variant="empty"
+                    title={t('Select one version to continue')}
+                    description={t('Choose a registered version first, then return here to finish remote device or API delivery.')}
+                  />
+                ) : !selectedVersionSupportsDeviceAccess ? (
+                  <InlineAlert
+                    tone="warning"
+                    title={t('Selected version must be registered before remote delivery')}
+                    description={t('Register this version first, then issue scoped credentials for devices or remote API callers.')}
+                    actions={
+	                      <div className="row gap wrap">
+	                        <Button type="button" variant="secondary" size="sm" onClick={() => setVersionDetailOpen(true)}>
+	                          {t('Open version detail')}
+	                        </Button>
+	                        <ButtonLink to={scopedTrainingJobsPath} variant="ghost" size="sm">
+	                          {t('Open Training Jobs')}
+	                        </ButtonLink>
+	                      </div>
+                    }
+                  />
+                ) : (
+                  <div className="stack">
+                    <DetailList
+                      items={[
+                        { label: t('Selected version'), value: selectedVersion.version_name },
+                        { label: t('Credentials'), value: deviceAccessRecords.length },
+                        {
+                          label: t('Public inference'),
+                          value: deviceLifecycle?.public_inference_invocations.length ?? 0
+                        },
+                        {
+                          label: t('Package deliveries'),
+                          value: deviceLifecycle?.model_package_deliveries.length ?? 0
+                        }
+                      ]}
+                    />
+                    <Card as="section" tone="soft" className="stack tight">
+                      <div className="row gap wrap align-center">
+                        <strong>{t('Remote delivery checklist')}</strong>
+                        <Badge tone={selectedVersionHasRemoteProof ? 'success' : 'info'}>
+                          {t('{done}/3 complete', { done: remoteDeliveryCompletedCount })}
+                        </Badge>
+                      </div>
+                      <small className="muted">
+                        {t('Follow this order to avoid missing remote-usage evidence.')}
+                      </small>
+                      <div className="workspace-keyline-list">
+                        {remoteDeliveryChecklist.map((item) => (
+                          <div key={item.key} className="workspace-keyline-item">
+                            <span>{item.title}</span>
+                            <small>{item.done ? t('Ready') : item.detail}</small>
+                          </div>
+                        ))}
+                      </div>
+                      {remoteDeliveryNextAction ? (
+                        <div className="row gap wrap">
+                          {remoteDeliveryNextAction.to ? (
+                            <ButtonLink
+                              to={remoteDeliveryNextAction.to}
+                              variant={remoteDeliveryNextAction.variant ?? 'secondary'}
+                              size="sm"
+                            >
+                              {remoteDeliveryNextAction.label}
+                            </ButtonLink>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant={remoteDeliveryNextAction.variant ?? 'secondary'}
+                              size="sm"
+                              onClick={remoteDeliveryNextAction.onClick}
+                            >
+                              {remoteDeliveryNextAction.label}
+                            </Button>
+                          )}
+                        </div>
+                      ) : null}
+                    </Card>
+
+                    <div className="stack tight">
+                      <div className="workspace-record-item compact stack tight">
+                        <div className="row gap wrap align-center">
+                          <strong>{t('Issue device credential')}</strong>
+                          <Badge tone={deviceAccessRecords.length > 0 ? 'success' : 'warning'}>
+                            {deviceAccessRecords.length > 0 ? t('Ready') : t('Pending')}
+                          </Badge>
+                        </div>
+                        <small className="muted">
+                          {deviceAccessRecords.length > 0
+                            ? `${deviceAccessRecords[0].device_name} · ${deviceAccessRecords[0].binding_key} · ${deviceAccessRecords[0].api_key_masked}`
+                            : t('Issue one credential to enable API-based model usage from field devices.')}
+                        </small>
+                      </div>
+
+                      <div className="workspace-record-item compact stack tight">
+                        <div className="row gap wrap align-center">
+                          <strong>{t('Latest public inference')}</strong>
+                          <Badge tone={latestPublicInferenceInvocation ? 'success' : 'warning'}>
+                            {latestPublicInferenceInvocation ? t('Ready') : t('Pending')}
+                          </Badge>
+                        </div>
+                        <small className="muted">
+                          {latestPublicInferenceInvocation
+                            ? `${latestPublicInferenceInvocation.request_id} · ${latestPublicInferenceInvocation.runtime_auth_binding_key} · ${formatCompactTimestamp(latestPublicInferenceInvocation.created_at)}`
+                            : t('No device has invoked public inference yet. Copy the inference curl below and verify once from the target device.')}
+                        </small>
+                      </div>
+
+                      <div className="workspace-record-item compact stack tight">
+                        <div className="row gap wrap align-center">
+                          <strong>{t('Latest package delivery')}</strong>
+                          <Badge tone={latestModelPackageDelivery ? 'success' : 'warning'}>
+                            {latestModelPackageDelivery ? t('Ready') : t('Pending')}
+                          </Badge>
+                        </div>
+                        <small className="muted">
+                          {latestModelPackageDelivery
+                            ? `${latestModelPackageDelivery.delivery_id} · ${latestModelPackageDelivery.source_filename} · ${formatCompactTimestamp(latestModelPackageDelivery.generated_at)}`
+                            : t('No encrypted model package has been delivered yet. Copy the model package curl below when the device is ready to pull.')}
+                        </small>
+                      </div>
+                    </div>
+
+                    <div className="row gap wrap">
+                      <Button type="button" size="sm" onClick={openSelectedVersionDeviceDelivery}>
+                        {t('Open device delivery panel')}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={openSelectedVersionOpsMonitoring}>
+                        {t('Open remote ops summary')}
+                      </Button>
+                      <ButtonLink to={selectedVersionInferencePath} variant="ghost" size="sm">
+                        {t('Validate inference')}
+                      </ButtonLink>
+                      <ButtonLink to={selectedVersionClosurePath} variant="ghost" size="sm">
+                        {t('Open closure lane')}
+                      </ButtonLink>
+                    </div>
+
+                    {latestIssuedDeviceAccess ? (
+                      <details className="workspace-details">
+                        <summary>{t('Latest issued credential (copy once)')}</summary>
+                        <div className="stack tight">
+                          <small className="muted">
+                            {latestIssuedDeviceAccess.record.device_name} · {latestIssuedDeviceAccess.record.api_key_masked}
+                          </small>
+                          <div className="row gap wrap">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                void copyToClipboard(latestIssuedDeviceAccess.api_key, t('key'));
+                              }}
+                            >
+                              {t('Copy device key')}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                void copyToClipboard(
+                                  latestIssuedDeviceAccess.snippets.sample_inference_curl,
+                                  t('Inference API sample')
+                                );
+                              }}
+                            >
+                              {t('Copy inference curl')}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                void copyToClipboard(
+                                  latestIssuedDeviceAccess.snippets.sample_model_package_curl,
+                                  t('Model package API sample')
+                                );
+                              }}
+                            >
+                              {t('Copy model package curl')}
+                            </Button>
+                          </div>
+                          <pre className="code-block">{latestIssuedDeviceAccess.api_key}</pre>
+                          <small className="muted">{t('Inference API sample')}</small>
+                          <pre className="code-block">{latestIssuedDeviceAccess.snippets.sample_inference_curl}</pre>
+                          <small className="muted">{t('Model package API sample')}</small>
+                          <pre className="code-block">{latestIssuedDeviceAccess.snippets.sample_model_package_curl}</pre>
+                        </div>
+                      </details>
+                    ) : (
+                      <small className="muted">
+                        {t('Open the device delivery panel once, then the latest key and sample curls will appear here.')}
+                      </small>
+                    )}
+                  </div>
+                )}
+              </SectionCard>
+            </div>
 
             <SectionCard
               title={versionToolMode === 'compare' ? t('Compare versions') : t('Register version')}
@@ -1859,11 +3221,11 @@ export default function ModelVersionsPage() {
                   <Button type="button" variant="ghost" size="sm" onClick={() => setCompareIds([])}>
                     {t('Clear compare')}
                   </Button>
-                ) : versionToolMode === 'register' ? (
-                  <ButtonLink to="/training/jobs" variant="ghost" size="sm">
-                    {t('Open Training Jobs')}
-                  </ButtonLink>
-                ) : null
+	                ) : versionToolMode === 'register' ? (
+	                  <ButtonLink to={scopedTrainingJobsPath} variant="ghost" size="sm">
+	                    {t('Open Training Jobs')}
+	                  </ButtonLink>
+	                ) : null
               }
             >
               {versionToolMode === 'compare' ? (
@@ -1910,15 +3272,15 @@ export default function ModelVersionsPage() {
                   description={registrationBlockedDescription}
                   extra={
                     <div className="row gap wrap">
-                      {registrationPrefillJob ? (
-                        <ButtonLink
-                          to={buildCreateModelDraftPath(registrationPrefillJob.task_type, {
-                            jobId: registrationPrefillJob.id,
-                            versionName: registrationPrefillJob.name
-                          })}
-                          variant="secondary"
-                          size="sm"
-                        >
+	                      {registrationPrefillJob ? (
+	                        <ButtonLink
+	                          to={buildCreateModelDraftPath(registrationPrefillJob.task_type, {
+	                            jobId: registrationPrefillJob.id,
+	                            versionName: registrationPrefillJob.name
+	                          }, registrationPrefillTrainingContext)}
+	                          variant="secondary"
+	                          size="sm"
+	                        >
                           {t('Create model draft')}
                         </ButtonLink>
                       ) : models.length === 0 ? (
@@ -1926,7 +3288,7 @@ export default function ModelVersionsPage() {
                           {t('Create model draft')}
                         </ButtonLink>
                       ) : completedJobs.length === 0 ? (
-                        <ButtonLink to="/training/jobs/new" variant="secondary" size="sm">
+                        <ButtonLink to={registrationPrefillTrainingCreatePath} variant="secondary" size="sm">
                           {t('Create training job')}
                         </ButtonLink>
                       ) : null}
@@ -1953,15 +3315,15 @@ export default function ModelVersionsPage() {
                       }
                       actions={
                         <div className="row gap wrap">
-                          {registrationPrefillJob ? (
-                            <ButtonLink
-                              to={buildCreateModelDraftPath(registrationPrefillJob.task_type, {
-                                jobId: registrationPrefillJob.id,
-                                versionName: registrationPrefillJob.name
-                              })}
-                              variant="secondary"
-                              size="sm"
-                            >
+	                          {registrationPrefillJob ? (
+	                            <ButtonLink
+	                              to={buildCreateModelDraftPath(registrationPrefillJob.task_type, {
+	                                jobId: registrationPrefillJob.id,
+	                                versionName: registrationPrefillJob.name
+	                              }, registrationPrefillTrainingContext)}
+	                              variant="secondary"
+	                              size="sm"
+	                            >
                               {t('Create model draft')}
                             </ButtonLink>
                           ) : null}
@@ -1981,7 +3343,7 @@ export default function ModelVersionsPage() {
                       })}
                     </Badge>
                   ) : null}
-                  {jobInsightsLoading ? <small className="muted">{t('Checking job authenticity...')}</small> : null}
+                  {jobInsightsLoading ? <small className="muted">{t('Checking job execution status...')}</small> : null}
                   {blockedLocalCommandJobs.length > 0 ? (
                     <StateBlock
                       variant="empty"
@@ -2009,7 +3371,7 @@ export default function ModelVersionsPage() {
                             </ButtonLink>
                           ) : null}
                           {prefillJobId ? (
-                            <ButtonLink to="/models/versions" variant="ghost" size="sm">
+                            <ButtonLink to={clearRegistrationPrefillPath} variant="ghost" size="sm">
                               {t('Clear prefill')}
                             </ButtonLink>
                           ) : null}
@@ -2088,20 +3450,29 @@ export default function ModelVersionsPage() {
             : t('Pick one version from the list.')
         }
         actions={
-          <div className="row gap wrap">
-            {selectedVersion ? (
-              <ButtonLink to={buildScopedInferenceValidationPath(selectedVersion.id)} variant="secondary" size="sm">
-                {t('Validate inference')}
-              </ButtonLink>
-            ) : null}
-            {selectedVersion?.training_job_id ? (
-              <ButtonLink
-                to={buildScopedTrainingJobDetailPath(
-                  selectedVersion.training_job_id,
-                  jobsById.get(selectedVersion.training_job_id) ?? null
-                )}
-                variant="ghost"
-                size="sm"
+	          <div className="row gap wrap">
+	            {selectedVersion ? (
+	              <ButtonLink
+	                to={buildScopedInferenceValidationPath(selectedVersion.id, {
+	                  datasetId: selectedVersionJob?.dataset_id ?? null,
+	                  versionId: selectedVersionJob?.dataset_version_id ?? null,
+	                  launchContext: activeLaunchContext
+	                })}
+	                variant="secondary"
+	                size="sm"
+	              >
+	                {t('Validate inference')}
+	              </ButtonLink>
+	            ) : null}
+	            {selectedVersion?.training_job_id ? (
+	              <ButtonLink
+	                to={buildScopedTrainingJobDetailPath(
+	                  selectedVersion.training_job_id,
+	                  jobsById.get(selectedVersion.training_job_id) ?? null,
+	                  activeLaunchContext
+	                )}
+	                variant="ghost"
+	                size="sm"
               >
                 {t('Open Training Job')}
               </ButtonLink>
@@ -2122,10 +3493,10 @@ export default function ModelVersionsPage() {
             <DetailList items={selectedVersionDetailItems} />
             {selectedVersionJob &&
             selectedVersionJob.execution_mode === 'local_command' &&
-            selectedVersionJobInsight?.reality !== 'real' ? (
+            selectedVersionJobInsight?.reality !== 'standard' ? (
               <StateBlock
                 variant="empty"
-                title={t('Version linked to non-real output')}
+                title={t('Version linked to limited-output evidence')}
                 description={
                   selectedVersionJobInsight?.fallbackReason
                     ? t(
@@ -2133,7 +3504,7 @@ export default function ModelVersionsPage() {
                         { reason: formatFallbackReasonLabel(selectedVersionJobInsight.fallbackReason) }
                       )
                     : t(
-                        'The linked training job contains non-real execution evidence. Check training details first.'
+                        'The linked training job contains limited-output evidence. Check training details first.'
                       )
                 }
               />
@@ -2184,7 +3555,7 @@ export default function ModelVersionsPage() {
                 <small className="muted">{t('No feedback dataset linked yet.')}</small>
               )}
             </div>
-            <div className="stack tight">
+            <div ref={deviceAuthorizationSectionRef} className="stack tight">
               <strong>{t('Device API authorization')}</strong>
               <small className="muted">
                 {t(
@@ -2312,14 +3683,15 @@ export default function ModelVersionsPage() {
                   )}
 
                   <Card as="section" tone="soft" className="stack tight">
+                    <div ref={deviceLifecycleSectionRef} />
                     <div className="row gap wrap align-center">
                       <strong>{t('Device delivery lifecycle')}</strong>
-                      <ButtonLink to={selectedVersionInferencePath} variant="ghost" size="sm">
-                        {t('Open Validation')}
-                      </ButtonLink>
-                      <ButtonLink to="/workspace/console" variant="ghost" size="sm">
-                        {t('Open Console')}
-                      </ButtonLink>
+	                      <ButtonLink to={selectedVersionInferencePath} variant="ghost" size="sm">
+	                        {t('Open Validation')}
+	                      </ButtonLink>
+	                      <ButtonLink to={scopedWorkspaceConsolePath} variant="ghost" size="sm">
+	                        {t('Open Console')}
+	                      </ButtonLink>
                     </div>
                     <small className="muted">
                       {t(
@@ -2369,6 +3741,54 @@ export default function ModelVersionsPage() {
                               ? t('No encrypted model package has been delivered yet. Copy the model package curl below when the device is ready to pull.')
                               : t('After issuing a credential, model package deliveries will be listed here.')}
                         </small>
+                        {selectedVersionRemoteOpsSummary ? (
+                          <Card as="section" tone="soft" className="stack tight">
+                            <div className="row gap wrap align-center">
+                              <strong>{t('Remote ops handoff')}</strong>
+                              <Badge tone={selectedVersionHasRemoteProof ? 'success' : 'warning'}>
+                                {selectedVersionHasRemoteProof ? t('Monitoring ready') : t('Collecting evidence')}
+                              </Badge>
+                            </div>
+                            <small className="muted">
+                              {selectedVersionHasRemoteProof
+                                ? t('Remote delivery proof is complete for this version. Continue day-2 monitoring and governance from this lane.')
+                                : t('Keep this lane open until credential, public inference, and package delivery evidence are all visible.')}
+                            </small>
+                            <div className="row gap wrap">
+                              <Badge tone={selectedVersionRemoteOpsSummary.credentialCount > 0 ? 'success' : 'warning'}>
+                                {t('Credentials')}: {selectedVersionRemoteOpsSummary.credentialCount}
+                              </Badge>
+                              <Badge
+                                tone={selectedVersionRemoteOpsSummary.publicInferenceCount > 0 ? 'success' : 'warning'}
+                              >
+                                {t('Public inference')}: {selectedVersionRemoteOpsSummary.publicInferenceCount}
+                              </Badge>
+                              <Badge
+                                tone={selectedVersionRemoteOpsSummary.packageDeliveryCount > 0 ? 'success' : 'warning'}
+                              >
+                                {t('Package deliveries')}: {selectedVersionRemoteOpsSummary.packageDeliveryCount}
+                              </Badge>
+                            </div>
+                            <small className="muted">
+                              {selectedVersionRemoteOpsSummary.lastActivityAt
+                                ? `${t('Last remote activity')}: ${formatCompactTimestamp(selectedVersionRemoteOpsSummary.lastActivityAt)}`
+                                : t('No remote activity recorded yet.')}
+                            </small>
+	                            <div className="row gap wrap">
+	                              <ButtonLink to={scopedWorkspaceConsolePath} variant="ghost" size="sm">
+	                                {t('Open Console')}
+	                              </ButtonLink>
+                              <ButtonLink to={selectedVersionClosurePath} variant="ghost" size="sm">
+                                {t('Open closure lane')}
+                              </ButtonLink>
+                              {canReviewAudit ? (
+                                <ButtonLink to={scopedAdminAuditPath} variant="ghost" size="sm">
+                                  {t('Open audit logs')}
+                                </ButtonLink>
+                              ) : null}
+                            </div>
+                          </Card>
+                        ) : null}
                         {deviceLifecycleTimeline.length > 0 ? (
                           <div className="stack tight">
                             {deviceLifecycleTimeline.map((event) => (
@@ -2403,6 +3823,44 @@ export default function ModelVersionsPage() {
                         <small className="muted">
                           {latestIssuedDeviceAccess.record.device_name} · {latestIssuedDeviceAccess.record.api_key_masked}
                         </small>
+                        <div className="row gap wrap">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              void copyToClipboard(latestIssuedDeviceAccess.api_key, t('key'));
+                            }}
+                          >
+                            {t('Copy device key')}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              void copyToClipboard(
+                                latestIssuedDeviceAccess.snippets.sample_inference_curl,
+                                t('Inference API sample')
+                              );
+                            }}
+                          >
+                            {t('Copy inference curl')}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              void copyToClipboard(
+                                latestIssuedDeviceAccess.snippets.sample_model_package_curl,
+                                t('Model package API sample')
+                              );
+                            }}
+                          >
+                            {t('Copy model package curl')}
+                          </Button>
+                        </div>
                         <pre className="code-block">{latestIssuedDeviceAccess.api_key}</pre>
                         <small className="muted">{t('Inference API sample')}</small>
                         <pre className="code-block">{latestIssuedDeviceAccess.snippets.sample_inference_curl}</pre>

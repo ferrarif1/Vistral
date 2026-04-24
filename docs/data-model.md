@@ -19,6 +19,13 @@ This document defines platform-level entities for Vistral's AI-native conversati
 - `segmentation`
 - `obb` (optional)
 
+### 3.1A Vision task type
+- `ocr`
+- `detection`
+- `classification`
+- `segmentation`
+- `unknown`
+
 ### 3.2 Framework
 - `paddleocr`
 - `doctr`
@@ -47,6 +54,14 @@ This document defines platform-level entities for Vistral's AI-native conversati
 - `completed`
 - `failed`
 - `cancelled`
+
+### 3.6 Vision modeling task status
+- `draft`
+- `requires_input`
+- `plan_ready`
+- `training_started`
+- `training_completed`
+- `failed`
 
 ## 4. Core Entities
 
@@ -115,6 +130,50 @@ Relationships:
 - has many `Message`
 - references many `FileAttachment` (via message/context)
 
+### 4.3A VisionModelingTask
+Attributes:
+- `id` (PK)
+- `conversation_id` (nullable FK Conversation)
+- `status` (Vision modeling task status)
+- `source_prompt`
+- `sample_attachment_ids` (JSON array of FileAttachment ids)
+- `dataset_id` (nullable FK Dataset)
+- `dataset_version_id` (nullable FK DatasetVersion)
+- `spec` (JSON: structured understanding result)
+- `dataset_profile` (nullable JSON: trainability inspection result)
+- `training_plan` (nullable JSON: recipe/base-model/config suggestion)
+- `validation_report` (nullable JSON: primary metric summary + recommendations)
+- `missing_requirements` (JSON array)
+- `training_job_id` (nullable FK TrainingJob)
+- `model_id` (nullable FK Model)
+- `model_version_id` (nullable FK ModelVersion)
+- `metadata` (JSON)
+- `created_by` (FK User)
+- `created_at`, `updated_at`
+
+Rules:
+- task is visible to owner or `admin`
+- task can be created either from a conversation-assisted orchestration step or from the dedicated `POST /vision/tasks/understand` API
+- `spec` keeps prompt understanding output such as:
+  - `task_type`
+  - `expected_output`
+  - `annotation_type`
+  - `recommended_metrics`
+  - `deployment_hint`
+  - `constraints`
+- `dataset_profile` records current dataset trainability (`sample_count`, `splits`, `label_coverage`, `issues`, `is_trainable`)
+- `training_plan` records recipe id, recommended base model, and train/eval/export args
+- `sample_attachment_ids` stores at most 10 image attachments used as the task-understanding sample set; non-image attachments are ignored for this field
+- `metadata` currently carries orchestration helpers such as:
+  - `auto_tune_rounds_json`
+  - `auto_tune_history_json`
+  - `threshold_rule_json`
+  - `auto_tune_active_round`
+  - `feedback_dataset_id`
+  - `auto_feedback_last_generated_at`
+  - `auto_feedback_sample_count`
+- linked training job/model version fields are backfilled from runtime progress so task detail can stay a reliable continuation surface
+
 ### 4.4 Message
 Attributes:
 - `id` (PK)
@@ -127,9 +186,10 @@ Attributes:
 
 Conversation action metadata rules:
 - assistant messages may include `metadata.conversation_action`
-- supported action types: `create_dataset`, `create_model_draft`, `create_training_job`
+- supported action types: `create_dataset`, `create_model_draft`, `create_training_job`, `run_model_inference`, `console_api_call`
 - supported action statuses: `requires_input`, `completed`, `failed`, `cancelled`
-- action metadata stores `missing_fields`, `collected_fields`, optional `suggestions`, and optional created-entity reference so UI can render a compact execution card in the chat timeline
+- action metadata stores `missing_fields`, `collected_fields`, optional `suggestions`, optional `action_links`, and optional created-entity reference (`Dataset`, `TrainingJob`, `Model`, `VisionTask`) so UI can render a compact execution card in the chat timeline
+- frontend may derive additional next-step actions from the action metadata, but mutating follow-up actions must still go through the same confirmation and API guards as the manual path
 
 ### 4.5 FileAttachment
 Attributes:
@@ -513,6 +573,17 @@ Rules:
 - registration must reject jobs with `execution_mode=simulated|unknown`
 - for `execution_mode=local_command`, registration must also reject artifact summaries that indicate non-real execution (`mode=template`, explicit `fallback_reason`, or `training_performed=false`) unless `MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1`
 - lifecycle can move to `deprecated`
+
+### 5.4 VisionModelingTask
+- common path:
+  - `requires_input -> plan_ready -> training_started -> training_completed`
+- failure path:
+  - `training_started -> failed`
+- runtime synchronization rules:
+  - linked training job in non-terminal state keeps task at `training_started`
+  - linked completed training job updates task to `training_completed` and refreshes `validation_report`
+  - linked failed/cancelled training job updates task to `failed`
+- `training_completed` is the stable post-training state even after model registration and feedback-dataset creation; those follow-up artifacts are recorded through `model_id`, `model_version_id`, and `metadata.feedback_dataset_id`
 
 ## 6. Unified Inference Output Storage
 `InferenceRun.normalized_output` must support:

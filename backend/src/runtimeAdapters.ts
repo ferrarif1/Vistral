@@ -1478,7 +1478,7 @@ const callLocalPredictCommand = async (
   ) {
     throw attachLocalCommandContext(
       new Error(
-        `${framework} local predict produced non-real template/fallback evidence while VISTRAL_DISABLE_INFERENCE_FALLBACK=1. fallback_reason=${resolvedLocalFallbackReason || 'none'}`
+        `${framework} local predict produced restricted template/fallback evidence while VISTRAL_DISABLE_INFERENCE_FALLBACK=1. fallback_reason=${resolvedLocalFallbackReason || 'none'}`
       ),
       execution.context
     );
@@ -1736,7 +1736,7 @@ const createTrainer = (
       valid: supportedTasks.includes(input.taskType),
       warnings: supportedTasks.includes(input.taskType)
         ? []
-        : [`${framework} does not support ${input.taskType} in current prototype.`]
+        : [`${framework} does not support ${input.taskType} in current runtime profile.`]
     };
   },
 

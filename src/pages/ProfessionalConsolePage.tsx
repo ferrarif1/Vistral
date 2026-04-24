@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import type {
   ApprovalRequest,
   DatasetRecord,
@@ -26,6 +27,11 @@ import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 import { formatCompactTimestamp } from '../utils/formatting';
 import { detectInferenceRunReality } from '../utils/inferenceSource';
+import {
+  isStandardGateReady,
+  resolveRegistrationEvidenceLevel,
+  resolveRegistrationGateLevel
+} from '../utils/registrationEvidence';
 
 interface ConsoleSnapshot {
   user: User;
@@ -59,18 +65,95 @@ const toTimestampValue = (iso: string | null | undefined): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 const isAuthenticationRequiredMessage = (message: string): boolean => message === 'Authentication required.';
-const buildScopedClosurePath = (datasetId: string, versionId?: string | null): string => {
+
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+};
+
+const appendTrainingLaunchContext = (searchParams: URLSearchParams, context?: LaunchContext) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const appendReturnTo = (searchParams: URLSearchParams, returnTo?: string | null) => {
+  const safeReturnTo = sanitizeReturnToPath(returnTo);
+  if (safeReturnTo && !searchParams.has('return_to')) {
+    searchParams.set('return_to', safeReturnTo);
+  }
+};
+
+const buildScopedClosurePath = (
+  datasetId: string,
+  versionId?: string | null,
+  launchContext?: LaunchContext,
+  returnTo?: string | null
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId?.trim()) {
     searchParams.set('version', versionId.trim());
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
   return `/workflow/closure?${searchParams.toString()}`;
+};
+
+const buildClosureLandingPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/workflow/closure?${query}` : '/workflow/closure';
 };
 const buildScopedInferencePath = (
   modelVersionId?: string | null,
   datasetId?: string | null,
-  versionId?: string | null
+  versionId?: string | null,
+  options?: {
+    runId?: string | null;
+    focus?: string | null;
+    launchContext?: LaunchContext;
+    returnTo?: string | null;
+  }
 ): string => {
   const searchParams = new URLSearchParams();
   if (modelVersionId?.trim()) {
@@ -82,8 +165,161 @@ const buildScopedInferencePath = (
   if (versionId?.trim()) {
     searchParams.set('version', versionId.trim());
   }
+  if (options?.runId?.trim()) {
+    searchParams.set('run', options.runId.trim());
+  }
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  appendReturnTo(searchParams, options?.returnTo);
   const query = searchParams.toString();
   return query ? `/inference/validate?${query}` : '/inference/validate';
+};
+const buildDatasetDetailPath = (
+  datasetId?: string | null,
+  options?: { focus?: string | null; launchContext?: LaunchContext; returnTo?: string | null }
+): string => {
+  if (!datasetId?.trim()) {
+    return '/datasets';
+  }
+  const searchParams = new URLSearchParams();
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  appendReturnTo(searchParams, options?.returnTo);
+  const query = searchParams.toString();
+  return query
+    ? `/datasets/${encodeURIComponent(datasetId.trim())}?${query}`
+    : `/datasets/${encodeURIComponent(datasetId.trim())}`;
+};
+
+const buildDatasetsPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/datasets?${query}` : '/datasets';
+};
+
+const buildTrainingCreatePath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/training/jobs/new?${query}` : '/training/jobs/new';
+};
+
+const buildRuntimeSettingsPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', 'readiness');
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  return `/settings/runtime?${searchParams.toString()}`;
+};
+
+const buildWorkerSettingsPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', 'inventory');
+  if (launchContext?.framework?.trim()) {
+    searchParams.set('profile', launchContext.framework.trim());
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  return `/settings/workers?${searchParams.toString()}`;
+};
+
+const buildTrainingJobsPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/training/jobs?${query}` : '/training/jobs';
+};
+
+const buildCreateModelPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/models/create?${query}` : '/models/create';
+};
+
+const buildMyModelsPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/models/my-models?${query}` : '/models/my-models';
+};
+
+const buildModelVersionsPath = (
+  options?: {
+    selectedVersionId?: string | null;
+    focus?: string | null;
+    launchContext?: LaunchContext;
+    returnTo?: string | null;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (options?.selectedVersionId?.trim()) {
+    searchParams.set('selectedVersion', options.selectedVersionId.trim());
+  }
+  if (options?.focus?.trim()) {
+    searchParams.set('focus', options.focus.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  appendReturnTo(searchParams, options?.returnTo);
+  const query = searchParams.toString();
+  return query ? `/models/versions?${query}` : '/models/versions';
+};
+
+const buildAdminPendingPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/admin/models/pending?${query}` : '/admin/models/pending';
+};
+
+const buildAdminAuditPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/admin/audit?${query}` : '/admin/audit';
+};
+
+const buildAdminVerificationReportsPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/admin/verification-reports?${query}` : '/admin/verification-reports';
+};
+
+const buildWorkspaceChatPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/workspace/chat?${query}` : '/workspace/chat';
+};
+
+const buildSettingsPath = (launchContext?: LaunchContext, returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/settings/account?${query}` : '/settings/account';
+};
+
+const buildLoginPath = (returnTo?: string | null): string => {
+  const searchParams = new URLSearchParams();
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/auth/login?${query}` : '/auth/login';
 };
 
 const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
@@ -155,6 +391,8 @@ const buildConsoleSnapshotSignature = (snapshot: ConsoleSnapshot): string =>
 
 export default function ProfessionalConsolePage() {
   const { t, roleLabel } = useI18n();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(null);
   const [latestVersionDeviceAccess, setLatestVersionDeviceAccess] = useState<RuntimeDeviceAccessRecord[]>([]);
   const [latestVersionDeviceAccessLoading, setLatestVersionDeviceAccessLoading] = useState(false);
@@ -176,6 +414,23 @@ export default function ProfessionalConsolePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const snapshotSignatureRef = useRef('');
+  const requestedContext = useMemo<LaunchContext>(
+    () => ({
+      datasetId: (searchParams.get('dataset') ?? '').trim() || null,
+      versionId: (searchParams.get('version') ?? '').trim() || null,
+      taskType: (searchParams.get('task_type') ?? '').trim() || null,
+      framework: (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase() || null,
+      executionTarget: (searchParams.get('execution_target') ?? '').trim().toLowerCase() || null,
+      workerId: (searchParams.get('worker') ?? '').trim() || null
+    }),
+    [searchParams]
+  );
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentConsolePath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentConsolePath;
 
   const load = useCallback(async (mode: LoadMode = 'initial') => {
     if (mode === 'initial') {
@@ -310,7 +565,7 @@ export default function ProfessionalConsolePage() {
                   status: job.status,
                   executionMode: job.execution_mode,
                   artifactSummary: null
-                }).reality !== 'real'
+                }).reality !== 'standard'
             ).length
         : 0,
     [snapshot]
@@ -375,27 +630,103 @@ export default function ProfessionalConsolePage() {
   const latestVersionFeedbackRun = latestVersionRuns.find((run) => Boolean(run.feedback_dataset_id)) ?? null;
   const closureDatasetId = latestVersionTrainingJob?.dataset_id ?? '';
   const closureDatasetVersionId = latestVersionTrainingJob?.dataset_version_id ?? '';
-  const scopedClosurePath = closureDatasetId
-    ? buildScopedClosurePath(closureDatasetId, closureDatasetVersionId)
-    : '/workflow/closure';
+  const launchTaskType = requestedContext.taskType ?? latestVersionTrainingJob?.task_type ?? null;
+  const launchFramework =
+    requestedContext.framework ??
+    latestRegisteredVersion?.framework ??
+    latestVersionTrainingJob?.framework ??
+    (launchTaskType === 'ocr'
+      ? 'paddleocr'
+      : launchTaskType === 'detection' ||
+          launchTaskType === 'classification' ||
+          launchTaskType === 'segmentation' ||
+          launchTaskType === 'obb'
+        ? 'yolo'
+        : null);
+  const launchContext: LaunchContext = {
+    datasetId: requestedContext.datasetId ?? (closureDatasetId || null),
+    versionId: requestedContext.versionId ?? (closureDatasetVersionId || null),
+    taskType: launchTaskType,
+    framework: launchFramework,
+    executionTarget: requestedContext.executionTarget ?? null,
+    workerId: requestedContext.workerId ?? null
+  };
+  const requestedDatasetMissing = useMemo(
+    () =>
+      Boolean(
+        requestedContext.datasetId &&
+          snapshot &&
+          !snapshot.datasets.some((dataset) => dataset.id === requestedContext.datasetId)
+      ),
+    [requestedContext.datasetId, snapshot]
+  );
+  const clearRequestedContextPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('dataset');
+    next.delete('version');
+    next.delete('task_type');
+    next.delete('framework');
+    next.delete('profile');
+    next.delete('execution_target');
+    next.delete('worker');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
+  const scopedClosurePath = launchContext.datasetId
+    ? buildScopedClosurePath(
+        launchContext.datasetId,
+        launchContext.versionId ?? null,
+        launchContext,
+        outboundReturnTo
+      )
+    : buildClosureLandingPath(launchContext, outboundReturnTo);
   const scopedInferencePath = buildScopedInferencePath(
     latestRegisteredVersion?.id ?? null,
     closureDatasetId || null,
-    closureDatasetVersionId || null
+    closureDatasetVersionId || null,
+    {
+      launchContext,
+      returnTo: outboundReturnTo
+    }
   );
+  const scopedLatestRunPath = buildScopedInferencePath(
+    latestRegisteredVersion?.id ?? null,
+    closureDatasetId || null,
+    closureDatasetVersionId || null,
+    {
+      runId: latestVersionRun?.id ?? null,
+      focus: latestVersionRun ? 'result' : null,
+      launchContext,
+      returnTo: outboundReturnTo
+    }
+  );
+  const scopedFeedbackDatasetPath = buildDatasetDetailPath(
+    latestVersionFeedbackRun?.feedback_dataset_id ?? null,
+    { focus: latestVersionFeedbackRun ? 'workflow' : null, launchContext, returnTo: outboundReturnTo }
+  );
+  const registrationGateLevel = latestRegisteredVersion
+    ? resolveRegistrationGateLevel(latestRegisteredVersion)
+    : 'pending';
+  const registrationEvidenceLevel = latestRegisteredVersion
+    ? resolveRegistrationEvidenceLevel(latestRegisteredVersion.registration_evidence_mode)
+    : 'pending';
   const registrationGateLabel = latestRegisteredVersion
-    ? latestRegisteredVersion.registration_gate_exempted
-      ? 'exempted'
-      : 'strict'
+    ? registrationGateLevel === 'override'
+      ? t('Policy override')
+      : registrationGateLevel === 'standard'
+        ? t('Standard gate')
+        : t('Gate pending')
     : '-';
-  const strictRealRegistration = Boolean(
-    latestRegisteredVersion &&
-      !latestRegisteredVersion.registration_gate_exempted &&
-      latestRegisteredVersion.registration_evidence_mode === 'real'
-  );
-  const scopedModelVersionsPath = latestRegisteredVersion
-    ? `/models/versions?model=${encodeURIComponent(latestRegisteredVersion.model_id)}`
-    : '/models/versions';
+  const registrationEvidenceLabel = latestRegisteredVersion
+    ? registrationEvidenceLevel === 'standard'
+      ? t('Standard evidence')
+      : registrationEvidenceLevel === 'calibrated'
+        ? t('Calibrated evidence')
+        : registrationEvidenceLevel === 'compatibility'
+          ? t('Compatibility evidence')
+          : t('Pending evidence')
+    : '-';
+  const standardGateReady = Boolean(latestRegisteredVersion && isStandardGateReady(latestRegisteredVersion));
   const runtimePublicInferenceEndpoint =
     typeof window !== 'undefined'
       ? `${window.location.origin}/api/runtime/public/inference`
@@ -610,6 +941,35 @@ export default function ProfessionalConsolePage() {
     latestVersionDeviceLifecycle?.public_inference_invocations[0] ?? null;
   const latestModelPackageDelivery =
     latestVersionDeviceLifecycle?.model_package_deliveries[0] ?? null;
+  const hasRemoteOpsProof = Boolean(
+    latestRegisteredVersion &&
+      latestVersionDeviceAccess.length > 0 &&
+      latestPublicInferenceInvocation &&
+      latestModelPackageDelivery
+  );
+  const canReviewAudit = snapshot?.user.role === 'admin';
+  const scopedModelVersionsPath = buildModelVersionsPath({
+    selectedVersionId: latestRegisteredVersion?.id ?? null,
+    focus: latestRegisteredVersion ? (hasRemoteOpsProof ? 'ops' : 'device') : null,
+    launchContext,
+    returnTo: outboundReturnTo
+  });
+  const scopedTrainingCreatePath = buildTrainingCreatePath(launchContext, outboundReturnTo);
+  const scopedRuntimeSettingsPath = buildRuntimeSettingsPath(launchContext, outboundReturnTo);
+  const scopedWorkerSettingsPath = buildWorkerSettingsPath(launchContext, outboundReturnTo);
+  const scopedDatasetsPath = buildDatasetsPath(launchContext, outboundReturnTo);
+  const scopedTrainingJobsPath = buildTrainingJobsPath(launchContext, outboundReturnTo);
+  const scopedCreateModelPath = buildCreateModelPath(launchContext, outboundReturnTo);
+  const scopedMyModelsPath = buildMyModelsPath(launchContext, outboundReturnTo);
+  const scopedAdminApprovalsPath = buildAdminPendingPath(launchContext, outboundReturnTo);
+  const scopedAdminAuditPath = buildAdminAuditPath(launchContext, outboundReturnTo);
+  const scopedVerificationReportsPath = buildAdminVerificationReportsPath(
+    launchContext,
+    outboundReturnTo
+  );
+  const scopedWorkspaceChatPath = buildWorkspaceChatPath(launchContext, outboundReturnTo);
+  const scopedSettingsPath = buildSettingsPath(launchContext, outboundReturnTo);
+  const scopedLoginPath = buildLoginPath(outboundReturnTo);
   const deviceLifecycleTimeline = useMemo(() => {
     const credentialEvents = latestVersionDeviceAccess.map((record) => ({
       id: `credential-${record.binding_key}`,
@@ -657,19 +1017,19 @@ export default function ProfessionalConsolePage() {
         title: t('Build & Ship'),
         description: t('Move from draft to version.'),
         links: [
-          { to: '/models/create', label: t('Create New Model') },
-          { to: '/models/my-models', label: t('Manage My Models') },
-          { to: '/models/versions', label: t('Open Model Versions') }
+          { to: scopedCreateModelPath, label: t('Create New Model') },
+          { to: scopedMyModelsPath, label: t('Manage My Models') },
+          { to: scopedModelVersionsPath, label: t('Open Model Versions') }
         ]
       },
       {
         title: t('Data & Run'),
         description: t('Open data, training, and validation.'),
         links: [
-          { to: '/workflow/closure', label: t('Training Closure Wizard') },
-          { to: '/datasets', label: t('Manage Datasets') },
-          { to: '/training/jobs', label: t('Open Training Jobs') },
-          { to: '/inference/validate', label: t('Validate Inference') }
+          { to: scopedClosurePath, label: t('Training Closure Wizard') },
+          { to: scopedDatasetsPath, label: t('Manage Datasets') },
+          { to: scopedTrainingJobsPath, label: t('Open Training Jobs') },
+          { to: scopedInferencePath, label: t('Validate Inference') }
         ]
       }
     ];
@@ -679,15 +1039,28 @@ export default function ProfessionalConsolePage() {
         title: t('Admin & Audit'),
         description: t('Review approvals and audit trails.'),
         links: [
-          { to: '/admin/models/pending', label: t('Review Approval Queue') },
-          { to: '/admin/audit', label: t('View Audit Logs') },
-          { to: '/admin/verification-reports', label: t('View Verification Reports') }
+          { to: scopedAdminApprovalsPath, label: t('Review Approval Queue') },
+          { to: scopedAdminAuditPath, label: t('View Audit Logs') },
+          { to: scopedVerificationReportsPath, label: t('View Verification Reports') }
         ]
       });
     }
 
     return groups;
-  }, [snapshot?.user.role, t]);
+  }, [
+    scopedAdminApprovalsPath,
+    scopedAdminAuditPath,
+    scopedClosurePath,
+    scopedCreateModelPath,
+    scopedDatasetsPath,
+    scopedInferencePath,
+    scopedModelVersionsPath,
+    scopedMyModelsPath,
+    scopedTrainingJobsPath,
+    scopedVerificationReportsPath,
+    snapshot?.user.role,
+    t
+  ]);
 
   const priorityMode =
     pendingApprovals.length > 0
@@ -707,12 +1080,12 @@ export default function ProfessionalConsolePage() {
           : t('No immediate follow-up item.');
   const priorityCta =
     priorityMode === 'approval'
-      ? { to: '/admin/models/pending', label: t('Open Queue') }
+      ? { to: scopedAdminApprovalsPath, label: t('Open Queue') }
       : priorityMode === 'model'
-        ? { to: '/models/my-models', label: t('Inspect my models') }
+        ? { to: scopedMyModelsPath, label: t('Inspect my models') }
         : priorityMode === 'attachment'
-          ? { to: '/workspace/chat', label: t('Continue in Chat') }
-          : { to: '/datasets', label: t('Open Datasets') };
+          ? { to: scopedWorkspaceChatPath, label: t('Continue in Chat') }
+          : { to: scopedDatasetsPath, label: t('Open Datasets') };
 
   const authRequired = isAuthenticationRequiredMessage(error);
 
@@ -748,9 +1121,16 @@ export default function ProfessionalConsolePage() {
           disabled: loading || refreshing
         }}
         secondaryActions={
-          <ButtonLink to="/settings" variant="ghost" size="sm">
-            {t('Open Settings')}
-          </ButtonLink>
+          <div className="row gap wrap">
+            {requestedReturnTo ? (
+              <ButtonLink to={requestedReturnTo} variant="secondary" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to={scopedSettingsPath} variant="ghost" size="sm">
+              {t('Open Settings')}
+            </ButtonLink>
+          </div>
         }
       />
 
@@ -768,7 +1148,7 @@ export default function ProfessionalConsolePage() {
             description={t('Sign in to access operational snapshots and console actions.')}
             extra={
               <div className="chat-auth-state-actions">
-                <ButtonLink to="/auth/login" variant="secondary" size="sm">
+                <ButtonLink to={scopedLoginPath} variant="secondary" size="sm">
                   {t('Login')}
                 </ButtonLink>
               </div>
@@ -784,17 +1164,32 @@ export default function ProfessionalConsolePage() {
           description={t('It fills itself after data, training, or runtime work.')}
           extra={
             <div className="row gap wrap">
-              <ButtonLink to="/datasets" variant="secondary" size="sm">
+              <ButtonLink to={scopedDatasetsPath} variant="secondary" size="sm">
                 {t('Open Datasets')}
               </ButtonLink>
-              <ButtonLink to="/settings/runtime" variant="ghost" size="sm">
+              <ButtonLink to={scopedRuntimeSettingsPath} variant="ghost" size="sm">
                 {t('Open Runtime Settings')}
+              </ButtonLink>
+              <ButtonLink to={scopedWorkerSettingsPath} variant="ghost" size="sm">
+                {t('Open Worker Settings')}
               </ButtonLink>
             </div>
           }
         />
       ) : (
         <>
+          {requestedDatasetMissing ? (
+            <InlineAlert
+              tone="warning"
+              title={t('Requested dataset context not found')}
+              description={t('The dataset from the incoming link is unavailable. Console links now use the latest available context.')}
+              actions={
+                <ButtonLink to={clearRequestedContextPath} variant="ghost" size="sm">
+                  {t('Clear context')}
+                </ButtonLink>
+              }
+            />
+          ) : null}
           {hasRealityWarning ? (
             <InlineAlert
               tone="warning"
@@ -808,10 +1203,10 @@ export default function ProfessionalConsolePage() {
               )}
               actions={
                 <div className="row gap wrap">
-                  <ButtonLink to="/training/jobs" variant="secondary" size="sm">
+                  <ButtonLink to={scopedTrainingJobsPath} variant="secondary" size="sm">
                     {t('Open Training Jobs')}
                   </ButtonLink>
-                  <ButtonLink to="/inference/validate" variant="ghost" size="sm">
+                  <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
                     {t('Open Inference Validation')}
                   </ButtonLink>
                 </div>
@@ -850,10 +1245,10 @@ export default function ProfessionalConsolePage() {
                       description={t('No pending approvals, active model work, or processing attachments were found.')}
                       extra={
                         <div className="row gap wrap">
-                          <ButtonLink to="/datasets" variant="secondary" size="sm">
+                          <ButtonLink to={scopedDatasetsPath} variant="secondary" size="sm">
                             {t('Open Datasets')}
                           </ButtonLink>
-                          <ButtonLink to="/models/create" variant="ghost" size="sm">
+                          <ButtonLink to={scopedCreateModelPath} variant="ghost" size="sm">
                             {t('Create New Model')}
                           </ButtonLink>
                         </div>
@@ -880,7 +1275,7 @@ export default function ProfessionalConsolePage() {
                                   </div>
                                   <StatusTag status={approval.status}>{t(approval.status)}</StatusTag>
                                 </div>
-                                <ButtonLink to="/admin/models/pending" variant="ghost" size="sm">
+                                <ButtonLink to={scopedAdminApprovalsPath} variant="ghost" size="sm">
                                   {t('Open Queue')}
                                 </ButtonLink>
                               </Panel>
@@ -902,7 +1297,7 @@ export default function ProfessionalConsolePage() {
                                 </div>
                                 <StatusTag status={model.status}>{t(model.status)}</StatusTag>
                               </div>
-                              <ButtonLink to="/models/my-models" variant="ghost" size="sm">
+                              <ButtonLink to={scopedMyModelsPath} variant="ghost" size="sm">
                                 {t('Inspect my models')}
                               </ButtonLink>
                             </Panel>
@@ -920,7 +1315,7 @@ export default function ProfessionalConsolePage() {
                                 </div>
                                 <StatusTag status={attachment.status}>{t(attachment.status)}</StatusTag>
                               </div>
-                              <ButtonLink to="/workspace/chat" variant="ghost" size="sm">
+                              <ButtonLink to={scopedWorkspaceChatPath} variant="ghost" size="sm">
                                 {t('Continue in Chat')}
                               </ButtonLink>
                             </Panel>
@@ -963,9 +1358,24 @@ export default function ProfessionalConsolePage() {
                         <ButtonLink to={scopedClosurePath} variant="secondary" size="sm">
                           {t('Training Closure Wizard')}
                         </ButtonLink>
+                        {latestRegisteredVersion ? (
+                          <ButtonLink to={scopedModelVersionsPath} variant="ghost" size="sm">
+                            {t('Continue in version delivery lane')}
+                          </ButtonLink>
+                        ) : null}
                         <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
                           {t('Validate Inference')}
                         </ButtonLink>
+                        {latestVersionRun ? (
+                          <ButtonLink to={scopedLatestRunPath} variant="ghost" size="sm">
+                            {t('Open latest run')}
+                          </ButtonLink>
+                        ) : null}
+                        {latestVersionFeedbackRun?.feedback_dataset_id ? (
+                          <ButtonLink to={scopedFeedbackDatasetPath} variant="ghost" size="sm">
+                            {t('Open feedback dataset')}
+                          </ButtonLink>
+                        ) : null}
                       </div>
                     }
                   />
@@ -999,17 +1409,17 @@ export default function ProfessionalConsolePage() {
                       </ul>
                       <Card as="section">
                         <WorkspaceSectionHeader
-                          title={t('Reality & gate status')}
+                          title={t('Evidence & gate status')}
                           description={t('Keep evidence mode and registration gate visible for every handoff.')}
                         />
                         <ul className="workspace-record-list compact">
                           <Panel
                             as="li"
                             className="workspace-record-item compact stack tight"
-                            tone={strictRealRegistration ? 'accent' : 'soft'}
+                            tone={standardGateReady ? 'accent' : 'soft'}
                           >
                             <strong>{t('evidence mode')}</strong>
-                            <small className="muted">{latestRegisteredVersion?.registration_evidence_mode ?? '-'}</small>
+                            <small className="muted">{registrationEvidenceLabel}</small>
                           </Panel>
                           <Panel
                             as="li"
@@ -1023,19 +1433,19 @@ export default function ProfessionalConsolePage() {
                             <strong>{t('gate interpretation')}</strong>
                             <small className="muted">
                               {latestRegisteredVersion
-                                ? strictRealRegistration
-                                  ? t('This version can be treated as strict real-evidence registration.')
-                                  : t('This version is usable, but not yet a strict real-evidence registration.')
+                                ? standardGateReady
+                                  ? t('This version meets the standard registration gate.')
+                                  : t('This version is usable, but still requires gate review.')
                                 : '-'}
                             </small>
                           </Panel>
                         </ul>
                         {latestRegisteredVersion ? (
                           <div className="row gap wrap">
-                            <Badge tone={strictRealRegistration ? 'success' : 'warning'}>
-                              {strictRealRegistration
-                                ? t('Registration is strict + real evidence')
-                                : t('Registration is not strict real yet')}
+                            <Badge tone={standardGateReady ? 'success' : 'warning'}>
+                              {standardGateReady
+                                ? t('Registration meets standard gate')
+                                : t('Registration still requires gate review')}
                             </Badge>
                           </div>
                         ) : null}
@@ -1064,7 +1474,7 @@ export default function ProfessionalConsolePage() {
                                 {t('Training Closure Wizard')}
                               </ButtonLink>
                               <ButtonLink to={scopedModelVersionsPath} variant="ghost" size="sm">
-                                {t('Open Model Versions')}
+                                {t('Continue in version delivery lane')}
                               </ButtonLink>
                             </div>
                           }
@@ -1077,6 +1487,18 @@ export default function ProfessionalConsolePage() {
                           />
                         ) : (
                           <div className="stack">
+                            <InlineAlert
+                              tone="info"
+                              title={t('Use Model Versions as the main remote-delivery lane')}
+                              description={t(
+                                'Use this page for cross-workspace visibility. Open the version lane when you need the exact credential, inference curl, model package curl, and lifecycle proof for one concrete version.'
+                              )}
+                              actions={
+                                <ButtonLink to={scopedModelVersionsPath} variant="secondary" size="sm">
+                                  {t('Continue in version delivery lane')}
+                                </ButtonLink>
+                              }
+                            />
                             {deviceActionFeedback ? (
                               <InlineAlert
                                 tone={deviceActionFeedback.tone}
@@ -1090,6 +1512,9 @@ export default function ProfessionalConsolePage() {
                               </Badge>
                               <Badge tone={latestVersionActiveDeviceAccessCount > 0 ? 'success' : 'warning'}>
                                 {t('active')}: {latestVersionActiveDeviceAccessCount}
+                              </Badge>
+                              <Badge tone={hasRemoteOpsProof ? 'success' : 'warning'}>
+                                {hasRemoteOpsProof ? t('Remote ops ready') : t('Collecting evidence')}
                               </Badge>
                               <Badge tone="neutral">
                                 {t('last used')}:{' '}
@@ -1251,6 +1676,35 @@ export default function ProfessionalConsolePage() {
                           />
                         ) : deviceLifecycleTimeline.length > 0 ? (
                           <div className="stack">
+                            <InlineAlert
+                              tone={hasRemoteOpsProof ? 'success' : 'info'}
+                              title={
+                                hasRemoteOpsProof
+                                  ? t('Shift into remote ops monitoring and audit follow-up')
+                                  : t('Keep collecting remote delivery evidence in the version lane')
+                              }
+                              description={
+                                hasRemoteOpsProof
+                                  ? t(
+                                      'Credential issuance, public inference, and encrypted package delivery are all evidenced. Continue governance and operational follow-up from Model Versions.'
+                                    )
+                                  : t(
+                                      'Keep this lane open until credential issuance, public inference, and package delivery evidence are all visible for this version.'
+                                    )
+                              }
+                              actions={
+                                <div className="row gap wrap">
+                                  <ButtonLink to={scopedModelVersionsPath} variant="secondary" size="sm">
+                                    {t('Open remote ops summary')}
+                                  </ButtonLink>
+                                  {canReviewAudit ? (
+                                    <ButtonLink to={scopedAdminAuditPath} variant="ghost" size="sm">
+                                      {t('Open audit logs')}
+                                    </ButtonLink>
+                                  ) : null}
+                                </div>
+                              }
+                            />
                             <div className="row gap wrap">
                               <Badge tone={latestVersionDeviceAccess.length > 0 ? 'success' : 'warning'}>
                                 {t('Credentials')}: {latestVersionDeviceAccess.length}
@@ -1344,10 +1798,10 @@ export default function ProfessionalConsolePage() {
                       description={t('Create the first training job.')}
                       extra={
                         <div className="row gap wrap">
-                          <ButtonLink to="/workflow/closure" variant="secondary" size="sm">
+                          <ButtonLink to={scopedClosurePath} variant="secondary" size="sm">
                             {t('Training Closure Wizard')}
                           </ButtonLink>
-                          <ButtonLink to="/training/jobs/new" variant="ghost" size="sm">
+                          <ButtonLink to={scopedTrainingCreatePath} variant="ghost" size="sm">
                             {t('Create Training Job')}
                           </ButtonLink>
                         </div>

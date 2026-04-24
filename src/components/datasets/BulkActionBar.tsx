@@ -14,6 +14,7 @@ interface BulkActionBarProps {
   onBatchStatusChange: (value: 'keep' | 'uploading' | 'processing' | 'ready' | 'error') => void;
   onBatchTagsTextChange: (value: string) => void;
   onApplyBatchUpdates: () => void;
+  onDeleteSelected: () => void;
 }
 
 const datasetItemSplitOptions = ['unassigned', 'train', 'val', 'test'] as const;
@@ -29,7 +30,8 @@ export default function BulkActionBar({
   onBatchSplitChange,
   onBatchStatusChange,
   onBatchTagsTextChange,
-  onApplyBatchUpdates
+  onApplyBatchUpdates,
+  onDeleteSelected
 }: BulkActionBarProps) {
   return (
     <div className="dataset-item-browser-batch">
@@ -67,15 +69,26 @@ export default function BulkActionBar({
         />
       </div>
       <div className="row between gap wrap">
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          onClick={onApplyBatchUpdates}
-          disabled={busy || selectedCount === 0}
-        >
-          {t('Apply to selected')}
-        </Button>
+        <div className="row gap wrap">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={onApplyBatchUpdates}
+            disabled={busy || selectedCount === 0}
+          >
+            {t('Apply to selected')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="danger"
+            onClick={onDeleteSelected}
+            disabled={busy || selectedCount === 0}
+          >
+            {t('Delete selected')}
+          </Button>
+        </div>
       </div>
     </div>
   );

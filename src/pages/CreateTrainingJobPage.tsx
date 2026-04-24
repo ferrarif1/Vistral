@@ -1,17 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent as ReactChangeEvent,
+  type DragEvent as ReactDragEvent
+} from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   DatasetRecord,
   DatasetVersionRecord,
   RequirementTaskDraft,
+  TrainingJobRecord,
   TrainingWorkerNodeView
 } from '../../shared/domain';
+import {
+  UPLOAD_SOFT_LIMIT_LABEL,
+  findOversizedUpload,
+  formatByteSize
+} from '../../shared/uploadLimits';
 import AdvancedSection from '../components/AdvancedSection';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import StateBlock from '../components/StateBlock';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { InlineAlert, PageHeader } from '../components/ui/ConsolePage';
-import { Input, Select, Textarea } from '../components/ui/Field';
+import { HiddenFileInput, Input, Select, Textarea } from '../components/ui/Field';
 import ProgressStepper from '../components/ui/ProgressStepper';
 import { Card, Panel } from '../components/ui/Surface';
 import {
@@ -22,15 +37,90 @@ import {
 import { useI18n } from '../i18n/I18nProvider';
 import { api } from '../services/api';
 
-const curatedBaseModelCatalog = {
-  paddleocr: ['paddleocr-PP-OCRv4'],
-  doctr: ['doctr-crnn-vitstr-base'],
-  yolo: ['yolo11n']
-} as const;
 const taskTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
 const adminAccessMessagePattern = /(forbidden|permission|unauthorized|not allowed|admin|管理员|权限)/i;
 
-type TrainingFramework = keyof typeof curatedBaseModelCatalog;
+type TrainingTaskType = (typeof taskTypeOptions)[number];
+type TrainingFramework = 'paddleocr' | 'doctr' | 'yolo';
+const trainingFrameworkOptions: TrainingFramework[] = ['paddleocr', 'doctr', 'yolo'];
+const frameworkBaseModelCatalog: Record<TrainingFramework, string[]> = {
+  paddleocr: ['paddleocr-PP-OCRv4', 'paddleocr-PP-OCRv3'],
+  doctr: ['doctr-crnn-vitstr-base', 'doctr-vitstr-small'],
+  yolo: ['yolo11n', 'yolo11s', 'yolo11m']
+};
+const taskBaseModelOverrides: Partial<Record<TrainingTaskType, Partial<Record<TrainingFramework, string[]>>>> = {
+  ocr: {
+    paddleocr: ['paddleocr-PP-OCRv4', 'paddleocr-PP-OCRv3'],
+    doctr: ['doctr-crnn-vitstr-base', 'doctr-vitstr-small']
+  },
+  detection: {
+    yolo: ['yolo11n', 'yolo11s', 'yolo11m']
+  },
+  classification: {
+    yolo: ['yolo11n-cls', 'yolo11s-cls']
+  },
+  segmentation: {
+    yolo: ['yolo11n-seg', 'yolo11s-seg']
+  },
+  obb: {
+    yolo: ['yolo11n-obb', 'yolo11s-obb']
+  }
+};
+const recommendedTrainingConfigCatalog: Record<
+  TrainingFramework,
+  Partial<
+    Record<
+      TrainingTaskType,
+      { epochs: string; batchSize: string; learningRate: string; warmupRatio: string; weightDecay: string }
+    >
+  >
+> = {
+  paddleocr: {
+    ocr: { epochs: '24', batchSize: '32', learningRate: '0.001', warmupRatio: '0.1', weightDecay: '0.0001' }
+  },
+  doctr: {
+    ocr: { epochs: '28', batchSize: '24', learningRate: '0.0008', warmupRatio: '0.1', weightDecay: '0.0001' }
+  },
+  yolo: {
+    detection: { epochs: '30', batchSize: '16', learningRate: '0.001', warmupRatio: '0.1', weightDecay: '0.0005' },
+    obb: { epochs: '36', batchSize: '16', learningRate: '0.0008', warmupRatio: '0.1', weightDecay: '0.0005' },
+    segmentation: { epochs: '36', batchSize: '12', learningRate: '0.0008', warmupRatio: '0.1', weightDecay: '0.0005' },
+    classification: { epochs: '20', batchSize: '32', learningRate: '0.001', warmupRatio: '0.05', weightDecay: '0.0001' }
+  }
+};
+const defaultLabelClassesByTask: Record<TrainingTaskType, string[]> = {
+  ocr: ['text'],
+  detection: ['object'],
+  classification: ['class_a', 'class_b'],
+  segmentation: ['segment'],
+  obb: ['rotated_object']
+};
+const maxBootstrapSampleEntries = 80;
+
+const buildBootstrapSampleFileKey = (file: Pick<File, 'name' | 'size' | 'lastModified'>): string =>
+  `${file.name.trim().toLowerCase()}::${file.size}::${file.lastModified}`;
+
+const dedupeBootstrapSampleFiles = (files: File[]): File[] => {
+  const seen = new Set<string>();
+  const unique: File[] = [];
+  for (const file of files) {
+    const key = buildBootstrapSampleFileKey(file);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(file);
+  }
+  return unique;
+};
+type TrainingLaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: 'auto' | 'control_plane' | 'worker' | null;
+  workerId?: string | null;
+};
 const formatCoveragePercent = (value: number) => `${Math.round(value * 100)}%`;
 const parsePositiveInteger = (value: string): number | null => {
   const normalized = value.trim();
@@ -59,17 +149,225 @@ const parsePositiveNumber = (value: string): number | null => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
+const isTrainingReadyDatasetVersion = (version: DatasetVersionRecord): boolean =>
+  version.split_summary.train > 0 && version.annotation_coverage > 0;
+
+const selectPreferredLaunchVersion = (
+  versions: DatasetVersionRecord[],
+  preferredVersionId?: string | null,
+  currentVersionId?: string | null
+): string => {
+  const preferred = preferredVersionId?.trim() ?? '';
+  const current = currentVersionId?.trim() ?? '';
+  const hasVersion = (id: string) => versions.some((version) => version.id === id);
+  const readyVersions = versions.filter(isTrainingReadyDatasetVersion);
+  const topReadyId = readyVersions[0]?.id ?? '';
+  if (preferred && hasVersion(preferred)) {
+    return preferred;
+  }
+  if (current && hasVersion(current) && isTrainingReadyDatasetVersion(versions.find((item) => item.id === current)!)) {
+    return current;
+  }
+  if (topReadyId) {
+    return topReadyId;
+  }
+  if (current && hasVersion(current)) {
+    return current;
+  }
+  return versions[0]?.id ?? '';
+};
+
+const resolveBaseModelOptions = (framework: TrainingFramework, taskType: TrainingTaskType): string[] => {
+  const taskSpecific = taskBaseModelOverrides[taskType]?.[framework] ?? [];
+  if (taskSpecific.length > 0) {
+    return [...taskSpecific];
+  }
+  return [...frameworkBaseModelCatalog[framework]];
+};
+
+const parseBootstrapFilenames = (value: string): string[] =>
+  Array.from(
+    new Set(
+      value
+        .split(/\r?\n|[,，;；]/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 80);
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: TrainingLaunchContext
+) => {
+  if (context?.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context?.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context?.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context?.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (context?.executionTarget && context.executionTarget !== 'auto' && !searchParams.has('execution_target')) {
+    searchParams.set('execution_target', context.executionTarget);
+  }
+  if (context?.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const appendReturnTo = (searchParams: URLSearchParams, returnTo?: string | null) => {
+  const safeReturnTo = sanitizeReturnToPath(returnTo);
+  if (safeReturnTo && !searchParams.has('return_to')) {
+    searchParams.set('return_to', safeReturnTo);
+  }
+};
+
+const buildDatasetDetailPath = (
+  datasetId: string,
+  versionId?: string | null,
+  launchContext?: TrainingLaunchContext
+): string => {
+  const searchParams = new URLSearchParams();
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/datasets/${datasetId}?${query}` : `/datasets/${datasetId}`;
+};
+
+const buildClosurePath = (
+  datasetId: string,
+  versionId?: string | null,
+  launchContext?: TrainingLaunchContext
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('dataset', datasetId);
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/workflow/closure?${searchParams.toString()}`;
+};
+
+const buildDatasetsPath = (launchContext?: TrainingLaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/datasets?${query}` : '/datasets';
+};
+
+const buildRuntimeSettingsPath = (
+  focus: 'setup' | 'readiness' | 'advanced' = 'readiness',
+  framework?: TrainingFramework | null,
+  launchContext?: TrainingLaunchContext,
+  returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('focus', focus);
+  if (framework) {
+    searchParams.set('framework', framework);
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  return `/settings/runtime?${searchParams.toString()}`;
+};
+
+const buildWorkerSettingsPath = (options?: {
+  focus?: 'inventory' | 'pairing';
+  onboarding?: boolean;
+  profile?: TrainingFramework | null;
+  workerId?: string | null;
+  launchContext?: TrainingLaunchContext;
+  returnTo?: string | null;
+}): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  if (options?.focus) {
+    searchParams.set('focus', options.focus);
+  }
+  if (options?.onboarding) {
+    searchParams.set('onboarding', '1');
+  }
+  if (options?.profile) {
+    searchParams.set('profile', options.profile);
+  }
+  if (options?.workerId?.trim()) {
+    searchParams.set('worker', options.workerId.trim());
+  }
+  appendReturnTo(searchParams, options?.returnTo);
+  const query = searchParams.toString();
+  return query ? `/settings/workers?${query}` : '/settings/workers';
+};
+
+const buildTrainingJobDetailPath = (
+  jobId: string,
+  options?: {
+    datasetId?: string | null;
+    versionId?: string | null;
+    created?: boolean;
+    launchContext?: TrainingLaunchContext;
+    returnTo?: string | null;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (options?.datasetId?.trim()) {
+    searchParams.set('dataset', options.datasetId.trim());
+  }
+  if (options?.versionId?.trim()) {
+    searchParams.set('version', options.versionId.trim());
+  }
+  if (options?.created) {
+    searchParams.set('created', '1');
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  appendReturnTo(searchParams, options?.returnTo);
+  const query = searchParams.toString();
+  const encodedJobId = encodeURIComponent(jobId);
+  return query ? `/training/jobs/${encodedJobId}?${query}` : `/training/jobs/${encodedJobId}`;
+};
+
 export default function CreateTrainingJobPage() {
   const { t } = useI18n();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const preferredTaskType = (searchParams.get('task_type') ?? searchParams.get('model_type') ?? '').trim();
+  const preferredTaskTypeNormalized = taskTypeOptions.includes(preferredTaskType as (typeof taskTypeOptions)[number])
+    ? (preferredTaskType as (typeof taskTypeOptions)[number])
+    : null;
+  const preferredFrameworkRaw = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
+  const preferredFramework = trainingFrameworkOptions.includes(preferredFrameworkRaw as TrainingFramework)
+    ? (preferredFrameworkRaw as TrainingFramework)
+    : null;
   const preferredExecutionTargetRaw = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
   const preferredExecutionTarget =
     preferredExecutionTargetRaw === 'control_plane' || preferredExecutionTargetRaw === 'worker'
       ? preferredExecutionTargetRaw
       : 'auto';
   const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
+  const preferredSourceJobId = (searchParams.get('source_job') ?? searchParams.get('sourceJob') ?? '').trim();
 
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetVersions, setDatasetVersions] = useState<DatasetVersionRecord[]>([]);
@@ -79,7 +377,7 @@ export default function CreateTrainingJobPage() {
       ? (preferredTaskType as (typeof taskTypeOptions)[number])
       : 'ocr'
   );
-  const [framework, setFramework] = useState<TrainingFramework>('paddleocr');
+  const [framework, setFramework] = useState<TrainingFramework>(preferredFramework ?? 'paddleocr');
   const [datasetId, setDatasetId] = useState('');
   const [datasetVersionId, setDatasetVersionId] = useState('');
   const [baseModel, setBaseModel] = useState('');
@@ -102,19 +400,76 @@ export default function CreateTrainingJobPage() {
   const [workers, setWorkers] = useState<TrainingWorkerNodeView[]>([]);
   const [workersAccessDenied, setWorkersAccessDenied] = useState(false);
   const [workersError, setWorkersError] = useState('');
+  const [sourceJobPrefillLoading, setSourceJobPrefillLoading] = useState(false);
+  const [sourceJobPrefillError, setSourceJobPrefillError] = useState('');
+  const [sourceJobPrefillJob, setSourceJobPrefillJob] = useState<TrainingJobRecord | null>(null);
   const [nonStrictLaunchConfirmed, setNonStrictLaunchConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [preparingSnapshot, setPreparingSnapshot] = useState(false);
+  const [creatingDatasetFromSamples, setCreatingDatasetFromSamples] = useState(false);
+  const [autoPrepareSnapshot, setAutoPrepareSnapshot] = useState(true);
+  const [bootstrapSampleFilenames, setBootstrapSampleFilenames] = useState('');
+  const [bootstrapSampleFiles, setBootstrapSampleFiles] = useState<File[]>([]);
+  const [bootstrapDropActive, setBootstrapDropActive] = useState(false);
+  const [snapshotPreparationNote, setSnapshotPreparationNote] = useState('');
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const [preferredLaunchContextHint, setPreferredLaunchContextHint] = useState('');
   const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
   const preferredDatasetAppliedRef = useRef(false);
   const preferredVersionAppliedRef = useRef(false);
+  const preferredDatasetRecoveryAppliedRef = useRef(false);
+  const preferredVersionRecoveryAppliedRef = useRef(false);
+  const preferredWorkerRecoveryAppliedRef = useRef(false);
+  const preferredTaskFrameworkRecoveryAppliedRef = useRef(false);
+  const sourceJobPrefillAppliedRef = useRef(false);
   const jobNameInputRef = useRef<HTMLInputElement | null>(null);
   const datasetSelectRef = useRef<HTMLSelectElement | null>(null);
   const datasetVersionSelectRef = useRef<HTMLSelectElement | null>(null);
   const paramsEpochsInputRef = useRef<HTMLInputElement | null>(null);
+  const bootstrapSampleFileInputRef = useRef<HTMLInputElement | null>(null);
+  const appendPreferredLaunchContextHint = useCallback(
+    (reason: string) => {
+      setPreferredLaunchContextHint((current) => {
+        const nextHint = t('Adjusted launch context to match available training data and runtime options. {reason}', {
+          reason
+        });
+        if (!current) {
+          return nextHint;
+        }
+        if (current.includes(reason)) {
+          return current;
+        }
+        return `${current} ${nextHint}`;
+      });
+    },
+    [t]
+  );
+
+  useEffect(() => {
+    setPreferredLaunchContextHint('');
+    preferredDatasetRecoveryAppliedRef.current = false;
+    preferredVersionRecoveryAppliedRef.current = false;
+    preferredWorkerRecoveryAppliedRef.current = false;
+    preferredTaskFrameworkRecoveryAppliedRef.current = false;
+    sourceJobPrefillAppliedRef.current = false;
+    setSourceJobPrefillError('');
+    setSourceJobPrefillJob(null);
+  }, [
+    preferredDatasetId,
+    preferredExecutionTarget,
+    preferredFramework,
+    preferredSourceJobId,
+    preferredTaskTypeNormalized,
+    preferredVersionId,
+    preferredWorkerId
+  ]);
+
+  useEffect(() => {
+    setSnapshotPreparationNote('');
+  }, [datasetId, taskType, framework]);
 
   useEffect(() => {
     setLoading(true);
@@ -131,12 +486,24 @@ export default function CreateTrainingJobPage() {
           preferredDatasetAppliedRef.current = true;
           if (preferredDataset.task_type !== taskType) {
             setTaskType(preferredDataset.task_type);
+            if (!preferredDatasetRecoveryAppliedRef.current) {
+              preferredDatasetRecoveryAppliedRef.current = true;
+              appendPreferredLaunchContextHint(
+                t('Switched task type to match the requested dataset.')
+              );
+            }
           }
           setDatasetId(preferredDataset.id);
           return;
         }
 
         const first = result.find((dataset) => dataset.task_type === taskType);
+        if (preferredDatasetId && result.length > 0 && !preferredDatasetRecoveryAppliedRef.current) {
+          preferredDatasetRecoveryAppliedRef.current = true;
+          appendPreferredLaunchContextHint(
+            t('Requested dataset is unavailable, using current task inventory instead.')
+          );
+        }
         setDatasetId((current) =>
           current && result.some((dataset) => dataset.id === current && dataset.task_type === taskType)
             ? current
@@ -174,11 +541,15 @@ export default function CreateTrainingJobPage() {
 
         if (preferredVersion) {
           preferredVersionAppliedRef.current = true;
+        } else if (preferredVersionId && result.length > 0 && !preferredVersionRecoveryAppliedRef.current) {
+          preferredVersionRecoveryAppliedRef.current = true;
+          appendPreferredLaunchContextHint(
+            t('Requested dataset version is unavailable, using an available snapshot.')
+          );
         }
 
         setDatasetVersionId((current) =>
-          preferredVersion ||
-          (current && result.some((version) => version.id === current) ? current : (result[0]?.id ?? ''))
+          preferredVersion || selectPreferredLaunchVersion(result, preferredVersionId, current)
         );
       })
       .catch((error) => {
@@ -209,6 +580,25 @@ export default function CreateTrainingJobPage() {
   }, [framework, taskType]);
 
   useEffect(() => {
+    if (
+      preferredTaskFrameworkRecoveryAppliedRef.current ||
+      !preferredTaskTypeNormalized ||
+      !preferredFramework
+    ) {
+      return;
+    }
+    const incompatible =
+      (preferredTaskTypeNormalized === 'ocr' && preferredFramework === 'yolo') ||
+      (preferredTaskTypeNormalized !== 'ocr' &&
+        (preferredFramework === 'paddleocr' || preferredFramework === 'doctr'));
+    if (!incompatible) {
+      return;
+    }
+    preferredTaskFrameworkRecoveryAppliedRef.current = true;
+    appendPreferredLaunchContextHint(t('Adjusted framework to align with task type compatibility.'));
+  }, [appendPreferredLaunchContextHint, preferredFramework, preferredTaskTypeNormalized, t]);
+
+  useEffect(() => {
     let active = true;
     setRuntimeSettingsLoading(true);
     setRuntimeSettingsError('');
@@ -236,6 +626,82 @@ export default function CreateTrainingJobPage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!preferredSourceJobId || sourceJobPrefillAppliedRef.current) {
+      return;
+    }
+    let active = true;
+    sourceJobPrefillAppliedRef.current = true;
+    setSourceJobPrefillLoading(true);
+    setSourceJobPrefillError('');
+    api
+      .getTrainingJobDetail(preferredSourceJobId)
+      .then((detail) => {
+        if (!active) {
+          return;
+        }
+        const sourceJob = detail.job;
+        setSourceJobPrefillJob(sourceJob);
+        setTaskType(sourceJob.task_type);
+        setFramework(sourceJob.framework);
+        setDatasetId(sourceJob.dataset_id);
+        setDatasetVersionId(sourceJob.dataset_version_id ?? '');
+        setBaseModel(sourceJob.base_model);
+
+        const pickConfigValue = (...keys: string[]): string => {
+          for (const key of keys) {
+            const value = sourceJob.config[key];
+            if (typeof value === 'string' && value.trim().length > 0) {
+              return value.trim();
+            }
+          }
+          return '';
+        };
+        const nextEpochs = pickConfigValue('epochs');
+        const nextBatchSize = pickConfigValue('batch_size', 'batchSize');
+        const nextLearningRate = pickConfigValue('learning_rate', 'learningRate');
+        const nextWarmupRatio = pickConfigValue('warmup_ratio', 'warmupRatio');
+        const nextWeightDecay = pickConfigValue('weight_decay', 'weightDecay');
+        if (nextEpochs) {
+          setEpochs(nextEpochs);
+        }
+        if (nextBatchSize) {
+          setBatchSize(nextBatchSize);
+        }
+        if (nextLearningRate) {
+          setLearningRate(nextLearningRate);
+        }
+        if (nextWarmupRatio) {
+          setWarmupRatio(nextWarmupRatio);
+        }
+        if (nextWeightDecay) {
+          setWeightDecay(nextWeightDecay);
+        }
+        setDispatchPreference(sourceJob.execution_target);
+        setSelectedWorkerId(
+          sourceJob.execution_target === 'worker' ? sourceJob.scheduled_worker_id?.trim() ?? '' : ''
+        );
+        setName((current) => (current.trim().length > 0 ? current : `${sourceJob.name}-next`));
+        appendPreferredLaunchContextHint(
+          t('Prefilled launch settings from source run {jobId}.', { jobId: sourceJob.id })
+        );
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setSourceJobPrefillError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setSourceJobPrefillLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [appendPreferredLaunchContextHint, preferredSourceJobId, t]);
 
   useEffect(() => {
     let active = true;
@@ -286,9 +752,131 @@ export default function CreateTrainingJobPage() {
     }
   }, [dispatchPreference, selectedWorkerId]);
 
+  useEffect(() => {
+    if (
+      preferredWorkerRecoveryAppliedRef.current ||
+      dispatchPreference !== 'worker' ||
+      !preferredWorkerId ||
+      workersLoading ||
+      workersAccessDenied
+    ) {
+      return;
+    }
+    if (workers.some((worker) => worker.id === preferredWorkerId)) {
+      return;
+    }
+    preferredWorkerRecoveryAppliedRef.current = true;
+    setSelectedWorkerId('');
+    setDispatchPreference('auto');
+    appendPreferredLaunchContextHint(
+      t('Requested worker is unavailable, switched dispatch back to auto scheduling.')
+    );
+  }, [
+    appendPreferredLaunchContextHint,
+    dispatchPreference,
+    preferredWorkerId,
+    workers,
+    workersAccessDenied,
+    workersLoading,
+    t
+  ]);
+
+  useEffect(() => {
+    const queryTaskType = (() => {
+      const value = (searchParams.get('task_type') ?? searchParams.get('model_type') ?? '').trim();
+      if (taskTypeOptions.includes(value as (typeof taskTypeOptions)[number])) {
+        return value as (typeof taskTypeOptions)[number];
+      }
+      return null;
+    })();
+    if (queryTaskType && queryTaskType !== taskType) {
+      setTaskType(queryTaskType);
+    }
+
+    const queryFramework = (() => {
+      const value = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
+      if (trainingFrameworkOptions.includes(value as TrainingFramework)) {
+        return value as TrainingFramework;
+      }
+      return null;
+    })();
+    if (queryFramework && queryFramework !== framework) {
+      setFramework(queryFramework);
+    }
+
+    const queryExecutionTarget = (() => {
+      const value = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
+      return value === 'control_plane' || value === 'worker' ? value : 'auto';
+    })();
+    if (queryExecutionTarget !== dispatchPreference) {
+      setDispatchPreference(queryExecutionTarget);
+    }
+
+    const queryWorkerId = (searchParams.get('worker') ?? '').trim();
+    if (queryExecutionTarget === 'worker' && queryWorkerId !== selectedWorkerId) {
+      setSelectedWorkerId(queryWorkerId);
+    }
+  }, [dispatchPreference, framework, searchParams, selectedWorkerId, taskType]);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+
+    if (datasetId.trim()) {
+      next.set('dataset', datasetId.trim());
+    } else {
+      next.delete('dataset');
+    }
+
+    if (datasetVersionId.trim()) {
+      next.set('version', datasetVersionId.trim());
+    } else {
+      next.delete('version');
+    }
+
+    next.set('task_type', taskType);
+    // Backward compatibility cleanup for older task key.
+    next.delete('model_type');
+
+    next.set('framework', framework);
+    // Backward compatibility cleanup for older framework alias.
+    next.delete('profile');
+
+    if (dispatchPreference === 'auto') {
+      next.delete('execution_target');
+    } else {
+      next.set('execution_target', dispatchPreference);
+    }
+
+    if (dispatchPreference === 'worker' && selectedWorkerId.trim()) {
+      next.set('worker', selectedWorkerId.trim());
+    } else {
+      next.delete('worker');
+    }
+
+    const currentQuery = searchParams.toString();
+    const nextQuery = next.toString();
+    if (nextQuery === currentQuery) {
+      return;
+    }
+
+    navigate(nextQuery ? `${location.pathname}?${nextQuery}` : location.pathname, {
+      replace: true
+    });
+  }, [
+    datasetId,
+    datasetVersionId,
+    dispatchPreference,
+    framework,
+    location.pathname,
+    navigate,
+    searchParams,
+    selectedWorkerId,
+    taskType
+  ]);
+
   const baseModelOptions = useMemo<string[]>(
-    () => [...curatedBaseModelCatalog[framework]],
-    [framework]
+    () => resolveBaseModelOptions(framework, taskType),
+    [framework, taskType]
   );
 
   useEffect(() => {
@@ -306,6 +894,54 @@ export default function CreateTrainingJobPage() {
     () => filteredDatasets.find((dataset) => dataset.id === datasetId) ?? null,
     [datasetId, filteredDatasets]
   );
+  const preferredDatasetRecord = useMemo(
+    () => (preferredDatasetId ? datasets.find((dataset) => dataset.id === preferredDatasetId) ?? null : null),
+    [datasets, preferredDatasetId]
+  );
+  const preferredDatasetMissing = useMemo(
+    () => Boolean(preferredDatasetId && datasets.length > 0 && !preferredDatasetRecord),
+    [datasets.length, preferredDatasetId, preferredDatasetRecord]
+  );
+  const preferredVersionRecord = useMemo(
+    () => (preferredVersionId ? datasetVersions.find((version) => version.id === preferredVersionId) ?? null : null),
+    [datasetVersions, preferredVersionId]
+  );
+  const preferredVersionMissing = useMemo(() => {
+    if (!preferredVersionId || versionsLoading || datasetVersions.length === 0) {
+      return false;
+    }
+    if (preferredDatasetId && datasetId !== preferredDatasetId) {
+      return false;
+    }
+    return !preferredVersionRecord;
+  }, [
+    datasetId,
+    datasetVersions.length,
+    preferredDatasetId,
+    preferredVersionId,
+    preferredVersionRecord,
+    versionsLoading
+  ]);
+  const clearRequestedLaunchContextPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('dataset');
+    next.delete('version');
+    next.delete('task_type');
+    next.delete('model_type');
+    next.delete('framework');
+    next.delete('profile');
+    next.delete('execution_target');
+    next.delete('worker');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
+  const clearSourceJobPrefillPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('source_job');
+    next.delete('sourceJob');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
   const onlineWorkers = useMemo(
     () =>
       workers.filter(
@@ -316,6 +952,16 @@ export default function CreateTrainingJobPage() {
   const selectedWorker = useMemo(
     () => workers.find((worker) => worker.id === selectedWorkerId) ?? null,
     [selectedWorkerId, workers]
+  );
+  const requestedWorkerMissing = useMemo(
+    () =>
+      Boolean(
+        preferredWorkerId &&
+          !workersLoading &&
+          !workersAccessDenied &&
+          !workers.some((worker) => worker.id === preferredWorkerId)
+      ),
+    [preferredWorkerId, workers, workersAccessDenied, workersLoading]
   );
   const selectedWorkerAvailable =
     !selectedWorkerId || workersLoading || workersAccessDenied || Boolean(selectedWorker);
@@ -339,6 +985,69 @@ export default function CreateTrainingJobPage() {
   const selectedDatasetVersion = useMemo(
     () => datasetVersions.find((version) => version.id === datasetVersionId) ?? null,
     [datasetVersionId, datasetVersions]
+  );
+  const launchContext = useMemo(
+    () => ({
+      datasetId: datasetId || null,
+      versionId: datasetVersionId || null,
+      taskType: taskType || null,
+      framework: framework || null,
+      executionTarget: dispatchPreference,
+      workerId: dispatchPreference === 'worker' ? selectedWorkerId || null : null
+    }),
+    [datasetId, datasetVersionId, dispatchPreference, framework, selectedWorkerId, taskType]
+  );
+  const datasetsPath = useMemo(() => buildDatasetsPath(launchContext), [launchContext]);
+  const selectedDatasetDetailPath = useMemo(
+    () =>
+      selectedDataset
+        ? buildDatasetDetailPath(selectedDataset.id, selectedDatasetVersion?.id, launchContext)
+        : datasetsPath,
+    [datasetsPath, launchContext, selectedDataset, selectedDatasetVersion?.id]
+  );
+  const selectedClosurePath = useMemo(
+    () =>
+      selectedDataset
+        ? buildClosurePath(selectedDataset.id, selectedDatasetVersion?.id, launchContext)
+        : '/workflow/closure',
+    [launchContext, selectedDataset, selectedDatasetVersion?.id]
+  );
+  const sourceJobDetailPath = useMemo(() => {
+    if (!sourceJobPrefillJob) {
+      return '';
+    }
+    return buildTrainingJobDetailPath(sourceJobPrefillJob.id, {
+      datasetId: sourceJobPrefillJob.dataset_id,
+      versionId: sourceJobPrefillJob.dataset_version_id,
+      launchContext,
+      returnTo: currentTaskPath
+    });
+  }, [currentTaskPath, launchContext, sourceJobPrefillJob]);
+  const runtimeReadinessPath = useMemo(
+    () => buildRuntimeSettingsPath('readiness', framework, launchContext, outboundReturnTo),
+    [framework, launchContext, outboundReturnTo]
+  );
+  const workerInventoryPath = useMemo(
+    () =>
+      buildWorkerSettingsPath({
+        focus: 'inventory',
+        profile: framework,
+        workerId: selectedWorkerId || undefined,
+        launchContext,
+        returnTo: outboundReturnTo
+      }),
+    [framework, launchContext, outboundReturnTo, selectedWorkerId]
+  );
+  const workerPairingPath = useMemo(
+    () =>
+      buildWorkerSettingsPath({
+        focus: 'pairing',
+        onboarding: true,
+        profile: framework,
+        launchContext,
+        returnTo: outboundReturnTo
+      }),
+    [framework, launchContext, outboundReturnTo]
   );
   const snapshotPrefilledFromLink =
     Boolean(preferredDatasetId) &&
@@ -376,8 +1085,9 @@ export default function CreateTrainingJobPage() {
   }, [batchSize, epochs, learningRate, t, warmupRatio, weightDecay]);
   const paramsReady = paramValidationIssues.length === 0;
   const dispatchReady = dispatchPreference !== 'worker' || selectedWorkerAvailable;
+  const snapshotAutoRecoverable = autoPrepareSnapshot && Boolean(selectedDataset) && datasetStatusReady;
   const submitReady =
-    launchReady &&
+    (launchReady || snapshotAutoRecoverable) &&
     !runtimeSettingsLoading &&
     !runtimeSettingsError &&
     strictLaunchGateReady &&
@@ -406,7 +1116,9 @@ export default function CreateTrainingJobPage() {
         state: launchReady ? ('ready' as const) : ('blocked' as const),
         detail: selectedDatasetVersion
           ? [selectedDataset?.name, selectedDatasetVersion.version_name].filter(Boolean).join(' · ')
-          : t('Choose a dataset and version first.'),
+          : autoPrepareSnapshot
+            ? t('Snapshot will be auto-prepared at launch.')
+            : t('Choose a dataset and version first.'),
         action: () => {
           if (!datasetId) {
             datasetSelectRef.current?.focus();
@@ -427,7 +1139,10 @@ export default function CreateTrainingJobPage() {
         label: t('Dispatch strategy'),
         state: dispatchReady ? ('ready' as const) : ('blocked' as const),
         detail: dispatchReady ? dispatchSummary : t('Selected worker is not in current inventory.'),
-        action: null
+        action:
+          dispatchPreference === 'worker'
+            ? () => navigate(onlineWorkers.length > 0 || selectedWorkerId ? workerInventoryPath : workerPairingPath)
+            : null
       },
       {
         key: 'runtime',
@@ -441,27 +1156,34 @@ export default function CreateTrainingJobPage() {
               ? t('Strict fallback is enabled.')
               : t('Confirm the risk to continue.'),
         action: runtimeSettingsError
-          ? () => navigate('/settings/runtime')
+          ? () => navigate(runtimeReadinessPath)
           : !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed
             ? () => setNonStrictLaunchConfirmed(true)
             : null
       }
     ];
   }, [
+    autoPrepareSnapshot,
     datasetId,
     launchReady,
     name,
     navigate,
     nonStrictLaunchConfirmed,
     dispatchReady,
+    dispatchPreference,
     dispatchSummary,
+    onlineWorkers.length,
     paramsReady,
     paramValidationIssues,
     runtimeDisableSimulatedTrainFallback,
     runtimeSettingsError,
     runtimeSettingsLoading,
+    runtimeReadinessPath,
+    selectedWorkerId,
     selectedDataset,
     selectedDatasetVersion,
+    workerInventoryPath,
+    workerPairingPath,
     t
   ]);
   const blockedLaunchCheckpoints = launchCheckpoints.filter((item) => item.state !== 'ready');
@@ -482,6 +1204,8 @@ export default function CreateTrainingJobPage() {
                 ? t('Focus snapshot')
                 : nextLaunchCheckpoint.key === 'params'
                   ? t('Focus params')
+                  : nextLaunchCheckpoint.key === 'dispatch'
+                    ? t('Worker Settings')
                   : nextLaunchCheckpoint.key === 'runtime' && runtimeSettingsError
                     ? t('Open Runtime Settings')
                     : t('Confirm risk'),
@@ -496,23 +1220,330 @@ export default function CreateTrainingJobPage() {
     return ['yolo'] as const;
   }, [taskType]);
 
-  const submit = async () => {
-    if (!name.trim()) {
+  const recommendedParams = useMemo(() => {
+    const byFramework = recommendedTrainingConfigCatalog[framework];
+    const fallbackTask = framework === 'yolo' ? 'detection' : 'ocr';
+    return byFramework[taskType] ?? byFramework[fallbackTask] ?? null;
+  }, [framework, taskType]);
+
+  const applyRecommendedParams = useCallback(() => {
+    const recommended = recommendedParams;
+    if (!recommended) {
+      return;
+    }
+    setEpochs(recommended.epochs);
+    setBatchSize(recommended.batchSize);
+    setLearningRate(recommended.learningRate);
+    setWarmupRatio(recommended.warmupRatio);
+    setWeightDecay(recommended.weightDecay);
+    setFeedback({
+      variant: 'success',
+      text: t('Applied recommended params for {framework}/{task}.', {
+        framework,
+        task: taskType
+      })
+    });
+  }, [framework, recommendedParams, taskType, t]);
+
+  const queueBootstrapSampleFiles = useCallback(
+    (incomingFiles: File[]) => {
+      if (incomingFiles.length === 0) {
+        return;
+      }
+      const oversized = findOversizedUpload(incomingFiles);
+      if (oversized) {
+        setFeedback({
+          variant: 'error',
+          text: t('File {filename} is {size}. Keep each file under {limit} to avoid proxy rejection (413).', {
+            filename: oversized.name,
+            size: formatByteSize(oversized.size),
+            limit: UPLOAD_SOFT_LIMIT_LABEL
+          })
+        });
+        return;
+      }
+
+      setBootstrapSampleFiles((current) => {
+        const unique = dedupeBootstrapSampleFiles([...current, ...incomingFiles]).slice(0, maxBootstrapSampleEntries);
+        if (unique.length < current.length + incomingFiles.length) {
+          setFeedback({
+            variant: 'success',
+            text: t('Only {count} sample files are kept for Smart Launch. Remove duplicates or extra files if needed.', {
+              count: maxBootstrapSampleEntries
+            })
+          });
+        }
+        return unique;
+      });
+    },
+    [t]
+  );
+
+  const removeBootstrapSampleFile = useCallback((targetKey: string) => {
+    setBootstrapSampleFiles((current) =>
+      current.filter((file) => buildBootstrapSampleFileKey(file) !== targetKey)
+    );
+  }, []);
+
+  const clearBootstrapSampleFiles = useCallback(() => {
+    setBootstrapSampleFiles([]);
+    setBootstrapDropActive(false);
+  }, []);
+
+  const handleBootstrapSampleFileInput = useCallback(
+    (event: ReactChangeEvent<HTMLInputElement>) => {
+      const selectedFiles = event.target.files ? Array.from(event.target.files) : [];
+      event.target.value = '';
+      queueBootstrapSampleFiles(selectedFiles);
+    },
+    [queueBootstrapSampleFiles]
+  );
+
+  const handleBootstrapDrop = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setBootstrapDropActive(false);
+      const droppedFiles = Array.from(event.dataTransfer.files ?? []);
+      queueBootstrapSampleFiles(droppedFiles);
+    },
+    [queueBootstrapSampleFiles]
+  );
+
+  const waitForDatasetAttachmentsReady = useCallback(
+    async (
+      targetDatasetId: string,
+      expectedCount: number
+    ): Promise<{ ready: boolean; failedFilenames: string[] }> => {
+      const maxRounds = 30;
+      for (let round = 0; round < maxRounds; round += 1) {
+        const attachments = await api.listDatasetAttachments(targetDatasetId);
+        const readyCount = attachments.filter((item) => item.status === 'ready').length;
+        const hasPending = attachments.some((item) => item.status === 'uploading' || item.status === 'processing');
+        const failed = attachments.filter((item) => item.status === 'error').map((item) => item.filename);
+        if (failed.length > 0) {
+          return { ready: false, failedFilenames: failed };
+        }
+        if (readyCount >= expectedCount && !hasPending) {
+          return { ready: true, failedFilenames: [] };
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+      }
+      return { ready: false, failedFilenames: [] };
+    },
+    []
+  );
+
+  const createDatasetFromSamples = useCallback(
+    async (runName: string): Promise<DatasetRecord | null> => {
+      const parsedFilenames = parseBootstrapFilenames(bootstrapSampleFilenames);
+      const selectedFiles = dedupeBootstrapSampleFiles(bootstrapSampleFiles).slice(0, maxBootstrapSampleEntries);
+      const selectedFileNameSet = new Set(selectedFiles.map((file) => file.name.trim().toLowerCase()));
+      const filenames = parsedFilenames.filter((filename) => !selectedFileNameSet.has(filename.toLowerCase()));
+      const sampleCount = selectedFiles.length + filenames.length;
+      if (sampleCount === 0) {
+        setFeedback({
+          variant: 'error',
+          text: t('Add sample files or filenames so Smart Launch can create dataset automatically.')
+        });
+        return null;
+      }
+
+      setCreatingDatasetFromSamples(true);
+      try {
+        const datasetNameBase = runName.trim() || `${taskType}-${framework}`;
+        const createdDataset = await api.createDataset({
+          name: `${datasetNameBase}-dataset-${Date.now().toString().slice(-6)}`,
+          description: t('Auto-created by Smart Launch from sample inputs.'),
+          task_type: taskType,
+          label_schema: {
+            classes: defaultLabelClassesByTask[taskType]
+          }
+        });
+
+        for (const file of selectedFiles) {
+          await api.uploadDatasetFile(createdDataset.id, file);
+        }
+        for (const filename of filenames) {
+          await api.uploadDatasetAttachment(createdDataset.id, filename);
+        }
+
+        const readiness = await waitForDatasetAttachmentsReady(createdDataset.id, sampleCount);
+        if (!readiness.ready) {
+          if (readiness.failedFilenames.length > 0) {
+            setFeedback({
+              variant: 'error',
+              text: t('Some sample files failed to process: {files}', {
+                files: readiness.failedFilenames.slice(0, 6).join(', ')
+              })
+            });
+            return null;
+          }
+          setFeedback({
+            variant: 'success',
+            text: t('Dataset files are still processing. Smart Launch will continue once they are ready.')
+          });
+        }
+
+        setDatasets((previous) => [createdDataset, ...previous.filter((item) => item.id !== createdDataset.id)]);
+        setDatasetId(createdDataset.id);
+        setSnapshotPreparationNote(
+          t('Smart Launch created dataset from {count} sample file(s).', { count: sampleCount })
+        );
+        setBootstrapSampleFilenames('');
+        setBootstrapSampleFiles([]);
+        return createdDataset;
+      } catch (error) {
+        setFeedback({
+          variant: 'error',
+          text: t('Smart dataset bootstrap failed: {message}', {
+            message: (error as Error).message
+          })
+        });
+        return null;
+      } finally {
+        setCreatingDatasetFromSamples(false);
+      }
+    },
+    [bootstrapSampleFilenames, bootstrapSampleFiles, framework, taskType, t, waitForDatasetAttachmentsReady]
+  );
+
+  const autoPrepareTrainingSnapshot = useCallback(async (options?: {
+    datasetIdOverride?: string;
+    datasetOverride?: DatasetRecord | null;
+  }) => {
+    const effectiveDatasetId = options?.datasetIdOverride ?? datasetId;
+    const effectiveDataset = options?.datasetOverride ?? selectedDataset;
+    if (!effectiveDatasetId || !effectiveDataset) {
+      setFeedback({ variant: 'error', text: t('Please select a dataset first.') });
+      return null;
+    }
+    if (effectiveDataset.status !== 'ready') {
+      setFeedback({ variant: 'error', text: t('Selected dataset must be ready before creating a run.') });
+      return null;
+    }
+
+    setPreparingSnapshot(true);
+    setFeedback(null);
+    const notes: string[] = [];
+
+    try {
+      let versions = await api.listDatasetVersions(effectiveDatasetId);
+      let readyVersion = versions.find(isTrainingReadyDatasetVersion) ?? null;
+
+      if (!readyVersion) {
+        const hasTrainSplit = versions.some((version) => version.split_summary.train > 0);
+        if (!hasTrainSplit) {
+          await api.splitDataset({
+            dataset_id: effectiveDatasetId,
+            train_ratio: 0.8,
+            val_ratio: 0.1,
+            test_ratio: 0.1,
+            seed: 42
+          });
+          notes.push(t('Auto-split applied'));
+        }
+
+        const hasCoverage = versions.some((version) => version.annotation_coverage > 0);
+        if (!hasCoverage) {
+          try {
+            const preAnnotationResult = await api.runDatasetPreAnnotations(effectiveDatasetId);
+            if (preAnnotationResult.created + preAnnotationResult.updated > 0) {
+              notes.push(
+                t('Auto pre-annotation added {count} item(s).', {
+                  count: preAnnotationResult.created + preAnnotationResult.updated
+                })
+              );
+            }
+          } catch {
+            notes.push(t('Auto pre-annotation skipped'));
+          }
+        }
+
+        await api.createDatasetVersion(effectiveDatasetId, `auto-v${Date.now().toString().slice(-6)}`);
+        notes.push(t('Auto dataset version created'));
+        versions = await api.listDatasetVersions(effectiveDatasetId);
+        readyVersion = versions.find(isTrainingReadyDatasetVersion) ?? null;
+      }
+
+      setDatasetVersions(versions);
+      const selectedVersionId = selectPreferredLaunchVersion(
+        versions,
+        preferredVersionId,
+        readyVersion?.id ?? datasetVersionId
+      );
+      setDatasetVersionId(selectedVersionId);
+      const selectedVersion = versions.find((version) => version.id === selectedVersionId) ?? null;
+
+      if (selectedVersion && isTrainingReadyDatasetVersion(selectedVersion)) {
+        const note = notes.length > 0 ? notes.join(' · ') : t('Training-ready snapshot selected automatically.');
+        setSnapshotPreparationNote(note);
+        return selectedVersion;
+      }
+
+      setSnapshotPreparationNote(notes.join(' · '));
+      setFeedback({
+        variant: 'error',
+        text: t('Snapshot is still not launch-ready. Please complete annotation or dataset versioning in dataset lane.')
+      });
+      return null;
+    } catch (error) {
+      setSnapshotPreparationNote('');
+      setFeedback({
+        variant: 'error',
+        text: t('Auto snapshot preparation failed: {message}', {
+          message: (error as Error).message
+        })
+      });
+      return null;
+    } finally {
+      setPreparingSnapshot(false);
+    }
+  }, [datasetId, datasetVersionId, preferredVersionId, selectedDataset, t]);
+
+  const submit = async (options?: { autoFill?: boolean }) => {
+    const autoFill = options?.autoFill ?? false;
+    const generatedName = `${selectedDataset?.name ?? taskType}-${framework}-job-${Date.now().toString().slice(-6)}`;
+    const effectiveName = name.trim() || (autoFill ? generatedName : '');
+    if (!effectiveName) {
       setFeedback({ variant: 'error', text: t('Training job name is required.') });
       return;
     }
+    if (!name.trim() && autoFill) {
+      setName(effectiveName);
+    }
 
-    if (!datasetId) {
+    let resolvedDatasetId = datasetId;
+    let resolvedDataset = selectedDataset;
+    if (!resolvedDatasetId && autoFill) {
+      const createdDataset = await createDatasetFromSamples(effectiveName);
+      if (!createdDataset) {
+        return;
+      }
+      resolvedDatasetId = createdDataset.id;
+      resolvedDataset = createdDataset;
+    }
+    if (!resolvedDatasetId || !resolvedDataset) {
       setFeedback({ variant: 'error', text: t('Please select a dataset.') });
       return;
     }
 
-    if (!datasetVersionId.trim()) {
+    let resolvedVersion = selectedDatasetVersion;
+    if (autoPrepareSnapshot && (!resolvedVersion || !launchReady)) {
+      resolvedVersion = await autoPrepareTrainingSnapshot({
+        datasetIdOverride: resolvedDatasetId,
+        datasetOverride: resolvedDataset
+      });
+      if (!resolvedVersion) {
+        return;
+      }
+    }
+
+    if (!(resolvedVersion?.id ?? datasetVersionId).trim()) {
       setFeedback({ variant: 'error', text: t('Please select a dataset version.') });
       return;
     }
 
-    if (!selectedDatasetVersion) {
+    if (!resolvedVersion) {
       setFeedback({ variant: 'error', text: t('Selected dataset version is unavailable.') });
       return;
     }
@@ -522,12 +1553,12 @@ export default function CreateTrainingJobPage() {
       return;
     }
 
-    if (!datasetVersionHasTrainSplit) {
+    if (resolvedVersion.split_summary.train <= 0) {
       setFeedback({ variant: 'error', text: t('Selected dataset version must include train split items before launch.') });
       return;
     }
 
-    if (!datasetVersionHasAnnotationCoverage) {
+    if (resolvedVersion.annotation_coverage <= 0) {
       setFeedback({ variant: 'error', text: t('Selected dataset version must include annotation coverage before launch.') });
       return;
     }
@@ -540,7 +1571,12 @@ export default function CreateTrainingJobPage() {
       return;
     }
 
-    if (!runtimeSettingsLoading && !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed) {
+    const runtimeRiskConfirmed =
+      runtimeDisableSimulatedTrainFallback || nonStrictLaunchConfirmed || autoFill;
+    if (!runtimeSettingsLoading && !runtimeDisableSimulatedTrainFallback && !nonStrictLaunchConfirmed && autoFill) {
+      setNonStrictLaunchConfirmed(true);
+    }
+    if (!runtimeSettingsLoading && !runtimeRiskConfirmed) {
       setFeedback({
         variant: 'error',
         text: t('Runtime safety guard is off. Confirm risk acknowledgment before creating this run.')
@@ -548,12 +1584,80 @@ export default function CreateTrainingJobPage() {
       return;
     }
 
-    if (!paramsReady) {
+    const fallbackParams = recommendedParams;
+    const effectiveEpochs =
+      parsePositiveInteger(epochs) !== null
+        ? epochs
+        : autoFill && fallbackParams
+          ? fallbackParams.epochs
+          : epochs;
+    const effectiveBatchSize =
+      parsePositiveInteger(batchSize) !== null
+        ? batchSize
+        : autoFill && fallbackParams
+          ? fallbackParams.batchSize
+          : batchSize;
+    const effectiveLearningRate =
+      parsePositiveNumber(learningRate) !== null
+        ? learningRate
+        : autoFill && fallbackParams
+          ? fallbackParams.learningRate
+          : learningRate;
+    const warmupCandidate =
+      parseNonNegativeNumber(warmupRatio) !== null &&
+      (parseNonNegativeNumber(warmupRatio) ?? 0) <= 1
+        ? warmupRatio
+        : autoFill && fallbackParams
+          ? fallbackParams.warmupRatio
+          : warmupRatio;
+    const effectiveWeightDecay =
+      parseNonNegativeNumber(weightDecay) !== null
+        ? weightDecay
+        : autoFill && fallbackParams
+          ? fallbackParams.weightDecay
+          : weightDecay;
+
+    const autoParamIssues: string[] = [];
+    if (parsePositiveInteger(effectiveEpochs) === null) {
+      autoParamIssues.push(t('Epochs must be a positive integer.'));
+    }
+    if (parsePositiveInteger(effectiveBatchSize) === null) {
+      autoParamIssues.push(t('Batch size must be a positive integer.'));
+    }
+    if (parsePositiveNumber(effectiveLearningRate) === null) {
+      autoParamIssues.push(t('Learning rate must be greater than 0.'));
+    }
+    const parsedWarmup = parseNonNegativeNumber(warmupCandidate);
+    if (parsedWarmup === null || parsedWarmup > 1) {
+      autoParamIssues.push(t('Warmup ratio must be between 0 and 1.'));
+    }
+    if (parseNonNegativeNumber(effectiveWeightDecay) === null) {
+      autoParamIssues.push(t('Weight decay must be 0 or greater.'));
+    }
+
+    if (autoParamIssues.length > 0) {
       setFeedback({
         variant: 'error',
-        text: paramValidationIssues[0] ?? t('Fix the training params before launch.')
+        text: autoParamIssues[0] ?? t('Fix the training params before launch.')
       });
       return;
+    }
+    if (autoFill && fallbackParams) {
+      if (effectiveEpochs !== epochs) {
+        setEpochs(effectiveEpochs);
+      }
+      if (effectiveBatchSize !== batchSize) {
+        setBatchSize(effectiveBatchSize);
+      }
+      if (effectiveLearningRate !== learningRate) {
+        setLearningRate(effectiveLearningRate);
+      }
+      if (warmupCandidate !== warmupRatio) {
+        setWarmupRatio(warmupCandidate);
+      }
+      if (effectiveWeightDecay !== weightDecay) {
+        setWeightDecay(effectiveWeightDecay);
+      }
     }
 
     if (!dispatchReady) {
@@ -575,27 +1679,31 @@ export default function CreateTrainingJobPage() {
           ? selectedWorkerId.trim()
           : undefined;
       const created = await api.createTrainingJob({
-        name: name.trim(),
+        name: effectiveName,
         task_type: taskType,
         framework,
-        dataset_id: datasetId,
-        dataset_version_id: datasetVersionId.trim(),
+        dataset_id: resolvedDatasetId,
+        dataset_version_id: resolvedVersion.id,
         base_model: baseModel.trim() || baseModelOptions[0] || `${framework}-base`,
         config: {
-          epochs,
-          batch_size: batchSize,
-          learning_rate: learningRate,
-          warmup_ratio: warmupRatio,
-          weight_decay: weightDecay
+          epochs: effectiveEpochs,
+          batch_size: effectiveBatchSize,
+          learning_rate: effectiveLearningRate,
+          warmup_ratio: warmupCandidate,
+          weight_decay: effectiveWeightDecay
         },
         ...(executionTarget ? { execution_target: executionTarget } : {}),
         ...(workerId ? { worker_id: workerId } : {})
       });
 
       navigate(
-        `/training/jobs/${created.id}?dataset=${encodeURIComponent(datasetId)}&version=${encodeURIComponent(
-          datasetVersionId
-        )}&created=1`
+        buildTrainingJobDetailPath(created.id, {
+          datasetId: resolvedDatasetId,
+          versionId: resolvedVersion.id,
+          created: true,
+          launchContext,
+          returnTo: outboundReturnTo
+        })
       );
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -645,47 +1753,87 @@ export default function CreateTrainingJobPage() {
         title={t('Create Training Run')}
         description={t('Create a run from one fixed snapshot.')}
         primaryAction={{
-          label: submitting ? t('Submitting...') : t('Create Training Run'),
+          label: creatingDatasetFromSamples
+            ? t('Preparing dataset...')
+            : preparingSnapshot
+            ? t('Preparing snapshot...')
+            : submitting
+              ? t('Submitting...')
+              : t('Create Training Run'),
           onClick: () => {
             void submit();
           },
-          disabled: submitting || loading || versionsLoading || !submitReady
+          disabled: submitting || creatingDatasetFromSamples || preparingSnapshot || loading || versionsLoading || !submitReady
         }}
         secondaryActions={
-          <ButtonLink to="/datasets" variant="ghost" size="sm">
-            {t('Open datasets')}
-          </ButtonLink>
+          <div className="row gap wrap">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                void submit({ autoFill: true });
+              }}
+              disabled={submitting || creatingDatasetFromSamples || preparingSnapshot || loading || versionsLoading}
+            >
+              {submitting || creatingDatasetFromSamples || preparingSnapshot ? t('Launching...') : t('Smart Launch')}
+            </Button>
+            <ButtonLink to={datasetsPath} variant="ghost" size="sm">
+              {t('Open datasets')}
+            </ButtonLink>
+            {selectedDataset ? (
+              <ButtonLink to={selectedDatasetDetailPath} variant="ghost" size="sm">
+                {t('Open dataset detail')}
+              </ButtonLink>
+            ) : null}
+            {selectedDataset ? (
+              <ButtonLink to={selectedClosurePath} variant="ghost" size="sm">
+                {t('Open closure lane')}
+              </ButtonLink>
+            ) : null}
+          </div>
         }
         meta={
-          <div className="row gap wrap align-center">
-            <Badge tone="info">{t('Task')}: {t(taskType)}</Badge>
-            <Badge tone={snapshotPrefilledFromLink ? 'success' : 'neutral'}>
-              {t('Snapshot prefill')}: {snapshotPrefilledFromLink ? t('Ready') : t('N/A')}
-            </Badge>
-            <Badge tone={dispatchPreference === 'auto' ? 'neutral' : dispatchPreference === 'control_plane' ? 'warning' : 'info'}>
-              {t('Dispatch')}: {dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}
-            </Badge>
-            <Badge
-              tone={
-                runtimeSettingsError
-                  ? 'danger'
-                  : runtimeSettingsLoading
-                    ? 'info'
-                    : runtimeDisableSimulatedTrainFallback
-                      ? 'success'
-                      : 'warning'
-              }
-            >
-              {t('Runtime')}: {
-                runtimeSettingsError
-                  ? t('Unavailable')
-                  : runtimeSettingsLoading
-                    ? t('Checking...')
-                    : runtimeDisableSimulatedTrainFallback
-                      ? t('Guarded')
-                      : t('Review')
-              }
-            </Badge>
+          <div className="stack tight">
+            <div className="row gap wrap align-center">
+              <Badge tone="info">{t('Task')}: {t(taskType)}</Badge>
+              <Badge tone={snapshotPrefilledFromLink ? 'success' : 'neutral'}>
+                {t('Snapshot prefill')}: {snapshotPrefilledFromLink ? t('Ready') : t('N/A')}
+              </Badge>
+              <Badge
+                tone={dispatchPreference === 'auto' ? 'neutral' : dispatchPreference === 'control_plane' ? 'warning' : 'info'}
+              >
+                {t('Dispatch')}: {dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}
+              </Badge>
+              <Badge
+                tone={
+                  runtimeSettingsError
+                    ? 'danger'
+                    : runtimeSettingsLoading
+                      ? 'info'
+                      : runtimeDisableSimulatedTrainFallback
+                        ? 'success'
+                        : 'warning'
+                }
+              >
+                {t('Runtime')}: {
+                  runtimeSettingsError
+                    ? t('Unavailable')
+                    : runtimeSettingsLoading
+                      ? t('Checking...')
+                      : runtimeDisableSimulatedTrainFallback
+                        ? t('Guarded')
+                        : t('Review')
+                }
+              </Badge>
+            </div>
+            <TrainingLaunchContextPills
+              taskType={launchContext.taskType}
+              framework={launchContext.framework}
+              executionTarget={launchContext.executionTarget}
+              workerId={launchContext.workerId}
+              t={t}
+            />
           </div>
         }
       />
@@ -709,6 +1857,86 @@ export default function CreateTrainingJobPage() {
             preferredVersionId
               ? t('Dataset and version are prefilled. Confirm to launch.')
               : t('Dataset is prefilled. Pick a version next.')
+          }
+        />
+      ) : null}
+      {preferredSourceJobId ? (
+        <InlineAlert
+          tone={sourceJobPrefillError ? 'warning' : sourceJobPrefillLoading ? 'info' : sourceJobPrefillJob ? 'success' : 'info'}
+          title={
+            sourceJobPrefillError
+              ? t('Source run prefill unavailable')
+              : sourceJobPrefillLoading
+                ? t('Loading source run prefill...')
+                : sourceJobPrefillJob
+                  ? t('Source run prefilled')
+                  : t('Training run prefilled')
+          }
+          description={
+            sourceJobPrefillError
+              ? t('Source run prefill failed. Continue manually or clear source context.')
+              : sourceJobPrefillLoading
+                ? t('Loading launch fields from source run {jobId}.', { jobId: preferredSourceJobId })
+                : sourceJobPrefillJob
+                  ? t('Launcher fields were prefilled from run {jobId}. You can adjust any value before launch.', {
+                      jobId: sourceJobPrefillJob.id
+                    })
+                  : t('Use the completed run as the registration anchor.')
+          }
+          actions={
+            <div className="row gap wrap">
+              {sourceJobDetailPath ? (
+                <ButtonLink to={sourceJobDetailPath} variant="ghost" size="sm">
+                  {t('Open source run')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={clearSourceJobPrefillPath} variant="ghost" size="sm">
+                {t('Clear prefill')}
+              </ButtonLink>
+            </div>
+          }
+        />
+      ) : null}
+      {preferredLaunchContextHint ? (
+        <InlineAlert
+          tone="info"
+          title={t('Launch context adjusted')}
+          description={preferredLaunchContextHint}
+        />
+      ) : null}
+      {preferredDatasetMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested dataset not found')}
+          description={t('The dataset from the incoming link is unavailable. Showing available datasets instead.')}
+          actions={
+            <ButtonLink to={clearRequestedLaunchContextPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
+        />
+      ) : null}
+      {preferredVersionMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested dataset version not found')}
+          description={t('The requested snapshot is unavailable for the current dataset. Switched to an available version.')}
+          actions={
+            <ButtonLink to={clearRequestedLaunchContextPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
+        />
+      ) : null}
+      {requestedWorkerMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested worker not found')}
+          description={t('The worker from the incoming link is unavailable. Dispatch now falls back to scheduler auto mode.')}
+          actions={
+            <ButtonLink to={clearRequestedLaunchContextPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
           }
         />
       ) : null}
@@ -786,13 +2014,106 @@ export default function CreateTrainingJobPage() {
                     description={t('Create a dataset for this task type first.')}
                   extra={
                     <div className="row gap wrap">
-                      <ButtonLink to="/datasets" variant="secondary" size="sm">
+                      <ButtonLink to={datasetsPath} variant="secondary" size="sm">
                         {t('Open Datasets')}
                       </ButtonLink>
                     </div>
                   }
                 />
               ) : null}
+              <Panel className="stack tight" tone="soft">
+                <div className="row gap wrap align-center">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => bootstrapSampleFileInputRef.current?.click()}
+                    disabled={submitting || preparingSnapshot || creatingDatasetFromSamples}
+                  >
+                    {t('Upload sample files')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearBootstrapSampleFiles}
+                    disabled={
+                      bootstrapSampleFiles.length === 0 || submitting || preparingSnapshot || creatingDatasetFromSamples
+                    }
+                  >
+                    {t('Clear files')}
+                  </Button>
+                  <span className="muted">
+                    {t('{count} local sample file(s) queued', { count: bootstrapSampleFiles.length })}
+                  </span>
+                </div>
+                <HiddenFileInput
+                  ref={bootstrapSampleFileInputRef}
+                  multiple
+                  onChange={handleBootstrapSampleFileInput}
+                  disabled={submitting || preparingSnapshot || creatingDatasetFromSamples}
+                />
+                <div
+                  className={`training-bootstrap-dropzone${bootstrapDropActive ? ' is-active' : ''}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'copy';
+                    if (!bootstrapDropActive) {
+                      setBootstrapDropActive(true);
+                    }
+                  }}
+                  onDragLeave={() => setBootstrapDropActive(false)}
+                  onDrop={handleBootstrapDrop}
+                >
+                  <strong>{t('Drag and drop sample files here')}</strong>
+                  <small className="muted">
+                    {t('BMP and common image/document files are supported. Keep each file under {limit}.', {
+                      limit: UPLOAD_SOFT_LIMIT_LABEL
+                    })}
+                  </small>
+                </div>
+                {bootstrapSampleFiles.length > 0 ? (
+                  <ul className="workspace-record-list compact">
+                    {bootstrapSampleFiles.map((file) => {
+                      const fileKey = buildBootstrapSampleFileKey(file);
+                      return (
+                        <Panel key={fileKey} as="li" className="workspace-record-item stack tight" tone="soft">
+                          <div className="row between gap wrap align-center">
+                            <small>{file.name}</small>
+                            <div className="row gap">
+                              <Badge tone="neutral">{formatByteSize(file.size)}</Badge>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => removeBootstrapSampleFile(fileKey)}
+                              >
+                                {t('Delete')}
+                              </Button>
+                            </div>
+                          </div>
+                        </Panel>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <small className="muted">{t('No local sample files queued yet.')}</small>
+                )}
+                <label>
+                  {t('Sample filenames for Smart Launch')}
+                  <Textarea
+                    value={bootstrapSampleFilenames}
+                    onChange={(event) => setBootstrapSampleFilenames(event.target.value)}
+                    rows={3}
+                    placeholder={t('One filename per line, e.g. wagon_001.jpg')}
+                  />
+                </label>
+                <small className="muted">
+                  {t(
+                    'When no dataset is selected, Smart Launch can auto-create dataset from local files and filenames, then continue training setup.'
+                  )}
+                </small>
+              </Panel>
               <div className="workspace-form-grid">
                 <label className="workspace-form-span-2">
                   {t('Dataset')}
@@ -834,6 +2155,31 @@ export default function CreateTrainingJobPage() {
                   </Select>
                 </label>
               </div>
+              <div className="row gap wrap align-center">
+                <label className="row gap wrap align-center">
+                  <input
+                    type="checkbox"
+                    className="ui-checkbox"
+                    checked={autoPrepareSnapshot}
+                    onChange={(event) => setAutoPrepareSnapshot(event.target.checked)}
+                  />
+                  <span>{t('Auto-prepare snapshot before launch')}</span>
+                </label>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    void autoPrepareTrainingSnapshot();
+                  }}
+                  disabled={preparingSnapshot || !selectedDataset || versionsLoading || loading}
+                >
+                  {preparingSnapshot ? t('Preparing...') : t('Prepare snapshot now')}
+                </Button>
+              </div>
+              {snapshotPreparationNote ? (
+                <small className="muted">{snapshotPreparationNote}</small>
+              ) : null}
               {selectedDatasetVersion ? (
                 <Panel className="stack tight" tone="soft">
                   <div className="row gap wrap align-center">
@@ -861,7 +2207,7 @@ export default function CreateTrainingJobPage() {
                   title={t('No dataset version')}
                   description={t('Create a dataset version snapshot first.')}
                   extra={
-                    <ButtonLink to={`/datasets/${selectedDataset.id}`} variant="secondary" size="sm">
+                    <ButtonLink to={selectedDatasetDetailPath} variant="secondary" size="sm">
                       {t('Open Detail')}
                     </ButtonLink>
                   }
@@ -874,11 +2220,16 @@ export default function CreateTrainingJobPage() {
                 title={t('3. Core params')}
                 description={t('Keep the core params visible.')}
                 actions={
-                  paramsReady ? (
-                    <Badge tone="success">{t('Ready')}</Badge>
-                  ) : (
-                    <Badge tone="warning">{t('Needs review')}</Badge>
-                  )
+                  <div className="row gap wrap align-center">
+                    {paramsReady ? (
+                      <Badge tone="success">{t('Ready')}</Badge>
+                    ) : (
+                      <Badge tone="warning">{t('Needs review')}</Badge>
+                    )}
+                    <Button type="button" size="sm" variant="ghost" onClick={applyRecommendedParams}>
+                      {t('Use recommended params')}
+                    </Button>
+                  </div>
                 }
               />
               <div className="three-col">
@@ -1098,6 +2449,84 @@ export default function CreateTrainingJobPage() {
                   ))}
                 </div>
               </details>
+            </Card>
+
+            <Card as="article" className="workspace-inspector-card">
+              <div className="stack tight">
+                <h3>{t('Runtime & worker handoff')}</h3>
+                <small className="muted">
+                  {dispatchPreference === 'worker'
+                    ? onlineWorkers.length > 0
+                      ? t('Worker dispatch is available. Use Worker Settings only when you need to inspect inventory or open one concrete worker.')
+                      : t('No online worker is visible yet. Open Worker Settings to pair a node or inspect inventory before launch.')
+                    : t('Runtime readiness still governs whether this run can launch safely. Open Runtime Settings when you need strict-readiness checks or fixes.')}
+                </small>
+              </div>
+              <div className="row gap wrap">
+                <ButtonLink to={runtimeReadinessPath} variant="secondary" size="sm">
+                  {t('Open Runtime Settings')}
+                </ButtonLink>
+                <ButtonLink
+                  to={dispatchPreference === 'worker' && onlineWorkers.length === 0 ? workerPairingPath : workerInventoryPath}
+                  variant="ghost"
+                  size="sm"
+                >
+                  {t('Worker Settings')}
+                </ButtonLink>
+              </div>
+              <div className="workspace-keyline-list">
+                <div className="workspace-keyline-item">
+                  <span>{t('Runtime')}</span>
+                  <small>
+                    {runtimeSettingsError
+                      ? t('Unavailable')
+                      : runtimeSettingsLoading
+                        ? t('Checking...')
+                        : runtimeDisableSimulatedTrainFallback
+                          ? t('Guarded')
+                          : t('Review')}
+                  </small>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Online workers')}</span>
+                  <small>{onlineWorkers.length}</small>
+                </div>
+              </div>
+            </Card>
+
+            <Card as="article" className="workspace-inspector-card">
+              <div className="stack tight">
+                <h3>{t('Snapshot handoff')}</h3>
+                <small className="muted">
+                  {!selectedDataset
+                    ? t('Pick a dataset first, then use these links to fix files, versions, or closure steps without losing context.')
+                    : !selectedDatasetVersion
+                      ? t('Go to dataset detail to create a snapshot, or open the closure lane for guided loop work on this dataset.')
+                      : launchReady
+                        ? t('This snapshot is launch-ready. If you still need annotation or split work, use the links below and come back here.')
+                        : t('This snapshot still needs annotation, split, or readiness work. Continue from dataset detail or the closure lane.')}
+                </small>
+              </div>
+              <div className="row gap wrap">
+                <ButtonLink to={selectedDatasetDetailPath} variant="secondary" size="sm">
+                  {selectedDataset ? t('Open dataset detail') : t('Open datasets')}
+                </ButtonLink>
+                <ButtonLink to={selectedClosurePath} variant="ghost" size="sm">
+                  {t('Open closure lane')}
+                </ButtonLink>
+              </div>
+              {(selectedDataset || selectedDatasetVersion) ? (
+                <div className="workspace-keyline-list">
+                  <div className="workspace-keyline-item">
+                    <span>{t('Dataset')}</span>
+                    <small>{selectedDataset?.name ?? t('Not selected')}</small>
+                  </div>
+                  <div className="workspace-keyline-item">
+                    <span>{t('Dataset Version')}</span>
+                    <small>{selectedDatasetVersion?.version_name ?? t('Pick a version')}</small>
+                  </div>
+                </div>
+              ) : null}
             </Card>
           </div>
         }

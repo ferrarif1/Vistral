@@ -18,7 +18,7 @@ import {
   type TouchEvent as ReactTouchEvent,
   type UIEvent as ReactUIEvent
 } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type {
   ConversationActionMetadata,
   ConversationRecord,
@@ -48,7 +48,13 @@ import { HiddenFileInput, Input, Select, Textarea } from '../components/ui/Field
 import { api } from '../services/api';
 import { AUTH_UPDATED_EVENT, emitAuthUpdated } from '../services/authSession';
 import { LLM_CONFIG_UPDATED_EVENT } from '../services/llmConfig';
+import {
+  buildConversationActionNextStepInput,
+  deriveConversationActionNextSteps,
+  type ConversationActionNextStep
+} from '../features/conversationActionNextSteps';
 import { isFallbackExecutionSource } from '../utils/inferenceSource';
+import { resolveRegistrationEvidenceLevel, resolveRegistrationGateLevel } from '../utils/registrationEvidence';
 
 interface LocalChatHistoryItem {
   id: string;
@@ -114,7 +120,7 @@ const writeHistoryToStorage = (items: LocalChatHistoryItem[]) => {
   try {
     localStorage.setItem(historyStorageKey, JSON.stringify(items.slice(0, 40)));
   } catch {
-    // Ignore storage errors in prototype mode.
+    // Ignore storage errors in local client mode.
   }
 };
 
@@ -143,7 +149,7 @@ const writeHiddenConversationIdsToStorage = (ids: string[]) => {
   try {
     localStorage.setItem(hiddenHistoryStorageKey, JSON.stringify(normalizeHiddenConversationIds(ids)));
   } catch {
-    // Ignore storage errors in prototype mode.
+    // Ignore storage errors in local client mode.
   }
 };
 
@@ -174,7 +180,7 @@ const writePinnedHistoryOrderToStorage = (ids: string[]) => {
     ).slice(0, 200);
     localStorage.setItem(pinnedOrderStorageKey, JSON.stringify(unique));
   } catch {
-    // Ignore storage errors in prototype mode.
+    // Ignore storage errors in local client mode.
   }
 };
 
@@ -190,7 +196,7 @@ const writeSidebarCollapsedToStorage = (collapsed: boolean) => {
   try {
     localStorage.setItem(sidebarCollapsedStorageKey, String(collapsed));
   } catch {
-    // Ignore storage errors in prototype mode.
+    // Ignore storage errors in local client mode.
   }
 };
 
@@ -402,14 +408,47 @@ const formatMessageTime = (value: string): string => {
 
 const hasChineseText = (value: string): boolean => /[\u4e00-\u9fff]/.test(value);
 
-const actionRouteByEntityType: Record<'Dataset' | 'TrainingJob' | 'Model', string> = {
+const actionRouteByEntityType: Record<'Dataset' | 'TrainingJob' | 'Model' | 'VisionTask', string> = {
   Dataset: '/datasets',
   TrainingJob: '/training/jobs',
-  Model: '/models/my-models'
+  Model: '/models/my-models',
+  VisionTask: '/vision/tasks'
+};
+
+const appendReturnToPath = (base: string, returnTo?: string | null): string => {
+  const normalized = returnTo?.trim() ?? '';
+  if (
+    !normalized ||
+    !normalized.startsWith('/') ||
+    normalized.startsWith('//') ||
+    normalized.includes('://')
+  ) {
+    return base;
+  }
+  const [pathname, query = ''] = base.split('?');
+  const searchParams = new URLSearchParams(query);
+  if (!searchParams.has('return_to')) {
+    searchParams.set('return_to', normalized);
+  }
+  const nextQuery = searchParams.toString();
+  return nextQuery ? `${pathname}?${nextQuery}` : pathname;
+};
+
+const buildLoginPath = (returnTo?: string | null): string => {
+  return appendReturnToPath('/auth/login', returnTo);
 };
 
 const datasetIdPattern = /\((d-\d+)\)$/i;
 const isAuthenticationRequiredMessage = (message: string): boolean => message === 'Authentication required.';
+const isConversationMissingError = (error: unknown): boolean => {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+  return /conversation not found|会话.*不存在|not found/i.test(message);
+};
 type TranslateFn = (source: string, vars?: Record<string, string | number>) => string;
 
 interface ConversationHistoryItemRowProps {
@@ -1051,14 +1090,23 @@ interface ConversationMessageViewportProps {
   onLoadEarlierMessages: () => void;
   onCopyMessage: (content: string) => void;
   onQuoteMessage: (content: string) => void;
+  onConfirmConversationAction: (action: ConversationActionMetadata) => void;
+  onAutoFillConversationAction: (action: ConversationActionMetadata) => void;
   onApplyConversationSuggestion: (action: ConversationActionMetadata, suggestion: string) => void;
+  onRunConversationNextStep: (step: ConversationActionNextStep) => void;
   formatConversationActionLabel: (action: ConversationActionMetadata['action']) => string;
   formatConversationActionStatusLabel: (status: ConversationActionMetadata['status']) => string;
   formatConversationActionFieldLabel: (field: string) => string;
   formatConversationActionFieldValue: (field: string, value: unknown) => string;
+  resolveConversationActionFieldHref: (
+    action: ConversationActionMetadata,
+    field: string,
+    value: unknown
+  ) => string | null;
   resolveConversationActionHref: (action: ConversationActionMetadata) => string | null;
   resolveConversationActionLinks: (action: ConversationActionMetadata) => Array<{ label: string; href: string }>;
   resolveMessageAttachmentNames: (message: MessageRecord) => string[];
+  loginPath: string;
 }
 
 const ConversationMessageViewport = memo(function ConversationMessageViewport({
@@ -1073,14 +1121,19 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
   onLoadEarlierMessages,
   onCopyMessage,
   onQuoteMessage,
+  onConfirmConversationAction,
+  onAutoFillConversationAction,
   onApplyConversationSuggestion,
+  onRunConversationNextStep,
   formatConversationActionLabel,
   formatConversationActionStatusLabel,
   formatConversationActionFieldLabel,
   formatConversationActionFieldValue,
+  resolveConversationActionFieldHref,
   resolveConversationActionHref,
   resolveConversationActionLinks,
-  resolveMessageAttachmentNames
+  resolveMessageAttachmentNames,
+  loginPath
 }: ConversationMessageViewportProps) {
   const normalizeActionLinks = useCallback(
     (links: Array<{ label: string; href: string }> | undefined | null): Array<{ label: string; href: string }> => {
@@ -1098,7 +1151,7 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
         if (!href.startsWith('/') || href.startsWith('//') || label.length === 0) {
           continue;
         }
-        const dedupeKey = `${label}::${href}`;
+        const dedupeKey = href;
         if (seen.has(dedupeKey)) {
           continue;
         }
@@ -1181,10 +1234,10 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
         <StateBlock
           variant="empty"
           title={t('Login to use conversation workspace')}
-          description={t('Sign in to access chat history, settings, attachments, and real conversation actions.')}
+          description={t('Sign in to access chat history, settings, attachments, and governed conversation actions.')}
           extra={
             <div className="chat-auth-state-actions">
-              <ButtonLink to="/auth/login" variant="secondary" size="sm">
+              <ButtonLink to={loginPath} variant="secondary" size="sm">
                 {t('Login')}
               </ButtonLink>
             </div>
@@ -1234,16 +1287,22 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                   isFallbackExecutionSource(actionExecutionSource);
                 const actionDisplayStatus = isInferenceFallbackResult ? 'failed' : actionMetadata?.status ?? 'failed';
                 const actionDisplayStatusLabel = isInferenceFallbackResult
-                  ? t('Degraded mode')
+                  ? t('Restricted mode')
                   : actionMetadata
                     ? formatConversationActionStatusLabel(actionMetadata.status)
                     : formatConversationActionStatusLabel('failed');
+                const actionNextSteps = actionMetadata ? deriveConversationActionNextSteps(actionMetadata, t) : [];
                 const actionHref = actionMetadata ? resolveConversationActionHref(actionMetadata) : null;
-                const actionLinks = normalizeActionLinks(actionMetadata
-                  ? actionMetadata.action_links && actionMetadata.action_links.length > 0
-                    ? actionMetadata.action_links
-                    : resolveConversationActionLinks(actionMetadata)
-                  : []);
+                const actionLinks = normalizeActionLinks(
+                  actionMetadata
+                    ? [
+                        ...(actionMetadata.action_links ?? []),
+                        ...resolveConversationActionLinks(actionMetadata)
+                      ]
+                    : []
+                );
+                const normalizedActionHref =
+                  actionHref && actionLinks.some((item) => item.href === actionHref) ? null : actionHref;
                 const attachmentNames = resolveMessageAttachmentNames(message);
                 const contentParagraphs = formatMessageParagraphs(message.content);
 
@@ -1296,13 +1355,53 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                             <div className="stack tight">
                               <small className="muted">{t('Collected info')}</small>
                               <ul className="chat-message-action-details">
-                                {Object.entries(actionMetadata.collected_fields).map(([field, value]) => (
-                                  <li key={`${message.id}-collected-${field}`}>
-                                    <strong>{formatConversationActionFieldLabel(field)}:</strong>{' '}
-                                    {formatConversationActionFieldValue(field, value)}
-                                  </li>
-                                ))}
+                                {Object.entries(actionMetadata.collected_fields).map(([field, value]) => {
+                                  const fieldValueHref = resolveConversationActionFieldHref(actionMetadata, field, value);
+                                  return (
+                                    <li key={`${message.id}-collected-${field}`}>
+                                      <strong>{formatConversationActionFieldLabel(field)}:</strong>{' '}
+                                      {fieldValueHref ? (
+                                        <ButtonLink
+                                          to={fieldValueHref}
+                                          variant="ghost"
+                                          size="sm"
+                                          className="chat-action-btn"
+                                        >
+                                          {formatConversationActionFieldValue(field, value)}
+                                        </ButtonLink>
+                                      ) : (
+                                        formatConversationActionFieldValue(field, value)
+                                      )}
+                                    </li>
+                                  );
+                                })}
                               </ul>
+                            </div>
+                          ) : null}
+                          {actionMetadata.status === 'requires_input' ? (
+                            <div className="row gap wrap">
+                              <Button
+                                type="button"
+                                className="chat-action-btn"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => onAutoFillConversationAction(actionMetadata)}
+                              >
+                                {t('Auto fill all')}
+                              </Button>
+                              {actionMetadata.suggestions && actionMetadata.suggestions.length > 0 ? (
+                                <Button
+                                  type="button"
+                                  className="chat-action-btn"
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() =>
+                                    onApplyConversationSuggestion(actionMetadata, (actionMetadata.suggestions ?? [])[0] ?? '')
+                                  }
+                                >
+                                  {t('Auto apply top suggestion')}
+                                </Button>
+                              ) : null}
                             </div>
                           ) : null}
                           {actionMetadata.suggestions && actionMetadata.suggestions.length > 0 ? (
@@ -1324,9 +1423,58 @@ const ConversationMessageViewport = memo(function ConversationMessageViewport({
                               </div>
                             </div>
                           ) : null}
-                          {actionHref ? (
+                          {actionMetadata.requires_confirmation && actionMetadata.confirmation_phrase ? (
                             <div className="row gap wrap">
-                              <ButtonLink className="chat-action-btn" variant="secondary" size="sm" to={actionHref}>
+                              <Button
+                                className="chat-action-btn"
+                                variant="primary"
+                                size="sm"
+                                type="button"
+                                onClick={() => onConfirmConversationAction(actionMetadata)}
+                              >
+                                {t('Confirm now')}
+                              </Button>
+                            </div>
+                          ) : null}
+                          {actionNextSteps.length > 0 ? (
+                            <div className="stack tight">
+                              <small className="muted">{t('Suggested next steps')}</small>
+                              <div className="row gap wrap">
+                                {actionNextSteps.slice(0, 3).map((step) =>
+                                  step.kind === 'href' && step.href ? (
+                                    <ButtonLink
+                                      key={`${message.id}-next-step-${step.id}`}
+                                      className="chat-action-btn"
+                                      variant="secondary"
+                                      size="sm"
+                                      to={step.href}
+                                    >
+                                      {step.title}
+                                    </ButtonLink>
+                                  ) : step.kind === 'ops' ? (
+                                    <Button
+                                      key={`${message.id}-next-step-${step.id}`}
+                                      type="button"
+                                      className="chat-action-btn"
+                                      variant="secondary"
+                                      size="sm"
+                                      onClick={() => onRunConversationNextStep(step)}
+                                    >
+                                      {step.title}
+                                    </Button>
+                                  ) : (
+                                    <small key={`${message.id}-next-step-${step.id}`} className="muted">
+                                      {step.title}
+                                    </small>
+                                  )
+                                )}
+                              </div>
+                              <small className="muted">{actionNextSteps[0]?.detail}</small>
+                            </div>
+                          ) : null}
+                          {normalizedActionHref ? (
+                            <div className="row gap wrap">
+                              <ButtonLink className="chat-action-btn" variant="secondary" size="sm" to={normalizedActionHref}>
                                 {t('Open result')}
                               </ButtonLink>
                             </div>
@@ -1701,8 +1849,30 @@ const ConversationDraftAttachmentPanel = memo(function ConversationDraftAttachme
 });
 
 export default function ConversationPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const { language, setLanguage, t } = useI18n();
+  const currentConversationPath = useMemo(
+    () => {
+      const params = new URLSearchParams(location.search || '');
+      params.delete('return_to');
+      const query = params.toString();
+      return `${location.pathname}${query ? `?${query}` : ''}`;
+    },
+    [location.pathname, location.search]
+  );
+  const loginPath = useMemo(
+    () => buildLoginPath(currentConversationPath),
+    [currentConversationPath]
+  );
+  const scopedSettingsPath = useMemo(
+    () => appendReturnToPath('/settings/account', currentConversationPath),
+    [currentConversationPath]
+  );
+  const scopedConsolePath = useMemo(
+    () => appendReturnToPath('/workspace/console', currentConversationPath),
+    [currentConversationPath]
+  );
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [selectedModelId, setSelectedModelId] = useState('');
@@ -1739,6 +1909,7 @@ export default function ConversationPage() {
   const [draggingSelectedAttachmentId, setDraggingSelectedAttachmentId] = useState<string | null>(null);
   const [dragOverSelectedAttachmentId, setDragOverSelectedAttachmentId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
   const [error, setError] = useState('');
   const [authRequired, setAuthRequired] = useState(false);
   const [llmView, setLlmView] = useState<LlmConfigView | null>(null);
@@ -1751,6 +1922,15 @@ export default function ConversationPage() {
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const historyLongPressTimerRef = useRef<number | null>(null);
   const historyLongPressTriggeredRef = useRef(false);
+  const autoConversationFollowUpRef = useRef<{
+    armed: boolean;
+    baselineMessageId: string | null;
+    inFlight: boolean;
+  }>({
+    armed: false,
+    baselineMessageId: null,
+    inFlight: false
+  });
 
   useEffect(() => {
     document.body.classList.add('workspace-immersive-lock');
@@ -1775,17 +1955,34 @@ export default function ConversationPage() {
 
   const refreshConversations = useCallback(async () => {
     const conversationResults = await api.listConversations();
+    const visibleConversationIdSet = new Set(
+      conversationResults
+        .map((conversation) => conversation.id)
+        .filter((conversationId) => typeof conversationId === 'string' && conversationId.trim().length > 0)
+    );
+    const prunedHiddenHistoryIds = hiddenHistoryIdsRef.current.filter((conversationId) =>
+      visibleConversationIdSet.has(conversationId)
+    );
+    if (prunedHiddenHistoryIds.length !== hiddenHistoryIdsRef.current.length) {
+      hiddenHistoryIdsRef.current = prunedHiddenHistoryIds;
+      setHiddenHistoryIds(prunedHiddenHistoryIds);
+    }
     setHistory((previous) =>
       mergeHistoryWithConversations(
         conversationResults,
         previous,
-        hiddenHistoryIdsRef.current,
+        prunedHiddenHistoryIds,
         pinnedHistoryOrderRef.current
       )
     );
   }, []);
 
   const clearWorkspaceForAnonymousSession = useCallback(() => {
+    autoConversationFollowUpRef.current = {
+      armed: false,
+      baselineMessageId: null,
+      inFlight: false
+    };
     attachmentsSignatureRef.current = buildConversationAttachmentsSignature([]);
     setCurrentUser(null);
     setModels([]);
@@ -2048,7 +2245,7 @@ export default function ConversationPage() {
 
   const llmModeText = useMemo(() => {
     if (!llmView || !llmView.enabled || !llmView.has_api_key) {
-      return t('Mock mode');
+      return t('Compatibility mode');
     }
 
     return `${llmView.provider} · ${llmView.model} · ${llmView.api_key_masked}`;
@@ -2127,6 +2324,9 @@ export default function ConversationPage() {
       if (field === 'dataset_version_id') {
         return t('Dataset Version');
       }
+      if (field === 'training_job_id' || field === 'job_id') {
+        return t('Training Job');
+      }
       if (field === 'epochs') {
         return t('Epochs');
       }
@@ -2151,8 +2351,38 @@ export default function ConversationPage() {
       if (field === 'model_id') {
         return t('Model');
       }
+      if (field === 'model_name') {
+        return t('Model');
+      }
       if (field === 'model_version_id') {
         return t('Model Version');
+      }
+      if (field === 'orchestration_mode') {
+        return t('Orchestration mode');
+      }
+      if (field === 'orchestration_strategy') {
+        return t('Orchestration strategy');
+      }
+      if (field === 'model_auto_created') {
+        return t('Auto-created model');
+      }
+      if (field === 'dataset_auto_selected') {
+        return t('Auto-selected dataset');
+      }
+      if (field === 'dataset_version_auto_selected') {
+        return t('Auto-selected dataset version');
+      }
+      if (field === 'dataset_version_auto_created') {
+        return t('Auto-created dataset version');
+      }
+      if (field === 'split_auto_applied') {
+        return t('Auto split');
+      }
+      if (field === 'pre_annotation_auto_applied') {
+        return t('Auto pre-annotation');
+      }
+      if (field === 'feedback_dataset_id') {
+        return t('Feedback Dataset');
       }
       if (field === 'profile_id') {
         return t('Runtime Profile');
@@ -2163,8 +2393,26 @@ export default function ConversationPage() {
       if (field === 'inference_run_id') {
         return t('Inference Run');
       }
+      if (field === 'run_id') {
+        return t('Inference Run');
+      }
       if (field === 'execution_source') {
         return t('Execution Status');
+      }
+      if (field === 'registration_evidence_mode') {
+        return t('Evidence mode');
+      }
+      if (field === 'registration_evidence_level') {
+        return t('Evidence mode');
+      }
+      if (field === 'registration_gate_exempted') {
+        return t('Gate status');
+      }
+      if (field === 'registration_gate_status') {
+        return t('Gate status');
+      }
+      if (field === 'registration_gate_exemption_reason') {
+        return t('Gate exemption reason');
       }
       return field;
     },
@@ -2178,7 +2426,88 @@ export default function ConversationPage() {
         if (!source) {
           return t('Unknown execution');
         }
-        return isFallbackExecutionSource(source) ? t('Degraded mode') : t('Real execution');
+        return isFallbackExecutionSource(source) ? t('Restricted mode') : t('Standard execution');
+      }
+      if (field === 'registration_evidence_mode' || field === 'registration_evidence_level') {
+        const evidenceLevel = resolveRegistrationEvidenceLevel(value);
+        if (evidenceLevel === 'standard') {
+          return t('Standard evidence');
+        }
+        if (evidenceLevel === 'calibrated') {
+          return t('Calibrated evidence');
+        }
+        if (evidenceLevel === 'compatibility') {
+          return t('Compatibility evidence');
+        }
+        return t('Pending evidence');
+      }
+      if (field === 'registration_gate_exempted' || field === 'registration_gate_status') {
+        let gateExempted: boolean | undefined;
+        if (typeof value === 'string') {
+          const normalized = value.trim().toLowerCase();
+          if (normalized === 'true' || normalized === '1') {
+            gateExempted = true;
+          } else if (normalized === 'false' || normalized === '0') {
+            gateExempted = false;
+          } else {
+            gateExempted = undefined;
+          }
+        } else if (typeof value === 'boolean') {
+          gateExempted = value;
+        } else {
+          gateExempted = undefined;
+        }
+        const gateLevel = resolveRegistrationGateLevel({
+          registration_gate_status: field === 'registration_gate_status' ? value : undefined,
+          registration_gate_exempted: gateExempted
+        });
+        if (gateLevel === 'override') {
+          return t('Policy override');
+        }
+        if (gateLevel === 'standard') {
+          return t('Standard gate');
+        }
+        return t('Gate pending');
+      }
+      if (field === 'orchestration_mode') {
+        const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+        if (normalized === 'full_pipeline') {
+          return t('Full pipeline');
+        }
+        if (normalized === 'training_only') {
+          return t('Training only');
+        }
+        return normalized || t('Unknown');
+      }
+      if (field === 'orchestration_strategy') {
+        const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+        if (normalized === 'conservative') {
+          return t('Conservative');
+        }
+        if (normalized === 'standard') {
+          return t('Standard');
+        }
+        if (normalized === 'aggressive') {
+          return t('Aggressive');
+        }
+        return normalized || t('Unknown');
+      }
+      if (
+        field === 'model_auto_created' ||
+        field === 'dataset_auto_selected' ||
+        field === 'dataset_version_auto_selected' ||
+        field === 'dataset_version_auto_created' ||
+        field === 'split_auto_applied' ||
+        field === 'pre_annotation_auto_applied'
+      ) {
+        const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+        if (normalized === 'true' || normalized === '1') {
+          return t('Yes');
+        }
+        if (normalized === 'false' || normalized === '0') {
+          return t('No');
+        }
+        return t('Unknown');
       }
       if (typeof value === 'string') {
         return value;
@@ -2204,31 +2533,67 @@ export default function ConversationPage() {
     [attachmentById]
   );
 
-  const resolveConversationActionHref = useCallback((action: ConversationActionMetadata) => {
-    if (!action.created_entity_type || !action.created_entity_id) {
+  const resolveLatestAssistantActionMessage = useCallback(
+    (messageList: MessageRecord[]): MessageRecord | null => {
+      for (let index = messageList.length - 1; index >= 0; index -= 1) {
+        const candidate = messageList[index];
+        if (candidate.sender !== 'assistant') {
+          continue;
+        }
+        if (candidate.metadata?.conversation_action) {
+          return candidate;
+        }
+      }
       return null;
-    }
+    },
+    []
+  );
 
-    if (action.created_entity_type === 'Dataset') {
-      return `${actionRouteByEntityType.Dataset}/${action.created_entity_id}`;
-    }
+  const resolveConversationActionHref = useCallback(
+    (action: ConversationActionMetadata) => {
+      if (!action.created_entity_type || !action.created_entity_id) {
+        return null;
+      }
 
-    if (action.created_entity_type === 'TrainingJob') {
-      return `${actionRouteByEntityType.TrainingJob}/${action.created_entity_id}`;
-    }
+      const appendReturnTo = (base: string): string => {
+        const returnTo = currentConversationPath.trim();
+        if (!returnTo || !returnTo.startsWith('/') || returnTo.startsWith('//') || returnTo.includes('://')) {
+          return base;
+        }
+        const searchParams = new URLSearchParams();
+        searchParams.set('return_to', returnTo);
+        return `${base}?${searchParams.toString()}`;
+      };
 
-    return actionRouteByEntityType.Model;
-  }, []);
+      if (action.created_entity_type === 'Dataset') {
+        return appendReturnTo(`${actionRouteByEntityType.Dataset}/${action.created_entity_id}`);
+      }
+
+      if (action.created_entity_type === 'TrainingJob') {
+        return appendReturnTo(`${actionRouteByEntityType.TrainingJob}/${action.created_entity_id}`);
+      }
+
+      if (action.created_entity_type === 'Model') {
+        const searchParams = new URLSearchParams();
+        searchParams.set('model', action.created_entity_id);
+        return appendReturnTo(`${actionRouteByEntityType.Model}?${searchParams.toString()}`);
+      }
+
+      if (action.created_entity_type === 'VisionTask') {
+        return appendReturnTo(`${actionRouteByEntityType.VisionTask}/${action.created_entity_id}`);
+      }
+
+      return appendReturnTo(actionRouteByEntityType.Model);
+    },
+    [currentConversationPath]
+  );
 
   const resolveConversationActionLinks = useCallback(
     (action: ConversationActionMetadata): Array<{ label: string; href: string }> => {
-      if (action.action !== 'console_api_call') {
-        return [];
-      }
       const api = action.collected_fields.api ?? '';
       let payloadParams: Record<string, unknown> = {};
       const rawPayload = action.collected_fields.payload_json ?? '';
-      if (rawPayload) {
+      if (action.action === 'console_api_call' && rawPayload) {
         try {
           const parsed = JSON.parse(rawPayload) as { params?: Record<string, unknown> };
           if (parsed.params && typeof parsed.params === 'object') {
@@ -2239,37 +2604,432 @@ export default function ConversationPage() {
         }
       }
 
-      const datasetId = typeof payloadParams.dataset_id === 'string' ? payloadParams.dataset_id : '';
-      const modelVersionId = typeof payloadParams.model_version_id === 'string' ? payloadParams.model_version_id : '';
+      const readParam = (...keys: string[]): string => {
+        for (const key of keys) {
+          const value =
+            (action.action === 'console_api_call' ? payloadParams[key] : undefined) ??
+            action.collected_fields[key];
+          if (typeof value === 'string' && value.trim().length > 0) {
+            return value.trim();
+          }
+        }
+        return '';
+      };
+
+      const datasetId = readParam('dataset_id', 'datasetId');
+      const datasetVersionId = readParam('dataset_version_id', 'datasetVersionId', 'version_id', 'versionId');
+      const modelVersionId = readParam('model_version_id', 'modelVersionId');
+      const modelId = readParam('model_id', 'modelId');
+      const trainingJobId = readParam('training_job_id', 'trainingJobId', 'job_id', 'jobId');
+      const visionTaskId = readParam('vision_task_id', 'task_id', 'visionTaskId', 'taskId');
+      const inferenceRunId = readParam('inference_run_id', 'inferenceRunId', 'run_id', 'runId');
+      const feedbackDatasetId = readParam('feedback_dataset_id', 'feedbackDatasetId');
+      const taskType = readParam('task_type', 'taskType');
+      const framework = readParam('framework', 'profile');
+      const executionTarget = readParam('execution_target', 'executionTarget');
+      const workerId = readParam('worker_id', 'worker', 'workerId');
+      const normalizedTaskFilter = (() => {
+        const value = taskType.trim().toLowerCase();
+        return value === 'ocr' ||
+          value === 'detection' ||
+          value === 'classification' ||
+          value === 'segmentation' ||
+          value === 'obb'
+          ? value
+          : '';
+      })();
+      const normalizedFrameworkFilter = (() => {
+        const value = framework.trim().toLowerCase();
+        return value === 'yolo' || value === 'paddleocr' || value === 'doctr' ? value : '';
+      })();
+
+      const appendTrainingLaunchContext = (searchParams: URLSearchParams) => {
+        if (datasetId && !searchParams.has('dataset')) {
+          searchParams.set('dataset', datasetId);
+        }
+        if (datasetVersionId && !searchParams.has('version')) {
+          searchParams.set('version', datasetVersionId);
+        }
+        if (taskType && !searchParams.has('task_type')) {
+          searchParams.set('task_type', taskType);
+        }
+        if (framework && !searchParams.has('framework')) {
+          searchParams.set('framework', framework);
+        }
+        if (executionTarget && executionTarget !== 'auto' && !searchParams.has('execution_target')) {
+          searchParams.set('execution_target', executionTarget);
+        }
+        if (workerId && !searchParams.has('worker')) {
+          searchParams.set('worker', workerId);
+        }
+        const returnTo = currentConversationPath.trim();
+        if (
+          returnTo &&
+          returnTo.startsWith('/') &&
+          !returnTo.startsWith('//') &&
+          !returnTo.includes('://') &&
+          !searchParams.has('return_to')
+        ) {
+          searchParams.set('return_to', returnTo);
+        }
+      };
+
+      const buildPath = (base: string, params?: Record<string, string | null | undefined>): string => {
+        const searchParams = new URLSearchParams();
+        Object.entries(params ?? {}).forEach(([key, value]) => {
+          if (typeof value === 'string' && value.trim().length > 0) {
+            searchParams.set(key, value.trim());
+          }
+        });
+        appendTrainingLaunchContext(searchParams);
+        const query = searchParams.toString();
+        return query ? `${base}?${query}` : base;
+      };
+
+      const datasetsLandingPath = buildPath('/datasets');
+      const datasetDetailPath = datasetId
+        ? buildPath(`/datasets/${encodeURIComponent(datasetId)}`, {
+            version: datasetVersionId || null
+          })
+        : datasetsLandingPath;
+      const annotationWorkspacePath = datasetId
+        ? buildPath(`/datasets/${encodeURIComponent(datasetId)}/annotate`, {
+            version: datasetVersionId || null
+          })
+        : datasetsLandingPath;
+      const trainingJobsPath = buildPath('/training/jobs', {
+        task_filter: normalizedTaskFilter || null,
+        framework_filter: normalizedFrameworkFilter || null
+      });
+      const modelVersionsPath = buildPath('/models/versions', {
+        selectedVersion: modelVersionId || null,
+        focus: modelVersionId ? 'device' : null,
+        task_filter: normalizedTaskFilter || null,
+        framework_filter: normalizedFrameworkFilter || null
+      });
+      const myModelsPath = buildPath('/models/my-models', {
+        model: modelId || null
+      });
+      const trainingJobDetailPath = trainingJobId
+        ? buildPath(`/training/jobs/${encodeURIComponent(trainingJobId)}`, {
+            drawer: 'open'
+          })
+        : trainingJobsPath;
+      const modelVersionDetailPath = modelVersionId
+        ? buildPath('/models/versions', {
+            selectedVersion: modelVersionId,
+            drawer: 'open',
+            task_filter: normalizedTaskFilter || null,
+            framework_filter: normalizedFrameworkFilter || null
+          })
+        : modelVersionsPath;
+      const inferenceValidationPath = buildPath('/inference/validate', {
+        modelVersion: modelVersionId || null
+      });
+      const inferenceRunDetailPath = inferenceRunId
+        ? buildPath('/inference/validate', {
+            run: inferenceRunId,
+            modelVersion: modelVersionId || null
+          })
+        : inferenceValidationPath;
+      const closurePath = datasetId
+        ? buildPath('/workflow/closure', {
+            dataset: datasetId,
+            version: datasetVersionId || null
+          })
+        : buildPath('/workflow/closure');
+      const runtimeSettingsPath = buildPath('/settings/runtime', {
+        focus: 'readiness',
+        framework: framework || null
+      });
+      const feedbackDatasetPath = feedbackDatasetId
+        ? buildPath(`/datasets/${encodeURIComponent(feedbackDatasetId)}`)
+        : datasetDetailPath;
+      const modelDraftPath = buildPath('/models/create', {
+        task_type: taskType || null,
+        job: trainingJobId || null,
+        version_name: readParam('version_name', 'versionName', 'name') || null
+      });
+      const trainingCreatePath = buildPath('/training/jobs/new');
+      const visionTasksPath = buildPath('/vision/tasks');
+      const visionTaskDetailPath = visionTaskId
+        ? buildPath(`/vision/tasks/${encodeURIComponent(visionTaskId)}`)
+        : visionTasksPath;
+
       const linkMap: Record<string, Array<{ label: string; href: string }>> = {
-        list_datasets: [{ label: t('Open Datasets'), href: '/datasets' }],
-        create_dataset: [{ label: t('Open Datasets'), href: '/datasets' }],
-        create_dataset_version: [{ label: t('Open Dataset Detail'), href: datasetId ? `/datasets/${datasetId}` : '/datasets' }],
-        list_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
-        export_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
-        import_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
-        upsert_dataset_annotation: [{ label: t('Open Annotation Workspace'), href: '/datasets' }],
-        review_dataset_annotation: [{ label: t('Open Annotation Workspace'), href: '/datasets' }],
-        run_dataset_pre_annotations: [{ label: t('Open Annotation Workspace'), href: datasetId ? `/datasets/${datasetId}/annotate` : '/datasets' }],
-        list_training_jobs: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
-        create_training_job: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
-        cancel_training_job: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
-        retry_training_job: [{ label: t('Open Training Jobs'), href: '/training/jobs' }],
-        list_model_versions: [{ label: t('Open Model Versions'), href: '/models/versions' }],
-        register_model_version: [{ label: t('Open Model Versions'), href: '/models/versions' }],
+        list_datasets: [{ label: t('Open Datasets'), href: datasetsLandingPath }],
+        create_dataset: [
+          { label: t('Open Dataset Detail'), href: datasetDetailPath },
+          { label: t('Open Datasets'), href: datasetsLandingPath }
+        ],
+        create_dataset_version: [
+          { label: t('Open Dataset Detail'), href: datasetDetailPath },
+          { label: t('Open Datasets'), href: datasetsLandingPath }
+        ],
+        list_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: annotationWorkspacePath }],
+        export_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: annotationWorkspacePath }],
+        import_dataset_annotations: [{ label: t('Open Annotation Workspace'), href: annotationWorkspacePath }],
+        upsert_dataset_annotation: [{ label: t('Open Annotation Workspace'), href: annotationWorkspacePath }],
+        review_dataset_annotation: [{ label: t('Open Annotation Workspace'), href: annotationWorkspacePath }],
+        run_dataset_pre_annotations: [{ label: t('Open Annotation Workspace'), href: annotationWorkspacePath }],
+        list_training_jobs: [{ label: t('Open Training Jobs'), href: trainingJobsPath }],
+        create_training_job: [
+          { label: t('Open Job'), href: trainingJobDetailPath },
+          { label: t('Open Training Jobs'), href: trainingJobsPath }
+        ],
+        cancel_training_job: [
+          { label: t('Open Job'), href: trainingJobDetailPath },
+          { label: t('Open Training Jobs'), href: trainingJobsPath }
+        ],
+        retry_training_job: [
+          { label: t('Open Job'), href: trainingJobDetailPath },
+          { label: t('Open Training Jobs'), href: trainingJobsPath }
+        ],
+        list_vision_tasks: [{ label: t('Open Vision Tasks'), href: visionTasksPath }],
+        get_vision_task: [{ label: t('Open Vision Task'), href: visionTaskDetailPath }],
+        auto_continue_vision_task: [
+          { label: t('Open Vision Task'), href: visionTaskDetailPath },
+          { label: t('Open Job'), href: trainingJobDetailPath }
+        ],
+        auto_advance_vision_task: [
+          { label: t('Open Vision Task'), href: visionTaskDetailPath },
+          { label: t('Open Job'), href: trainingJobDetailPath },
+          { label: t('Open Version Controls'), href: modelVersionDetailPath },
+          { label: t('Open feedback dataset'), href: feedbackDatasetPath }
+        ],
+        generate_vision_task_feedback_dataset: [
+          { label: t('Open Vision Task'), href: visionTaskDetailPath },
+          { label: t('Open feedback dataset'), href: feedbackDatasetPath }
+        ],
+        register_vision_task_model: [
+          { label: t('Open Vision Task'), href: visionTaskDetailPath },
+          { label: t('Open Version Controls'), href: modelVersionDetailPath }
+        ],
+        list_model_versions: [{ label: t('Open Model Versions'), href: modelVersionsPath }],
+        register_model_version: [
+          { label: t('Open Version Controls'), href: modelVersionDetailPath },
+          { label: t('Open Model Versions'), href: modelVersionsPath }
+        ],
         run_inference: [
           {
+            label: t('View full detail'),
+            href: inferenceRunDetailPath
+          },
+          {
             label: t('Open Inference Validation'),
-            href: modelVersionId ? `/inference/validate?modelVersion=${encodeURIComponent(modelVersionId)}` : '/inference/validate'
+            href: inferenceValidationPath
           }
         ],
-        send_inference_feedback: [{ label: t('Open Inference Validation'), href: '/inference/validate' }],
-        activate_runtime_profile: [{ label: t('Open Runtime Settings'), href: '/settings/runtime' }],
-        auto_configure_runtime_settings: [{ label: t('Open Runtime Settings'), href: '/settings/runtime' }]
+        send_inference_feedback: [
+          {
+            label: t('View full detail'),
+            href: inferenceRunDetailPath
+          },
+          { label: t('Open Inference Validation'), href: inferenceValidationPath }
+        ],
+        activate_runtime_profile: [{ label: t('Open Runtime Settings'), href: runtimeSettingsPath }],
+        auto_configure_runtime_settings: [{ label: t('Open Runtime Settings'), href: runtimeSettingsPath }],
+        list_models: [{ label: t('Open My Models'), href: myModelsPath }],
+        create_model_draft: [
+          { label: t('Open My Models'), href: myModelsPath },
+          { label: t('Create model draft'), href: modelDraftPath }
+        ],
+        submit_approval_request: [{ label: t('Open My Models'), href: myModelsPath }]
       };
-      return linkMap[api] ?? [];
+
+      const requiresInputFieldSet = new Set(
+        (action.missing_fields ?? []).map((field) => field.trim()).filter(Boolean)
+      );
+      const requiresInputLinks: Array<{ label: string; href: string }> = [];
+      const pushRequiresInputLink = (label: string, href: string) => {
+        if (!href || !href.startsWith('/')) {
+          return;
+        }
+        requiresInputLinks.push({ label, href });
+      };
+      if (action.status === 'requires_input' && requiresInputFieldSet.size > 0) {
+        for (const field of requiresInputFieldSet) {
+          if (field.startsWith('dataset_issue:')) {
+            pushRequiresInputLink(t('Open Dataset Detail'), datasetDetailPath);
+            pushRequiresInputLink(t('Open Annotation Workspace'), annotationWorkspacePath);
+            continue;
+          }
+          if (field === 'dataset_id') {
+            pushRequiresInputLink(t('Open Datasets'), datasetsLandingPath);
+            continue;
+          }
+          if (field === 'dataset_version_id') {
+            pushRequiresInputLink(t('Open Dataset Detail'), datasetDetailPath);
+            continue;
+          }
+          if (
+            field === 'task_type' ||
+            field === 'framework' ||
+            field === 'base_model' ||
+            field === 'name' ||
+            field === 'version_name'
+          ) {
+            pushRequiresInputLink(t('Create Training Job'), trainingCreatePath);
+            continue;
+          }
+          if (field === 'model_id' || field === 'model_type' || field === 'visibility') {
+            pushRequiresInputLink(t('Open My Models'), myModelsPath);
+            pushRequiresInputLink(t('Create model draft'), modelDraftPath);
+            continue;
+          }
+          if (field === 'model_version_id' || field === 'source_model_version_id') {
+            pushRequiresInputLink(t('Open Model Versions'), modelVersionsPath);
+            continue;
+          }
+          if (field === 'training_job_id' || field === 'job_id') {
+            pushRequiresInputLink(t('Open Training Jobs'), trainingJobsPath);
+            continue;
+          }
+          if (field === 'run_id' || field === 'inference_run_id') {
+            pushRequiresInputLink(t('Open Inference Validation'), inferenceValidationPath);
+            continue;
+          }
+          if (field === 'vision_task_id' || field === 'task_id') {
+            pushRequiresInputLink(t('Open Vision Tasks'), visionTasksPath);
+            pushRequiresInputLink(t('Open Vision Task'), visionTaskDetailPath);
+            continue;
+          }
+          if (field === 'attachment_id' || field === 'input_attachment_id') {
+            pushRequiresInputLink(t('Conversation Workspace'), buildPath('/workspace/chat'));
+            continue;
+          }
+          if (
+            field === 'dataset_item_id' ||
+            field === 'annotation_id' ||
+            field === 'status' ||
+            field === 'source'
+          ) {
+            pushRequiresInputLink(t('Open Annotation Workspace'), annotationWorkspacePath);
+            continue;
+          }
+          if (field === 'profile_id') {
+            pushRequiresInputLink(t('Open Runtime Settings'), runtimeSettingsPath);
+            continue;
+          }
+        }
+      }
+      if (action.status === 'requires_input' && requiresInputLinks.length > 0) {
+        if (action.action === 'console_api_call') {
+          return [...requiresInputLinks, ...(linkMap[api] ?? [])];
+        }
+        return requiresInputLinks;
+      }
+
+      if (action.action === 'console_api_call') {
+        return linkMap[api] ?? [];
+      }
+      if (action.action === 'create_dataset') {
+        return [
+          { label: t('Open Dataset Detail'), href: datasetDetailPath },
+          { label: t('Open Annotation Workspace'), href: annotationWorkspacePath },
+          { label: t('Create Training Job'), href: trainingCreatePath }
+        ];
+      }
+      if (action.action === 'create_training_job') {
+        return [
+          { label: t('Open Job'), href: trainingJobDetailPath },
+          { label: t('Open closure lane'), href: closurePath },
+          { label: t('Open Training Jobs'), href: trainingJobsPath }
+        ];
+      }
+      if (action.action === 'create_model_draft') {
+        return [
+          { label: t('Create model draft'), href: modelDraftPath },
+          { label: t('Open My Models'), href: buildPath('/models/my-models') },
+          { label: t('Open Model Versions'), href: modelVersionsPath }
+        ];
+      }
+      if (action.action === 'run_model_inference') {
+        return [
+          { label: t('View full detail'), href: inferenceRunDetailPath },
+          { label: t('Open Inference Validation'), href: inferenceValidationPath },
+          { label: t('Open feedback dataset'), href: feedbackDatasetPath },
+          { label: t('Open closure lane'), href: closurePath }
+        ];
+      }
+      return [];
     },
-    [t]
+    [currentConversationPath, t]
+  );
+  const resolveConversationActionFieldHref = useCallback(
+    (action: ConversationActionMetadata, field: string, value: unknown): string | null => {
+      const normalizedValue = typeof value === 'string' ? value.trim() : '';
+      if (!normalizedValue) {
+        return null;
+      }
+      const appendReturnTo = (base: string): string => appendReturnToPath(base, currentConversationPath);
+      const datasetIdFromAction =
+        action.collected_fields.dataset_id?.trim() || action.collected_fields.datasetId?.trim() || '';
+      const modelVersionIdFromAction =
+        action.collected_fields.model_version_id?.trim() ||
+        action.collected_fields.modelVersionId?.trim() ||
+        '';
+
+      if (field === 'dataset_id' || field === 'dataset_reference' || field === 'feedback_dataset_id') {
+        return appendReturnTo(`/datasets/${encodeURIComponent(normalizedValue)}`);
+      }
+
+      if (field === 'dataset_version_id') {
+        if (!datasetIdFromAction) {
+          return appendReturnTo('/datasets');
+        }
+        const searchParams = new URLSearchParams();
+        searchParams.set('version', normalizedValue);
+        return appendReturnTo(`/datasets/${encodeURIComponent(datasetIdFromAction)}?${searchParams.toString()}`);
+      }
+
+      if (field === 'training_job_id' || field === 'job_id') {
+        return appendReturnTo(`/training/jobs/${encodeURIComponent(normalizedValue)}`);
+      }
+
+      if (field === 'vision_task_id' || field === 'task_id') {
+        return appendReturnTo(`/vision/tasks/${encodeURIComponent(normalizedValue)}`);
+      }
+
+      if (field === 'model_id') {
+        const searchParams = new URLSearchParams();
+        searchParams.set('model', normalizedValue);
+        return appendReturnTo(`/models/my-models?${searchParams.toString()}`);
+      }
+
+      if (field === 'model_version_id') {
+        const searchParams = new URLSearchParams();
+        searchParams.set('selectedVersion', normalizedValue);
+        searchParams.set('focus', 'device');
+        return appendReturnTo(`/models/versions?${searchParams.toString()}`);
+      }
+      if (
+        (field === 'registration_evidence_mode' ||
+          field === 'registration_evidence_level' ||
+          field === 'registration_gate_status' ||
+          field === 'registration_gate_exempted' ||
+          field === 'registration_gate_exemption_reason') &&
+        modelVersionIdFromAction
+      ) {
+        const searchParams = new URLSearchParams();
+        searchParams.set('selectedVersion', modelVersionIdFromAction);
+        searchParams.set('drawer', 'open');
+        return appendReturnTo(`/models/versions?${searchParams.toString()}`);
+      }
+
+      if (field === 'inference_run_id' || field === 'run_id') {
+        const searchParams = new URLSearchParams();
+        searchParams.set('run', normalizedValue);
+        searchParams.set('focus', 'result');
+        if (modelVersionIdFromAction) {
+          searchParams.set('modelVersion', modelVersionIdFromAction);
+        }
+        return appendReturnTo(`/inference/validate?${searchParams.toString()}`);
+      }
+
+      return null;
+    },
+    [currentConversationPath]
   );
 
   const upsertHistoryItem = useCallback((id: string, seedText: string) => {
@@ -2530,6 +3290,11 @@ export default function ConversationPage() {
   }, []);
 
   const startNewConversation = useCallback(() => {
+    autoConversationFollowUpRef.current = {
+      armed: false,
+      baselineMessageId: null,
+      inFlight: false
+    };
     setConversation(null);
     setMessages([]);
     cancelRenameConversation();
@@ -2642,11 +3407,18 @@ export default function ConversationPage() {
       try {
         await api.deleteConversation(id);
       } catch (deleteError) {
-        setError((deleteError as Error).message);
-        return;
+        if (!isConversationMissingError(deleteError)) {
+          setError((deleteError as Error).message);
+          return;
+        }
       }
 
       appendHiddenHistoryIds([id]);
+      setPinnedHistoryOrder((previous) => {
+        const next = previous.filter((itemId) => itemId !== id);
+        pinnedHistoryOrderRef.current = next;
+        return next;
+      });
       setHistory((previous) => previous.filter((item) => item.id !== id));
       if (editingConversationId === id) {
         cancelRenameConversation();
@@ -2673,63 +3445,113 @@ export default function ConversationPage() {
     ]
   );
   const clearAllHistory = useCallback(async () => {
+    if (clearingHistory) {
+      return;
+    }
     if (history.length === 0) {
       setNotice(t('No conversation history to clear.'));
       return;
     }
 
-    const confirmed = window.confirm(t('Delete all conversation history visible in this account?'));
+    const confirmed = window.confirm(t('Delete all conversation history in this account?'));
     if (!confirmed) {
       return;
     }
 
     setError('');
-    const ids = history.map((item) => item.id);
-    const results = await Promise.allSettled(ids.map((id) => api.deleteConversation(id)));
-    const deletedIds: string[] = [];
-    let failedCount = 0;
+    setClearingHistory(true);
+    try {
+      let deletedIds: string[] = [];
+      let failedIds: string[] = [];
+      try {
+        const result = await api.clearConversations();
+        deletedIds = Array.isArray(result.deleted_ids)
+          ? result.deleted_ids
+              .filter((id) => typeof id === 'string' && id.trim().length > 0)
+              .map((id) => id.trim())
+          : [];
+        failedIds = Array.isArray(result.failed_ids)
+          ? result.failed_ids
+              .filter((id) => typeof id === 'string' && id.trim().length > 0)
+              .map((id) => id.trim())
+          : [];
+      } catch {
+        let ids: string[] = [];
+        try {
+          const allConversations = await api.listConversations();
+          const remoteIds = allConversations
+            .map((item) => item.id)
+            .filter((id) => typeof id === 'string' && id.trim().length > 0);
+          ids = [...remoteIds, ...history.map((item) => item.id)];
+        } catch {
+          ids = history.map((item) => item.id);
+        }
+        ids = Array.from(new Set(ids));
+        const results = await Promise.allSettled(ids.map((id) => api.deleteConversation(id)));
+        results.forEach((result, index) => {
+          const id = ids[index];
+          if (!id) {
+            return;
+          }
+          if (result.status === 'fulfilled' || isConversationMissingError(result.reason)) {
+            deletedIds.push(id);
+            return;
+          }
+          failedIds.push(id);
+        });
+      }
 
-    results.forEach((result, index) => {
-      const id = ids[index];
-      if (!id) {
-        return;
-      }
-      if (result.status === 'fulfilled') {
-        deletedIds.push(id);
-        return;
-      }
-      failedCount += 1;
-    });
+      const failedIdSet = new Set(failedIds);
+      const localHistoryIds = history
+        .map((item) => item.id)
+        .filter((id) => typeof id === 'string' && id.trim().length > 0);
+      const localIdsSafeToClear = localHistoryIds.filter((id) => !failedIdSet.has(id));
+      deletedIds = Array.from(new Set([...deletedIds, ...localIdsSafeToClear]));
+      const failedCount = failedIds.length;
 
-    if (deletedIds.length > 0) {
-      const deletedIdSet = new Set(deletedIds);
-      appendHiddenHistoryIds(deletedIds);
-      setHistory((previous) => previous.filter((item) => !deletedIdSet.has(item.id)));
-      if (editingConversationId && deletedIdSet.has(editingConversationId)) {
-        cancelRenameConversation();
+      if (deletedIds.length > 0) {
+        const deletedIdSet = new Set(deletedIds);
+        if (failedCount === 0) {
+          hiddenHistoryIdsRef.current = [];
+          setHiddenHistoryIds([]);
+        } else {
+          appendHiddenHistoryIds(deletedIds);
+        }
+        setPinnedHistoryOrder((previous) => {
+          const next = previous.filter((itemId) => !deletedIdSet.has(itemId));
+          pinnedHistoryOrderRef.current = next;
+          return next;
+        });
+        setHistory((previous) => previous.filter((item) => !deletedIdSet.has(item.id)));
+        if (editingConversationId && deletedIdSet.has(editingConversationId)) {
+          cancelRenameConversation();
+        }
+        if (conversation?.id && deletedIdSet.has(conversation.id)) {
+          setConversation(null);
+          setMessages([]);
+          setInput('');
+          setSelectedAttachmentIds([]);
+          setAttachmentListExpanded(false);
+        }
       }
-      if (conversation?.id && deletedIdSet.has(conversation.id)) {
-        setConversation(null);
-        setMessages([]);
-        setInput('');
-        setSelectedAttachmentIds([]);
-        setAttachmentListExpanded(false);
+
+      if (failedCount > 0) {
+        setError(t('Failed to delete {count} conversations.', { count: failedCount }));
+        setNotice(t('History cleared with partial failures.'));
+      } else {
+        setNotice(t('History cleared.'));
       }
+
+      refreshConversations().catch(() => {
+        // Keep local state even when background sync is unavailable.
+      });
+    } finally {
+      setClearingHistory(false);
     }
-
-    if (failedCount > 0) {
-      setError(t('Failed to delete {count} conversations.', { count: failedCount }));
-      setNotice(t('History cleared with partial failures.'));
-    } else {
-      setNotice(t('History cleared.'));
-    }
-
-    refreshConversations().catch(() => {
-      // Keep local state even when background sync is unavailable.
-    });
   }, [
     appendHiddenHistoryIds,
     cancelRenameConversation,
+    clearingHistory,
     conversation?.id,
     editingConversationId,
     history,
@@ -3205,6 +4027,282 @@ export default function ConversationPage() {
     });
   }, [removeAttachment]);
 
+  const armConversationAutoFollowUp = useCallback(() => {
+    const latestMessage = resolveLatestAssistantActionMessage(messages);
+    autoConversationFollowUpRef.current = {
+      armed: true,
+      baselineMessageId: latestMessage?.id ?? null,
+      inFlight: false
+    };
+  }, [messages, resolveLatestAssistantActionMessage]);
+
+  const disarmConversationAutoFollowUp = useCallback(() => {
+    autoConversationFollowUpRef.current = {
+      armed: false,
+      baselineMessageId: null,
+      inFlight: false
+    };
+  }, []);
+
+  const extractIdFromSuggestion = useCallback((suggestion: string, pattern: RegExp): string => {
+    const match = suggestion.match(pattern);
+    if (match && typeof match[1] === 'string') {
+      return match[1];
+    }
+    return '';
+  }, []);
+
+  const pickSuggestionForField = useCallback(
+    (field: string, suggestions: string[], collectedFields: Record<string, string>): string => {
+      if (!Array.isArray(suggestions) || suggestions.length === 0) {
+        return '';
+      }
+      const normalizedCollectedValue = (key: string): string => {
+        const value = collectedFields[key];
+        return typeof value === 'string' ? value.trim() : '';
+      };
+      if (field === 'dataset_id' || field === 'dataset_reference') {
+        return (
+          normalizedCollectedValue('dataset_id') ||
+          normalizedCollectedValue('dataset_reference') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(d-\d+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'dataset_version_id') {
+        return (
+          normalizedCollectedValue('dataset_version_id') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(dv-\d+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'model_id' || field === 'source_model_id') {
+        return (
+          normalizedCollectedValue('model_id') ||
+          normalizedCollectedValue('source_model_id') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(m-\d+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'model_version_id' || field === 'source_model_version_id') {
+        return (
+          normalizedCollectedValue('model_version_id') ||
+          normalizedCollectedValue('source_model_version_id') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(mv-\d+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'training_job_id' || field === 'job_id') {
+        return (
+          normalizedCollectedValue('training_job_id') ||
+          normalizedCollectedValue('job_id') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(tj-[a-z0-9-]+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'run_id' || field === 'inference_run_id') {
+        return (
+          normalizedCollectedValue('run_id') ||
+          normalizedCollectedValue('inference_run_id') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(ir-\d+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'vision_task_id' || field === 'task_id') {
+        return (
+          normalizedCollectedValue('vision_task_id') ||
+          normalizedCollectedValue('task_id') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(vt-[a-z0-9-]+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'attachment_id' || field === 'input_attachment_id') {
+        return (
+          normalizedCollectedValue('attachment_id') ||
+          normalizedCollectedValue('input_attachment_id') ||
+          suggestions.map((item) => extractIdFromSuggestion(item, /\b(f-\d+)\b/i)).find(Boolean) ||
+          ''
+        );
+      }
+      if (field === 'framework') {
+        return (
+          normalizedCollectedValue('framework') ||
+          suggestions
+            .map((item) => item.trim().toLowerCase())
+            .find((item) => ['paddleocr', 'doctr', 'yolo'].includes(item)) ||
+          ''
+        );
+      }
+      if (field === 'task_type' || field === 'model_type') {
+        return (
+          normalizedCollectedValue('task_type') ||
+          normalizedCollectedValue('model_type') ||
+          suggestions
+            .map((item) => item.trim().toLowerCase())
+            .find((item) => ['ocr', 'detection', 'classification', 'segmentation', 'obb'].includes(item)) ||
+          ''
+        );
+      }
+      if (field === 'visibility') {
+        return (
+          normalizedCollectedValue('visibility') ||
+          suggestions
+            .map((item) => item.trim().toLowerCase())
+            .find((item) => ['private', 'workspace', 'public'].includes(item)) ||
+          ''
+        );
+      }
+      if (field === 'profile_id') {
+        return normalizedCollectedValue('profile_id') || suggestions[0]?.trim() || '';
+      }
+      if (field === 'status') {
+        return (
+          normalizedCollectedValue('status') ||
+          suggestions
+            .map((item) => item.trim().toLowerCase())
+            .find((item) => ['approved', 'rejected', 'annotated', 'in_progress'].includes(item)) ||
+          ''
+        );
+      }
+      if (field === 'source') {
+        return (
+          normalizedCollectedValue('source') ||
+          suggestions
+            .map((item) => item.trim().toLowerCase())
+            .find((item) => ['manual', 'import', 'pre_annotation'].includes(item)) ||
+          ''
+        );
+      }
+      if (field === 'name' || field === 'version_name') {
+        return normalizedCollectedValue(field) || suggestions[0]?.trim() || '';
+      }
+      return suggestions[0]?.trim() || '';
+    },
+    [extractIdFromSuggestion]
+  );
+
+  const autoFillConversationAction = useCallback(
+    (action: ConversationActionMetadata) => {
+      const chinese = hasChineseText(action.summary) || action.suggestions?.some((item) => hasChineseText(item)) === true;
+      const parts: string[] = [];
+      const missingFields = (action.missing_fields ?? []).map((item) => item.trim()).filter(Boolean);
+      for (const field of missingFields) {
+        if (field.startsWith('dataset_issue:')) {
+          continue;
+        }
+        const value = pickSuggestionForField(field, action.suggestions ?? [], action.collected_fields);
+        if (!value) {
+          continue;
+        }
+        if (field === 'dataset_id' || field === 'dataset_reference') {
+          parts.push(chinese ? `数据集用 ${value}` : `Use dataset ${value}`);
+          continue;
+        }
+        if (field === 'dataset_version_id') {
+          parts.push(chinese ? `数据集版本用 ${value}` : `Use dataset version ${value}`);
+          continue;
+        }
+        if (field === 'task_type' || field === 'model_type') {
+          parts.push(chinese ? `任务类型用 ${value}` : `Use task type ${value}`);
+          continue;
+        }
+        if (field === 'framework') {
+          parts.push(chinese ? `框架用 ${value}` : `Use framework ${value}`);
+          continue;
+        }
+        if (field === 'model_id' || field === 'source_model_id') {
+          parts.push(chinese ? `模型用 ${value}` : `Use model ${value}`);
+          continue;
+        }
+        if (field === 'model_version_id' || field === 'source_model_version_id') {
+          parts.push(chinese ? `模型版本用 ${value}` : `Use model version ${value}`);
+          continue;
+        }
+        if (field === 'training_job_id' || field === 'job_id') {
+          parts.push(chinese ? `训练任务用 ${value}` : `Use training job ${value}`);
+          continue;
+        }
+        if (field === 'run_id' || field === 'inference_run_id') {
+          parts.push(chinese ? `推理运行用 ${value}` : `Use run ${value}`);
+          continue;
+        }
+        if (field === 'vision_task_id' || field === 'task_id') {
+          parts.push(chinese ? `视觉任务用 ${value}` : `Use vision task ${value}`);
+          continue;
+        }
+        if (field === 'attachment_id' || field === 'input_attachment_id') {
+          parts.push(chinese ? `输入附件用 ${value}` : `Use attachment ${value}`);
+          continue;
+        }
+        if (field === 'visibility') {
+          parts.push(chinese ? `可见性设为 ${value}` : `Set visibility to ${value}`);
+          continue;
+        }
+        if (field === 'status') {
+          parts.push(chinese ? `状态设为 ${value}` : `Set status to ${value}`);
+          continue;
+        }
+        if (field === 'source') {
+          parts.push(chinese ? `来源设为 ${value}` : `Set source to ${value}`);
+          continue;
+        }
+        if (field === 'profile_id') {
+          parts.push(chinese ? `运行环境配置用 ${value}` : `Use runtime profile ${value}`);
+          continue;
+        }
+        if (field === 'name' || field === 'version_name') {
+          parts.push(chinese ? `${field === 'name' ? '名称' : '版本名'}用 ${value}` : `Set ${field} ${value}`);
+          continue;
+        }
+        parts.push(`${field}=${value}`);
+      }
+
+      const nextInput =
+        parts.length > 0
+          ? parts.join(chinese ? '；' : '; ')
+          : (action.suggestions?.[0]?.trim() ?? '');
+      if (!nextInput) {
+        return;
+      }
+      const shouldAutoSubmit =
+        action.status === 'requires_input' &&
+        !sending &&
+        !uploading &&
+        !authRequired &&
+        !hasPendingSelectedAttachments &&
+        Boolean(nextInput.trim());
+      if (shouldAutoSubmit) {
+        armConversationAutoFollowUp();
+        setInput('');
+        setNotice(t('Auto fill applied. Retrying action...'));
+        void sendWithContent(nextInput).catch(() => {
+          disarmConversationAutoFollowUp();
+          setInput(nextInput);
+          window.requestAnimationFrame(() => {
+            composerTextareaRef.current?.focus();
+          });
+        });
+        return;
+      }
+      setInput(nextInput);
+      window.requestAnimationFrame(() => {
+        composerTextareaRef.current?.focus();
+      });
+      setNotice(t('Auto fill inserted into composer.'));
+    },
+    [
+      armConversationAutoFollowUp,
+      authRequired,
+      disarmConversationAutoFollowUp,
+      hasPendingSelectedAttachments,
+      pickSuggestionForField,
+      sending,
+      sendWithContent,
+      t,
+      uploading
+    ]
+  );
+
   const applyConversationSuggestion = useCallback(
     (action: ConversationActionMetadata, suggestion: string) => {
       const trimmed = suggestion.trim();
@@ -3230,14 +4328,173 @@ export default function ConversationPage() {
           : `Set visibility to ${trimmed}`;
       }
 
+      const shouldAutoSubmit =
+        action.status === 'requires_input' &&
+        !sending &&
+        !uploading &&
+        !authRequired &&
+        !hasPendingSelectedAttachments &&
+        Boolean(nextInput.trim());
+      if (shouldAutoSubmit) {
+        armConversationAutoFollowUp();
+        setInput('');
+        setNotice(t('Suggestion applied. Retrying action...'));
+        void sendWithContent(nextInput).catch(() => {
+          disarmConversationAutoFollowUp();
+          setInput(nextInput);
+          window.requestAnimationFrame(() => {
+            composerTextareaRef.current?.focus();
+          });
+        });
+        return;
+      }
+
       setInput(nextInput);
       window.requestAnimationFrame(() => {
         composerTextareaRef.current?.focus();
       });
       setNotice(t('Suggestion inserted into composer.'));
     },
-    [t]
+    [
+      armConversationAutoFollowUp,
+      authRequired,
+      disarmConversationAutoFollowUp,
+      hasPendingSelectedAttachments,
+      sending,
+      sendWithContent,
+      t,
+      uploading
+    ]
   );
+
+  const confirmConversationAction = useCallback(
+    (action: ConversationActionMetadata) => {
+      const phrase = action.confirmation_phrase?.trim() ?? '';
+      if (!phrase) {
+        return;
+      }
+      if (sending || uploading || authRequired || hasPendingSelectedAttachments) {
+        setInput(phrase);
+        window.requestAnimationFrame(() => {
+          composerTextareaRef.current?.focus();
+        });
+        setNotice(t('Confirmation inserted into composer.'));
+        return;
+      }
+      setInput('');
+      setNotice(t('Confirmation sent. Executing action...'));
+      void sendWithContent(phrase).catch(() => {
+        setInput(phrase);
+        window.requestAnimationFrame(() => {
+          composerTextareaRef.current?.focus();
+        });
+      });
+    },
+    [authRequired, hasPendingSelectedAttachments, sending, sendWithContent, t, uploading]
+  );
+
+  const runConversationNextStep = useCallback(
+    (step: ConversationActionNextStep) => {
+      if (step.kind === 'href' && step.href) {
+        navigate(step.href);
+        return;
+      }
+
+      const nextInput = buildConversationActionNextStepInput(step);
+      if (!nextInput) {
+        return;
+      }
+
+      if (sending || uploading || authRequired || hasPendingSelectedAttachments) {
+        setInput(nextInput);
+        window.requestAnimationFrame(() => {
+          composerTextareaRef.current?.focus();
+        });
+        setNotice(t('Suggested next step inserted into composer.'));
+        return;
+      }
+
+      setInput('');
+      setNotice(t('Suggested next step sent. Confirm if prompted.'));
+      void sendWithContent(nextInput).catch(() => {
+        setInput(nextInput);
+        window.requestAnimationFrame(() => {
+          composerTextareaRef.current?.focus();
+        });
+      });
+    },
+    [authRequired, hasPendingSelectedAttachments, navigate, sending, sendWithContent, t, uploading]
+  );
+
+  useEffect(() => {
+    const autoFollowUp = autoConversationFollowUpRef.current;
+    if (!autoFollowUp.armed || autoFollowUp.inFlight) {
+      return;
+    }
+    if (sending || uploading || authRequired || hasPendingSelectedAttachments) {
+      return;
+    }
+
+    const latestActionMessage = resolveLatestAssistantActionMessage(messages);
+    if (!latestActionMessage || latestActionMessage.id === autoFollowUp.baselineMessageId) {
+      return;
+    }
+
+    const latestAction = latestActionMessage.metadata?.conversation_action ?? null;
+    autoConversationFollowUpRef.current = {
+      ...autoFollowUp,
+      baselineMessageId: latestActionMessage.id
+    };
+
+    if (!latestAction || latestAction.status !== 'requires_input') {
+      disarmConversationAutoFollowUp();
+      return;
+    }
+
+    const nonConfirmationMissingFields = (latestAction.missing_fields ?? [])
+      .map((field) => field.trim())
+      .filter((field) => field && field !== 'confirmation');
+    const confirmationPhrase = latestAction.confirmation_phrase?.trim() ?? '';
+    const shouldAutoConfirm =
+      latestAction.requires_confirmation === true &&
+      confirmationPhrase.length > 0 &&
+      nonConfirmationMissingFields.length === 0;
+    if (!shouldAutoConfirm) {
+      disarmConversationAutoFollowUp();
+      return;
+    }
+
+    autoConversationFollowUpRef.current = {
+      armed: false,
+      baselineMessageId: latestActionMessage.id,
+      inFlight: true
+    };
+    setNotice(t('Confirmation sent. Executing action...'));
+    void sendWithContent(confirmationPhrase)
+      .catch(() => {
+        setInput(confirmationPhrase);
+        window.requestAnimationFrame(() => {
+          composerTextareaRef.current?.focus();
+        });
+      })
+      .finally(() => {
+        autoConversationFollowUpRef.current = {
+          armed: false,
+          baselineMessageId: null,
+          inFlight: false
+        };
+      });
+  }, [
+    authRequired,
+    disarmConversationAutoFollowUp,
+    hasPendingSelectedAttachments,
+    messages,
+    resolveLatestAssistantActionMessage,
+    sending,
+    sendWithContent,
+    t,
+    uploading
+  ]);
 
   const hasActiveConversation = Boolean(conversation);
   const canSend =
@@ -3283,11 +4540,11 @@ export default function ConversationPage() {
   }, [clearWorkspaceForAnonymousSession, closeMobileSidebar, navigate]);
   const sessionMenuItems = useMemo(
     () => [
-      { to: '/settings', label: t('Settings') },
-      { to: '/workspace/console', label: t('Professional Console') },
+      { to: scopedSettingsPath, label: t('Settings') },
+      { to: scopedConsolePath, label: t('Professional Console') },
       { label: t('Logout'), onSelect: logout, tone: 'danger' as const }
     ],
-    [logout, t]
+    [logout, scopedConsolePath, scopedSettingsPath, t]
   );
 
   return (
@@ -3333,9 +4590,9 @@ export default function ConversationPage() {
                 onClick={() => {
                   void clearAllHistory();
                 }}
-                disabled={sending || authRequired || history.length === 0}
+                disabled={sending || authRequired || clearingHistory || history.length === 0}
               >
-                {t('Clear history')}
+                {clearingHistory ? t('Clearing...') : t('Clear history')}
               </Button>
             </div>
           </div>
@@ -3405,7 +4662,7 @@ export default function ConversationPage() {
                   </div>
                 </div>
                 <div className="chat-user-actions">
-                  <ButtonLink to="/auth/login" variant="ghost" size="sm" className="chat-guest-login-link">
+                  <ButtonLink to={loginPath} variant="ghost" size="sm" className="chat-guest-login-link">
                     {t('Login')}
                   </ButtonLink>
                 </div>
@@ -3443,7 +4700,7 @@ export default function ConversationPage() {
             ) : (
               <ButtonLink
                 className="chat-sidebar-rail-link chat-sidebar-rail-avatar-link"
-                to="/auth/login"
+                to={loginPath}
                 variant="ghost"
                 size="icon"
                 aria-label={t('Login')}
@@ -3500,7 +4757,7 @@ export default function ConversationPage() {
               ) : null}
               {!currentUser && isCompactViewport ? (
                 <div className="chat-header-auth-links">
-                  <ButtonLink to="/auth/login" variant="ghost" size="sm" className="chat-header-login-link">
+                  <ButtonLink to={loginPath} variant="ghost" size="sm" className="chat-header-login-link">
                     {t('Login')}
                   </ButtonLink>
                 </div>
@@ -3521,14 +4778,19 @@ export default function ConversationPage() {
           onLoadEarlierMessages={loadEarlierMessages}
           onCopyMessage={requestCopyMessage}
           onQuoteMessage={quoteMessage}
+          onConfirmConversationAction={confirmConversationAction}
+          onAutoFillConversationAction={autoFillConversationAction}
           onApplyConversationSuggestion={applyConversationSuggestion}
+          onRunConversationNextStep={runConversationNextStep}
           formatConversationActionLabel={formatConversationActionLabel}
           formatConversationActionStatusLabel={formatConversationActionStatusLabel}
           formatConversationActionFieldLabel={formatConversationActionFieldLabel}
           formatConversationActionFieldValue={formatConversationActionFieldValue}
+          resolveConversationActionFieldHref={resolveConversationActionFieldHref}
           resolveConversationActionHref={resolveConversationActionHref}
           resolveConversationActionLinks={resolveConversationActionLinks}
           resolveMessageAttachmentNames={resolveMessageAttachmentNames}
+          loginPath={loginPath}
         />
 
         <footer className="chat-composer-wrap">

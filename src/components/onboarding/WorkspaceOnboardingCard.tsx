@@ -106,7 +106,7 @@ export default function WorkspaceOnboardingCard({
     try {
       localStorage.setItem(floatingHelpSeenStorageKey, 'true');
     } catch {
-      // Ignore storage failures in prototype mode.
+      // Ignore storage failures in local client mode.
     }
   }, [floatingHelpSeenStorageKey]);
 

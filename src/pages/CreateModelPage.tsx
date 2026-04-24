@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import type { FileAttachment, ModelRecord } from '../../shared/domain';
+import { useLocation, useSearchParams } from 'react-router-dom';
+import type { FileAttachment, ModelRecord, User } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import StateBlock from '../components/StateBlock';
 import StepIndicator from '../components/StepIndicator';
 import { Badge, StatusTag } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
-import { PageHeader } from '../components/ui/ConsolePage';
+import { InlineAlert, PageHeader } from '../components/ui/ConsolePage';
 import { Checkbox, Input, Select, Textarea } from '../components/ui/Field';
 import { Card } from '../components/ui/Surface';
 import {
@@ -21,6 +22,90 @@ import { api } from '../services/api';
 
 const backgroundRefreshIntervalMs = 5000;
 const modelTypeOptions = ['ocr', 'detection', 'classification', 'segmentation', 'obb'] as const;
+
+type LaunchContext = {
+  datasetId?: string | null;
+  versionId?: string | null;
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: LaunchContext
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.datasetId?.trim() && !searchParams.has('dataset')) {
+    searchParams.set('dataset', context.datasetId.trim());
+  }
+  if (context.versionId?.trim() && !searchParams.has('version')) {
+    searchParams.set('version', context.versionId.trim());
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const buildPendingModelsPath = (model: ModelRecord | null, launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  searchParams.set('lane', 'pending');
+  searchParams.set('status', 'pending_approval');
+  if (model) {
+    searchParams.set('q', model.name);
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  return `/models/my-models?${searchParams.toString()}`;
+};
+
+const buildAdminApprovalQueuePath = (model: ModelRecord | null, launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  if (model) {
+    searchParams.set('model', model.id);
+    searchParams.set('q', model.name);
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/admin/models/pending?${query}` : '/admin/models/pending';
+};
 
 const buildModelFilesSignature = (modelId: string | null, files: FileAttachment[]): string =>
   JSON.stringify({
@@ -38,10 +123,23 @@ const buildModelFilesSignature = (modelId: string | null, files: FileAttachment[
 
 export default function CreateModelPage() {
   const { t } = useI18n();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const preferredModelType = (searchParams.get('task_type') ?? searchParams.get('model_type') ?? '').trim();
+  const preferredModelId = (searchParams.get('model') ?? searchParams.get('model_id') ?? '').trim();
   const preferredTrainingJobId = (searchParams.get('job') ?? '').trim();
   const preferredVersionName = (searchParams.get('version_name') ?? searchParams.get('versionName') ?? '').trim();
+  const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
+  const preferredDatasetVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredFramework = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
+  const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
+  const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
   const steps = useMemo(() => [t('Metadata'), t('Model File'), t('Parameters'), t('Review')], [t]);
   const stepTitles = useMemo(
     () => [t('Step 1. Metadata'), t('Step 2. Model File Upload'), t('Step 3. Parameters'), t('Step 4. Review and Submit')],
@@ -58,6 +156,7 @@ export default function CreateModelPage() {
   );
 
   const [step, setStep] = useState(0);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [modelType, setModelType] = useState<'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'>(() =>
@@ -73,7 +172,79 @@ export default function CreateModelPage() {
   const [enableEarlyStop, setEnableEarlyStop] = useState(true);
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const [requestedModelMissing, setRequestedModelMissing] = useState(false);
   const modelFilesSignatureRef = useRef(buildModelFilesSignature(null, []));
+  const backgroundSyncHint = t(
+    'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
+  );
+  const hasImportedTrainingContext = Boolean(
+    preferredTrainingJobId ||
+      preferredVersionName ||
+      preferredDatasetId ||
+      preferredDatasetVersionId ||
+      preferredFramework ||
+      preferredExecutionTarget ||
+      preferredWorkerId
+  );
+  const clearRequestedModelContextPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('model');
+    next.delete('model_id');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
+
+  useEffect(() => {
+    setRequestedModelMissing(false);
+  }, [preferredModelId]);
+
+  useEffect(() => {
+    let active = true;
+
+    Promise.all([
+      api.me().catch(() => null),
+      preferredModelId ? api.listModels().catch(() => []) : Promise.resolve<ModelRecord[]>([])
+    ]).then(([user, visibleModels]) => {
+      if (!active) {
+        return;
+      }
+
+      setCurrentUser(user);
+
+      if (!preferredModelId) {
+        return;
+      }
+
+      const selectedModel = visibleModels.find((item) => item.id === preferredModelId) ?? null;
+      if (!selectedModel) {
+        setRequestedModelMissing(true);
+        setFeedback({
+          variant: 'error',
+          text: t('The requested model draft is no longer available. Open My Models and choose another draft.')
+        });
+        return;
+      }
+
+      setRequestedModelMissing(false);
+      setDraftModel(selectedModel);
+      setName(selectedModel.name);
+      setDescription(selectedModel.description);
+      setModelType(selectedModel.model_type);
+      setVisibility(selectedModel.visibility);
+      setStep(selectedModel.status === 'pending_approval' ? steps.length - 1 : 1);
+      setFeedback({
+        variant: 'success',
+        text:
+          selectedModel.status === 'pending_approval'
+            ? t('Loaded existing model submission. Track approval from the next-step panel.')
+            : t('Loaded existing model draft. Continue with files, review, and approval handoff.')
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [preferredModelId, steps.length, t]);
 
   const refreshModelFiles = useCallback(async () => {
     if (!draftModel) {
@@ -104,7 +275,26 @@ export default function CreateModelPage() {
     () => modelFiles.some((file) => file.status === 'uploading' || file.status === 'processing'),
     [modelFiles]
   );
+  const metadataLocked = Boolean(draftModel);
+  const approvalSubmitted = draftModel?.status === 'pending_approval';
   const draftStatusLabel = draftModel ? t(draftModel.status) : t('not started');
+  const launchContext: LaunchContext = {
+    datasetId: preferredDatasetId || null,
+    versionId: preferredDatasetVersionId || null,
+    taskType: modelType || preferredModelType || null,
+    framework: preferredFramework || null,
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
+  const pendingModelsPath = useMemo(
+    () => buildPendingModelsPath(draftModel, launchContext),
+    [draftModel, launchContext]
+  );
+  const adminApprovalQueuePath = useMemo(
+    () => buildAdminApprovalQueuePath(draftModel, launchContext),
+    [draftModel, launchContext]
+  );
   const versionRegistrationPath = useMemo(() => {
     if (!draftModel) {
       return '';
@@ -118,8 +308,9 @@ export default function CreateModelPage() {
     if (preferredVersionName) {
       params.set('version_name', preferredVersionName);
     }
+    appendTrainingLaunchContext(params, launchContext);
     return `/models/versions?${params.toString()}`;
-  }, [draftModel, preferredTrainingJobId, preferredVersionName]);
+  }, [draftModel, launchContext, preferredTrainingJobId, preferredVersionName]);
 
   useBackgroundPolling(
     () => {
@@ -134,6 +325,15 @@ export default function CreateModelPage() {
   );
 
   const createDraft = async () => {
+    if (draftModel) {
+      setStep(1);
+      setFeedback({
+        variant: 'success',
+        text: t('Draft already exists. Continue with model file upload or final review.')
+      });
+      return;
+    }
+
     if (!name.trim() || !description.trim()) {
       setFeedback({ variant: 'error', text: t('Name and description are required before creating a draft.') });
       return;
@@ -189,7 +389,10 @@ export default function CreateModelPage() {
 
   const onDeleteModelFile = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
-    await refreshModelFiles();
+    setModelFiles((prev) => prev.filter((item) => item.id !== attachmentId));
+    refreshModelFiles().catch(() => {
+      setFeedback({ variant: 'success', text: backgroundSyncHint });
+    });
   };
 
   const nextStep = async () => {
@@ -225,6 +428,14 @@ export default function CreateModelPage() {
       return;
     }
 
+    if (approvalSubmitted || (draftModel.status !== 'draft' && draftModel.status !== 'rejected')) {
+      setFeedback({
+        variant: 'error',
+        text: t('Approval has already been submitted or completed for this model. Continue from My Models or the approval queue.')
+      });
+      return;
+    }
+
     setLoading(true);
     setFeedback(null);
 
@@ -242,7 +453,7 @@ export default function CreateModelPage() {
       setDraftModel({ ...draftModel, status: 'pending_approval' });
       setFeedback({
         variant: 'success',
-        text: t('Approval request submitted. Model status is now pending approval.')
+        text: t('Approval request submitted. Model status is now pending approval. Continue in My Models or the approval queue.')
       });
     } catch (error) {
       setFeedback({ variant: 'error', text: (error as Error).message });
@@ -285,16 +496,22 @@ export default function CreateModelPage() {
           <div className="workspace-form-grid">
             <label className="workspace-form-span-2">
               {t('Model Name')}
-              <Input value={name} onChange={(event) => setName(event.target.value)} />
+              <Input value={name} onChange={(event) => setName(event.target.value)} disabled={metadataLocked} />
             </label>
             <label className="workspace-form-span-2">
               {t('Description')}
-              <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+              <Textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={4}
+                disabled={metadataLocked}
+              />
             </label>
             <label>
               {t('Model Type')}
               <Select
                 value={modelType}
+                disabled={metadataLocked}
                 onChange={(event) =>
                   setModelType(
                     event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
@@ -312,6 +529,7 @@ export default function CreateModelPage() {
               {t('Visibility')}
               <Select
                 value={visibility}
+                disabled={metadataLocked}
                 onChange={(event) => setVisibility(event.target.value as 'private' | 'workspace' | 'public')}
               >
                 <option value="private">{t('private')}</option>
@@ -320,6 +538,11 @@ export default function CreateModelPage() {
               </Select>
             </label>
           </div>
+          {metadataLocked ? (
+            <small className="muted">
+              {t('Metadata is locked after the draft shell is created. Continue with file packaging, review, and approval from the next steps.')}
+            </small>
+          ) : null}
         </Card>
       );
     }
@@ -433,11 +656,27 @@ export default function CreateModelPage() {
         title={t('Create Model')}
         description={t('Move from metadata shell to approval-ready artifact package with a calm guided flow.')}
         meta={
-          <div className="row gap wrap align-center">
-            <Badge tone="neutral">{t('Step')}: {step + 1}/{steps.length}</Badge>
-            <Badge tone="info">{t('Ready model files')}: {readyFileCount}</Badge>
-            <Badge tone="neutral">{t('Draft status')}: {draftStatusLabel}</Badge>
+          <div className="stack tight">
+            <div className="row gap wrap align-center">
+              <Badge tone="neutral">{t('Step')}: {step + 1}/{steps.length}</Badge>
+              <Badge tone="info">{t('Ready model files')}: {readyFileCount}</Badge>
+              <Badge tone="neutral">{t('Draft status')}: {draftStatusLabel}</Badge>
+            </div>
+            <TrainingLaunchContextPills
+              taskType={launchContext.taskType}
+              framework={launchContext.framework}
+              executionTarget={launchContext.executionTarget}
+              workerId={launchContext.workerId}
+              t={t}
+            />
           </div>
+        }
+        secondaryActions={
+          requestedReturnTo ? (
+            <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+              {t('Return to current task')}
+            </ButtonLink>
+          ) : undefined
         }
       />
 
@@ -446,6 +685,25 @@ export default function CreateModelPage() {
           variant={feedback.variant}
           title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
+        />
+      ) : null}
+      {hasImportedTrainingContext ? (
+        <InlineAlert
+          tone="info"
+          title={t('Training context imported')}
+          description={t('This draft flow was opened with training context. Keep model governance and version registration in the same lane.')}
+        />
+      ) : null}
+      {requestedModelMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested model draft not found')}
+          description={t('The incoming model context is unavailable. Continue by creating a new draft or opening My Models.')}
+          actions={
+            <ButtonLink to={clearRequestedModelContextPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
         />
       ) : null}
 
@@ -464,8 +722,13 @@ export default function CreateModelPage() {
                 <Button type="button" variant="secondary" onClick={nextStep} disabled={step === steps.length - 1 || loading} size="sm">
                   {t('Next')}
                 </Button>
-                <Button type="button" onClick={submitApproval} disabled={step !== steps.length - 1 || loading} size="sm">
-                  {loading ? t('Submitting...') : t('Submit Approval')}
+                <Button
+                  type="button"
+                  onClick={submitApproval}
+                  disabled={step !== steps.length - 1 || loading || approvalSubmitted}
+                  size="sm"
+                >
+                  {loading ? t('Submitting...') : approvalSubmitted ? t('Approval Submitted') : t('Submit Approval')}
                 </Button>
               </div>
             </div>
@@ -523,12 +786,62 @@ export default function CreateModelPage() {
               )}
             </Card>
 
+            <Card as="article" className="workspace-inspector-card">
+              <div className="stack tight">
+                <h3>{t('Next step')}</h3>
+                <small className="muted">
+                  {!draftModel
+                    ? t('Create the model shell first, then this panel will point you to the next operational page.')
+                    : approvalSubmitted
+                      ? t('Approval has been submitted. Track the decision first, then continue into version registration or validation.')
+                      : readyFileCount === 0
+                        ? t('Upload at least one ready model artifact so the package can move toward review and approval.')
+                        : step < steps.length - 1
+                          ? t('The package is almost ready. Move into the final review step and submit approval from there.')
+                          : t('Submit approval now, then continue in the ownership lane instead of searching across pages.')}
+                </small>
+              </div>
+              <div className="row gap wrap">
+                {!draftModel ? null : approvalSubmitted ? (
+                  <>
+                    <ButtonLink to={pendingModelsPath} variant="secondary" size="sm">
+                      {t('Open my pending models')}
+                    </ButtonLink>
+                    {currentUser?.role === 'admin' ? (
+                      <ButtonLink to={adminApprovalQueuePath} variant="ghost" size="sm">
+                        {t('Open admin queue')}
+                      </ButtonLink>
+                    ) : null}
+                    {preferredTrainingJobId ? (
+                      <ButtonLink to={versionRegistrationPath} variant="ghost" size="sm">
+                        {t('Keep version registration nearby')}
+                      </ButtonLink>
+                    ) : null}
+                  </>
+                ) : readyFileCount === 0 ? (
+                  <Button type="button" variant="secondary" size="sm" onClick={() => setStep(1)}>
+                    {t('Go to model files')}
+                  </Button>
+                ) : step < steps.length - 1 ? (
+                  <Button type="button" variant="secondary" size="sm" onClick={() => setStep(steps.length - 1)}>
+                    {t('Go to final review')}
+                  </Button>
+                ) : (
+                  <Button type="button" variant="secondary" size="sm" onClick={submitApproval} disabled={loading}>
+                    {t('Submit Approval')}
+                  </Button>
+                )}
+              </div>
+            </Card>
+
             {draftModel && preferredTrainingJobId ? (
               <Card as="article" className="workspace-inspector-card">
                 <div className="stack tight">
-                  <h3>{t('Next step')}</h3>
+                  <h3>{t('Version registration handoff')}</h3>
                   <small className="muted">
-                    {t('Return to version registration after the draft and files are ready.')}
+                    {approvalSubmitted
+                      ? t('After approval finishes, return here and register the linked training output as a version.')
+                      : t('Return to version registration after the draft and files are ready.')}
                   </small>
                 </div>
                 <div className="row gap wrap">

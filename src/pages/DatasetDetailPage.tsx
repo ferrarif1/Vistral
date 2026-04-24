@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
   AnnotationReviewReasonCode,
   AnnotationWithReview,
@@ -10,6 +10,7 @@ import type {
 } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
+import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import BulkActionBar from '../components/datasets/BulkActionBar';
 import DatasetItemBrowser from '../components/datasets/DatasetItemBrowser';
 import DatasetVersionRail from '../components/datasets/DatasetVersionRail';
@@ -72,6 +73,7 @@ const buildAnnotationWorkspacePath = (
     splitFilter?: 'all' | 'train' | 'val' | 'test' | 'unassigned';
     itemStatusFilter?: 'all' | 'uploading' | 'processing' | 'ready' | 'error';
     metadataFilter?: string;
+    launchContext?: LaunchContext;
   }
 ): string => {
   const searchParams = new URLSearchParams();
@@ -99,42 +101,70 @@ const buildAnnotationWorkspacePath = (
   if (normalizedMetadataFilter) {
     searchParams.set('meta', normalizedMetadataFilter);
   }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
   const query = searchParams.toString();
   return query ? `/datasets/${datasetId}/annotate?${query}` : `/datasets/${datasetId}/annotate`;
 };
 
-const buildTrainingJobCreatePath = (datasetId: string, versionId: string): string => {
+const buildTrainingJobCreatePath = (
+  datasetId: string,
+  versionId: string,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   searchParams.set('version', versionId);
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/training/jobs/new?${searchParams.toString()}`;
 };
 
-const buildTrainingJobsPath = (datasetId: string, versionId?: string): string => {
+const buildTrainingJobsPath = (
+  datasetId: string,
+  versionId?: string,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId) {
     searchParams.set('version', versionId);
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/training/jobs?${searchParams.toString()}`;
 };
 
-const buildInferenceValidationPath = (datasetId: string, versionId?: string): string => {
+const buildInferenceValidationPath = (
+  datasetId: string,
+  versionId?: string,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId) {
     searchParams.set('version', versionId);
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/inference/validate?${searchParams.toString()}`;
 };
 
-const buildClosureWizardPath = (datasetId: string, versionId?: string): string => {
+const buildClosureWizardPath = (
+  datasetId: string,
+  versionId?: string,
+  launchContext?: LaunchContext
+): string => {
   const searchParams = new URLSearchParams();
   searchParams.set('dataset', datasetId);
   if (versionId) {
     searchParams.set('version', versionId);
   }
+  appendTrainingLaunchContext(searchParams, launchContext);
   return `/workflow/closure?${searchParams.toString()}`;
+};
+
+const buildDatasetsPath = (launchContext?: LaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/datasets?${query}` : '/datasets';
 };
 
 const backgroundRefreshIntervalMs = 5000;
@@ -148,6 +178,13 @@ type DatasetDetailSnapshot = {
   annotations: AnnotationWithReview[];
 };
 type ReviewReasonFilter = AnnotationReviewReasonCode | 'all';
+type LaunchContext = {
+  taskType?: string | null;
+  framework?: string | null;
+  executionTarget?: string | null;
+  workerId?: string | null;
+  returnTo?: string | null;
+};
 type SavedSampleView = {
   id: string;
   name: string;
@@ -158,6 +195,69 @@ type SavedSampleView = {
   reviewReasonFilter: ReviewReasonFilter;
   metadataFilter: string;
   viewMode: 'list' | 'grid';
+};
+
+const appendTrainingLaunchContext = (
+  searchParams: URLSearchParams,
+  context?: LaunchContext
+) => {
+  if (!context) {
+    return;
+  }
+  if (context.taskType?.trim() && !searchParams.has('task_type')) {
+    searchParams.set('task_type', context.taskType.trim());
+  }
+  if (context.framework?.trim() && !searchParams.has('framework')) {
+    searchParams.set('framework', context.framework.trim());
+  }
+  if (
+    context.executionTarget?.trim() &&
+    context.executionTarget.trim() !== 'auto' &&
+    !searchParams.has('execution_target')
+  ) {
+    searchParams.set('execution_target', context.executionTarget.trim());
+  }
+  if (context.workerId?.trim() && !searchParams.has('worker')) {
+    searchParams.set('worker', context.workerId.trim());
+  }
+  const returnTo = context.returnTo?.trim() ?? '';
+  if (
+    returnTo &&
+    returnTo.startsWith('/') &&
+    !returnTo.startsWith('//') &&
+    !returnTo.includes('://') &&
+    !searchParams.has('return_to')
+  ) {
+    searchParams.set('return_to', returnTo);
+  }
+};
+
+const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('://')) {
+    return null;
+  }
+  return trimmed;
+};
+
+const resolvePreferredFrameworkForTask = (
+  taskType: DatasetRecord['task_type'] | string | null | undefined,
+  preferredFramework?: string | null
+): string | null => {
+  const normalizedPreferred = preferredFramework?.trim().toLowerCase() ?? '';
+  if (normalizedPreferred === 'paddleocr' || normalizedPreferred === 'doctr' || normalizedPreferred === 'yolo') {
+    return normalizedPreferred;
+  }
+  if (taskType === 'ocr') {
+    return 'paddleocr';
+  }
+  if (taskType === 'detection' || taskType === 'classification' || taskType === 'segmentation' || taskType === 'obb') {
+    return 'yolo';
+  }
+  return null;
 };
 
 const buildDatasetDetailSignature = (detail: {
@@ -177,9 +277,16 @@ const buildDatasetDetailSignature = (detail: {
 
 export default function DatasetDetailPage() {
   const { t } = useI18n();
+  const location = useLocation();
   const navigate = useNavigate();
   const { datasetId } = useParams<{ datasetId: string }>();
   const [searchParams] = useSearchParams();
+  const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
+  const currentTaskPath = useMemo(
+    () => `${location.pathname}${location.search || ''}`,
+    [location.pathname, location.search]
+  );
+  const outboundReturnTo = requestedReturnTo ?? currentTaskPath;
   const [dataset, setDataset] = useState<DatasetRecord | null>(null);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [items, setItems] = useState<DatasetItemRecord[]>([]);
@@ -222,8 +329,33 @@ export default function DatasetDetailPage() {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const detailSignatureRef = useRef('');
+  const backgroundSyncHint = t(
+    'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
+  );
   const uploadSectionRef = useRef<HTMLDivElement | null>(null);
+  const sampleSectionRef = useRef<HTMLDivElement | null>(null);
+  const versionSectionRef = useRef<HTMLDivElement | null>(null);
+  const focusAppliedRef = useRef('');
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
+  const preferredFocus = (searchParams.get('focus') ?? '').trim();
+  const preferredTaskTypeRaw = (searchParams.get('task_type') ?? '').trim().toLowerCase();
+  const preferredTaskType =
+    preferredTaskTypeRaw === 'ocr' ||
+    preferredTaskTypeRaw === 'detection' ||
+    preferredTaskTypeRaw === 'classification' ||
+    preferredTaskTypeRaw === 'segmentation' ||
+    preferredTaskTypeRaw === 'obb'
+      ? preferredTaskTypeRaw
+      : null;
+  const preferredFrameworkRaw = (searchParams.get('framework') ?? searchParams.get('profile') ?? '')
+    .trim()
+    .toLowerCase();
+  const preferredFramework =
+    preferredFrameworkRaw === 'paddleocr' || preferredFrameworkRaw === 'doctr' || preferredFrameworkRaw === 'yolo'
+      ? preferredFrameworkRaw
+      : null;
+  const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim();
+  const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
   const sampleViewStorageKey = datasetId ? `vistral:dataset:${datasetId}:sample-views` : '';
 
   const applyDetailSnapshot = useCallback((snapshot: DatasetDetailSnapshot) => {
@@ -366,6 +498,14 @@ export default function DatasetDetailPage() {
   const selectedVersion = useMemo(
     () => versions.find((version) => version.id === selectedVersionId) ?? null,
     [selectedVersionId, versions]
+  );
+  const preferredVersionRecord = useMemo(
+    () => (preferredVersionId ? versions.find((version) => version.id === preferredVersionId) ?? null : null),
+    [preferredVersionId, versions]
+  );
+  const preferredVersionMissing = useMemo(
+    () => Boolean(preferredVersionId && versions.length > 0 && !preferredVersionRecord),
+    [preferredVersionId, preferredVersionRecord, versions.length]
   );
   const selectedVersionHasTrainSplit = (selectedVersion?.split_summary.train ?? 0) > 0;
   const selectedVersionHasCoverage = (selectedVersion?.annotation_coverage ?? 0) > 0;
@@ -513,25 +653,51 @@ export default function DatasetDetailPage() {
     },
     [annotationSummary.approved, annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected, annotations, items, t]
   );
+  const launchContextForDatasetFlow: LaunchContext = {
+    taskType: preferredTaskType ?? dataset?.task_type ?? null,
+    framework: resolvePreferredFrameworkForTask(preferredTaskType ?? dataset?.task_type ?? null, preferredFramework),
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
+  const datasetsPath = buildDatasetsPath(launchContextForDatasetFlow);
+  const clearVersionContextPath = useMemo(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('version');
+    const query = nextParams.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
   const prioritizedAnnotationWorkspacePath = useMemo(() => {
     if (!datasetId) {
       return '';
     }
 
-    const queuePriority: AnnotationQueueFilter[] = ['rejected', 'in_review', 'needs_work', 'approved'];
+    const queuePriority: AnnotationQueueFilter[] = ['needs_work', 'rejected', 'in_review', 'approved'];
     for (const queue of queuePriority) {
       const entry = queuePreviewEntries.find((item) => item.key === queue);
       if (entry && entry.count > 0) {
         return buildAnnotationWorkspacePath(datasetId, queue, entry.firstItemId, {
-          versionId: selectedVersionId
+          versionId: selectedVersionId,
+          launchContext: launchContextForDatasetFlow
         });
       }
     }
 
     return buildAnnotationWorkspacePath(datasetId, 'all', undefined, {
-      versionId: selectedVersionId
+      versionId: selectedVersionId,
+      launchContext: launchContextForDatasetFlow
     });
-  }, [datasetId, queuePreviewEntries, selectedVersionId]);
+  }, [datasetId, launchContextForDatasetFlow, queuePreviewEntries, selectedVersionId]);
+  const prioritizedQueueEntry = useMemo(() => {
+    const queuePriority: AnnotationQueueFilter[] = ['needs_work', 'rejected', 'in_review', 'approved'];
+    for (const queue of queuePriority) {
+      const entry = queuePreviewEntries.find((item) => item.key === queue);
+      if (entry && entry.count > 0) {
+        return entry;
+      }
+    }
+    return null;
+  }, [queuePreviewEntries]);
   const annotationWorkspaceFromSampleBrowserPath = useMemo(() => {
     if (!datasetId) {
       return '';
@@ -543,11 +709,13 @@ export default function DatasetDetailPage() {
       searchText: sampleSearchText,
       splitFilter: sampleSplitFilter,
       itemStatusFilter: sampleStatusFilter,
-      metadataFilter: sampleMetadataFilter
+      metadataFilter: sampleMetadataFilter,
+      launchContext: launchContextForDatasetFlow
     });
   }, [
     datasetId,
     filteredSampleItems,
+    launchContextForDatasetFlow,
     sampleMetadataFilter,
     sampleQueueFilter,
     sampleSearchText,
@@ -733,7 +901,26 @@ export default function DatasetDetailPage() {
 
   const deleteAttachment = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
-    await loadDetail('manual');
+    setAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
+    const removedItemIds: string[] = [];
+    setItems((prev) =>
+      prev.filter((item) => {
+        const keep = item.attachment_id !== attachmentId;
+        if (!keep) {
+          removedItemIds.push(item.id);
+        }
+        return keep;
+      })
+    );
+    setImportAttachmentId((prev) => (prev === attachmentId ? '' : prev));
+    if (removedItemIds.length > 0) {
+      const removedItemIdSet = new Set(removedItemIds);
+      setSelectedItemId((prev) => (removedItemIdSet.has(prev) ? '' : prev));
+      setSelectedSampleItemIds((prev) => prev.filter((itemId) => !removedItemIdSet.has(itemId)));
+    }
+    loadDetail('background').catch(() => {
+      setFeedback({ variant: 'success', text: backgroundSyncHint });
+    });
   };
 
   const refreshAttachmentSection = useCallback(async () => {
@@ -1066,52 +1253,95 @@ export default function DatasetDetailPage() {
       batchTagEntries[`tag:${tag}`] = 'true';
     }
 
-    setBusy(true);
-    setFeedback(null);
-    try {
-      let updatedCount = 0;
-      await Promise.all(
-        selectedItems.map(async (item) => {
-          const nextPayload: {
+    const pendingUpdates = selectedItems
+      .map((item) => {
+        const nextPayload: {
+          split?: 'train' | 'val' | 'test' | 'unassigned';
+          status?: 'uploading' | 'processing' | 'ready' | 'error';
+          metadata?: Record<string, string>;
+        } = {};
+
+        if (batchSplit !== 'keep' && item.split !== batchSplit) {
+          nextPayload.split = batchSplit;
+        }
+
+        if (batchStatus !== 'keep' && item.status !== batchStatus) {
+          nextPayload.status = batchStatus;
+        }
+
+        if (normalizedTagList.length > 0) {
+          nextPayload.metadata = {
+            ...item.metadata,
+            ...batchTagEntries
+          };
+        }
+
+        if (
+          typeof nextPayload.split === 'undefined' &&
+          typeof nextPayload.status === 'undefined' &&
+          typeof nextPayload.metadata === 'undefined'
+        ) {
+          return null;
+        }
+
+        return { itemId: item.id, payload: nextPayload };
+      })
+      .filter(
+        (
+          update
+        ): update is {
+          itemId: string;
+          payload: {
             split?: 'train' | 'val' | 'test' | 'unassigned';
             status?: 'uploading' | 'processing' | 'ready' | 'error';
             metadata?: Record<string, string>;
-          } = {};
-
-          if (batchSplit !== 'keep' && item.split !== batchSplit) {
-            nextPayload.split = batchSplit;
-          }
-
-          if (batchStatus !== 'keep' && item.status !== batchStatus) {
-            nextPayload.status = batchStatus;
-          }
-
-          if (normalizedTagList.length > 0) {
-            nextPayload.metadata = {
-              ...item.metadata,
-              ...batchTagEntries
-            };
-          }
-
-          if (
-            typeof nextPayload.split === 'undefined' &&
-            typeof nextPayload.status === 'undefined' &&
-            typeof nextPayload.metadata === 'undefined'
-          ) {
-            return;
-          }
-
-          await api.updateDatasetItem(datasetId, item.id, nextPayload);
-          updatedCount += 1;
-        })
+          };
+        } => Boolean(update)
       );
 
-      await loadDetail('manual');
-      setFeedback({
-        variant: 'success',
-        text: t('Batch update completed. Updated {count} items.', { count: updatedCount })
+    if (pendingUpdates.length === 0) {
+      setFeedback({ variant: 'success', text: t('No selected items required updates.') });
+      return;
+    }
+
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const results = await Promise.allSettled(
+        pendingUpdates.map((update) => api.updateDatasetItem(datasetId, update.itemId, update.payload))
+      );
+      let updatedCount = 0;
+      let failedCount = 0;
+      const failedItemIds: string[] = [];
+      results.forEach((result, index) => {
+        const target = pendingUpdates[index];
+        if (!target) {
+          return;
+        }
+        if (result.status === 'fulfilled') {
+          updatedCount += 1;
+          return;
+        }
+        failedCount += 1;
+        failedItemIds.push(target.itemId);
       });
-      if (updatedCount > 0) {
+
+      await loadDetail('manual');
+
+      if (failedCount > 0) {
+        setFeedback({
+          variant: 'error',
+          text: t(
+            'Batch update finished with partial failures. Updated {success} items, failed {failed}.',
+            { success: updatedCount, failed: failedCount }
+          )
+        });
+        setSelectedSampleItemIds(failedItemIds);
+      } else {
+        setFeedback({
+          variant: 'success',
+          text: t('Batch update completed. Updated {count} items.', { count: updatedCount })
+        });
         setSelectedSampleItemIds([]);
       }
     } catch (error) {
@@ -1121,6 +1351,90 @@ export default function DatasetDetailPage() {
     }
   }, [batchSplit, batchStatus, batchTagsText, datasetId, items, loadDetail, selectedSampleItemIds, t]);
 
+  const deleteSelectedSampleItems = useCallback(async () => {
+    if (!datasetId) {
+      return;
+    }
+
+    if (selectedSampleItemIds.length === 0) {
+      setFeedback({ variant: 'error', text: t('Select at least one sample item first.') });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      t('Delete {count} selected sample(s)?', { count: selectedSampleItemIds.length })
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const results = await Promise.allSettled(
+        selectedSampleItemIds.map((itemId) => api.deleteDatasetItem(datasetId, itemId))
+      );
+      let deletedCount = 0;
+      let failedCount = 0;
+      let firstError = '';
+      const failedItemIds: string[] = [];
+      results.forEach((result, index) => {
+        const itemId = selectedSampleItemIds[index];
+        if (!itemId) {
+          return;
+        }
+        if (result.status === 'fulfilled') {
+          deletedCount += 1;
+          return;
+        }
+        failedCount += 1;
+        failedItemIds.push(itemId);
+        if (!firstError) {
+          firstError = (result.reason as Error)?.message || String(result.reason || '');
+        }
+      });
+
+      await loadDetail('manual');
+
+      if (failedCount === 0) {
+        setFeedback({
+          variant: 'success',
+          text: t('Deleted {count} selected sample(s).', { count: deletedCount })
+        });
+        setSelectedSampleItemIds([]);
+        return;
+      }
+
+      if (deletedCount === 0) {
+        setFeedback({
+          variant: 'error',
+          text: t('Batch delete failed for all selected items. First error: {message}', {
+            message: firstError || t('Unknown')
+          })
+        });
+        setSelectedSampleItemIds(failedItemIds);
+        return;
+      }
+
+      setFeedback({
+        variant: 'error',
+        text: t(
+          'Batch delete finished with partial failures. Deleted {success} items, failed {failed}. First error: {message}',
+          {
+            success: deletedCount,
+            failed: failedCount,
+            message: firstError || t('Unknown')
+          }
+        )
+      });
+      setSelectedSampleItemIds(failedItemIds);
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }, [datasetId, loadDetail, selectedSampleItemIds, t]);
+
   if (!datasetId) {
     return (
       <WorkspacePage>
@@ -1129,9 +1443,16 @@ export default function DatasetDetailPage() {
           title={t('Dataset Detail')}
           description={t('Inspect dataset files, annotation readiness, and version snapshots in one place.')}
           secondaryActions={
-            <ButtonLink to="/datasets" variant="ghost" size="sm">
-              {t('Back to Datasets')}
-            </ButtonLink>
+            <div className="row gap wrap">
+              {requestedReturnTo ? (
+                <ButtonLink to={requestedReturnTo} variant="secondary" size="sm">
+                  {t('Return to current task')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={datasetsPath} variant="ghost" size="sm">
+                {t('Back to Datasets')}
+              </ButtonLink>
+            </div>
           }
         />
         <StateBlock
@@ -1151,9 +1472,16 @@ export default function DatasetDetailPage() {
           title={t('Dataset Detail')}
           description={t('Inspect dataset files, annotation readiness, and version snapshots in one place.')}
           secondaryActions={
-            <ButtonLink to="/datasets" variant="ghost" size="sm">
-              {t('Back to Datasets')}
-            </ButtonLink>
+            <div className="row gap wrap">
+              {requestedReturnTo ? (
+                <ButtonLink to={requestedReturnTo} variant="secondary" size="sm">
+                  {t('Return to current task')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={datasetsPath} variant="ghost" size="sm">
+                {t('Back to Datasets')}
+              </ButtonLink>
+            </div>
           }
         />
         <StateBlock
@@ -1173,9 +1501,16 @@ export default function DatasetDetailPage() {
           title={t('Dataset Detail')}
           description={t('Inspect dataset files, annotation readiness, and version snapshots in one place.')}
           secondaryActions={
-            <ButtonLink to="/datasets" variant="ghost" size="sm">
-              {t('Back to Datasets')}
-            </ButtonLink>
+            <div className="row gap wrap">
+              {requestedReturnTo ? (
+                <ButtonLink to={requestedReturnTo} variant="secondary" size="sm">
+                  {t('Return to current task')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={datasetsPath} variant="ghost" size="sm">
+                {t('Back to Datasets')}
+              </ButtonLink>
+            </div>
           }
         />
         <StateBlock
@@ -1191,20 +1526,69 @@ export default function DatasetDetailPage() {
     uploadSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const focusSamplesSection = () => {
+    sampleSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const focusVersionsSection = () => {
+    versionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const focusWorkflowPanel = () => {
     document.getElementById('dataset-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  useEffect(() => {
+    if (!preferredFocus) {
+      return;
+    }
+
+    const focusKey = `${preferredFocus}:${dataset.id}:${selectedVersionId}`;
+    if (focusAppliedRef.current === focusKey) {
+      return;
+    }
+
+    const focusMap: Record<string, () => void> = {
+      upload: focusUploadSection,
+      files: focusUploadSection,
+      samples: focusSamplesSection,
+      sample: focusSamplesSection,
+      versions: focusVersionsSection,
+      version: focusVersionsSection,
+      workflow: focusWorkflowPanel,
+      advanced: focusWorkflowPanel
+    };
+
+    const action = focusMap[preferredFocus];
+    if (!action) {
+      return;
+    }
+
+    focusAppliedRef.current = focusKey;
+    window.setTimeout(() => {
+      action();
+    }, 120);
+  }, [dataset.id, preferredFocus, selectedVersionId]);
+
   const preferredTrainingVersion = selectedVersion ?? versions[0] ?? null;
   const preferredLaunchReadyVersion =
     selectedVersionLaunchReady && selectedVersion ? selectedVersion : latestLaunchReadyVersion;
+  const fallbackAnnotationWorkspacePath = buildAnnotationWorkspacePath(dataset.id, 'all', undefined, {
+    versionId: selectedVersionId || undefined,
+    launchContext: launchContextForDatasetFlow
+  });
   const closureWizardPath = buildClosureWizardPath(
     dataset.id,
-    preferredLaunchReadyVersion?.id ?? preferredTrainingVersion?.id
+    preferredLaunchReadyVersion?.id ?? preferredTrainingVersion?.id,
+    launchContextForDatasetFlow
   );
   const inferenceValidationPath = buildInferenceValidationPath(
     dataset.id,
-    preferredLaunchReadyVersion?.id ?? preferredTrainingVersion?.id ?? undefined
+    preferredLaunchReadyVersion?.id ?? preferredTrainingVersion?.id ?? undefined,
+    launchContextForDatasetFlow
   );
+  const hasUnresolvedAnnotationWork =
+    annotationSummary.needs_work > 0 || annotationSummary.rejected > 0 || annotationSummary.in_review > 0;
   const nextDatasetAction =
     readyCount === 0
       ? {
@@ -1220,7 +1604,31 @@ export default function DatasetDetailPage() {
           title: t('Start annotation workflow'),
           description: t('Open the annotation workspace and review samples.'),
           label: t('Open Annotation Workspace'),
-          to: prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`
+          to: prioritizedAnnotationWorkspacePath || fallbackAnnotationWorkspacePath
+        }
+      : hasUnresolvedAnnotationWork
+        ? {
+          tone: 'warning' as const,
+          title:
+            prioritizedQueueEntry?.key === 'needs_work'
+              ? t('Clear needs-work samples')
+              : prioritizedQueueEntry?.key === 'rejected'
+                ? t('Resolve rejected samples')
+                : t('Finish pending review decisions'),
+          description:
+            prioritizedQueueEntry?.key === 'needs_work'
+              ? t('{count} samples still need annotation before you freeze a trustworthy version snapshot.', {
+                  count: prioritizedQueueEntry.count
+                })
+              : prioritizedQueueEntry?.key === 'rejected'
+                ? t('{count} samples were rejected and should be corrected before training handoff.', {
+                    count: prioritizedQueueEntry.count
+                  })
+                : t('{count} samples are still waiting for review approval or rejection.', {
+                    count: prioritizedQueueEntry?.count ?? annotationSummary.in_review
+                  }),
+          label: t('Open Annotation Workspace'),
+          to: prioritizedAnnotationWorkspacePath || fallbackAnnotationWorkspacePath
         }
       : versions.length === 0
         ? {
@@ -1230,14 +1638,20 @@ export default function DatasetDetailPage() {
           label: t('Open Version Controls'),
           onClick: focusWorkflowPanel
         }
+      : !preferredLaunchReadyVersion
+        ? {
+          tone: 'info' as const,
+          title: t('Promote one version to launch-ready'),
+          description: t('Choose or create a version with train split and annotation coverage before training or validation.'),
+          label: t('Open Version Controls'),
+          onClick: focusWorkflowPanel
+        }
       : {
           tone: 'success' as const,
-          title: t('Dataset is ready for downstream tasks'),
-          description: t('Continue to training or validation.'),
-          label: t('Open Training Jobs'),
-          to: preferredTrainingVersion
-            ? buildTrainingJobsPath(dataset.id, preferredTrainingVersion.id)
-            : '/training/jobs'
+          title: t('Launch-ready version is available'),
+          description: t('Continue directly into training, closure verification, or inference validation from the selected ready snapshot.'),
+          label: t('Create Training Job'),
+          to: buildTrainingJobCreatePath(dataset.id, preferredLaunchReadyVersion.id, launchContextForDatasetFlow)
         };
   const handleNextDatasetAction = () => {
     if ('to' in nextDatasetAction && nextDatasetAction.to) {
@@ -1255,10 +1669,19 @@ export default function DatasetDetailPage() {
         title={dataset.name}
         description={t('Check readiness first, then open samples or versions.')}
         meta={
-          <div className="row gap wrap align-center">
-            <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
-            <Badge tone="neutral">{t('Attachments')}: {attachments.length}</Badge>
-            <Badge tone="neutral">{t('Versions')}: {versions.length}</Badge>
+          <div className="stack tight">
+            <div className="row gap wrap align-center">
+              <StatusTag status={dataset.status}>{t(dataset.status)}</StatusTag>
+              <Badge tone="neutral">{t('Attachments')}: {attachments.length}</Badge>
+              <Badge tone="neutral">{t('Versions')}: {versions.length}</Badge>
+            </div>
+            <TrainingLaunchContextPills
+              taskType={launchContextForDatasetFlow.taskType}
+              framework={launchContextForDatasetFlow.framework}
+              executionTarget={launchContextForDatasetFlow.executionTarget}
+              workerId={launchContextForDatasetFlow.workerId}
+              t={t}
+            />
           </div>
         }
         primaryAction={{
@@ -1266,11 +1689,16 @@ export default function DatasetDetailPage() {
           onClick: handleNextDatasetAction
         }}
         secondaryActions={
-          <>
-            <ButtonLink to="/datasets" variant="ghost" size="sm">
+          <div className="row gap wrap">
+            {requestedReturnTo ? (
+              <ButtonLink to={requestedReturnTo} variant="secondary" size="sm">
+                {t('Return to current task')}
+              </ButtonLink>
+            ) : null}
+            <ButtonLink to={datasetsPath} variant="ghost" size="sm">
               {t('Back to Datasets')}
             </ButtonLink>
-          </>
+          </div>
         }
       />
 
@@ -1279,6 +1707,18 @@ export default function DatasetDetailPage() {
           tone={feedback.variant === 'success' ? 'success' : 'danger'}
           title={feedback.variant === 'success' ? t('Action Completed') : t('Action Failed')}
           description={feedback.text}
+        />
+      ) : null}
+      {preferredVersionMissing ? (
+        <InlineAlert
+          tone="warning"
+          title={t('Requested version not found')}
+          description={t('The requested dataset version is no longer available. Showing the latest visible version instead.')}
+          actions={
+            <ButtonLink to={clearVersionContextPath} variant="ghost" size="sm">
+              {t('Clear context')}
+            </ButtonLink>
+          }
         />
       ) : null}
       <WorkspaceWorkbench
@@ -1319,131 +1759,146 @@ export default function DatasetDetailPage() {
         }
         main={
           <div className="workspace-main-stack">
-            <SectionCard
-              title={t('Current samples')}
-              description={t('Search, narrow, and open the focused queue.')}
-              actions={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    void refreshItemSection();
-                  }}
-                  disabled={busy || sectionRefreshing === 'items'}
+            <div ref={sampleSectionRef}>
+              <SectionCard
+                title={t('Current samples')}
+                description={t('Search, narrow, and open the focused queue.')}
+                actions={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      void refreshItemSection();
+                    }}
+                    disabled={busy || sectionRefreshing === 'items'}
+                  >
+                    {sectionRefreshing === 'items' ? t('Refreshing...') : t('Refresh')}
+                  </Button>
+                }
               >
-                {sectionRefreshing === 'items' ? t('Refreshing...') : t('Refresh')}
-              </Button>
-              }
-            >
-              <small className="muted">
-                {t('Ready files: {count}', { count: readyCount })} · {t('Visible samples')}: {filteredSampleItems.length}
-              </small>
-              {items.length === 0 ? (
-                  <StateBlock
-                    variant="empty"
-                    title={t('No Items')}
-                    description={t('Upload files first.')}
-                  extra={
-                    <Button type="button" variant="secondary" size="sm" onClick={focusUploadSection}>
-                      {t('Jump to Files')}
-                    </Button>
-                  }
-                />
-              ) : (
-                <DatasetItemBrowser
+                <small className="muted">
+                  {t('Ready files: {count}', { count: readyCount })} · {t('Visible samples')}: {filteredSampleItems.length}
+                </small>
+                {items.length === 0 ? (
+                    <StateBlock
+                      variant="empty"
+                      title={t('No Items')}
+                      description={t('Upload files first.')}
+                    extra={
+                      <Button type="button" variant="secondary" size="sm" onClick={focusUploadSection}>
+                        {t('Jump to Files')}
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <DatasetItemBrowser
+                    t={t}
+                    busy={busy}
+                    filteredItems={filteredSampleItems}
+                    selectedItemIdSet={selectedSampleItemIdSet}
+                    allFilteredItemsSelected={allFilteredItemsSelected}
+                    selectedCount={selectedSampleItemIds.length}
+                    viewMode={sampleViewMode}
+                    searchText={sampleSearchText}
+                    splitFilter={sampleSplitFilter}
+                    statusFilter={sampleStatusFilter}
+                    queueFilter={sampleQueueFilter}
+                    reviewReasonFilter={sampleReviewReasonFilter}
+                    metadataFilter={sampleMetadataFilter}
+                    savedViewNameDraft={savedSampleViewNameDraft}
+                    selectedSavedViewId={selectedSavedSampleViewId}
+                    savedViews={savedSampleViews.map((view) => ({ id: view.id, name: view.name }))}
+                    openFilteredQueuePath={
+                      annotationWorkspaceFromSampleBrowserPath ||
+                      buildAnnotationWorkspacePath(dataset.id, sampleQueueFilter, undefined, {
+                        versionId: selectedVersionId,
+                        launchContext: launchContextForDatasetFlow
+                      })
+                    }
+                    batchActionBar={
+                      <BulkActionBar
+                        t={t}
+                        busy={busy}
+                        selectedCount={selectedSampleItemIds.length}
+                        batchSplit={batchSplit}
+                        batchStatus={batchStatus}
+                        batchTagsText={batchTagsText}
+                        onBatchSplitChange={setBatchSplit}
+                        onBatchStatusChange={setBatchStatus}
+                        onBatchTagsTextChange={setBatchTagsText}
+                        onApplyBatchUpdates={() => {
+                          void applyBatchItemUpdates();
+                        }}
+                        onDeleteSelected={() => {
+                          void deleteSelectedSampleItems();
+                        }}
+                      />
+                    }
+                    onSearchTextChange={setSampleSearchText}
+                    onSplitFilterChange={setSampleSplitFilter}
+                    onStatusFilterChange={setSampleStatusFilter}
+                    onQueueFilterChange={(value) => setSampleQueueFilter(value as AnnotationQueueFilter)}
+                    onReviewReasonFilterChange={setSampleReviewReasonFilter}
+                    onMetadataFilterChange={setSampleMetadataFilter}
+                    onSavedViewNameDraftChange={setSavedSampleViewNameDraft}
+                    onSelectedSavedViewChange={applySavedSampleView}
+                    onSaveCurrentView={saveCurrentSampleView}
+                    onDeleteSavedView={deleteSavedSampleView}
+                    onSelectAllFiltered={selectAllFilteredItems}
+                    onClearSelected={clearSelectedSampleItems}
+                    onClearFilters={clearSampleFilters}
+                    onViewModeChange={setSampleViewMode}
+                    onToggleSelection={toggleSampleItemSelection}
+                    onEditItem={selectItemForEditing}
+                    resolveItemFilename={resolveItemFilename}
+                    resolvePreviewUrl={resolveItemPreviewUrl}
+                    resolveAnnotationStatus={resolveAnnotationStatus}
+                  />
+                )}
+              </SectionCard>
+            </div>
+
+            <div ref={versionSectionRef}>
+              <SectionCard
+                title={t('Versions')}
+                description={t('Choose one snapshot for training, review, or validation.')}
+              >
+                <DatasetVersionRail
                   t={t}
+                  dataset={dataset}
+                  versions={versions}
+                  selectedVersionId={selectedVersionId}
+                  selectedVersion={selectedVersion}
+                  selectedVersionLaunchReady={selectedVersionLaunchReady}
+                  selectedVersionHasTrainSplit={selectedVersionHasTrainSplit}
+                  selectedVersionHasCoverage={selectedVersionHasCoverage}
+                  preferredReviewQueueForSelectedVersion={preferredReviewQueueForSelectedVersion}
                   busy={busy}
-                  filteredItems={filteredSampleItems}
-                  selectedItemIdSet={selectedSampleItemIdSet}
-                  allFilteredItemsSelected={allFilteredItemsSelected}
-                  selectedCount={selectedSampleItemIds.length}
-                  viewMode={sampleViewMode}
-                  searchText={sampleSearchText}
-                  splitFilter={sampleSplitFilter}
-                  statusFilter={sampleStatusFilter}
-                  queueFilter={sampleQueueFilter}
-                  reviewReasonFilter={sampleReviewReasonFilter}
-                  metadataFilter={sampleMetadataFilter}
-                  savedViewNameDraft={savedSampleViewNameDraft}
-                  selectedSavedViewId={selectedSavedSampleViewId}
-                  savedViews={savedSampleViews.map((view) => ({ id: view.id, name: view.name }))}
-                  openFilteredQueuePath={
-                    annotationWorkspaceFromSampleBrowserPath ||
-                    buildAnnotationWorkspacePath(dataset.id, sampleQueueFilter, undefined, {
-                      versionId: selectedVersionId
+                  isRefreshing={sectionRefreshing === 'versions'}
+                  onRefresh={() => {
+                    void refreshVersionSection();
+                  }}
+                  onSelectVersion={setSelectedVersionId}
+                  formatCoveragePercent={formatCoveragePercent}
+                  buildTrainingPath={(versionId) =>
+                    buildTrainingJobCreatePath(dataset.id, versionId, launchContextForDatasetFlow)
+                  }
+                  buildReviewPath={(versionId, queue) =>
+                    buildAnnotationWorkspacePath(dataset.id, queue, undefined, {
+                      versionId,
+                      launchContext: launchContextForDatasetFlow
                     })
                   }
-                  batchActionBar={
-                    <BulkActionBar
-                      t={t}
-                      busy={busy}
-                      selectedCount={selectedSampleItemIds.length}
-                      batchSplit={batchSplit}
-                      batchStatus={batchStatus}
-                      batchTagsText={batchTagsText}
-                      onBatchSplitChange={setBatchSplit}
-                      onBatchStatusChange={setBatchStatus}
-                      onBatchTagsTextChange={setBatchTagsText}
-                      onApplyBatchUpdates={() => {
-                        void applyBatchItemUpdates();
-                      }}
-                    />
+                  buildJobsPath={(versionId) =>
+                    buildTrainingJobsPath(dataset.id, versionId, launchContextForDatasetFlow)
                   }
-                  onSearchTextChange={setSampleSearchText}
-                  onSplitFilterChange={setSampleSplitFilter}
-                  onStatusFilterChange={setSampleStatusFilter}
-                  onQueueFilterChange={(value) => setSampleQueueFilter(value as AnnotationQueueFilter)}
-                  onReviewReasonFilterChange={setSampleReviewReasonFilter}
-                  onMetadataFilterChange={setSampleMetadataFilter}
-                  onSavedViewNameDraftChange={setSavedSampleViewNameDraft}
-                  onSelectedSavedViewChange={applySavedSampleView}
-                  onSaveCurrentView={saveCurrentSampleView}
-                  onDeleteSavedView={deleteSavedSampleView}
-                  onSelectAllFiltered={selectAllFilteredItems}
-                  onClearSelected={clearSelectedSampleItems}
-                  onClearFilters={clearSampleFilters}
-                  onViewModeChange={setSampleViewMode}
-                  onToggleSelection={toggleSampleItemSelection}
-                  onEditItem={selectItemForEditing}
-                  resolveItemFilename={resolveItemFilename}
-                  resolvePreviewUrl={resolveItemPreviewUrl}
-                  resolveAnnotationStatus={resolveAnnotationStatus}
+                  buildInferencePath={(versionId) =>
+                    buildInferenceValidationPath(dataset.id, versionId, launchContextForDatasetFlow)
+                  }
                 />
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title={t('Versions')}
-              description={t('Choose one snapshot for training, review, or validation.')}
-            >
-              <DatasetVersionRail
-                t={t}
-                dataset={dataset}
-                versions={versions}
-                selectedVersionId={selectedVersionId}
-                selectedVersion={selectedVersion}
-                selectedVersionLaunchReady={selectedVersionLaunchReady}
-                selectedVersionHasTrainSplit={selectedVersionHasTrainSplit}
-                selectedVersionHasCoverage={selectedVersionHasCoverage}
-                preferredReviewQueueForSelectedVersion={preferredReviewQueueForSelectedVersion}
-                busy={busy}
-                isRefreshing={sectionRefreshing === 'versions'}
-                onRefresh={() => {
-                  void refreshVersionSection();
-                }}
-                onSelectVersion={setSelectedVersionId}
-                formatCoveragePercent={formatCoveragePercent}
-                buildTrainingPath={(versionId) => buildTrainingJobCreatePath(dataset.id, versionId)}
-                buildReviewPath={(versionId, queue) =>
-                  buildAnnotationWorkspacePath(dataset.id, queue, undefined, {
-                    versionId
-                  })
-                }
-                buildJobsPath={(versionId) => buildTrainingJobsPath(dataset.id, versionId)}
-                buildInferencePath={(versionId) => buildInferenceValidationPath(dataset.id, versionId)}
-              />
-            </SectionCard>
+              </SectionCard>
+            </div>
 
             <div ref={uploadSectionRef}>
               <AttachmentUploader
@@ -1663,7 +2118,7 @@ export default function DatasetDetailPage() {
                   {nextDatasetAction.label}
                 </Button>
                 <ButtonLink
-                  to={prioritizedAnnotationWorkspacePath || `/datasets/${dataset.id}/annotate`}
+                  to={prioritizedAnnotationWorkspacePath || fallbackAnnotationWorkspacePath}
                   variant="ghost"
                   size="sm"
                 >
@@ -1709,8 +2164,16 @@ export default function DatasetDetailPage() {
                 <ButtonLink
                   to={
                     preferredLaunchReadyVersion
-                      ? buildTrainingJobCreatePath(dataset.id, preferredLaunchReadyVersion.id)
-                      : buildTrainingJobsPath(dataset.id, preferredTrainingVersion?.id)
+                      ? buildTrainingJobCreatePath(
+                          dataset.id,
+                          preferredLaunchReadyVersion.id,
+                          launchContextForDatasetFlow
+                        )
+                      : buildTrainingJobsPath(
+                          dataset.id,
+                          preferredTrainingVersion?.id,
+                          launchContextForDatasetFlow
+                        )
                   }
                   variant="secondary"
                   size="sm"

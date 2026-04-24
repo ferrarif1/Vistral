@@ -1280,6 +1280,22 @@
   grid-column: span 2;
 }
 
+.training-bootstrap-dropzone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 10px 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.training-bootstrap-dropzone.is-active {
+  border-color: var(--primary);
+  background: rgba(var(--primary-rgb), 0.08);
+}
+
 .workspace-side-metric {
   font-size: clamp(32px, 4.4vw, 40px);
   line-height: 1;

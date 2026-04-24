@@ -1,0 +1,83 @@
+name: Plan LLM Complete Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 18 * * *'
+
+jobs:
+  smoke-plan-llm-complete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      PLAN_LLM_REPORT_RETAIN: '10'
+      PLAN_LLM_REPORT_DIR: .data/verify-reports
+      PLAN_LLM_RUNTIME_CACHE_VERSION: 'v1'
+      VISTRAL_PYTHON_BIN: .data/runtime-python/.venv/bin/python
+      YOLO_LOCAL_MODEL_PATH: .data/runtime-models/yolo11n.pt
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore runtime caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .data/runtime-python/.venv
+            .data/runtime-models
+          key: plan-llm-runtime-${{ runner.os }}-${{ env.PLAN_LLM_RUNTIME_CACHE_VERSION }}-${{ hashFiles('package-lock.json', 'scripts/setup-real-training-env.sh', 'scripts/doctor-real-training-readiness.sh') }}
+          restore-keys: |
+            plan-llm-runtime-${{ runner.os }}-${{ env.PLAN_LLM_RUNTIME_CACHE_VERSION }}-
+
+      - name: Prepare real-training runtime prerequisites
+        run: |
+          set -euo pipefail
+          mkdir -p .data/runtime-python .data/runtime-models
+          readiness_status="ready"
+          if ! npm run doctor:real-training-readiness; then
+            readiness_status="repairing"
+            if npm run setup:real-training-env && npm run doctor:real-training-readiness; then
+              readiness_status="repaired"
+            else
+              readiness_status="repair_failed"
+            fi
+          fi
+
+          {
+            echo "## Runtime readiness"
+            echo "- status: ${readiness_status}"
+            echo "- cache roots: .data/runtime-python/.venv + .data/runtime-models"
+            echo "- python: ${VISTRAL_PYTHON_BIN}"
+            echo "- yolo: ${YOLO_LOCAL_MODEL_PATH}"
+            if [[ "${readiness_status}" == "repair_failed" ]]; then
+              echo "- next: rerun \`npm run setup:real-training-env\` and \`npm run doctor:real-training-readiness\`, or bump \`PLAN_LLM_RUNTIME_CACHE_VERSION\` to force a fresh cache."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${readiness_status}" == "repair_failed" ]]; then
+            echo "Runtime prerequisites are still degraded; continuing so smoke:plan-llm-complete can emit report artifacts."
+          fi
+
+      - name: Run plan LLM complete smoke
+        run: npm run smoke:plan-llm-complete
+
+      - name: Upload plan LLM reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-llm-complete-reports
+          path: |
+            .data/verify-reports/plan-llm-complete-*.json
+            .data/verify-reports/plan-llm-complete-*.md
+            .data/verify-reports/plan-llm-complete-*.log
+          if-no-files-found: warn
+          retention-days: 14
