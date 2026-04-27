@@ -1707,3 +1707,50 @@ Rules:
   - `npm run lint`
   - `npm run build`
   - `docker compose build --no-cache vistral-web` (blocked in this shell due Docker daemon/socket access)
+
+## 2026-04-27 07:42:58 +0800 (Asia/Shanghai)
+- date_time: 2026-04-27 07:42:58 +0800 (Asia/Shanghai)
+- context: Agent-first training flow work was interrupted by a new architecture/recommendation request about what a modern agentized training platform should include. The interrupted thread was refactoring `/vision/tasks` into a prioritized continuation surface.
+- done:
+  - Bound `Smart Launch` to `VisionTask` orchestration:
+    - training create payload accepts optional `vision_task_id`
+    - `CreateTrainingJobPage.tsx` now creates or reuses a task context when a goal prompt exists
+    - `TrainingJobDetailPage.tsx` now exposes `Continue as agent` when a linked task is available
+    - `VisionModelingTaskPage.tsx` now treats `Continue as agent` as the primary action
+  - Updated contracts:
+    - `docs/prd.md`
+    - `docs/ia.md`
+    - `docs/flows.md`
+    - `docs/api-contract.md`
+  - Verified and refreshed web bundle before the interruption:
+    - `npm run typecheck`
+    - `npx eslint src/pages/CreateTrainingJobPage.tsx src/pages/TrainingJobDetailPage.tsx src/pages/VisionModelingTaskPage.tsx src/services/api.ts backend/src/server.ts`
+    - `npm run smoke:i18n-key-hygiene`
+    - `npx vite build`
+    - `npm run docker:healthcheck`
+- next:
+  1. Restore `src/pages/VisionModelingTasksPage.tsx` to its pre-refactor state before switching work, because the interruption happened after deleting the file but before the replacement implementation landed.
+  2. When returning to this thread, redesign `/vision/tasks` so the first screen answers:
+     - which task is blocked by missing requirements
+     - which task is currently training
+     - which task is ready for the next explicit `Continue as agent` action
+  3. Keep the list page operator-driven: grouped priority cards on top, full table below, explicit `Continue as agent` controls only where action is meaningful.
+  4. Re-run:
+     - `npm run typecheck`
+     - `npx eslint src/pages/VisionModelingTasksPage.tsx`
+     - `npx vite build`
+     - `npm run docker:healthcheck`
+- risks:
+  - `src/pages/VisionModelingTasksPage.tsx` was momentarily deleted during the interrupted refactor and must be restored before any unrelated task continues.
+  - Worktree contains many unrelated local modifications; do not revert existing user changes while resuming the list-page refactor later.
+  - The intended `/vision/tasks` redesign was not implemented yet; current product contracts now expect a more agent-centric list than the still-existing baseline page provides.
+- verification:
+  - completed before interruption:
+    - `npm run typecheck`
+    - `npx eslint src/pages/CreateTrainingJobPage.tsx src/pages/TrainingJobDetailPage.tsx src/pages/VisionModelingTaskPage.tsx src/services/api.ts backend/src/server.ts`
+    - `npm run smoke:i18n-key-hygiene`
+    - `npx vite build`
+    - `npm run docker:healthcheck`
+  - pending after restoration:
+    - `npm run typecheck`
+    - `npx eslint src/pages/VisionModelingTasksPage.tsx`

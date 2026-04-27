@@ -44,6 +44,7 @@
     "smoke:conversation-next-steps": "tsx scripts/smoke-conversation-next-steps.ts",
     "smoke:conversation-next-steps-ui-wiring": "tsx scripts/smoke-conversation-next-steps-ui-wiring.ts",
     "smoke:conversation-next-steps-browser": "tsx scripts/smoke-conversation-next-steps-browser.ts",
+    "smoke:training-cockpit-browser": "tsx scripts/smoke-training-cockpit-browser.ts",
     "smoke:conversation-ops-bridge": "bash scripts/smoke-conversation-ops-bridge.sh",
     "smoke:runtime-profile-activation": "bash scripts/smoke-runtime-profile-activation.sh",
     "smoke:inference-feedback-guard": "bash scripts/smoke-inference-feedback-guard.sh",

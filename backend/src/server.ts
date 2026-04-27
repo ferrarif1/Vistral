@@ -365,6 +365,9 @@ const parseCreateTrainingJobBody = (raw: unknown): ParseResult<CreateTrainingJob
       framework: raw.framework,
       dataset_id: datasetId,
       dataset_version_id: datasetVersionId,
+      ...(toOptionalTrimmedString(raw.vision_task_id ?? raw.task_id)
+        ? { vision_task_id: toOptionalTrimmedString(raw.vision_task_id ?? raw.task_id)! }
+        : {}),
       base_model: baseModel,
       config: normalizeTrainingConfigInput(raw.config),
       ...(executionTarget ? { execution_target: executionTarget } : {}),

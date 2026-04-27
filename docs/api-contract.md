@@ -259,6 +259,11 @@ Notes:
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
 - `metadata.conversation_action` may include optional `action_links` (`[{label, href}]`) so clients can render direct navigation cards for complex follow-up input collection (for example annotation/training/inference workspaces)
 - when the same in-thread action materializes a `VisionTask`, assistant may also return `created_entity_type=VisionTask` with deep links into `/vision/tasks` or `/vision/tasks/{id}`
+- when a completed in-thread action returns a `VisionTask`, the assistant-facing summary should prefer human-readable orchestration evidence over raw action enums:
+  - evaluation suite / metric contract
+  - promotion gate result
+  - comparison decision
+  - current recommended next action
 - high-risk mutating operations (`create_*`) require explicit confirmation before backend execution; assistant returns `missing_fields=["confirmation"]` plus `requires_confirmation=true`
 - when `confirmation_phrase` is present in pending action metadata, execution confirmation must match that phrase after trim/case/punctuation normalization (free-form "yes" is not enough)
 - when a pending action already has confirmation context, follow-up turns should keep the same `confirmation_phrase` (avoid switching zh/en phrase because user only replied with ids)
@@ -281,6 +286,7 @@ Notes:
       - can create/update a `VisionTask`, reuse current attachments as sample inputs, and optionally continue with `auto_advance_vision_task`
       - when business requirements are still missing, it returns `requires_input`
       - when downstream mutating follow-up would start automatically, it still requires explicit in-thread confirmation first
+      - completed summaries should include the linked `VisionTask` evidence snapshot (`evaluation_suite`, `promotion_gate`, `run_comparison`, `agent_next_action`) when available
   - high-risk bridge APIs (all mutating actions above) require explicit confirmation before execution
 
 ### GET /conversations/{id}
@@ -1352,7 +1358,16 @@ List vision-task records visible to the current owner/admin scope.
 
 Rules:
 - owner can only see their own tasks; `admin` can see all
-- backend may refresh `status`, `validation_report`, `model_id`, and `model_version_id` from linked runtime state before returning the list
+- backend may refresh `status`, `validation_report`, `model_id`, `model_version_id`, and `agent_next_action` from linked runtime state before returning the list
+- each row should already contain enough recommendation context for the operator inbox view:
+  - `agent_next_action.action`
+  - `agent_next_action.title`
+  - `agent_next_action.summary`
+  - `agent_next_action.reason`
+  - `evaluation_suite.primary_metric`
+  - `evaluation_suite.threshold_target`
+  - `promotion_gate.status`
+  - `run_comparison.decision`
 
 ### GET /vision/tasks/{id}
 Get one vision-task detail record.
@@ -1362,9 +1377,17 @@ Rules:
 - response includes the same orchestration fields used by task detail page:
   - `spec`
   - `dataset_profile`
+    - `dataset_profile.label_stats[]` may be used to explain dominant or long-tail labels
+    - `dataset_profile.diagnostics.recommended_data_actions[]` may be used to justify `collect_data` recommendations
   - `training_plan`
   - `validation_report`
   - `missing_requirements`
+  - `agent_next_action`
+  - `agent_decision_log`
+  - `evaluation_suite`
+  - `promotion_gate`
+  - `run_comparison`
+  - `active_learning_pool`
   - `training_job_id`
   - `model_version_id`
 
@@ -1384,6 +1407,7 @@ Rules:
 - `max_rounds` must be a finite number when provided
 - `force` must be boolean when provided
 - requires resolved task type, accessible dataset, and a training-ready dataset version
+- success or no-op responses must still refresh `task.agent_next_action`; mutating launches may append to `task.agent_decision_log`
 - when threshold is already reached and `force=false`, backend returns `launched=false` with `reason=threshold_reached`
 - when a previous round is still non-terminal, backend returns `launched=false` with `reason=previous_round_running`
 - when no unused round remains inside `max_rounds`, backend returns `launched=false` with `reason=round_exhausted`
@@ -1410,6 +1434,8 @@ Rules:
 - `max_rounds` must be a finite number when provided
 - `force` must be boolean when provided
 - uses the same task visibility and readiness rules as `auto-continue`
+- backend should append one compact `agent_decision_log` entry describing the chosen branch (wait / train / register / feedback / completed) and refresh `task.agent_next_action`
+- assistant/bridge-facing completed summaries for this action should also explain the refreshed `evaluation_suite`, `promotion_gate`, and `run_comparison` in human-readable form
 - response includes:
   - `task`
   - `action`
@@ -1440,6 +1466,7 @@ Rules:
 - `max_samples` must be a finite number when provided
 - `max_samples` is optional; current implementation clamps to `1..30`
 - backend selects completed inference runs linked to the task's current model version (or model versions produced from the linked training job)
+- backend should prefer cluster-diversified selection when enough candidate runs exist, instead of taking only the globally lowest-scoring runs from one repeated failure mode
 - response includes:
   - `task`
   - `dataset_id`
@@ -1501,6 +1528,7 @@ Request:
   "framework": "paddleocr",
   "dataset_id": "d-1",
   "dataset_version_id": "dv-1",
+  "vision_task_id": "vt-1",
   "base_model": "paddleocr-PP-OCRv4",
   "config": {
     "epochs": 20,
@@ -1520,10 +1548,12 @@ Request rules:
 - selected dataset must already be launch-ready for training (`status=ready`)
 - selected dataset version must include at least one `train` item in `split_summary`
 - selected dataset version must have positive annotation coverage (`annotation_coverage > 0`)
+- `vision_task_id` is optional; when provided, it must reference a visible `VisionTask` owned by the current user or accessible to `admin`
 - `config` is optional; non-string primitive values are normalized to string form by backend before persistence
 
 Server behavior (current):
 - create in `draft`, then queue into local single-node executor
+- when `vision_task_id` is provided, backend links the created run back to that task and refreshes the task's dataset/version/training-plan context so downstream `auto-advance` or `register-model` calls keep operating on the same goal
 - executor creates workspace at `TRAINING_WORKDIR_ROOT/{job_id}`
 - executor writes:
   - `job-config.json`

@@ -198,6 +198,19 @@ export interface DatasetProfile {
   charset: string[];
   issues: string[];
   is_trainable: boolean;
+  label_stats: Array<{
+    label: string;
+    count: number;
+    share: number;
+  }>;
+  diagnostics: {
+    duplicate_attachment_ratio: number;
+    split_overlap_detected: boolean;
+    label_balance_score: number | null;
+    long_tail_labels: string[];
+    charset_size: number;
+    recommended_data_actions: string[];
+  };
 }
 
 export interface TrainingPlan {
@@ -222,6 +235,125 @@ export interface ValidationReport {
   recommendations: string[];
 }
 
+export type VisionTaskAgentAction =
+  | 'requires_input'
+  | 'start_training'
+  | 'wait_training'
+  | 'collect_data'
+  | 'register_model'
+  | 'mine_feedback'
+  | 'completed';
+
+export interface VisionTaskAgentRecommendation {
+  action: VisionTaskAgentAction;
+  title: string;
+  summary: string;
+  reason: string;
+  blocking_items: string[];
+  evidence: string[];
+  requires_confirmation: boolean;
+  created_at: string;
+}
+
+export interface VisionTaskAgentDecisionLogEntry {
+  action: VisionTaskAgentAction;
+  outcome: 'recommended' | 'executed' | 'skipped';
+  summary: string;
+  reason: string;
+  created_at: string;
+}
+
+export type VisionTaskGateStatus = 'pending' | 'pass' | 'needs_review' | 'fail';
+export type VisionTaskEvaluationSuiteStatus = 'pending' | 'ready';
+export type VisionTaskComparisonDecision =
+  | 'pending'
+  | 'observe'
+  | 'promote'
+  | 'train_again'
+  | 'collect_data';
+
+export interface VisionTaskEvaluationSuite {
+  suite_id: string;
+  title: string;
+  summary: string;
+  primary_metric: string;
+  threshold_target: number | null;
+  status: VisionTaskEvaluationSuiteStatus;
+  threshold_source: 'task_type_default' | 'training_plan';
+  basis: string[];
+  created_at: string;
+}
+
+export interface VisionTaskPromotionGate {
+  evaluation_suite_id: string | null;
+  status: VisionTaskGateStatus;
+  title: string;
+  summary: string;
+  reason: string;
+  threshold_metric: string;
+  threshold_target: number | null;
+  current_value: number | null;
+  best_value: number | null;
+  best_training_job_id: string | null;
+  created_at: string;
+}
+
+export interface VisionTaskRunComparisonEntry {
+  training_job_id: string;
+  round: number;
+  status: TrainingJobStatus;
+  pass_status: VisionTaskGateStatus;
+  primary_metric: string | null;
+  primary_value: number | null;
+  is_best: boolean;
+  is_challenger: boolean;
+}
+
+export interface VisionTaskRunComparison {
+  evaluation_suite_id: string | null;
+  decision: VisionTaskComparisonDecision;
+  title: string;
+  summary: string;
+  reason: string;
+  best_training_job_id: string | null;
+  champion_training_job_id: string | null;
+  challenger_training_job_id: string | null;
+  latest_training_job_id: string | null;
+  champion_value: number | null;
+  challenger_value: number | null;
+  champion_margin: number | null;
+  best_value: number | null;
+  latest_value: number | null;
+  improvement: number | null;
+  candidates: VisionTaskRunComparisonEntry[];
+  created_at: string;
+}
+
+export interface VisionTaskActiveLearningCluster {
+  cluster_id: string;
+  title: string;
+  count: number;
+  average_score: number | null;
+}
+
+export interface VisionTaskActiveLearningCandidate {
+  run_id: string;
+  attachment_id: string;
+  cluster_id: string;
+  score: number;
+  model_version_id: string;
+  created_at: string;
+}
+
+export interface VisionTaskActiveLearningPool {
+  summary: string;
+  total_candidates: number;
+  recommended_sample_count: number;
+  clusters: VisionTaskActiveLearningCluster[];
+  top_candidates: VisionTaskActiveLearningCandidate[];
+  refreshed_at: string;
+}
+
 export type VisionModelingTaskStatus =
   | 'draft'
   | 'requires_input'
@@ -243,6 +375,12 @@ export interface VisionModelingTaskRecord {
   training_plan: TrainingPlan | null;
   validation_report: ValidationReport | null;
   missing_requirements: string[];
+  agent_next_action: VisionTaskAgentRecommendation | null;
+  agent_decision_log: VisionTaskAgentDecisionLogEntry[];
+  evaluation_suite: VisionTaskEvaluationSuite | null;
+  promotion_gate: VisionTaskPromotionGate | null;
+  run_comparison: VisionTaskRunComparison | null;
+  active_learning_pool: VisionTaskActiveLearningPool | null;
   training_job_id: string | null;
   model_id: string | null;
   model_version_id: string | null;
@@ -744,6 +882,7 @@ export interface CreateTrainingJobInput {
   framework: ModelFramework;
   dataset_id: string;
   dataset_version_id: string;
+  vision_task_id?: string;
   base_model: string;
   config: Record<string, string>;
   execution_target?: TrainingExecutionTarget;

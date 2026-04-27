@@ -17,6 +17,7 @@ import type {
   ApprovalRequest,
   AuditLogRecord,
   ConversationRecord,
+  DatasetProfile,
   DatasetItemRecord,
   DatasetRecord,
   DatasetVersionRecord,
@@ -36,6 +37,17 @@ import type {
   TrainingWorkerNodeRecord,
   TrainingMetricRecord,
   TrainingExecutionMode,
+  VisionTaskAgentDecisionLogEntry,
+  VisionTaskActiveLearningCandidate,
+  VisionTaskActiveLearningCluster,
+  VisionTaskActiveLearningPool,
+  VisionTaskEvaluationSuite,
+  VisionTaskEvaluationSuiteStatus,
+  VisionTaskGateStatus,
+  VisionTaskPromotionGate,
+  VisionTaskAgentRecommendation,
+  VisionTaskRunComparison,
+  VisionTaskRunComparisonEntry,
   VisionModelingTaskRecord,
   User
 } from '../../shared/domain';
@@ -1202,6 +1214,567 @@ const normalizeVisionModelingTaskStatus = (
   return 'draft';
 };
 
+const normalizeVisionTaskAgentAction = (
+  value: unknown
+): NonNullable<VisionTaskAgentRecommendation>['action'] => {
+  if (
+    value === 'requires_input' ||
+    value === 'start_training' ||
+    value === 'wait_training' ||
+    value === 'collect_data' ||
+    value === 'register_model' ||
+    value === 'mine_feedback' ||
+    value === 'completed'
+  ) {
+    return value;
+  }
+  return 'completed';
+};
+
+const normalizeVisionTaskGateStatus = (value: unknown): VisionTaskGateStatus => {
+  if (
+    value === 'pending' ||
+    value === 'pass' ||
+    value === 'needs_review' ||
+    value === 'fail'
+  ) {
+    return value;
+  }
+  return 'pending';
+};
+
+const normalizeVisionTaskEvaluationSuiteStatus = (
+  value: unknown
+): VisionTaskEvaluationSuiteStatus => {
+  if (value === 'pending' || value === 'ready') {
+    return value;
+  }
+  return 'pending';
+};
+
+const normalizeVisionTaskAgentRecommendation = (
+  value: unknown
+): VisionTaskAgentRecommendation | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+  const reason = typeof entry.reason === 'string' ? entry.reason.trim() : '';
+  if (!title || !summary || !reason) {
+    return null;
+  }
+  return {
+    action: normalizeVisionTaskAgentAction(entry.action),
+    title,
+    summary,
+    reason,
+    blocking_items: Array.isArray(entry.blocking_items)
+      ? entry.blocking_items
+          .filter((item) => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+          .slice(0, 12)
+      : [],
+    evidence: Array.isArray(entry.evidence)
+      ? entry.evidence
+          .filter((item) => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+          .slice(0, 12)
+      : [],
+    requires_confirmation: entry.requires_confirmation === true,
+    created_at:
+      typeof entry.created_at === 'string' && entry.created_at.trim().length > 0
+        ? entry.created_at
+        : now()
+  };
+};
+
+const normalizeVisionTaskAgentDecisionLog = (
+  value: unknown
+): VisionTaskAgentDecisionLogEntry[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        return null;
+      }
+      const raw = entry as Record<string, unknown>;
+      const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
+      const reason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
+      const outcome =
+        raw.outcome === 'recommended' || raw.outcome === 'executed' || raw.outcome === 'skipped'
+          ? raw.outcome
+          : null;
+      if (!summary || !reason || !outcome) {
+        return null;
+      }
+      return {
+        action: normalizeVisionTaskAgentAction(raw.action),
+        outcome,
+        summary,
+        reason,
+        created_at:
+          typeof raw.created_at === 'string' && raw.created_at.trim().length > 0
+            ? raw.created_at
+            : now()
+      } satisfies VisionTaskAgentDecisionLogEntry;
+    })
+    .filter((entry): entry is VisionTaskAgentDecisionLogEntry => Boolean(entry))
+    .slice(0, 24);
+};
+
+const normalizeVisionTaskEvaluationSuite = (
+  value: unknown
+): VisionTaskEvaluationSuite | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const suiteId = typeof entry.suite_id === 'string' ? entry.suite_id.trim() : '';
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+  const primaryMetric =
+    typeof entry.primary_metric === 'string' ? entry.primary_metric.trim() : '';
+  if (!suiteId || !title || !summary || !primaryMetric) {
+    return null;
+  }
+  return {
+    suite_id: suiteId,
+    title,
+    summary,
+    primary_metric: primaryMetric,
+    threshold_target:
+      typeof entry.threshold_target === 'number' && Number.isFinite(entry.threshold_target)
+        ? entry.threshold_target
+        : null,
+    status: normalizeVisionTaskEvaluationSuiteStatus(entry.status),
+    threshold_source:
+      entry.threshold_source === 'training_plan' ? 'training_plan' : 'task_type_default',
+    basis: Array.isArray(entry.basis)
+      ? entry.basis
+          .filter((item) => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+          .slice(0, 12)
+      : [],
+    created_at:
+      typeof entry.created_at === 'string' && entry.created_at.trim().length > 0
+        ? entry.created_at
+        : now()
+  };
+};
+
+const normalizeVisionTaskPromotionGate = (
+  value: unknown
+): VisionTaskPromotionGate | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+  const reason = typeof entry.reason === 'string' ? entry.reason.trim() : '';
+  const thresholdMetric =
+    typeof entry.threshold_metric === 'string' ? entry.threshold_metric.trim() : '';
+  if (!title || !summary || !reason || !thresholdMetric) {
+    return null;
+  }
+  return {
+    evaluation_suite_id:
+      typeof entry.evaluation_suite_id === 'string' && entry.evaluation_suite_id.trim()
+        ? entry.evaluation_suite_id
+        : null,
+    status: normalizeVisionTaskGateStatus(entry.status),
+    title,
+    summary,
+    reason,
+    threshold_metric: thresholdMetric,
+    threshold_target:
+      typeof entry.threshold_target === 'number' && Number.isFinite(entry.threshold_target)
+        ? entry.threshold_target
+        : null,
+    current_value:
+      typeof entry.current_value === 'number' && Number.isFinite(entry.current_value)
+        ? entry.current_value
+        : null,
+    best_value:
+      typeof entry.best_value === 'number' && Number.isFinite(entry.best_value)
+        ? entry.best_value
+        : null,
+    best_training_job_id:
+      typeof entry.best_training_job_id === 'string' && entry.best_training_job_id.trim()
+        ? entry.best_training_job_id
+        : null,
+    created_at:
+      typeof entry.created_at === 'string' && entry.created_at.trim().length > 0
+        ? entry.created_at
+        : now()
+  };
+};
+
+const normalizeVisionTaskComparisonDecision = (
+  value: unknown
+): VisionTaskRunComparison['decision'] => {
+  if (
+    value === 'pending' ||
+    value === 'observe' ||
+    value === 'promote' ||
+    value === 'train_again' ||
+    value === 'collect_data'
+  ) {
+    return value;
+  }
+  return 'pending';
+};
+
+const normalizeVisionTaskRunComparisonEntry = (
+  value: unknown
+): VisionTaskRunComparisonEntry | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const trainingJobId =
+    typeof entry.training_job_id === 'string' ? entry.training_job_id.trim() : '';
+  if (!trainingJobId) {
+    return null;
+  }
+  return {
+    training_job_id: trainingJobId,
+    round:
+      typeof entry.round === 'number' && Number.isFinite(entry.round)
+        ? Math.max(1, Math.round(entry.round))
+        : 1,
+    status:
+      entry.status === 'draft' ||
+      entry.status === 'queued' ||
+      entry.status === 'preparing' ||
+      entry.status === 'running' ||
+      entry.status === 'evaluating' ||
+      entry.status === 'completed' ||
+      entry.status === 'failed' ||
+      entry.status === 'cancelled'
+        ? entry.status
+        : 'draft',
+    pass_status: normalizeVisionTaskGateStatus(entry.pass_status),
+    primary_metric:
+      typeof entry.primary_metric === 'string' && entry.primary_metric.trim().length > 0
+        ? entry.primary_metric.trim()
+        : null,
+    primary_value:
+      typeof entry.primary_value === 'number' && Number.isFinite(entry.primary_value)
+        ? entry.primary_value
+        : null,
+    is_best: entry.is_best === true,
+    is_challenger: entry.is_challenger === true
+  };
+};
+
+const normalizeVisionTaskRunComparison = (
+  value: unknown
+): VisionTaskRunComparison | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+  const reason = typeof entry.reason === 'string' ? entry.reason.trim() : '';
+  if (!title || !summary || !reason) {
+    return null;
+  }
+  return {
+    evaluation_suite_id:
+      typeof entry.evaluation_suite_id === 'string' && entry.evaluation_suite_id.trim()
+        ? entry.evaluation_suite_id
+        : null,
+    decision: normalizeVisionTaskComparisonDecision(entry.decision),
+    title,
+    summary,
+    reason,
+    best_training_job_id:
+      typeof entry.best_training_job_id === 'string' && entry.best_training_job_id.trim()
+        ? entry.best_training_job_id
+        : null,
+    champion_training_job_id:
+      typeof entry.champion_training_job_id === 'string' && entry.champion_training_job_id.trim()
+        ? entry.champion_training_job_id
+        : null,
+    challenger_training_job_id:
+      typeof entry.challenger_training_job_id === 'string' && entry.challenger_training_job_id.trim()
+        ? entry.challenger_training_job_id
+        : null,
+    latest_training_job_id:
+      typeof entry.latest_training_job_id === 'string' && entry.latest_training_job_id.trim()
+        ? entry.latest_training_job_id
+        : null,
+    champion_value:
+      typeof entry.champion_value === 'number' && Number.isFinite(entry.champion_value)
+        ? entry.champion_value
+        : null,
+    challenger_value:
+      typeof entry.challenger_value === 'number' && Number.isFinite(entry.challenger_value)
+        ? entry.challenger_value
+        : null,
+    champion_margin:
+      typeof entry.champion_margin === 'number' && Number.isFinite(entry.champion_margin)
+        ? entry.champion_margin
+        : null,
+    best_value:
+      typeof entry.best_value === 'number' && Number.isFinite(entry.best_value)
+        ? entry.best_value
+        : null,
+    latest_value:
+      typeof entry.latest_value === 'number' && Number.isFinite(entry.latest_value)
+        ? entry.latest_value
+        : null,
+    improvement:
+      typeof entry.improvement === 'number' && Number.isFinite(entry.improvement)
+        ? entry.improvement
+        : null,
+    candidates: Array.isArray(entry.candidates)
+      ? entry.candidates
+          .map((item) => normalizeVisionTaskRunComparisonEntry(item))
+          .filter((item): item is VisionTaskRunComparisonEntry => Boolean(item))
+          .slice(0, 12)
+      : [],
+    created_at:
+      typeof entry.created_at === 'string' && entry.created_at.trim().length > 0
+        ? entry.created_at
+        : now()
+  };
+};
+
+const normalizeDatasetProfile = (value: unknown): DatasetProfile | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const datasetId = typeof entry.dataset_id === 'string' ? entry.dataset_id.trim() : '';
+  const detectedTaskType =
+    entry.detected_task_type === 'ocr' ||
+    entry.detected_task_type === 'detection' ||
+    entry.detected_task_type === 'classification' ||
+    entry.detected_task_type === 'segmentation'
+      ? entry.detected_task_type
+      : 'unknown';
+  if (!datasetId) {
+    return null;
+  }
+
+  const splitsEntry =
+    entry.splits && typeof entry.splits === 'object' && !Array.isArray(entry.splits)
+      ? (entry.splits as Record<string, unknown>)
+      : {};
+  const toSafeCount = (raw: unknown): number =>
+    typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
+
+  return {
+    dataset_id: datasetId,
+    detected_task_type: detectedTaskType,
+    sample_count: toSafeCount(entry.sample_count),
+    splits: {
+      train: toSafeCount(splitsEntry.train),
+      val: toSafeCount(splitsEntry.val),
+      test: toSafeCount(splitsEntry.test)
+    },
+    annotation_format:
+      typeof entry.annotation_format === 'string' && entry.annotation_format.trim().length > 0
+        ? entry.annotation_format.trim()
+        : 'unknown',
+    label_coverage:
+      typeof entry.label_coverage === 'number' && Number.isFinite(entry.label_coverage)
+        ? entry.label_coverage
+        : 0,
+    class_names: Array.isArray(entry.class_names)
+      ? entry.class_names
+          .filter((item) => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+          .slice(0, 200)
+      : [],
+    charset: Array.isArray(entry.charset)
+      ? entry.charset
+          .filter((item) => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+          .slice(0, 300)
+      : [],
+    issues: Array.isArray(entry.issues)
+      ? entry.issues
+          .filter((item) => typeof item === 'string' && item.trim().length > 0)
+          .map((item) => item.trim())
+          .slice(0, 32)
+      : [],
+    is_trainable: entry.is_trainable === true,
+    label_stats: Array.isArray(entry.label_stats)
+      ? entry.label_stats
+          .map((item) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) {
+              return null;
+            }
+            const raw = item as Record<string, unknown>;
+            const label = typeof raw.label === 'string' ? raw.label.trim() : '';
+            if (!label) {
+              return null;
+            }
+            return {
+              label,
+              count: toSafeCount(raw.count),
+              share:
+                typeof raw.share === 'number' && Number.isFinite(raw.share)
+                  ? Math.max(0, raw.share)
+                  : 0
+            };
+          })
+          .filter((item): item is DatasetProfile['label_stats'][number] => Boolean(item))
+          .slice(0, 12)
+      : [],
+    diagnostics:
+      entry.diagnostics && typeof entry.diagnostics === 'object' && !Array.isArray(entry.diagnostics)
+        ? {
+            duplicate_attachment_ratio:
+              typeof (entry.diagnostics as Record<string, unknown>).duplicate_attachment_ratio === 'number' &&
+              Number.isFinite((entry.diagnostics as Record<string, unknown>).duplicate_attachment_ratio)
+                ? Math.max(
+                    0,
+                    (entry.diagnostics as Record<string, unknown>).duplicate_attachment_ratio as number
+                  )
+                : 0,
+            split_overlap_detected:
+              (entry.diagnostics as Record<string, unknown>).split_overlap_detected === true,
+            label_balance_score:
+              typeof (entry.diagnostics as Record<string, unknown>).label_balance_score === 'number' &&
+              Number.isFinite((entry.diagnostics as Record<string, unknown>).label_balance_score)
+                ? ((entry.diagnostics as Record<string, unknown>).label_balance_score as number)
+                : null,
+            long_tail_labels: Array.isArray((entry.diagnostics as Record<string, unknown>).long_tail_labels)
+              ? ((entry.diagnostics as Record<string, unknown>).long_tail_labels as unknown[])
+                  .filter((item) => typeof item === 'string' && item.trim().length > 0)
+                  .map((item) => item.trim())
+                  .slice(0, 12)
+              : [],
+            charset_size:
+              typeof (entry.diagnostics as Record<string, unknown>).charset_size === 'number' &&
+              Number.isFinite((entry.diagnostics as Record<string, unknown>).charset_size)
+                ? toSafeCount((entry.diagnostics as Record<string, unknown>).charset_size)
+                : 0,
+            recommended_data_actions: Array.isArray(
+              (entry.diagnostics as Record<string, unknown>).recommended_data_actions
+            )
+              ? ((entry.diagnostics as Record<string, unknown>).recommended_data_actions as unknown[])
+                  .filter((item) => typeof item === 'string' && item.trim().length > 0)
+                  .map((item) => item.trim())
+                  .slice(0, 12)
+              : []
+          }
+        : {
+            duplicate_attachment_ratio: 0,
+            split_overlap_detected: false,
+            label_balance_score: null,
+            long_tail_labels: [],
+            charset_size: 0,
+            recommended_data_actions: []
+          }
+  };
+};
+
+const normalizeVisionTaskActiveLearningCluster = (
+  value: unknown
+): VisionTaskActiveLearningCluster | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const clusterId = typeof entry.cluster_id === 'string' ? entry.cluster_id.trim() : '';
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  if (!clusterId || !title) {
+    return null;
+  }
+  return {
+    cluster_id: clusterId,
+    title,
+    count:
+      typeof entry.count === 'number' && Number.isFinite(entry.count)
+        ? Math.max(0, Math.round(entry.count))
+        : 0,
+    average_score:
+      typeof entry.average_score === 'number' && Number.isFinite(entry.average_score)
+        ? entry.average_score
+        : null
+  };
+};
+
+const normalizeVisionTaskActiveLearningCandidate = (
+  value: unknown
+): VisionTaskActiveLearningCandidate | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const runId = typeof entry.run_id === 'string' ? entry.run_id.trim() : '';
+  const attachmentId = typeof entry.attachment_id === 'string' ? entry.attachment_id.trim() : '';
+  const clusterId = typeof entry.cluster_id === 'string' ? entry.cluster_id.trim() : '';
+  const modelVersionId =
+    typeof entry.model_version_id === 'string' ? entry.model_version_id.trim() : '';
+  if (!runId || !attachmentId || !clusterId || !modelVersionId) {
+    return null;
+  }
+  return {
+    run_id: runId,
+    attachment_id: attachmentId,
+    cluster_id: clusterId,
+    score:
+      typeof entry.score === 'number' && Number.isFinite(entry.score) ? entry.score : 0,
+    model_version_id: modelVersionId,
+    created_at:
+      typeof entry.created_at === 'string' && entry.created_at.trim().length > 0
+        ? entry.created_at
+        : now()
+  };
+};
+
+const normalizeVisionTaskActiveLearningPool = (
+  value: unknown
+): VisionTaskActiveLearningPool | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+  if (!summary) {
+    return null;
+  }
+  return {
+    summary,
+    total_candidates:
+      typeof entry.total_candidates === 'number' && Number.isFinite(entry.total_candidates)
+        ? Math.max(0, Math.round(entry.total_candidates))
+        : 0,
+    recommended_sample_count:
+      typeof entry.recommended_sample_count === 'number' &&
+      Number.isFinite(entry.recommended_sample_count)
+        ? Math.max(0, Math.round(entry.recommended_sample_count))
+        : 0,
+    clusters: Array.isArray(entry.clusters)
+      ? entry.clusters
+          .map((item) => normalizeVisionTaskActiveLearningCluster(item))
+          .filter((item): item is VisionTaskActiveLearningCluster => Boolean(item))
+          .slice(0, 12)
+      : [],
+    top_candidates: Array.isArray(entry.top_candidates)
+      ? entry.top_candidates
+          .map((item) => normalizeVisionTaskActiveLearningCandidate(item))
+          .filter((item): item is VisionTaskActiveLearningCandidate => Boolean(item))
+          .slice(0, 20)
+      : [],
+    refreshed_at:
+      typeof entry.refreshed_at === 'string' && entry.refreshed_at.trim().length > 0
+        ? entry.refreshed_at
+        : now()
+  };
+};
+
 const normalizeVisionModelingTask = (entry: VisionModelingTaskRecord): VisionModelingTaskRecord => ({
   ...entry,
   status: normalizeVisionModelingTaskStatus(entry.status),
@@ -1214,6 +1787,7 @@ const normalizeVisionModelingTask = (entry: VisionModelingTaskRecord): VisionMod
     typeof entry.dataset_version_id === 'string' && entry.dataset_version_id.trim()
       ? entry.dataset_version_id
       : null,
+  dataset_profile: normalizeDatasetProfile(entry.dataset_profile),
   sample_attachment_ids: Array.isArray(entry.sample_attachment_ids)
     ? entry.sample_attachment_ids.filter((item) => typeof item === 'string' && item.trim().length > 0)
     : [],
@@ -1222,6 +1796,12 @@ const normalizeVisionModelingTask = (entry: VisionModelingTaskRecord): VisionMod
         .filter((item) => typeof item === 'string' && item.trim().length > 0)
         .slice(0, 200)
     : [],
+  agent_next_action: normalizeVisionTaskAgentRecommendation(entry.agent_next_action),
+  agent_decision_log: normalizeVisionTaskAgentDecisionLog(entry.agent_decision_log),
+  evaluation_suite: normalizeVisionTaskEvaluationSuite(entry.evaluation_suite),
+  promotion_gate: normalizeVisionTaskPromotionGate(entry.promotion_gate),
+  run_comparison: normalizeVisionTaskRunComparison(entry.run_comparison),
+  active_learning_pool: normalizeVisionTaskActiveLearningPool(entry.active_learning_pool),
   training_job_id:
     typeof entry.training_job_id === 'string' && entry.training_job_id.trim()
       ? entry.training_job_id

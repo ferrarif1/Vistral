@@ -48,6 +48,7 @@ Define executable route and page structure for the AI-native conversation worksp
 ### 3.4 Professional Console
 - `/workspace/console`
   - shared app shell route (global left navigation + top context header), not chat-immersive layout
+  - visual language should stay aligned with `notion/DESIGN.md`: warm white canvas, subtle neutral section contrast, whisper-weight borders, restrained card elevation, and one consistent blue interaction accent
   - every engineering-console page must follow the `single primary job per page` rule:
     - one page owns one core operator task only
     - other task domains may appear only as summary context or navigation links
@@ -57,6 +58,7 @@ Define executable route and page structure for the AI-native conversation worksp
     - top context toolbar (`WorkspaceContextBar`) for search/filter/batch actions
     - middle main work area for operational lists/canvas/tables
     - right inspector panel for selected-object details and primary follow-up actions
+  - domain-specific pages may vary information density, but should not introduce separate visual systems that break the shared Notion-inspired shell
   - left global nav, middle work area, and right inspector are independently scrollable within the shell
   - operational pages should reuse `WorkspaceWorkbench` to keep control surfaces consistent across dataset/training/model lanes
   - rollout update (2026-04): for high-frequency console routes, heavy onboarding cards are replaced with a compact single-task hint block to reduce first-screen noise while keeping clear next-action links
@@ -155,25 +157,44 @@ Define executable route and page structure for the AI-native conversation worksp
   - initial page load may show blocking loading state, but background refresh must stay non-jumping and only update visible state when job data actually changes
   - manual refresh remains available for operators who want explicit control
 - `/training/jobs/new`
-  - create training job wizard (stepper required, advanced params collapsed)
-  - dataset step binds an explicit dataset-version snapshot, not an implicit latest dataset state
+  - default surface is an agent-style launcher, not a dense wizard:
+    - one natural-language goal input
+    - one dataset / dataset-version snapshot selection
+    - one compact progress indicator (`goal -> snapshot -> launch`)
+    - when goal text is present or the page is opened from a `VisionTask`, Smart Launch should keep or create that task context so the launched run stays attached to the same orchestration lane
+  - dataset selection still binds an explicit dataset-version snapshot, not an implicit latest dataset state
   - selected dataset-version readiness summary stays visible before launch (dataset status, split summary, annotation coverage, train-split availability)
-  - onboarding card should frame this page as "train from a reproducible snapshot" and provide direct links back to dataset preparation when readiness is not met
-  - the main workspace should also mirror the first incomplete training-setup step with one explicit next-action card, and blocked states should point back to dataset detail or runtime settings when relevant
+  - task/framework/base-model/core-param choices should be auto-derived when possible and only exposed for manual override inside collapsed expert controls
+  - onboarding card should frame this page as "tell the agent what to train, confirm the snapshot, then launch"
+  - the main workspace should mirror the first incomplete training-setup step with one explicit next-action card, and blocked states should point back to dataset detail or runtime settings when relevant instead of expanding more configuration by default
 - `/training/jobs/:jobId`
   - detail: status, logs, metrics, and artifact readiness for one run
   - scheduler history, raw fallback reasons, and technical identifiers should stay in advanced disclosure by default
   - first screen should prioritize evidence inspection (status/logs/metrics/artifacts), while cross-domain next steps stay as lightweight links
   - detail should expose a direct `Open cockpit` continuation into the dedicated visualization surface
+  - when the run is linked to a `VisionTask`, the first-screen next-step area should prefer one direct `Continue as agent` action over a menu of separate manual sub-tools
   - completed runs should expose a direct version-registration handoff into `/models/versions` with the job context prefilled
   - when no owned model matches the completed job's task type, the detail page should also expose a direct model-draft creation path prefilled to that task type
 - `/training/jobs/:jobId/cockpit`
   - dedicated training cockpit for one run
   - accessible from both training list and training detail without removing the existing detail page responsibilities
-  - keeps one professional dark-surface visualization layout: top run summary, stage flow rail, metric/resource center, auto-tuning panel, and event stream
+  - should be treated as a secondary expert visualization surface rather than the primary training entry
+  - keeps one professional telemetry layout: top run summary, cinematic training scene, stage flow rail, metric/resource center, auto-tuning panel, and event stream
+  - the cinematic training scene should feel like one restrained 3D execution theater rather than a dashboard banner:
+    - left dataset structure is rendered as a thumbnail album / sample gallery, with a visibly active mini-batch being selected from the gallery
+    - dataset-side file/count signal should visibly decrease as training advances, while still honoring `derived` semantics when live file counts are unavailable
+    - center interaction lane should read as real training logic: sampled batch -> augmentation / normalization -> forward pass toward the model core
+    - right model structure should render pulsing/vector-like parameter particles so optimization looks active, not static
+    - scene footer should carry compact parameter/metric curves that stay synchronized with the current run snapshot
+    - the scene should read through one dominant cinematic path, not many separate animated widgets; inactive regions should remain mostly steady so the operator always knows where to look
+    - overall styling should feel like a premium film-style control console: dark, sharp, minimal, and technical, with motion reserved for the live training path and convergence signals
   - supports mode switch between `live` and `demo`
   - `demo` mode must expose playback controls (`play`, `pause`, `replay`, `1x/2x/4x`)
+  - playback state should stay readable in-page (`playing`, `paused`, `finished`) so demo sessions never look frozen by accident
   - `live` mode should prefer real backend data, while missing tuning/resource feeds stay clearly marked as unavailable or derived instead of pretending to be persisted truth
+  - current degradation messaging should stay inside the same page instead of auto-forcing demo mode when only part of the telemetry surface is missing
+  - all cockpit user-visible copy should resolve through the shared i18n layer, including stage labels, trial statuses, empty states, and demo/live helper text
+  - on narrower screens the cockpit should reflow in one stable order: cinematic scene, summary, stage flow, metrics, resources, auto tuning, event stream
 
 ### 3.7A Vision Orchestration Domain
 - `/vision/tasks`
@@ -182,7 +203,11 @@ Define executable route and page structure for the AI-native conversation worksp
     - which task is blocked by missing requirements
     - which task is currently training
     - which task is ready for the next operator action
-  - filters should stay lightweight (`status` first); row click opens detail; `Auto advance` remains an explicit action, not an always-on background mutation
+  - filters should stay lightweight (`status` first); row click opens detail; one explicit `Continue as agent` control may call task auto-advance, but it must remain a visible operator action rather than an always-on background mutation
+  - every visible task row/card should surface:
+    - current recommendation title
+    - one-line rationale
+    - linked entities needed to continue (`dataset`, `training job`, `model version`)
 - `/vision/tasks/:taskId`
   - dedicated continuation page for one structured vision-task record
   - top of page should keep:
@@ -190,6 +215,18 @@ Define executable route and page structure for the AI-native conversation worksp
     - current status
     - primary metric snapshot
     - next recommended action
+    - recommendation rationale / evidence
+    - evaluation suite
+    - promotion gate status
+    - run comparison decision
+  - the main page action should read as one agent continuation control first; manual training / registration / feedback operations are secondary escape hatches
+  - task detail should also show a compact agent decision history so engineers can understand why the system moved from train -> wait -> register -> feedback
+  - task detail should include one explicit evidence section explaining:
+    - which evaluation suite / threshold the agent is using
+    - why the best run is currently considered best
+    - who is champion and who is challenger
+    - whether the result is strong enough to promote now
+    - whether the safer next move is train again or collect more data
   - main sections should expose structured understanding, dataset inspection, training plan, auto-tune history, validation report, and missing requirements without forcing the engineer back into the chat thread
   - quick actions can open linked dataset, training job, model version, or feedback dataset directly, but those linked domains still own their own primary workflows
 
@@ -371,6 +408,7 @@ Define executable route and page structure for the AI-native conversation worksp
 - list page should keep filters and actions lightweight enough for operators to decide in seconds whether to open detail or press `Auto advance`
 - detail page should always keep one visible "next step" summary above the raw structured panels
 - quick actions may launch training, continue the next round, register a model version, or mine badcases, but they must remain contextual to the task's current state
+- when task detail opens inference validation from an active-learning candidate, the validation page should preserve task context and make the return path obvious instead of behaving like a detached validation workspace
 - structured JSON panels are acceptable in the MVP, but the surrounding page chrome must still make the workflow understandable without reading raw payload keys first
 - task detail must remain a bridge page, not a second full implementation of dataset/training/model workflows
 

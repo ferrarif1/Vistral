@@ -5,6 +5,7 @@ import {
   AutoTuningPanel,
   TrainingCockpitOverview,
   TrainingEventStream,
+  TrainingFluxScene,
   TrainingMetricPanel,
   TrainingResourcePanel,
   TrainingStageRail
@@ -16,6 +17,9 @@ import { InlineAlert, PageHeader } from '../components/ui/ConsolePage';
 import { Panel } from '../components/ui/Surface';
 import { WorkspaceContextBar, WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import { useI18n } from '../i18n/I18nProvider';
+
+const availabilityTone = (value: 'real' | 'derived' | 'unavailable') =>
+  value === 'real' ? 'success' : value === 'derived' ? 'warning' : 'neutral';
 
 const sanitizeReturnToPath = (value: string | null | undefined): string | null => {
   if (!value) {
@@ -58,6 +62,8 @@ export default function TrainingCockpitPage() {
     : '/training/jobs';
   const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
   const backPath = requestedReturnTo ?? detailPath;
+  const availabilityLabel = (value: 'real' | 'derived' | 'unavailable') =>
+    value === 'real' ? t('Real') : value === 'derived' ? t('Derived') : t('Unavailable');
 
   if (!jobId) {
     return (
@@ -124,7 +130,7 @@ export default function TrainingCockpitPage() {
   }
 
   return (
-    <WorkspacePage className="training-cockpit-route">
+    <WorkspacePage className="training-cockpit-route" data-testid="training-cockpit-page">
       <PageHeader
         eyebrow={t('Training cockpit')}
         title={snapshot.summary.name}
@@ -184,6 +190,7 @@ export default function TrainingCockpitPage() {
 
       <div className="training-cockpit-shell">
         <WorkspaceWorkbench
+          className="training-cockpit-workbench"
           toolbar={
             <WorkspaceContextBar
               leading={
@@ -193,6 +200,8 @@ export default function TrainingCockpitPage() {
                     variant={controller.mode === 'live' ? 'secondary' : 'ghost'}
                     size="sm"
                     onClick={() => updateMode('live')}
+                    aria-pressed={controller.mode === 'live'}
+                    data-testid="training-cockpit-mode-live"
                   >
                     {t('Live mode')}
                   </Button>
@@ -201,15 +210,23 @@ export default function TrainingCockpitPage() {
                     variant={controller.mode === 'demo' ? 'secondary' : 'ghost'}
                     size="sm"
                     onClick={() => updateMode('demo')}
+                    aria-pressed={controller.mode === 'demo'}
+                    data-testid="training-cockpit-mode-demo"
                   >
                     {t('Demo mode')}
                   </Button>
                   {controller.mode === 'demo' ? (
                     <>
-                      <Button type="button" variant="ghost" size="sm" onClick={controller.isPlaying ? controller.pause : controller.play}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={controller.isPlaying ? controller.pause : controller.play}
+                        data-testid="training-cockpit-demo-play-toggle"
+                      >
                         {controller.isPlaying ? t('Pause') : t('Play')}
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={controller.replay}>
+                      <Button type="button" variant="ghost" size="sm" onClick={controller.replay} data-testid="training-cockpit-demo-replay">
                         {t('Replay')}
                       </Button>
                       {[1, 2, 4].map((speed) => (
@@ -219,6 +236,8 @@ export default function TrainingCockpitPage() {
                           variant={controller.speed === speed ? 'secondary' : 'ghost'}
                           size="sm"
                           onClick={() => controller.setSpeed(speed as 1 | 2 | 4)}
+                          aria-pressed={controller.speed === speed}
+                          data-testid={`training-cockpit-demo-speed-${speed}`}
                         >
                           {speed}x
                         </Button>
@@ -230,27 +249,26 @@ export default function TrainingCockpitPage() {
               trailing={
                 <div className="row gap wrap align-center">
                   <Badge
-                    tone={
-                      snapshot.summary.availability.resources === 'real'
-                        ? 'success'
-                        : snapshot.summary.availability.resources === 'derived'
-                          ? 'warning'
-                          : 'neutral'
-                    }
+                    tone={availabilityTone(snapshot.summary.availability.resources)}
+                    data-testid="training-cockpit-availability-resources"
                   >
-                    {t('Resources')}: {snapshot.summary.availability.resources}
+                    {t('Resources')}: {availabilityLabel(snapshot.summary.availability.resources)}
                   </Badge>
                   <Badge
-                    tone={
-                      snapshot.summary.availability.tuning === 'real'
-                        ? 'success'
-                        : snapshot.summary.availability.tuning === 'derived'
-                          ? 'warning'
-                          : 'neutral'
-                    }
+                    tone={availabilityTone(snapshot.summary.availability.tuning)}
+                    data-testid="training-cockpit-availability-tuning"
                   >
-                    {t('Tuning')}: {snapshot.summary.availability.tuning}
+                    {t('Tuning')}: {availabilityLabel(snapshot.summary.availability.tuning)}
                   </Badge>
+                  {controller.mode === 'demo' ? (
+                    <Badge tone={controller.isPlaying ? 'info' : snapshot.summary.status === 'completed' ? 'success' : 'neutral'}>
+                      {controller.isPlaying
+                        ? t('Demo playing')
+                        : snapshot.summary.status === 'completed'
+                          ? t('Demo finished')
+                          : t('Demo paused')}
+                    </Badge>
+                  ) : null}
                 </div>
               }
               summary={
@@ -258,7 +276,7 @@ export default function TrainingCockpitPage() {
                   <div className="row between gap wrap align-center">
                     <div className="stack tight">
                       <strong>
-                        {snapshot.summary.currentStageLabel} · {snapshot.summary.currentEpoch}/{snapshot.summary.totalEpoch || '—'} epochs
+                        {snapshot.summary.currentStageLabel} · {snapshot.summary.currentEpoch}/{snapshot.summary.totalEpoch || '—'} {t('epochs')}
                       </strong>
                       <small className="muted">
                         {snapshot.summary.bestMetricLabel}: {snapshot.summary.bestMetricValue === null ? '—' : snapshot.summary.bestMetricValue.toFixed(4)} · {snapshot.summary.deviceLabel}
@@ -277,6 +295,7 @@ export default function TrainingCockpitPage() {
           }
           main={
             <div className="training-cockpit-main stack">
+              <TrainingFluxScene snapshot={snapshot} />
               <TrainingCockpitOverview summary={snapshot.summary} />
               <div className="training-cockpit-core-grid">
                 <TrainingStageRail snapshot={snapshot} />
@@ -285,11 +304,11 @@ export default function TrainingCockpitPage() {
                   <TrainingResourcePanel snapshot={snapshot} />
                 </div>
               </div>
-              <TrainingEventStream events={snapshot.events} />
             </div>
           }
           side={<AutoTuningPanel snapshot={snapshot} />}
         />
+        <TrainingEventStream events={snapshot.events} />
       </div>
     </WorkspacePage>
   );

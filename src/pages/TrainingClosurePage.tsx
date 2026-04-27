@@ -978,7 +978,7 @@ export default function TrainingClosurePage() {
         done: hasCompletedTraining,
         primary: hasTrainableVersion
           ? {
-              label: t('Create training job'),
+              label: t('Smart Launch'),
               to: trainingCreatePath
             }
           : {

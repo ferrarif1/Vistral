@@ -2088,7 +2088,7 @@ export default function AnnotationWorkspacePage() {
       badgeLabel: t('Launch-ready'),
       actions: [
         {
-          label: t('Create training job'),
+          label: t('Smart Launch'),
           to: buildTrainingJobCreatePath(
             dataset.id,
             preferredLaunchReadyDatasetVersion.id,

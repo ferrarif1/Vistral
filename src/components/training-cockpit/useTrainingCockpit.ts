@@ -1,9 +1,17 @@
 import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
-import type { ModelVersionRecord, TrainingMetricRecord, VisionModelingTaskRecord } from '../../../shared/domain';
+import type {
+  DatasetItemRecord,
+  FileAttachment,
+  ModelVersionRecord,
+  TrainingMetricRecord,
+  VisionModelingTaskRecord
+} from '../../../shared/domain';
 import useBackgroundPolling from '../../hooks/useBackgroundPolling';
+import { useI18n } from '../../i18n/I18nProvider';
 import { api } from '../../services/api';
 import type {
   TrainingCockpitController,
+  TrainingCockpitDatasetPreview,
   TrainingCockpitEventLevel,
   TrainingCockpitEventLog,
   TrainingCockpitMetricPoint,
@@ -23,50 +31,55 @@ const liveRefreshIntervalMs = 5000;
 const demoFrameCount = 36;
 const demoBaseTickMs = 1100;
 
-const stageBlueprint: Array<Pick<TrainingCockpitStage, 'id' | 'label' | 'description'>> = [
+type Translate = (source: string, vars?: Record<string, string | number>) => string;
+
+const buildStageBlueprint = (
+  t: Translate
+): Array<Pick<TrainingCockpitStage, 'id' | 'label' | 'description'>> => [
   {
     id: 'data_preparation',
-    label: 'Data preparation',
-    description: 'Dataset snapshot is frozen and materialized for the run.'
+    label: t('Data preparation'),
+    description: t('Dataset snapshot is frozen and materialized for the run.')
   },
   {
     id: 'annotation_review',
-    label: 'Annotation review',
-    description: 'Label quality gate and trainability checks are locked.'
+    label: t('Annotation review'),
+    description: t('Label quality gate and trainability checks are locked.')
   },
   {
     id: 'training_config',
-    label: 'Training config',
-    description: 'Framework, recipe, and launch parameters are finalized.'
+    label: t('Training config'),
+    description: t('Framework, recipe, and launch parameters are finalized.')
   },
   {
     id: 'auto_tuning',
-    label: 'Auto tuning',
-    description: 'Candidate hyper-parameters are generated, tried, and compared.'
+    label: t('Auto tuning'),
+    description: t('Candidate hyper-parameters are generated, tried, and compared.')
   },
   {
     id: 'model_training',
-    label: 'Model training',
-    description: 'The selected configuration is running against the dataset snapshot.'
+    label: t('Model training'),
+    description: t('The selected configuration is running against the dataset snapshot.')
   },
   {
     id: 'validation',
-    label: 'Validation',
-    description: 'Evaluation metrics and checkpoints are being verified.'
+    label: t('Validation'),
+    description: t('Evaluation metrics and checkpoints are being verified.')
   },
   {
     id: 'model_registration',
-    label: 'Model registration',
-    description: 'Training evidence is ready to be promoted into a model version.'
+    label: t('Model registration'),
+    description: t('Training evidence is ready to be promoted into a model version.')
   },
   {
     id: 'publish_handoff',
-    label: 'Publish handoff',
-    description: 'The completed run is waiting for downstream validation or release.'
+    label: t('Publish handoff'),
+    description: t('The completed run is waiting for downstream validation or release.')
   }
 ];
 
 type TrainingJobDetailPayload = Awaited<ReturnType<typeof api.getTrainingJobDetail>>;
+type DatasetDetailPayload = Awaited<ReturnType<typeof api.getDatasetDetail>>;
 
 type AutoTuneRound = {
   round: number;
@@ -83,6 +96,113 @@ type AutoTuneHistoryEntry = {
   pass_status?: 'pass' | 'fail' | 'needs_review';
   primary_metric?: string;
   primary_value?: number;
+};
+
+const imageFilenamePattern = /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i;
+
+const isImageAttachment = (attachment: FileAttachment | undefined | null): attachment is FileAttachment => {
+  if (!attachment || attachment.status !== 'ready') {
+    return false;
+  }
+  if (attachment.mime_type?.toLowerCase().startsWith('image/')) {
+    return true;
+  }
+  return imageFilenamePattern.test(attachment.filename);
+};
+
+const splitPriority = (split: DatasetItemRecord['split']) => {
+  if (split === 'train') {
+    return 0;
+  }
+  if (split === 'val') {
+    return 1;
+  }
+  if (split === 'test') {
+    return 2;
+  }
+  return 3;
+};
+
+const buildDatasetPreviews = (
+  detail: DatasetDetailPayload | null | undefined
+): {
+  datasetLabel: string;
+  datasetPreviews: TrainingCockpitDatasetPreview[];
+  datasetPreviewAvailability: 'real' | 'derived' | 'unavailable';
+} => {
+  if (!detail) {
+    return {
+      datasetLabel: '',
+      datasetPreviews: [],
+      datasetPreviewAvailability: 'unavailable'
+    };
+  }
+
+  const attachmentById = new Map(detail.attachments.map((attachment) => [attachment.id, attachment]));
+  const itemPreviews = [...detail.items]
+    .filter((item) => item.status === 'ready')
+    .sort((left, right) => {
+      const splitDelta = splitPriority(left.split) - splitPriority(right.split);
+      if (splitDelta !== 0) {
+        return splitDelta;
+      }
+      return Date.parse(right.created_at) - Date.parse(left.created_at);
+    })
+    .map((item) => {
+      const attachment = attachmentById.get(item.attachment_id);
+      if (!isImageAttachment(attachment)) {
+        return null;
+      }
+      return {
+        id: item.id,
+        attachmentId: attachment.id,
+        filename: attachment.filename,
+        split: item.split,
+        status: item.status,
+        previewUrl: api.attachmentContentUrl(attachment.id),
+        source: 'real'
+      } satisfies TrainingCockpitDatasetPreview;
+    })
+    .filter((item): item is TrainingCockpitDatasetPreview => Boolean(item))
+    .slice(0, 8);
+
+  if (itemPreviews.length > 0) {
+    return {
+      datasetLabel: detail.dataset.name,
+      datasetPreviews: itemPreviews,
+      datasetPreviewAvailability: 'real'
+    };
+  }
+
+  const attachmentPreviews = [...detail.attachments]
+    .filter((attachment) => isImageAttachment(attachment))
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+    .slice(0, 8)
+    .map(
+      (attachment) =>
+        ({
+          id: `attachment-${attachment.id}`,
+          attachmentId: attachment.id,
+          filename: attachment.filename,
+          split: 'unassigned',
+          status: attachment.status,
+          previewUrl: api.attachmentContentUrl(attachment.id),
+          source: 'derived'
+        }) satisfies TrainingCockpitDatasetPreview
+    );
+
+  const availability =
+    attachmentPreviews.length > 0
+      ? 'derived'
+      : detail.items.length > 0 || detail.attachments.length > 0
+        ? 'derived'
+        : 'unavailable';
+
+  return {
+    datasetLabel: detail.dataset.name,
+    datasetPreviews: attachmentPreviews,
+    datasetPreviewAvailability: availability
+  };
 };
 
 const parseNumber = (value: unknown): number | null => {
@@ -220,7 +340,7 @@ const readAutoTuneHistory = (task: VisionModelingTaskRecord | null): AutoTuneHis
   const parsed = tryParseTaskMetadata<unknown[]>(task?.metadata.auto_tune_history_json, []);
   return Array.isArray(parsed)
     ? parsed
-        .map((item) => {
+        .map((item): AutoTuneHistoryEntry | null => {
           if (!item || typeof item !== 'object' || Array.isArray(item)) {
             return null;
           }
@@ -233,7 +353,7 @@ const readAutoTuneHistory = (task: VisionModelingTaskRecord | null): AutoTuneHis
           ) {
             return null;
           }
-          return {
+          const normalized: AutoTuneHistoryEntry = {
             round: Math.max(1, Math.round(entry.round)),
             training_job_id: entry.training_job_id.trim(),
             status: typeof entry.status === 'string' ? entry.status : 'draft',
@@ -261,9 +381,10 @@ const readAutoTuneHistory = (task: VisionModelingTaskRecord | null): AutoTuneHis
               typeof entry.primary_value === 'number' && Number.isFinite(entry.primary_value)
                 ? entry.primary_value
                 : undefined
-          } satisfies AutoTuneHistoryEntry;
+          };
+          return normalized;
         })
-        .filter((item): item is AutoTuneHistoryEntry => Boolean(item))
+        .filter((item): item is AutoTuneHistoryEntry => item !== null)
         .sort((left, right) => left.round - right.round)
     : [];
 };
@@ -298,7 +419,32 @@ const buildMetricSeries = (
     existing.recordedAt = safeIso(metric.recorded_at, existing.recordedAt);
     const channel = detectMetricChannel(metric.metric_name);
     if (channel) {
-      existing[channel] = Number(metric.metric_value.toFixed(6));
+      const nextValue = Number(metric.metric_value.toFixed(6));
+      switch (channel) {
+        case 'loss':
+          existing.loss = nextValue;
+          break;
+        case 'valLoss':
+          existing.valLoss = nextValue;
+          break;
+        case 'accuracy':
+          existing.accuracy = nextValue;
+          break;
+        case 'map':
+          existing.map = nextValue;
+          break;
+        case 'learningRate':
+          existing.learningRate = nextValue;
+          break;
+        case 'precision':
+          existing.precision = nextValue;
+          break;
+        case 'recall':
+          existing.recall = nextValue;
+          break;
+        default:
+          break;
+      }
     }
     grouped.set(step, existing);
   }
@@ -307,7 +453,8 @@ const buildMetricSeries = (
 
 const pickBestMetric = (
   metrics: TrainingMetricRecord[],
-  task: VisionModelingTaskRecord | null
+  task: VisionModelingTaskRecord | null,
+  t: Translate
 ): { label: string; value: number | null } => {
   if (task?.validation_report?.summary) {
     return {
@@ -339,7 +486,7 @@ const pickBestMetric = (
 
   const fallback = metrics.at(-1) ?? null;
   return {
-    label: fallback ? titleCaseMetric(fallback.metric_name) : 'Primary metric',
+    label: fallback ? titleCaseMetric(fallback.metric_name) : t('Primary metric'),
     value: fallback ? fallback.metric_value : null
   };
 };
@@ -392,7 +539,8 @@ const parseLogLevel = (line: string): TrainingCockpitEventLevel => {
 
 const buildTuningTrialsFromTask = (
   task: VisionModelingTaskRecord | null,
-  jobId: string
+  jobId: string,
+  t: Translate
 ): {
   trials: TrainingCockpitTrial[];
   strategy: string;
@@ -405,7 +553,7 @@ const buildTuningTrialsFromTask = (
   if (!task) {
     return {
       trials: [],
-      strategy: 'No live tuning stream',
+      strategy: t('No live tuning stream'),
       attempt: 0,
       total: 0,
       recommendedParamsApplied: false,
@@ -480,12 +628,20 @@ const buildTuningTrialsFromTask = (
             : 'info',
     message:
       entry.pass_status === 'fail'
-        ? `Trial #${String(entry.round).padStart(2, '0')} was rejected after evaluation.`
+        ? t('Trial #{trial} was rejected after evaluation.', {
+            trial: String(entry.round).padStart(2, '0')
+          })
         : bestHistory?.round === entry.round
-          ? `Trial #${String(entry.round).padStart(2, '0')} became the current best configuration.`
+          ? t('Trial #{trial} became the current best configuration.', {
+              trial: String(entry.round).padStart(2, '0')
+            })
           : entry.training_job_id === jobId && ['running', 'evaluating'].includes(entry.status)
-            ? `Trial #${String(entry.round).padStart(2, '0')} is active on the current run.`
-            : `Trial #${String(entry.round).padStart(2, '0')} finished with recorded metrics.`,
+            ? t('Trial #{trial} is active on the current run.', {
+                trial: String(entry.round).padStart(2, '0')
+              })
+            : t('Trial #{trial} finished with recorded metrics.', {
+                trial: String(entry.round).padStart(2, '0')
+              }),
     eventType: 'tuning',
     emphasis: bestHistory?.round === entry.round
   })) satisfies TrainingCockpitEventLog[];
@@ -499,7 +655,7 @@ const buildTuningTrialsFromTask = (
 
   return {
     trials,
-    strategy: task.training_plan?.recipe_id ? titleCaseMetric(task.training_plan.recipe_id) : 'Adaptive search',
+    strategy: task.training_plan?.recipe_id ? titleCaseMetric(task.training_plan.recipe_id) : t('Adaptive search'),
     attempt: history.length,
     total,
     recommendedParamsApplied: history.some((entry) => entry.training_job_id === jobId),
@@ -509,11 +665,12 @@ const buildTuningTrialsFromTask = (
 };
 
 const buildStages = (input: {
+  stageBlueprint: Array<Pick<TrainingCockpitStage, 'id' | 'label' | 'description'>>;
   status: string;
   hasVersion: boolean;
   tuningEnabled: boolean;
 }): { stages: TrainingCockpitStage[]; currentStageLabel: string } => {
-  const { status, hasVersion, tuningEnabled } = input;
+  const { stageBlueprint, status, hasVersion, tuningEnabled } = input;
   let activeStageId: TrainingCockpitStage['id'] = 'training_config';
   if (status === 'queued') {
     activeStageId = 'training_config';
@@ -556,8 +713,9 @@ const buildLiveEventStream = (input: {
   metrics: TrainingCockpitMetricPoint[];
   bestMetricLabel: string;
   tuningEvents: TrainingCockpitEventLog[];
+  t: Translate;
 }): TrainingCockpitEventLog[] => {
-  const { detail, metrics, bestMetricLabel, tuningEvents } = input;
+  const { detail, metrics, bestMetricLabel, tuningEvents, t } = input;
   const createdAt = safeIso(detail.job.created_at, new Date().toISOString());
   const updatedAt = safeIso(detail.job.updated_at, createdAt);
   const baseEvents: TrainingCockpitEventLog[] = [
@@ -565,7 +723,7 @@ const buildLiveEventStream = (input: {
       id: 'job-created',
       time: createdAt,
       level: 'info',
-      message: 'Training task was created and entered the execution queue.',
+      message: t('Training task was created and entered the execution queue.'),
       eventType: 'job',
       emphasis: true
     },
@@ -573,7 +731,7 @@ const buildLiveEventStream = (input: {
       id: 'dataset-locked',
       time: addSeconds(createdAt, 18),
       level: 'success',
-      message: 'Dataset snapshot and launch configuration were frozen for this run.',
+      message: t('Dataset snapshot and launch configuration were frozen for this run.'),
       eventType: 'snapshot'
     }
   ];
@@ -583,13 +741,13 @@ const buildLiveEventStream = (input: {
       id: 'training-started',
       time: addSeconds(createdAt, 42),
       level: 'success',
-      message: 'Training execution started and telemetry began streaming.',
+      message: t('Training execution started and telemetry began streaming.'),
       eventType: 'training'
     });
   }
 
   const metricEvents = metrics
-    .filter((point, index) => index === 0 || index === metrics.length - 1 || index % 4 === 0)
+    .filter((_point, index) => index === 0 || index === metrics.length - 1 || index % 4 === 0)
     .map((point, index) => {
       const primaryValue =
         point.map ?? point.accuracy ?? point.precision ?? point.recall ?? point.loss ?? point.valLoss ?? null;
@@ -599,8 +757,12 @@ const buildLiveEventStream = (input: {
         level: primaryValue !== null ? 'info' : 'warning',
         message:
           primaryValue !== null
-            ? `${bestMetricLabel} refreshed at epoch ${point.epoch}: ${primaryValue.toFixed(4)}`
-            : `Metrics refresh landed for epoch ${point.epoch}.`,
+            ? t('{metric} refreshed at epoch {epoch}: {value}', {
+                metric: bestMetricLabel,
+                epoch: point.epoch,
+                value: primaryValue.toFixed(4)
+              })
+            : t('Metrics refresh landed for epoch {epoch}.', { epoch: point.epoch }),
         eventType: 'metric'
       } satisfies TrainingCockpitEventLog;
     });
@@ -618,7 +780,7 @@ const buildLiveEventStream = (input: {
       id: 'best-weights',
       time: addSeconds(updatedAt, -45),
       level: 'success',
-      message: 'Best checkpoint was saved and validation summary was sealed.',
+      message: t('Best checkpoint was saved and validation summary was sealed.'),
       eventType: 'checkpoint',
       emphasis: true
     });
@@ -629,7 +791,7 @@ const buildLiveEventStream = (input: {
       id: 'job-failed',
       time: updatedAt,
       level: 'error',
-      message: 'The current run exited early. Review the latest logs before retrying.',
+      message: t('The current run exited early. Review the latest logs before retrying.'),
       eventType: 'job',
       emphasis: true
     });
@@ -642,19 +804,22 @@ const buildLiveEventStream = (input: {
 
 const buildLiveSnapshot = (input: {
   detail: TrainingJobDetailPayload;
+  datasetDetail: DatasetDetailPayload | null;
   versions: ModelVersionRecord[];
   relatedTask: VisionModelingTaskRecord | null;
+  stageBlueprint: Array<Pick<TrainingCockpitStage, 'id' | 'label' | 'description'>>;
+  t: Translate;
 }): TrainingCockpitSnapshot => {
-  const { detail, versions, relatedTask } = input;
+  const { detail, datasetDetail, versions, relatedTask, stageBlueprint, t } = input;
   const totalEpoch = parseNumber(detail.job.config.epochs) ?? parseNumber(detail.job.config.epoch) ?? 0;
   const metrics = buildMetricSeries(detail.metrics, totalEpoch);
   const currentEpoch = Math.max(metrics.at(-1)?.epoch ?? 0, 0);
-  const bestMetric = pickBestMetric(detail.metrics, relatedTask);
+  const bestMetric = pickBestMetric(detail.metrics, relatedTask, t);
   const linkedVersion =
     [...versions]
       .filter((version) => version.training_job_id === detail.job.id)
       .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0] ?? null;
-  const tuning = buildTuningTrialsFromTask(relatedTask, detail.job.id);
+  const tuning = buildTuningTrialsFromTask(relatedTask, detail.job.id, t);
   const createdAt = safeIso(detail.job.created_at, new Date().toISOString());
   const lastUpdatedAt = safeIso(detail.job.updated_at, createdAt);
   const durationAnchor =
@@ -664,17 +829,19 @@ const buildLiveSnapshot = (input: {
   const durationSeconds = Math.max(60, Math.round((durationAnchor - Date.parse(createdAt)) / 1000));
   const resources = deriveResourceSeries(metrics, currentEpoch, totalEpoch, detail.job.status, createdAt, lastUpdatedAt);
   const stages = buildStages({
+    stageBlueprint,
     status: detail.job.status,
     hasVersion: Boolean(linkedVersion),
     tuningEnabled: tuning.trials.length > 0
   });
+  const datasetPreview = buildDatasetPreviews(datasetDetail);
   const summary: TrainingCockpitSummary = {
     id: detail.job.id,
     name: detail.job.name,
     status: detail.job.status,
     modelType: detail.job.task_type,
-    datasetVersion: detail.job.dataset_version_id || 'Pending snapshot',
-    modelVersion: linkedVersion?.version_name ?? 'Pending registration',
+    datasetVersion: detail.job.dataset_version_id || t('Pending snapshot'),
+    modelVersion: linkedVersion?.version_name ?? t('Pending registration'),
     createdAt,
     startedAt: createdAt,
     durationSeconds,
@@ -684,8 +851,10 @@ const buildLiveSnapshot = (input: {
     bestMetricValue: bestMetric.value,
     deviceLabel:
       detail.job.execution_target === 'worker'
-        ? `Worker lane${detail.job.scheduled_worker_id ? ` · ${detail.job.scheduled_worker_id}` : ''}`
-        : 'Control plane lane',
+        ? t('Worker lane{suffix}', {
+            suffix: detail.job.scheduled_worker_id ? ` · ${detail.job.scheduled_worker_id}` : ''
+          })
+        : t('Control plane lane'),
     currentStageLabel: stages.currentStageLabel,
     autoTuningEnabled: tuning.trials.length > 0,
     tuningStrategy: tuning.strategy,
@@ -704,6 +873,9 @@ const buildLiveSnapshot = (input: {
     source: 'live',
     lastUpdatedAt,
     summary,
+    datasetLabel: datasetPreview.datasetLabel || detail.job.dataset_id,
+    datasetPreviews: datasetPreview.datasetPreviews,
+    datasetPreviewAvailability: datasetPreview.datasetPreviewAvailability,
     stages: stages.stages,
     metrics,
     resources,
@@ -712,12 +884,13 @@ const buildLiveSnapshot = (input: {
       detail,
       metrics,
       bestMetricLabel: bestMetric.label,
-      tuningEvents: tuning.eventLogs
+      tuningEvents: tuning.eventLogs,
+      t
     })
   };
 };
 
-const buildDemoTrials = (frame: number): TrainingCockpitTrial[] => {
+const buildDemoTrials = (frame: number, t: Translate): TrainingCockpitTrial[] => {
   const templates = [
     {
       id: 'trial-01',
@@ -730,7 +903,7 @@ const buildDemoTrials = (frame: number): TrainingCockpitTrial[] => {
         augmentation_strength: 0.42
       },
       score: 0.698,
-      note: 'Fast warmup candidate focused on stable recall.'
+      note: t('Fast warmup candidate focused on stable recall.')
     },
     {
       id: 'trial-02',
@@ -743,7 +916,7 @@ const buildDemoTrials = (frame: number): TrainingCockpitTrial[] => {
         augmentation_strength: 0.5
       },
       score: 0.734,
-      note: 'Expanded image size to test hard-example recovery.'
+      note: t('Expanded image size to test hard-example recovery.')
     },
     {
       id: 'trial-03',
@@ -756,7 +929,7 @@ const buildDemoTrials = (frame: number): TrainingCockpitTrial[] => {
         augmentation_strength: 0.47
       },
       score: 0.781,
-      note: 'Balanced convergence candidate promoted into main training.'
+      note: t('Balanced convergence candidate promoted into main training.')
     },
     {
       id: 'trial-04',
@@ -769,7 +942,7 @@ const buildDemoTrials = (frame: number): TrainingCockpitTrial[] => {
         augmentation_strength: 0.63
       },
       score: 0.753,
-      note: 'Higher augmentation was too unstable on validation.'
+      note: t('Higher augmentation was too unstable on validation.')
     },
     {
       id: 'trial-05',
@@ -782,7 +955,7 @@ const buildDemoTrials = (frame: number): TrainingCockpitTrial[] => {
         augmentation_strength: 0.44
       },
       score: 0.768,
-      note: 'Late-stage fine candidate reserved for next round.'
+      note: t('Late-stage fine candidate reserved for next round.')
     },
     {
       id: 'trial-06',
@@ -795,7 +968,7 @@ const buildDemoTrials = (frame: number): TrainingCockpitTrial[] => {
         augmentation_strength: 0.4
       },
       score: 0.774,
-      note: 'Projected follow-up candidate after main run.'
+      note: t('Projected follow-up candidate after main run.')
     }
   ] as const;
 
@@ -887,7 +1060,12 @@ const buildDemoResources = (frame: number, startedAt: string): TrainingCockpitRe
   });
 };
 
-const buildDemoEvents = (frame: number, startedAt: string, trialId: string | null): TrainingCockpitEventLog[] => {
+const buildDemoEvents = (
+  frame: number,
+  startedAt: string,
+  trialId: string | null,
+  t: Translate
+): TrainingCockpitEventLog[] => {
   const events: Array<{ frame: number; event: TrainingCockpitEventLog }> = [
     {
       frame: 0,
@@ -895,7 +1073,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-created',
         time: startedAt,
         level: 'info',
-        message: 'Training task created from dataset snapshot v14.',
+        message: t('Training task created from dataset snapshot v14.'),
         eventType: 'job',
         emphasis: true
       }
@@ -906,7 +1084,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-config',
         time: addSeconds(startedAt, 180),
         level: 'success',
-        message: 'Recipe and initial parameter envelope validated.',
+        message: t('Recipe and initial parameter envelope validated.'),
         eventType: 'config'
       }
     },
@@ -916,7 +1094,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-trial-1',
         time: addSeconds(startedAt, 420),
         level: 'info',
-        message: 'Trial #01 launched for warmup exploration.',
+        message: t('Trial #01 launched for warmup exploration.'),
         eventType: 'tuning'
       }
     },
@@ -926,7 +1104,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-trial-1-reject',
         time: addSeconds(startedAt, 720),
         level: 'warning',
-        message: 'Trial #01 rejected due to unstable validation recall.',
+        message: t('Trial #01 rejected due to unstable validation recall.'),
         eventType: 'tuning'
       }
     },
@@ -936,7 +1114,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-trial-2-pass',
         time: addSeconds(startedAt, 1020),
         level: 'success',
-        message: 'Trial #02 completed with better mAP and lower loss.',
+        message: t('Trial #02 completed with better mAP and lower loss.'),
         eventType: 'tuning'
       }
     },
@@ -946,7 +1124,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-best-selected',
         time: addSeconds(startedAt, 1310),
         level: 'success',
-        message: 'Trial #03 selected as current best; training config updated.',
+        message: t('Trial #03 selected as current best; training config updated.'),
         eventType: 'tuning',
         emphasis: true
       }
@@ -957,7 +1135,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-main-train',
         time: addSeconds(startedAt, 1780),
         level: 'info',
-        message: 'Main training resumed under the promoted parameter set.',
+        message: t('Main training resumed under the promoted parameter set.'),
         eventType: 'training'
       }
     },
@@ -967,7 +1145,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-best-weights',
         time: addSeconds(startedAt, 2220),
         level: 'success',
-        message: 'Best checkpoint refreshed after validation uplift.',
+        message: t('Best checkpoint refreshed after validation uplift.'),
         eventType: 'checkpoint'
       }
     },
@@ -977,7 +1155,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-validation',
         time: addSeconds(startedAt, 2860),
         level: 'success',
-        message: 'Validation sweep completed and artifact bundle sealed.',
+        message: t('Validation sweep completed and artifact bundle sealed.'),
         eventType: 'validation',
         emphasis: true
       }
@@ -988,7 +1166,7 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-register',
         time: addSeconds(startedAt, 3220),
         level: 'info',
-        message: 'Run is ready for model registration and publish handoff.',
+        message: t('Run is ready for model registration and publish handoff.'),
         eventType: 'handoff'
       }
     }
@@ -1001,7 +1179,9 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
         id: 'demo-params-applied',
         time: addSeconds(startedAt, 1400),
         level: 'success',
-        message: `Promoted parameters from ${trialId.toUpperCase()} are now active.`,
+        message: t('Promoted parameters from {trialId} are now active.', {
+          trialId: trialId.toUpperCase()
+        }),
         eventType: 'config'
       }
     });
@@ -1015,17 +1195,21 @@ const buildDemoEvents = (frame: number, startedAt: string, trialId: string | nul
 
 const buildDemoSnapshot = (
   frame: number,
-  liveSummary: TrainingCockpitSummary | null
+  liveSnapshot: TrainingCockpitSnapshot | null,
+  stageBlueprint: Array<Pick<TrainingCockpitStage, 'id' | 'label' | 'description'>>,
+  t: Translate
 ): TrainingCockpitSnapshot => {
   const totalEpoch = 30;
+  const liveSummary = liveSnapshot?.summary ?? null;
   const startedAt = safeIso(liveSummary?.createdAt, '2026-04-24T08:00:00.000Z');
   const metrics = buildDemoMetrics(frame, totalEpoch, startedAt);
   const resources = buildDemoResources(frame, startedAt);
-  const tuningTrials = buildDemoTrials(frame);
+  const tuningTrials = buildDemoTrials(frame, t);
   const promotedTrial = tuningTrials.find((trial) => trial.status === 'best') ?? null;
   const status =
     frame < 2 ? 'queued' : frame < 4 ? 'preparing' : frame < 29 ? 'running' : frame < 33 ? 'evaluating' : 'completed';
   const stages = buildStages({
+    stageBlueprint,
     status,
     hasVersion: false,
     tuningEnabled: true
@@ -1037,11 +1221,11 @@ const buildDemoSnapshot = (
     lastUpdatedAt: addSeconds(startedAt, durationSeconds),
     summary: {
       id: liveSummary?.id ?? 'demo-training-cockpit',
-      name: liveSummary?.name ?? 'surface-defect-tuning-demo',
+      name: liveSummary?.name ?? t('Surface defect tuning demo'),
       status,
       modelType: liveSummary?.modelType ?? 'detection',
       datasetVersion: liveSummary?.datasetVersion ?? 'dv-cockpit-demo-v14',
-      modelVersion: liveSummary?.modelVersion ?? 'Pending registration',
+      modelVersion: liveSummary?.modelVersion ?? t('Pending registration'),
       createdAt: startedAt,
       startedAt,
       durationSeconds,
@@ -1049,10 +1233,10 @@ const buildDemoSnapshot = (
       totalEpoch,
       bestMetricLabel: 'mAP',
       bestMetricValue: Number(bestMap.toFixed(4)),
-      deviceLabel: 'NVIDIA L40S · Worker GPU-03',
+      deviceLabel: t('NVIDIA L40S · Worker GPU-03'),
       currentStageLabel: stages.currentStageLabel,
       autoTuningEnabled: true,
-      tuningStrategy: 'Bayesian search',
+      tuningStrategy: t('Bayesian search'),
       tuningAttempt: tuningTrials.filter((trial) => trial.status !== 'pending').length,
       tuningTotal: tuningTrials.length,
       recommendedParamsApplied: frame >= 13,
@@ -1073,11 +1257,23 @@ const buildDemoSnapshot = (
         tuning: 'derived'
       }
     },
+    datasetLabel: liveSnapshot?.datasetLabel ?? t('Dataset gallery'),
+    datasetPreviews:
+      liveSnapshot?.datasetPreviews.map((preview) => ({
+        ...preview,
+        source: preview.source === 'real' ? 'real' : 'demo'
+      })) ?? [],
+    datasetPreviewAvailability:
+      liveSnapshot?.datasetPreviews.length
+        ? liveSnapshot.datasetPreviewAvailability
+        : liveSnapshot?.datasetPreviewAvailability === 'derived'
+          ? 'derived'
+          : 'unavailable',
     stages: stages.stages,
     metrics,
     resources,
     tuningTrials,
-    events: buildDemoEvents(frame, startedAt, promotedTrial?.trialId ?? null)
+    events: buildDemoEvents(frame, startedAt, promotedTrial?.trialId ?? null, t)
   };
 };
 
@@ -1085,6 +1281,7 @@ export default function useTrainingCockpit(
   jobId: string | undefined,
   initialMode: TrainingCockpitMode = 'live'
 ): TrainingCockpitController {
+  const { t } = useI18n();
   const [mode, setMode] = useState<TrainingCockpitMode>(initialMode);
   const [speed, setSpeed] = useState<TrainingCockpitPlaybackSpeed>(1);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -1093,12 +1290,13 @@ export default function useTrainingCockpit(
   const [liveSnapshot, setLiveSnapshot] = useState<TrainingCockpitSnapshot | null>(null);
   const [liveError, setLiveError] = useState('');
   const [liveUpdatedAt, setLiveUpdatedAt] = useState<string | null>(null);
+  const stageBlueprint = useMemo(() => buildStageBlueprint(t), [t]);
 
   const refreshLive = useCallback(async () => {
     if (!jobId) {
       startTransition(() => {
         setLiveStatus('error');
-        setLiveError('Missing training job id.');
+        setLiveError(t('Missing training job id.'));
         setLiveSnapshot(null);
         setLiveUpdatedAt(null);
       });
@@ -1112,17 +1310,22 @@ export default function useTrainingCockpit(
 
     try {
       const detail = await api.getTrainingJobDetail(jobId);
-      const [versionsResult, tasksResult] = await Promise.allSettled([
+      const [versionsResult, tasksResult, datasetDetailResult] = await Promise.allSettled([
         api.listModelVersions(),
-        api.listVisionTasks()
+        api.listVisionTasks(),
+        detail.job.dataset_id ? api.getDatasetDetail(detail.job.dataset_id) : Promise.resolve(null)
       ]);
       const versions = versionsResult.status === 'fulfilled' ? versionsResult.value : [];
       const tasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
+      const datasetDetail = datasetDetailResult.status === 'fulfilled' ? datasetDetailResult.value : null;
       const relatedTask = tasks.find((task) => task.training_job_id === detail.job.id) ?? null;
       const snapshot = buildLiveSnapshot({
         detail,
+        datasetDetail,
         versions,
-        relatedTask
+        relatedTask,
+        stageBlueprint,
+        t
       });
       startTransition(() => {
         setLiveSnapshot(snapshot);
@@ -1135,7 +1338,7 @@ export default function useTrainingCockpit(
         setLiveError((error as Error).message);
       });
     }
-  }, [jobId]);
+  }, [jobId, stageBlueprint, t]);
 
   useEffect(() => {
     void refreshLive();
@@ -1152,8 +1355,11 @@ export default function useTrainingCockpit(
   );
 
   const demoFrames = useMemo(
-    () => Array.from({ length: demoFrameCount }, (_, index) => buildDemoSnapshot(index, liveSnapshot?.summary ?? null)),
-    [liveSnapshot?.summary]
+    () =>
+      Array.from({ length: demoFrameCount }, (_, index) =>
+        buildDemoSnapshot(index, liveSnapshot, stageBlueprint, t)
+      ),
+    [liveSnapshot, stageBlueprint, t]
   );
 
   useEffect(() => {

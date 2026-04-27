@@ -2257,7 +2257,7 @@ export default function ConversationPage() {
         return t('Create Dataset');
       }
       if (action === 'create_training_job') {
-        return t('Create Training Job');
+        return t('Smart Launch');
       }
       if (action === 'run_model_inference') {
         return t('Run Inference');
@@ -2869,7 +2869,7 @@ export default function ConversationPage() {
             field === 'name' ||
             field === 'version_name'
           ) {
-            pushRequiresInputLink(t('Create Training Job'), trainingCreatePath);
+            pushRequiresInputLink(t('Smart Launch'), trainingCreatePath);
             continue;
           }
           if (field === 'model_id' || field === 'model_type' || field === 'visibility') {
@@ -2927,7 +2927,7 @@ export default function ConversationPage() {
         return [
           { label: t('Open Dataset Detail'), href: datasetDetailPath },
           { label: t('Open Annotation Workspace'), href: annotationWorkspacePath },
-          { label: t('Create Training Job'), href: trainingCreatePath }
+          { label: t('Smart Launch'), href: trainingCreatePath }
         ];
       }
       if (action.action === 'create_training_job') {

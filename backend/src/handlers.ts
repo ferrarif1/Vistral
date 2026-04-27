@@ -139,7 +139,17 @@ import type {
   ValidationReport,
   VerificationCheckRecord,
   VerificationReportRecord,
+  VisionTaskAgentAction,
+  VisionTaskActiveLearningPool,
+  VisionTaskAgentDecisionLogEntry,
+  VisionTaskComparisonDecision,
+  VisionTaskEvaluationSuite,
+  VisionTaskGateStatus,
+  VisionTaskAgentRecommendation,
   VisionModelingTaskRecord,
+  VisionTaskPromotionGate,
+  VisionTaskRunComparison,
+  VisionTaskRunComparisonEntry,
   VisionTaskSpec,
   VisionTaskType,
   DatasetProfile,
@@ -3449,6 +3459,62 @@ const generateVisionTaskSpec = async (input: {
   }
 };
 
+const normalizeDatasetProfileLabelToken = (value: unknown): string => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : '';
+};
+
+const extractDatasetProfileLabelsFromPayload = (payload: Record<string, unknown>): string[] => {
+  const labels: string[] = [];
+  const push = (value: unknown) => {
+    const normalized = normalizeDatasetProfileLabelToken(value);
+    if (normalized) {
+      labels.push(normalized);
+    }
+  };
+
+  push(payload.label);
+  push(payload.class_name);
+  push(payload.class);
+  push(payload.category);
+
+  const labelEntries = Array.isArray(payload.labels) ? payload.labels : [];
+  for (const entry of labelEntries) {
+    if (typeof entry === 'string') {
+      push(entry);
+      continue;
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    push(record.label);
+    push(record.class_name);
+    push(record.class);
+  }
+
+  const boxes = Array.isArray(payload.boxes) ? payload.boxes : [];
+  for (const entry of boxes) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    push((entry as Record<string, unknown>).label);
+  }
+
+  const polygons = Array.isArray(payload.polygons) ? payload.polygons : [];
+  for (const entry of polygons) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    push((entry as Record<string, unknown>).label);
+  }
+
+  return labels;
+};
+
 const buildDatasetProfileForVisionTask = (
   dataset: DatasetRecord,
   taskSpec: VisionTaskSpec
@@ -3479,6 +3545,43 @@ const buildDatasetProfileForVisionTask = (
     }
   }
   const charset = Array.from(charsetSet).slice(0, 300);
+  const labelCounts = new Map<string, number>();
+  for (const annotation of relatedAnnotations) {
+    for (const label of extractDatasetProfileLabelsFromPayload(annotation.payload)) {
+      labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+    }
+  }
+  const effectiveLabelNames = Array.from(new Set([...classNames, ...labelCounts.keys()]));
+  const observedLabelStats = Array.from(labelCounts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([label, count]) => ({
+      label,
+      count,
+      share: relatedAnnotations.length > 0 ? count / Math.max(1, Array.from(labelCounts.values()).reduce((sum, item) => sum + item, 0)) : 0
+    }))
+    .slice(0, 12);
+  const effectiveLabelStats = effectiveLabelNames.map((label) => ({
+    label,
+    count: labelCounts.get(label) ?? 0
+  }));
+  const maxLabelCount = effectiveLabelStats.reduce((max, item) => Math.max(max, item.count), 0);
+  const minLabelCount =
+    effectiveLabelStats.length > 0
+      ? effectiveLabelStats.reduce((min, item) => Math.min(min, item.count), Number.POSITIVE_INFINITY)
+      : Number.POSITIVE_INFINITY;
+  const labelBalanceScore =
+    taskSpec.task_type === 'ocr' || effectiveLabelStats.length <= 1 || maxLabelCount <= 0
+      ? null
+      : Number((minLabelCount / maxLabelCount).toFixed(4));
+  const longTailThreshold = maxLabelCount > 0 ? Math.max(1, Math.ceil(maxLabelCount * 0.2)) : 0;
+  const longTailLabels =
+    taskSpec.task_type === 'ocr' || effectiveLabelStats.length <= 1
+      ? []
+      : effectiveLabelStats
+          .filter((item) => item.count <= longTailThreshold)
+          .sort((left, right) => left.count - right.count || left.label.localeCompare(right.label))
+          .map((item) => item.label)
+          .slice(0, 6);
 
   const inferAnnotationFormat = (): string => {
     if (taskSpec.task_type === 'ocr') {
@@ -3547,6 +3650,68 @@ const buildDatasetProfileForVisionTask = (
   if (duplicateImages) {
     issues.push('duplicate_images');
   }
+  if (taskSpec.task_type === 'ocr' && charset.length > 0 && charset.length < 24) {
+    issues.push('narrow_charset_coverage');
+  }
+  if (
+    taskSpec.task_type !== 'ocr' &&
+    typeof labelBalanceScore === 'number' &&
+    Number.isFinite(labelBalanceScore) &&
+    labelBalanceScore < 0.35
+  ) {
+    issues.push('label_imbalance');
+  }
+
+  const attachmentCounts = new Map<string, number>();
+  for (const item of datasetTrainableItems) {
+    attachmentCounts.set(item.attachment_id, (attachmentCounts.get(item.attachment_id) ?? 0) + 1);
+  }
+  const duplicateAttachmentCount = Array.from(attachmentCounts.values()).reduce(
+    (sum, count) => sum + Math.max(0, count - 1),
+    0
+  );
+  const duplicateAttachmentRatio =
+    datasetTrainableItems.length > 0
+      ? Number((duplicateAttachmentCount / datasetTrainableItems.length).toFixed(4))
+      : 0;
+  const recommendedDataActions: string[] = [];
+  const pushDataAction = (action: string) => {
+    if (action && !recommendedDataActions.includes(action)) {
+      recommendedDataActions.push(action);
+    }
+  };
+  if (splitSummary.train <= 0) {
+    pushDataAction('add_train_split');
+  }
+  if (splitSummary.val <= 0) {
+    pushDataAction('add_validation_split');
+  }
+  if (labelCoverage < 0.8) {
+    pushDataAction('improve_label_coverage');
+  }
+  if (trainValAttachmentOverlap) {
+    pushDataAction('fix_split_overlap');
+  }
+  if (duplicateAttachmentRatio >= 0.12) {
+    pushDataAction('deduplicate_samples');
+  }
+  if (taskSpec.task_type === 'ocr' && charset.length < 24) {
+    pushDataAction('expand_charset_coverage');
+  }
+  if (
+    taskSpec.task_type !== 'ocr' &&
+    typeof labelBalanceScore === 'number' &&
+    Number.isFinite(labelBalanceScore) &&
+    labelBalanceScore < 0.4
+  ) {
+    pushDataAction('balance_long_tail_labels');
+  }
+  if (
+    taskSpec.task_type !== 'unknown' &&
+    toVisionTaskTypeFromTaskType(dataset.task_type) !== taskSpec.task_type
+  ) {
+    pushDataAction('realign_task_type');
+  }
 
   const blockingIssues = new Set([
     'no_trainable_images',
@@ -3572,7 +3737,16 @@ const buildDatasetProfileForVisionTask = (
     class_names: classNames,
     charset,
     issues,
-    is_trainable: !issues.some((issue) => blockingIssues.has(issue))
+    is_trainable: !issues.some((issue) => blockingIssues.has(issue)),
+    label_stats: observedLabelStats,
+    diagnostics: {
+      duplicate_attachment_ratio: duplicateAttachmentRatio,
+      split_overlap_detected: trainValAttachmentOverlap,
+      label_balance_score: labelBalanceScore,
+      long_tail_labels: longTailLabels,
+      charset_size: charset.length,
+      recommended_data_actions: recommendedDataActions
+    }
   };
 };
 
@@ -3902,6 +4076,829 @@ const resolveDatasetVersionForVisionTask = (task: VisionModelingTaskRecord): str
   return null;
 };
 
+const formatVisionTaskMetric = (value: number | null | undefined): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-';
+  }
+  if (value >= 10) {
+    return value.toFixed(1);
+  }
+  if (value >= 1) {
+    return value.toFixed(2);
+  }
+  return value.toFixed(4);
+};
+
+const toVisionTaskGateStatus = (
+  value: ValidationReport['summary']['pass_status'] | 'pending'
+): VisionTaskGateStatus => {
+  if (value === 'pass') {
+    return 'pass';
+  }
+  if (value === 'needs_review') {
+    return 'needs_review';
+  }
+  if (value === 'fail') {
+    return 'fail';
+  }
+  return 'pending';
+};
+
+const readThresholdRuleFromTask = (task: VisionModelingTaskRecord): ThresholdRule => {
+  const parsed = parseTaskMetadataJson<Partial<ThresholdRule> | null>(
+    task.metadata.threshold_rule_json,
+    null
+  );
+  if (
+    parsed &&
+    typeof parsed.primary_metric === 'string' &&
+    Array.isArray(parsed.aliases) &&
+    typeof parsed.threshold === 'number' &&
+    Number.isFinite(parsed.threshold)
+  ) {
+    return {
+      primary_metric: parsed.primary_metric.trim() || 'metric',
+      aliases: parsed.aliases
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .map((item) => item.trim()),
+      threshold: parsed.threshold
+    };
+  }
+  const taskType = toTaskTypeFromVisionTaskType(task.spec.task_type) ?? 'detection';
+  return metricAliasesByTaskType[taskType] ?? metricAliasesByTaskType.detection;
+};
+
+const buildVisionTaskEvaluationSuite = (
+  task: VisionModelingTaskRecord
+): VisionTaskEvaluationSuite => {
+  const thresholdRule = readThresholdRuleFromTask(task);
+  const configuredPrimaryMetric = task.training_plan?.eval_args.primary_metric?.trim() ?? '';
+  const thresholdSource: VisionTaskEvaluationSuite['threshold_source'] = configuredPrimaryMetric
+    ? 'training_plan'
+    : 'task_type_default';
+  const basis: string[] = [
+    task.dataset_version_id ? `dataset version ${task.dataset_version_id}` : '',
+    configuredPrimaryMetric
+      ? `training plan metric ${configuredPrimaryMetric}`
+      : `task default metric ${thresholdRule.primary_metric}`,
+    Number.isFinite(thresholdRule.threshold)
+      ? `threshold ${thresholdRule.primary_metric} >= ${formatVisionTaskMetric(thresholdRule.threshold)}`
+      : '',
+    task.training_plan?.recipe_id ? `recipe ${task.training_plan.recipe_id}` : ''
+  ].filter(Boolean);
+
+  return {
+    suite_id: `${task.id}:default-gate`,
+    title: 'Default evaluation suite',
+    summary:
+      'This suite defines the current metric contract the agent uses when deciding promote, retrain, or collect-data actions.',
+    primary_metric: configuredPrimaryMetric || thresholdRule.primary_metric,
+    threshold_target: thresholdRule.threshold,
+    status:
+      task.dataset_version_id && (configuredPrimaryMetric || thresholdRule.primary_metric)
+        ? 'ready'
+        : 'pending',
+    threshold_source: thresholdSource,
+    basis,
+    created_at: now()
+  };
+};
+
+const buildVisionTaskRunComparison = (
+  task: VisionModelingTaskRecord,
+  suite: VisionTaskEvaluationSuite
+): VisionTaskRunComparison => {
+  const history = readAutoTuneHistoryFromTask(task);
+  const candidates: VisionTaskRunComparisonEntry[] = history.map((entry) => ({
+    training_job_id: entry.training_job_id,
+    round: entry.round,
+    status: entry.status,
+    pass_status: toVisionTaskGateStatus(entry.pass_status ?? 'pending'),
+    primary_metric: entry.primary_metric ?? null,
+    primary_value: typeof entry.primary_value === 'number' ? entry.primary_value : null,
+    is_best: false,
+    is_challenger: false
+  }));
+  const rankedCandidates =
+    candidates
+      .filter((item) => typeof item.primary_value === 'number')
+      .sort(
+        (left, right) =>
+          (right.primary_value ?? Number.NEGATIVE_INFINITY) - (left.primary_value ?? Number.NEGATIVE_INFINITY) ||
+          right.round - left.round
+      );
+  const bestCandidate = rankedCandidates[0] ?? null;
+  const latestCandidate = candidates[candidates.length - 1] ?? null;
+  const firstCandidate = candidates[0] ?? null;
+  const challengerCandidate =
+    latestCandidate && bestCandidate && latestCandidate.training_job_id !== bestCandidate.training_job_id
+      ? latestCandidate
+      : rankedCandidates.find((item) => !bestCandidate || item.training_job_id !== bestCandidate.training_job_id) ?? null;
+  const feedbackDatasetId = (task.metadata.feedback_dataset_id ?? '').trim();
+  const hasFailedOrNeedReview =
+    latestCandidate?.pass_status === 'fail' || latestCandidate?.pass_status === 'needs_review';
+  const allRoundsConsumed =
+    candidates.length > 0 && candidates.length >= readAutoTuneRoundsFromTask(task).length;
+  const diagnostics = task.dataset_profile?.diagnostics ?? null;
+  const hasStrongDataIssues =
+    Boolean(task.dataset_profile?.issues.includes('label_imbalance')) ||
+    Boolean(task.dataset_profile?.issues.includes('narrow_charset_coverage')) ||
+    Boolean(task.dataset_profile?.issues.includes('duplicate_images')) ||
+    Boolean(task.dataset_profile?.issues.includes('train_val_overlap')) ||
+    Boolean(diagnostics?.split_overlap_detected) ||
+    Boolean(diagnostics && diagnostics.duplicate_attachment_ratio >= 0.12) ||
+    Boolean(
+      diagnostics?.recommended_data_actions.some((action) =>
+        ['balance_long_tail_labels', 'expand_charset_coverage', 'deduplicate_samples', 'fix_split_overlap'].includes(
+          action
+        )
+      )
+    );
+
+  for (const item of candidates) {
+    item.is_best = Boolean(bestCandidate && bestCandidate.training_job_id === item.training_job_id);
+    item.is_challenger = Boolean(
+      challengerCandidate && challengerCandidate.training_job_id === item.training_job_id
+    );
+  }
+
+  let decision: VisionTaskComparisonDecision = 'pending';
+  let title = 'Comparison pending';
+  let summary = 'The agent is waiting for enough evaluation history before comparing runs.';
+  let reason = 'No completed comparison-ready training evidence is linked yet.';
+
+  if (task.status === 'training_started' || latestCandidate?.status === 'running' || latestCandidate?.status === 'queued' || latestCandidate?.status === 'preparing' || latestCandidate?.status === 'evaluating') {
+    decision = 'observe';
+    title = 'Observe the active run';
+    summary = 'A training round is still active, so the best comparison decision is to wait for fresh metrics.';
+    reason = 'The current candidate is still running and would make comparison unstable if interpreted too early.';
+  } else if (!latestCandidate) {
+    decision = 'pending';
+  } else if (!task.model_version_id && bestCandidate?.pass_status === 'pass') {
+    decision = 'promote';
+    title = 'Promote the best run';
+    summary = 'At least one linked training round already passed the gate and is ready for model registration.';
+    reason = 'The best observed run cleared the current threshold, so promotion adds more value than rerunning the same lane.';
+  } else if (task.model_version_id && !feedbackDatasetId) {
+    decision = 'collect_data';
+    title = 'Collect more difficult data';
+    summary = 'The model version is already registered, so the next leverage comes from feedback data rather than more blind reruns.';
+    reason = 'A feedback dataset is still missing, which makes data loop closure the highest-value next step.';
+  } else if (hasFailedOrNeedReview && hasStrongDataIssues) {
+    decision = 'collect_data';
+    title = 'Collect more data before another round';
+    summary =
+      'The latest result is still below the target and dataset diagnostics already point to data work as the higher-leverage next step.';
+    reason =
+      'Current data signals suggest another blind round is less useful than improving coverage, balance, or cleanliness first.';
+  } else if (hasFailedOrNeedReview && allRoundsConsumed) {
+    decision = 'collect_data';
+    title = 'Collect more data before another round';
+    summary = 'The tried rounds are exhausted and the latest result is still below the desired gate.';
+    reason = 'More of the same training rounds is unlikely to help until the data quality or coverage changes.';
+  } else if (hasFailedOrNeedReview) {
+    decision = 'train_again';
+    title = 'Train again with the next candidate';
+    summary = 'The latest result is still below the desired gate, and more configured rounds are still available.';
+    reason = 'The current training history shows room for another iteration before switching to a data-collection strategy.';
+  } else {
+    decision = 'observe';
+    title = 'Observe and review';
+    summary = 'The current history does not point to a stronger mutation yet.';
+    reason = 'The linked evidence is stable enough to keep under review without forcing a new step immediately.';
+  }
+
+  return {
+    evaluation_suite_id: suite.suite_id,
+    decision,
+    title,
+    summary,
+    reason,
+    best_training_job_id: bestCandidate?.training_job_id ?? null,
+    champion_training_job_id: bestCandidate?.training_job_id ?? null,
+    challenger_training_job_id: challengerCandidate?.training_job_id ?? null,
+    latest_training_job_id: latestCandidate?.training_job_id ?? null,
+    champion_value: bestCandidate?.primary_value ?? null,
+    challenger_value: challengerCandidate?.primary_value ?? null,
+    champion_margin:
+      typeof bestCandidate?.primary_value === 'number' && typeof challengerCandidate?.primary_value === 'number'
+        ? bestCandidate.primary_value - challengerCandidate.primary_value
+        : null,
+    best_value: bestCandidate?.primary_value ?? null,
+    latest_value: latestCandidate?.primary_value ?? null,
+    improvement:
+      typeof bestCandidate?.primary_value === 'number' && typeof firstCandidate?.primary_value === 'number'
+        ? bestCandidate.primary_value - firstCandidate.primary_value
+        : null,
+    candidates,
+    created_at: now()
+  };
+};
+
+const buildVisionTaskPromotionGate = (
+  task: VisionModelingTaskRecord,
+  suite: VisionTaskEvaluationSuite,
+  comparison: VisionTaskRunComparison
+): VisionTaskPromotionGate => {
+  const currentValue = task.validation_report?.summary.primary_value ?? comparison.latest_value ?? null;
+  const bestValue = comparison.best_value ?? currentValue;
+  const passStatus = task.validation_report?.summary.pass_status ?? 'pending';
+  const gateStatus = toVisionTaskGateStatus(passStatus);
+
+  if (!task.training_job_id && comparison.candidates.length <= 0) {
+    return {
+      evaluation_suite_id: suite.suite_id,
+      status: 'pending',
+      title: 'Gate pending',
+      summary: 'No evaluated training run is linked yet, so promotion readiness is still pending.',
+      reason: 'The promotion gate can only be interpreted after at least one linked run reports metrics.',
+      threshold_metric: suite.primary_metric,
+      threshold_target: suite.threshold_target,
+      current_value: null,
+      best_value: null,
+      best_training_job_id: null,
+      created_at: now()
+    };
+  }
+
+  if (gateStatus === 'pending') {
+    return {
+      evaluation_suite_id: suite.suite_id,
+      status: 'pending',
+      title: 'Gate pending',
+      summary: 'The gate is waiting for a stable validation result before deciding on promotion.',
+      reason: 'Training history exists, but the current validation signal is not complete enough yet.',
+      threshold_metric: suite.primary_metric,
+      threshold_target: suite.threshold_target,
+      current_value: currentValue,
+      best_value: bestValue,
+      best_training_job_id: comparison.best_training_job_id,
+      created_at: now()
+    };
+  }
+
+  if (gateStatus === 'pass') {
+    return {
+      evaluation_suite_id: suite.suite_id,
+      status: 'pass',
+      title: 'Gate passed',
+      summary: 'Current evidence is strong enough to support model registration.',
+      reason: 'The linked validation result is already above the configured threshold for this task.',
+      threshold_metric: suite.primary_metric,
+      threshold_target: suite.threshold_target,
+      current_value: currentValue,
+      best_value: bestValue,
+      best_training_job_id: comparison.best_training_job_id,
+      created_at: now()
+    };
+  }
+
+  if (gateStatus === 'needs_review') {
+    return {
+      evaluation_suite_id: suite.suite_id,
+      status: 'needs_review',
+      title: 'Gate needs review',
+      summary: 'The current result is close to the target, but still needs human review before promotion.',
+      reason: 'The linked validation result is near the threshold and may still require another round or manual review.',
+      threshold_metric: suite.primary_metric,
+      threshold_target: suite.threshold_target,
+      current_value: currentValue,
+      best_value: bestValue,
+      best_training_job_id: comparison.best_training_job_id,
+      created_at: now()
+    };
+  }
+
+  return {
+    evaluation_suite_id: suite.suite_id,
+    status: 'fail',
+    title: 'Gate not passed',
+    summary: 'The current result is still below the required promotion threshold.',
+    reason:
+      comparison.decision === 'collect_data'
+        ? 'The comparison view suggests data quality or coverage should improve before more promotion attempts.'
+        : 'The current evidence still points to another training iteration before promotion.',
+    threshold_metric: suite.primary_metric,
+    threshold_target: suite.threshold_target,
+    current_value: currentValue,
+    best_value: bestValue,
+    best_training_job_id: comparison.best_training_job_id,
+    created_at: now()
+  };
+};
+
+const buildVisionTaskEvidence = (
+  task: VisionModelingTaskRecord,
+  currentJob: TrainingJobRecord | null
+): string[] => {
+  const evidence: string[] = [];
+  if (task.dataset_id) {
+    evidence.push(`dataset ${task.dataset_id}`);
+  }
+  if (task.dataset_version_id) {
+    evidence.push(`dataset version ${task.dataset_version_id}`);
+  }
+  if (currentJob) {
+    evidence.push(`training job ${currentJob.id} is ${currentJob.status}`);
+  }
+  if (task.validation_report?.summary.primary_metric) {
+    evidence.push(
+      `${task.validation_report.summary.primary_metric}=${formatVisionTaskMetric(task.validation_report.summary.primary_value)} (${task.validation_report.summary.pass_status})`
+    );
+  }
+  if (task.evaluation_suite) {
+    evidence.push(
+      `suite ${task.evaluation_suite.primary_metric} target ${task.evaluation_suite.threshold_target ?? '-'}`
+    );
+  }
+  if (task.dataset_profile?.diagnostics.recommended_data_actions.length) {
+    evidence.push(
+      `data actions ${task.dataset_profile.diagnostics.recommended_data_actions.slice(0, 2).join('/')}`
+    );
+  }
+  if (task.active_learning_pool && task.active_learning_pool.total_candidates > 0) {
+    evidence.push(`active pool ${task.active_learning_pool.total_candidates}`);
+  }
+  if (task.dataset_profile?.diagnostics.long_tail_labels.length) {
+    evidence.push(
+      `long-tail ${task.dataset_profile.diagnostics.long_tail_labels.slice(0, 3).join('/')}`
+    );
+  }
+  if (
+    task.spec.task_type === 'ocr' &&
+    task.dataset_profile?.diagnostics.charset_size &&
+    task.dataset_profile.diagnostics.charset_size > 0
+  ) {
+    evidence.push(`charset ${task.dataset_profile.diagnostics.charset_size}`);
+  }
+  if (task.model_version_id) {
+    evidence.push(`model version ${task.model_version_id}`);
+  }
+  const feedbackDatasetId = (task.metadata.feedback_dataset_id ?? '').trim();
+  if (feedbackDatasetId) {
+    evidence.push(`feedback dataset ${feedbackDatasetId}`);
+  }
+  return evidence.slice(0, 6);
+};
+
+const labelVisionTaskConversationAction = (
+  action: VisionTaskAgentAction,
+  chinese: boolean
+): string => {
+  if (chinese) {
+    switch (action) {
+      case 'requires_input':
+        return '补齐条件';
+      case 'start_training':
+        return '继续训练';
+      case 'wait_training':
+        return '等待训练完成';
+      case 'collect_data':
+        return '先补数据';
+      case 'register_model':
+        return '注册模型版本';
+      case 'mine_feedback':
+        return '生成反馈数据集';
+      default:
+        return '保持当前状态';
+    }
+  }
+  switch (action) {
+    case 'requires_input':
+      return 'fill missing requirements';
+    case 'start_training':
+      return 'continue training';
+    case 'wait_training':
+      return 'wait for training';
+    case 'collect_data':
+      return 'collect more data';
+    case 'register_model':
+      return 'register the model version';
+    case 'mine_feedback':
+      return 'mine the feedback dataset';
+    default:
+      return 'keep current state';
+  }
+};
+
+const labelVisionTaskConversationGate = (
+  status: VisionTaskGateStatus,
+  chinese: boolean
+): string => {
+  if (chinese) {
+    switch (status) {
+      case 'pass':
+        return '已通过';
+      case 'needs_review':
+        return '待复核';
+      case 'fail':
+        return '未通过';
+      default:
+        return '待判定';
+    }
+  }
+  switch (status) {
+    case 'pass':
+      return 'passed';
+    case 'needs_review':
+      return 'needs review';
+    case 'fail':
+      return 'not passed';
+    default:
+      return 'pending';
+  }
+};
+
+const labelVisionTaskConversationDecision = (
+  decision: VisionTaskComparisonDecision,
+  chinese: boolean
+): string => {
+  if (chinese) {
+    switch (decision) {
+      case 'promote':
+        return '建议提升';
+      case 'train_again':
+        return '建议再训';
+      case 'collect_data':
+        return '建议补数据';
+      case 'observe':
+        return '继续观察';
+      default:
+        return '待决策';
+    }
+  }
+  switch (decision) {
+    case 'promote':
+      return 'promote';
+    case 'train_again':
+      return 'train again';
+    case 'collect_data':
+      return 'collect data';
+    case 'observe':
+      return 'observe';
+    default:
+      return 'pending';
+  }
+};
+
+const labelVisionTaskConversationDataAction = (
+  action: string,
+  chinese: boolean
+): string => {
+  if (chinese) {
+    switch (action) {
+      case 'add_train_split':
+        return '补充训练切分';
+      case 'add_validation_split':
+        return '补充验证切分';
+      case 'improve_label_coverage':
+        return '提升标注覆盖率';
+      case 'fix_split_overlap':
+        return '修复切分重叠';
+      case 'deduplicate_samples':
+        return '去重样本';
+      case 'expand_charset_coverage':
+        return '扩展字符覆盖';
+      case 'balance_long_tail_labels':
+        return '补齐长尾标签样本';
+      case 'realign_task_type':
+        return '校正任务类型与标签定义';
+      default:
+        return action;
+    }
+  }
+  switch (action) {
+    case 'add_train_split':
+      return 'add train split';
+    case 'add_validation_split':
+      return 'add validation split';
+    case 'improve_label_coverage':
+      return 'improve label coverage';
+    case 'fix_split_overlap':
+      return 'fix split overlap';
+    case 'deduplicate_samples':
+      return 'deduplicate samples';
+    case 'expand_charset_coverage':
+      return 'expand charset coverage';
+    case 'balance_long_tail_labels':
+      return 'balance long-tail labels';
+    case 'realign_task_type':
+      return 'realign task type';
+    default:
+      return action;
+  }
+};
+
+const buildVisionTaskConversationEvidenceSummary = (input: {
+  task: VisionModelingTaskRecord;
+  chinese: boolean;
+  includeNextAction?: boolean;
+}): string => {
+  const { task, chinese, includeNextAction = true } = input;
+  const parts: string[] = [];
+  if (task.evaluation_suite) {
+    parts.push(
+      chinese
+        ? `评测契约：${task.evaluation_suite.primary_metric} >= ${task.evaluation_suite.threshold_target === null ? '-' : formatVisionTaskMetric(task.evaluation_suite.threshold_target)}。`
+        : `Evaluation suite: ${task.evaluation_suite.primary_metric} >= ${task.evaluation_suite.threshold_target === null ? '-' : formatVisionTaskMetric(task.evaluation_suite.threshold_target)}.`
+    );
+  }
+  if (task.promotion_gate) {
+    parts.push(
+      chinese
+        ? `当前门禁：${labelVisionTaskConversationGate(task.promotion_gate.status, true)}。`
+        : `Gate: ${labelVisionTaskConversationGate(task.promotion_gate.status, false)}.`
+    );
+  }
+  if (task.run_comparison) {
+    const champion =
+      task.run_comparison.champion_training_job_id && typeof task.run_comparison.champion_value === 'number'
+        ? `${task.run_comparison.champion_training_job_id} (${formatVisionTaskMetric(task.run_comparison.champion_value)})`
+        : '';
+    const challenger =
+      task.run_comparison.challenger_training_job_id && typeof task.run_comparison.challenger_value === 'number'
+        ? `${task.run_comparison.challenger_training_job_id} (${formatVisionTaskMetric(task.run_comparison.challenger_value)})`
+        : '';
+    const margin =
+      typeof task.run_comparison.champion_margin === 'number'
+        ? formatVisionTaskMetric(task.run_comparison.champion_margin)
+        : '';
+    parts.push(
+      chinese
+        ? `对比结论：${labelVisionTaskConversationDecision(task.run_comparison.decision, true)}。`
+        : `Comparison: ${labelVisionTaskConversationDecision(task.run_comparison.decision, false)}.`
+    );
+    if (champion && challenger) {
+      parts.push(
+        chinese
+          ? `Champion=${champion}，Challenger=${challenger}${margin ? `，领先 ${margin}` : ''}。`
+          : `Champion=${champion}, challenger=${challenger}${margin ? `, margin ${margin}` : ''}.`
+      );
+    } else if (champion) {
+      parts.push(
+        chinese
+          ? `当前最佳训练任务：${champion}。`
+          : `Current best training job: ${champion}.`
+      );
+    }
+  }
+  if (task.dataset_profile?.diagnostics.recommended_data_actions.length > 0) {
+    parts.push(
+      chinese
+        ? `数据建议：${task.dataset_profile.diagnostics.recommended_data_actions
+            .slice(0, 3)
+            .map((action) => labelVisionTaskConversationDataAction(action, true))
+            .join('、')}。`
+        : `Data actions: ${task.dataset_profile.diagnostics.recommended_data_actions
+            .slice(0, 3)
+            .map((action) => labelVisionTaskConversationDataAction(action, false))
+            .join(', ')}.`
+    );
+  }
+  if (task.active_learning_pool) {
+    parts.push(
+      task.active_learning_pool.total_candidates > 0
+        ? chinese
+          ? `主动学习池：${task.active_learning_pool.total_candidates} 个候选，${task.active_learning_pool.clusters.length} 个簇。`
+          : `Active-learning pool: ${task.active_learning_pool.total_candidates} candidates across ${task.active_learning_pool.clusters.length} clusters.`
+        : chinese
+          ? '主动学习池当前没有新的候选样本。'
+          : 'Active-learning pool currently has no new candidates.'
+    );
+  }
+  if (includeNextAction && task.agent_next_action) {
+    parts.push(
+      chinese
+        ? `下一步建议：${labelVisionTaskConversationAction(task.agent_next_action.action, true)}。`
+        : `Recommended next step: ${labelVisionTaskConversationAction(task.agent_next_action.action, false)}.`
+    );
+  }
+  return parts.join(chinese ? ' ' : ' ').trim();
+};
+
+const sameVisionTaskRecommendationMeaning = (
+  left: VisionTaskAgentRecommendation | null,
+  right: VisionTaskAgentRecommendation
+): boolean => {
+  if (!left) {
+    return false;
+  }
+  return (
+    left.action === right.action &&
+    left.title === right.title &&
+    left.summary === right.summary &&
+    left.reason === right.reason &&
+    left.requires_confirmation === right.requires_confirmation &&
+    JSON.stringify(left.blocking_items) === JSON.stringify(right.blocking_items) &&
+    JSON.stringify(left.evidence) === JSON.stringify(right.evidence)
+  );
+};
+
+const appendVisionTaskDecisionLog = (
+  task: VisionModelingTaskRecord,
+  entry: VisionTaskAgentDecisionLogEntry
+): boolean => {
+  const head = task.agent_decision_log[0] ?? null;
+  if (
+    head &&
+    head.action === entry.action &&
+    head.outcome === entry.outcome &&
+    head.summary === entry.summary &&
+    head.reason === entry.reason
+  ) {
+    return false;
+  }
+  task.agent_decision_log = [entry, ...task.agent_decision_log].slice(0, 24);
+  return true;
+};
+
+const buildVisionTaskAgentRecommendation = (
+  task: VisionModelingTaskRecord
+): VisionTaskAgentRecommendation => {
+  const currentJob = task.training_job_id
+    ? trainingJobs.find((item) => item.id === task.training_job_id) ?? null
+    : null;
+  const passStatus = task.validation_report?.summary.pass_status ?? 'needs_review';
+  const feedbackDatasetId = (task.metadata.feedback_dataset_id ?? '').trim();
+  const evidence = buildVisionTaskEvidence(task, currentJob);
+  const gate = task.promotion_gate;
+  const comparison = task.run_comparison;
+  const base = {
+    blocking_items: [] as string[],
+    evidence,
+    created_at: now()
+  };
+
+  if (task.missing_requirements.length > 0) {
+    return {
+      action: 'requires_input',
+      title: 'Missing requirements',
+      summary: 'Provide the missing requirements before the agent can continue.',
+      reason: 'The task is still blocked by missing inputs or unresolved dataset readiness requirements.',
+      blocking_items: [...task.missing_requirements],
+      requires_confirmation: false,
+      evidence: evidence.length > 0 ? evidence : ['task understanding is still incomplete'],
+      created_at: base.created_at
+    };
+  }
+
+  if (
+    currentJob &&
+    currentJob.status !== 'completed' &&
+    currentJob.status !== 'failed' &&
+    currentJob.status !== 'cancelled'
+  ) {
+    return {
+      action: 'wait_training',
+      title: 'Training is in progress',
+      summary: 'Wait for the active training run to finish before choosing the next mutation.',
+      reason: 'A linked training run is still active, so the next safe step is to observe rather than mutate.',
+      ...base,
+      requires_confirmation: false
+    };
+  }
+
+  if (!task.training_job_id) {
+    return {
+      action: 'start_training',
+      title: 'Ready to launch training',
+      summary: 'The task has enough structure to start the first training round.',
+      reason: 'Dataset context and task understanding are present, so the next productive step is to launch training.',
+      ...base,
+      requires_confirmation: true
+    };
+  }
+
+  if (!task.model_version_id && passStatus === 'pass') {
+    return {
+      action: 'register_model',
+      title: 'Register the model version',
+      summary:
+        comparison?.summary ??
+        'Metrics passed the current gate; the next step is to register the resulting model version.',
+      reason:
+        gate?.reason ??
+        'The linked training job already meets the current validation threshold, so promotion is safer than launching another round.',
+      ...base,
+      requires_confirmation: true
+    };
+  }
+
+  if (!task.model_version_id) {
+    if (comparison?.decision === 'collect_data') {
+      return {
+        action: 'collect_data',
+        title: comparison.title,
+        summary: comparison.summary,
+        reason: comparison.reason,
+        ...base,
+        requires_confirmation: false
+      };
+    }
+    const currentJobStatus = currentJob?.status ?? 'completed';
+    return {
+      action: 'start_training',
+      title: 'Run the next training round',
+      summary:
+        comparison?.summary ??
+        'The current metrics are still below the target gate, so the agent recommends another round.',
+      reason:
+        comparison?.reason ??
+        `The latest linked run ended with ${currentJobStatus} and the validation result is ${passStatus}.`,
+      ...base,
+      requires_confirmation: true
+    };
+  }
+
+  if (!feedbackDatasetId) {
+    return {
+      action: 'mine_feedback',
+      title: 'Mine a feedback dataset',
+      summary:
+        task.active_learning_pool?.summary ??
+        'The model version is registered. Next, collect low-confidence runs into a feedback dataset.',
+      reason:
+        task.active_learning_pool && task.active_learning_pool.total_candidates > 0
+          ? 'A clustered active-learning pool is already available, so feedback mining is the highest-leverage next step.'
+          : 'Closing the data loop is the highest-value next step once a model version already exists.',
+      ...base,
+      requires_confirmation: true
+    };
+  }
+
+  return {
+    action: 'completed',
+    title: 'Closed loop is ready',
+    summary: 'Training, registration, and feedback dataset creation are already linked on this task.',
+    reason: 'The task has a linked model version and feedback dataset, so the workflow is ready for iterative reuse rather than a forced next mutation.',
+    ...base,
+    requires_confirmation: false
+  };
+};
+
+const refreshVisionTaskAgentState = (task: VisionModelingTaskRecord): boolean => {
+  let changed = false;
+  const suite = buildVisionTaskEvaluationSuite(task);
+  if (JSON.stringify(task.evaluation_suite) !== JSON.stringify(suite)) {
+    task.evaluation_suite = suite;
+    changed = true;
+  }
+  const comparison = buildVisionTaskRunComparison(task, suite);
+  if (JSON.stringify(task.run_comparison) !== JSON.stringify(comparison)) {
+    task.run_comparison = comparison;
+    changed = true;
+  }
+  const activeLearningPool = buildVisionTaskActiveLearningPool(task);
+  if (JSON.stringify(task.active_learning_pool) !== JSON.stringify(activeLearningPool)) {
+    task.active_learning_pool = activeLearningPool;
+    changed = true;
+  }
+  const gate = buildVisionTaskPromotionGate(task, suite, comparison);
+  if (JSON.stringify(task.promotion_gate) !== JSON.stringify(gate)) {
+    task.promotion_gate = gate;
+    changed = true;
+  }
+  const recommendation = buildVisionTaskAgentRecommendation(task);
+  if (sameVisionTaskRecommendationMeaning(task.agent_next_action, recommendation)) {
+    return changed;
+  }
+  task.agent_next_action = recommendation;
+  appendVisionTaskDecisionLog(task, {
+    action: recommendation.action,
+    outcome: 'recommended',
+    summary: recommendation.summary,
+    reason: recommendation.reason,
+    created_at: recommendation.created_at
+  });
+  return true;
+};
+
+const recordVisionTaskAgentOutcome = (
+  task: VisionModelingTaskRecord,
+  action: VisionTaskAgentDecisionLogEntry['action'],
+  outcome: VisionTaskAgentDecisionLogEntry['outcome'],
+  summary: string,
+  reason: string
+): boolean =>
+  appendVisionTaskDecisionLog(task, {
+    action,
+    outcome,
+    summary,
+    reason,
+    created_at: now()
+  });
+
+const persistVisionTaskStateIfChanged = (
+  task: VisionModelingTaskRecord,
+  changed: boolean
+) => {
+  if (!changed) {
+    return;
+  }
+  task.updated_at = now();
+  markAppStateDirty();
+};
+
 const syncVisionTaskWithRuntimeState = (task: VisionModelingTaskRecord): boolean => {
   let changed = false;
   if (task.training_job_id) {
@@ -3945,6 +4942,9 @@ const syncVisionTaskWithRuntimeState = (task: VisionModelingTaskRecord): boolean
   if (linkedVersion && task.model_version_id !== linkedVersion.id) {
     task.model_version_id = linkedVersion.id;
     task.model_id = linkedVersion.model_id;
+    changed = true;
+  }
+  if (refreshVisionTaskAgentState(task)) {
     changed = true;
   }
   if (changed) {
@@ -4042,6 +5042,7 @@ const upsertVisionModelingTask = (input: {
       ...existing.metadata,
       ...(input.metadata ?? {})
     };
+    refreshVisionTaskAgentState(existing);
     existing.updated_at = now();
     markAppStateDirty();
     return existing;
@@ -4060,6 +5061,12 @@ const upsertVisionModelingTask = (input: {
     training_plan: input.trainingPlan,
     validation_report: input.validationReport ?? null,
     missing_requirements: [...input.missingRequirements],
+    agent_next_action: null,
+    agent_decision_log: [],
+    evaluation_suite: null,
+    promotion_gate: null,
+    run_comparison: null,
+    active_learning_pool: null,
     training_job_id: input.trainingJobId ?? null,
     model_id: input.modelId ?? null,
     model_version_id: input.modelVersionId ?? null,
@@ -4068,6 +5075,7 @@ const upsertVisionModelingTask = (input: {
     created_at: now(),
     updated_at: now()
   };
+  refreshVisionTaskAgentState(created);
   visionModelingTasks.unshift(created);
   markAppStateDirty();
   return created;
@@ -6931,9 +7939,14 @@ const executeGoalOrchestration = async (input: {
   }
 
   if (!autoAdvance) {
+    const evidenceSummary = buildVisionTaskConversationEvidenceSummary({
+      task,
+      chinese,
+      includeNextAction: true
+    });
     const summary = chinese
-      ? `我已将目标整理为视觉建模任务 ${task.id}，当前信息已齐备。你可以继续自动推进，或在任务详情里手动控制下一步。`
-      : `I organized this goal into vision task ${task.id}. The task is ready, and you can either continue automatically or open the task detail for manual control.`;
+      ? `我已将目标整理为视觉建模任务 ${task.id}，当前信息已齐备。你可以继续自动推进，或在任务详情里手动控制下一步。${evidenceSummary ? ` ${evidenceSummary}` : ''}`
+      : `I organized this goal into vision task ${task.id}. The task is ready, and you can either continue automatically or open the task detail for manual control.${evidenceSummary ? ` ${evidenceSummary}` : ''}`;
     return {
       content: summary,
       metadata: toActionMetadata(
@@ -6966,9 +7979,14 @@ const executeGoalOrchestration = async (input: {
 
   if (!input.confirmed) {
     const confirmationPhrase = resolveConfirmationPhrase(input.content, input.pendingAction);
+    const evidenceSummary = buildVisionTaskConversationEvidenceSummary({
+      task,
+      chinese,
+      includeNextAction: true
+    });
     const summary = chinese
-      ? `我已经把目标整理为视觉建模任务 ${task.id}，并准备继续自动推进下一步。若要真正执行，请回复“${confirmationPhrase}”。`
-      : `I organized this goal into vision task ${task.id} and I am ready to continue automatically. Reply "${confirmationPhrase}" to execute the next step.`;
+      ? `我已经把目标整理为视觉建模任务 ${task.id}，并准备继续自动推进下一步。若要真正执行，请回复“${confirmationPhrase}”。${evidenceSummary ? ` ${evidenceSummary}` : ''}`
+      : `I organized this goal into vision task ${task.id} and I am ready to continue automatically. Reply "${confirmationPhrase}" to execute the next step.${evidenceSummary ? ` ${evidenceSummary}` : ''}`;
     return {
       content: summary,
       metadata: toActionMetadata(
@@ -7006,10 +8024,15 @@ const executeGoalOrchestration = async (input: {
     task_id: task.id,
     max_rounds: maxRounds
   });
+  const evidenceSummary = buildVisionTaskConversationEvidenceSummary({
+    task: advanced.task,
+    chinese,
+    includeNextAction: true
+  });
 
   const advancedSummary = chinese
-    ? `我已按“最少人工操作”路径继续执行：${advanced.message}`
-    : `I continued on the least-manual path: ${advanced.message}`;
+    ? `我已按“最少人工操作”路径继续执行：${advanced.message}${evidenceSummary ? ` ${evidenceSummary}` : ''}`
+    : `I continued on the least-manual path: ${advanced.message}${evidenceSummary ? ` ${evidenceSummary}` : ''}`;
   return {
     content: advancedSummary,
     metadata: toActionMetadata(
@@ -7364,9 +8387,14 @@ const resolveConsoleApiAction = async (
         ...(Number.isFinite(maxRoundsRaw) ? { max_rounds: maxRoundsRaw } : {}),
         ...(typeof force === 'boolean' ? { force } : {})
       });
+      const evidenceSummary = buildVisionTaskConversationEvidenceSummary({
+        task: result.task,
+        chinese: hasChineseText(content),
+        includeNextAction: true
+      });
       const summary = hasChineseText(content)
-        ? `控制台 API auto_continue_vision_task 已执行：${result.launched ? '已发起训练' : '未发起训练'}，原因 ${result.reason}。`
-        : `Console API auto_continue_vision_task executed: launched=${result.launched ? 'true' : 'false'}, reason=${result.reason}.`;
+        ? `控制台 API auto_continue_vision_task 已执行：${result.launched ? '已发起训练' : '未发起训练'}，原因 ${result.reason}。${evidenceSummary ? ` ${evidenceSummary}` : ''}`
+        : `Console API auto_continue_vision_task executed: launched=${result.launched ? 'true' : 'false'}, reason=${result.reason}.${evidenceSummary ? ` ${evidenceSummary}` : ''}`;
       return {
         content: summary,
         metadata: toActionMetadata(
@@ -7405,9 +8433,14 @@ const resolveConsoleApiAction = async (
         ...(Number.isFinite(maxRoundsRaw) ? { max_rounds: maxRoundsRaw } : {}),
         ...(typeof force === 'boolean' ? { force } : {})
       });
+      const evidenceSummary = buildVisionTaskConversationEvidenceSummary({
+        task: result.task,
+        chinese: hasChineseText(content),
+        includeNextAction: true
+      });
       const summary = hasChineseText(content)
-        ? `控制台 API auto_advance_vision_task 已执行：${result.action}，${result.message}`
-        : `Console API auto_advance_vision_task executed: action=${result.action}, message=${result.message}`;
+        ? `控制台 API auto_advance_vision_task 已执行：${result.action}，${result.message}${evidenceSummary ? ` ${evidenceSummary}` : ''}`
+        : `Console API auto_advance_vision_task executed: action=${result.action}, message=${result.message}${evidenceSummary ? ` ${evidenceSummary}` : ''}`;
       return {
         content: summary,
         metadata: toActionMetadata(
@@ -15697,7 +16730,7 @@ const understandVisionTaskForContext = async (input: {
 }): Promise<{
   task: VisionModelingTaskRecord;
   can_start_training: boolean;
-}> {
+}> => {
   const existingTask =
     typeof input.task_id === 'string' && input.task_id.trim()
       ? findVisionModelingTask(input.task_id.trim())
@@ -15893,6 +16926,17 @@ export async function autoContinueVisionTask(input: {
   const latestRound = latestHistory[latestHistory.length - 1] ?? null;
   const force = input.force === true;
   if (latestRound && latestRound.pass_status === 'pass' && !force) {
+    let changed = recordVisionTaskAgentOutcome(
+      task,
+      'start_training',
+      'skipped',
+      'Skipped launching another round.',
+      'The current linked training evidence already reached the threshold.'
+    );
+    if (refreshVisionTaskAgentState(task)) {
+      changed = true;
+    }
+    persistVisionTaskStateIfChanged(task, changed);
     return {
       task,
       launched: false,
@@ -15902,6 +16946,17 @@ export async function autoContinueVisionTask(input: {
     };
   }
   if (latestRound && latestRound.status !== 'completed' && latestRound.status !== 'failed' && latestRound.status !== 'cancelled') {
+    let changed = recordVisionTaskAgentOutcome(
+      task,
+      'wait_training',
+      'skipped',
+      'Skipped launch because a round is still running.',
+      'The previous linked round is still active.'
+    );
+    if (refreshVisionTaskAgentState(task)) {
+      changed = true;
+    }
+    persistVisionTaskStateIfChanged(task, changed);
     return {
       task,
       launched: false,
@@ -15913,6 +16968,17 @@ export async function autoContinueVisionTask(input: {
   const usedRounds = new Set(latestRound ? latestHistory.map((item) => item.round) : history.map((item) => item.round));
   const nextRoundConfig = rounds.find((item) => item.round <= maxRounds && !usedRounds.has(item.round)) ?? null;
   if (!nextRoundConfig) {
+    let changed = recordVisionTaskAgentOutcome(
+      task,
+      'start_training',
+      'skipped',
+      'No unused round remained inside the current limit.',
+      'The current round budget is exhausted.'
+    );
+    if (refreshVisionTaskAgentState(task)) {
+      changed = true;
+    }
+    persistVisionTaskStateIfChanged(task, changed);
     return {
       task,
       launched: false,
@@ -15951,6 +17017,14 @@ export async function autoContinueVisionTask(input: {
     auto_tune_active_round: String(nextRoundConfig.round),
     auto_tune_last_launch_at: now()
   };
+  recordVisionTaskAgentOutcome(
+    task,
+    'start_training',
+    'executed',
+    'Started the next training round.',
+    'Launched a linked training job from this vision task context.'
+  );
+  refreshVisionTaskAgentState(task);
   task.updated_at = now();
   markAppStateDirty();
   logAudit('vision_task_auto_continue_launched', 'VisionTask', task.id, {
@@ -15976,8 +17050,15 @@ const resolveInferenceQualityScore = (run: InferenceRunRecord): number => {
     }
     return scores.reduce((sum, score) => sum + score, 0) / scores.length;
   }
-  if (run.task_type === 'detection' || run.task_type === 'obb') {
+  if (run.task_type === 'detection') {
     const scores = run.normalized_output.boxes.map((item) => item.score);
+    if (scores.length <= 0) {
+      return 0;
+    }
+    return scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  }
+  if (run.task_type === 'obb') {
+    const scores = run.normalized_output.rotated_boxes.map((item) => item.score);
     if (scores.length <= 0) {
       return 0;
     }
@@ -15987,13 +17068,273 @@ const resolveInferenceQualityScore = (run: InferenceRunRecord): number => {
     return run.normalized_output.labels[0]?.score ?? 0;
   }
   if (run.task_type === 'segmentation') {
-    const scores = run.normalized_output.masks.map((item) => item.score);
+    const scores = [
+      ...run.normalized_output.masks.map((item) => item.score),
+      ...run.normalized_output.polygons.map((item) => item.score)
+    ];
     if (scores.length <= 0) {
       return 0;
     }
     return scores.reduce((sum, score) => sum + score, 0) / scores.length;
   }
   return 0;
+};
+
+type VisionTaskActiveLearningScoredRun = {
+  run: InferenceRunRecord;
+  score: number;
+  cluster_id: string;
+  cluster_title: string;
+};
+
+const resolveVisionTaskFeedbackModelVersionIds = (
+  task: VisionModelingTaskRecord
+): Set<string> => {
+  const modelVersionIds = new Set<string>();
+  if (task.model_version_id) {
+    modelVersionIds.add(task.model_version_id);
+  }
+  if (task.training_job_id) {
+    for (const version of modelVersions) {
+      if (version.training_job_id === task.training_job_id) {
+        modelVersionIds.add(version.id);
+      }
+    }
+  }
+  return modelVersionIds;
+};
+
+const resolveVisionTaskFeedbackCandidateRuns = (
+  task: VisionModelingTaskRecord,
+  options?: { excludeExistingFeedbackDataset?: boolean }
+): InferenceRunRecord[] => {
+  const modelVersionIds = resolveVisionTaskFeedbackModelVersionIds(task);
+  if (modelVersionIds.size <= 0) {
+    return [];
+  }
+  const existingFeedbackDatasetId = (task.metadata.feedback_dataset_id ?? '').trim();
+  return inferenceRuns
+    .filter((run) => modelVersionIds.has(run.model_version_id))
+    .filter((run) => run.status === 'completed')
+    .filter((run) =>
+      options?.excludeExistingFeedbackDataset && existingFeedbackDatasetId
+        ? run.feedback_dataset_id !== existingFeedbackDatasetId
+        : true
+    )
+    .sort(
+      (left, right) =>
+        resolveInferenceQualityScore(left) - resolveInferenceQualityScore(right) ||
+        Date.parse(right.updated_at) - Date.parse(left.updated_at)
+    );
+};
+
+const classifyVisionTaskActiveLearningRun = (
+  run: InferenceRunRecord,
+  score: number
+): { cluster_id: string; cluster_title: string } => {
+  if (run.task_type === 'ocr') {
+    const lines = run.normalized_output.ocr.lines ?? [];
+    const textLength = lines.reduce((sum, item) => sum + item.text.trim().length, 0);
+    if (lines.length <= 0) {
+      return { cluster_id: 'no_text_detected', cluster_title: 'No text detected' };
+    }
+    if (score < 0.55) {
+      return { cluster_id: 'low_confidence_text', cluster_title: 'Low-confidence text' };
+    }
+    if (textLength > 0 && textLength <= 6) {
+      return { cluster_id: 'short_ocr_lines', cluster_title: 'Short OCR lines' };
+    }
+    return { cluster_id: 'general_review_queue', cluster_title: 'General review queue' };
+  }
+
+  if (run.task_type === 'detection' || run.task_type === 'obb') {
+    const objects =
+      run.task_type === 'obb' ? run.normalized_output.rotated_boxes : run.normalized_output.boxes;
+    if (objects.length <= 0) {
+      return { cluster_id: 'no_objects_detected', cluster_title: 'No objects detected' };
+    }
+    if (score < 0.45) {
+      return { cluster_id: 'low_confidence_objects', cluster_title: 'Low-confidence objects' };
+    }
+    if (objects.length >= 6) {
+      return { cluster_id: 'crowded_object_scenes', cluster_title: 'Crowded object scenes' };
+    }
+    return { cluster_id: 'general_review_queue', cluster_title: 'General review queue' };
+  }
+
+  if (run.task_type === 'segmentation') {
+    const masks = [...run.normalized_output.masks, ...run.normalized_output.polygons];
+    if (masks.length <= 0) {
+      return { cluster_id: 'no_masks_detected', cluster_title: 'No masks detected' };
+    }
+    if (score < 0.45) {
+      return { cluster_id: 'low_confidence_masks', cluster_title: 'Low-confidence masks' };
+    }
+    if (masks.length >= 4) {
+      return { cluster_id: 'dense_mask_scenes', cluster_title: 'Dense mask scenes' };
+    }
+    return { cluster_id: 'general_review_queue', cluster_title: 'General review queue' };
+  }
+
+  if (run.task_type === 'classification') {
+    const labels = run.normalized_output.labels ?? [];
+    const top1 = labels[0]?.score ?? 0;
+    const top2 = labels[1]?.score ?? 0;
+    if (labels.length <= 0) {
+      return { cluster_id: 'no_class_prediction', cluster_title: 'No class prediction' };
+    }
+    if (top1 < 0.6) {
+      return {
+        cluster_id: 'low_confidence_classification',
+        cluster_title: 'Low-confidence classification'
+      };
+    }
+    if (Math.max(0, top1 - top2) < 0.15) {
+      return { cluster_id: 'close_call_classification', cluster_title: 'Close-call classification' };
+    }
+    return { cluster_id: 'general_review_queue', cluster_title: 'General review queue' };
+  }
+
+  return { cluster_id: 'general_review_queue', cluster_title: 'General review queue' };
+};
+
+const buildVisionTaskActiveLearningScoredRuns = (
+  task: VisionModelingTaskRecord
+): VisionTaskActiveLearningScoredRun[] =>
+  resolveVisionTaskFeedbackCandidateRuns(task, { excludeExistingFeedbackDataset: true }).map((run) => {
+    const score = resolveInferenceQualityScore(run);
+    const cluster = classifyVisionTaskActiveLearningRun(run, score);
+    return {
+      run,
+      score,
+      cluster_id: cluster.cluster_id,
+      cluster_title: cluster.cluster_title
+    };
+  });
+
+const selectVisionTaskActiveLearningRuns = (
+  scoredRuns: VisionTaskActiveLearningScoredRun[],
+  maxSamples: number
+): VisionTaskActiveLearningScoredRun[] => {
+  if (maxSamples <= 0 || scoredRuns.length <= 0) {
+    return [];
+  }
+
+  const grouped = new Map<string, VisionTaskActiveLearningScoredRun[]>();
+  for (const entry of scoredRuns) {
+    const existing = grouped.get(entry.cluster_id) ?? [];
+    existing.push(entry);
+    grouped.set(entry.cluster_id, existing);
+  }
+  const orderedGroups = Array.from(grouped.values())
+    .map((entries) =>
+      [...entries].sort(
+        (left, right) =>
+          left.score - right.score || Date.parse(right.run.updated_at) - Date.parse(left.run.updated_at)
+      )
+    )
+    .sort((left, right) => {
+      const leftAverage = left.reduce((sum, entry) => sum + entry.score, 0) / Math.max(1, left.length);
+      const rightAverage = right.reduce((sum, entry) => sum + entry.score, 0) / Math.max(1, right.length);
+      return leftAverage - rightAverage || right.length - left.length;
+    });
+
+  const selected: VisionTaskActiveLearningScoredRun[] = [];
+  while (selected.length < maxSamples) {
+    let progressed = false;
+    for (const group of orderedGroups) {
+      if (selected.length >= maxSamples) {
+        break;
+      }
+      const next = group.shift();
+      if (!next) {
+        continue;
+      }
+      selected.push(next);
+      progressed = true;
+    }
+    if (!progressed) {
+      break;
+    }
+  }
+  return selected;
+};
+
+const buildVisionTaskActiveLearningPool = (
+  task: VisionModelingTaskRecord
+): VisionTaskActiveLearningPool | null => {
+  const modelVersionIds = resolveVisionTaskFeedbackModelVersionIds(task);
+  if (modelVersionIds.size <= 0) {
+    return null;
+  }
+
+  const scoredRuns = buildVisionTaskActiveLearningScoredRuns(task);
+  if (scoredRuns.length <= 0) {
+    const allCompletedRuns = resolveVisionTaskFeedbackCandidateRuns(task, {
+      excludeExistingFeedbackDataset: false
+    });
+    return {
+      summary:
+        allCompletedRuns.length > 0
+          ? 'No new active-learning candidates are available right now.'
+          : 'No completed inference runs are available for active learning yet.',
+      total_candidates: 0,
+      recommended_sample_count: 0,
+      clusters: [],
+      top_candidates: [],
+      refreshed_at: now()
+    };
+  }
+
+  const clusters = Array.from(
+    scoredRuns.reduce((map, entry) => {
+      const existing = map.get(entry.cluster_id) ?? {
+        cluster_id: entry.cluster_id,
+        title: entry.cluster_title,
+        count: 0,
+        totalScore: 0
+      };
+      existing.count += 1;
+      existing.totalScore += entry.score;
+      map.set(entry.cluster_id, existing);
+      return map;
+    }, new Map<string, { cluster_id: string; title: string; count: number; totalScore: number }>())
+  )
+    .map(([, entry]) => ({
+      cluster_id: entry.cluster_id,
+      title: entry.title,
+      count: entry.count,
+      average_score: entry.count > 0 ? entry.totalScore / entry.count : null
+    }))
+    .sort(
+      (left, right) =>
+        left.count - right.count === 0
+          ? (left.average_score ?? Number.POSITIVE_INFINITY) -
+            (right.average_score ?? Number.POSITIVE_INFINITY)
+          : right.count - left.count
+    )
+    .slice(0, 8);
+
+  const selectedPreview = selectVisionTaskActiveLearningRuns(
+    scoredRuns,
+    Math.min(12, scoredRuns.length)
+  );
+
+  return {
+    summary: 'Active learning candidates are ready for clustered feedback mining.',
+    total_candidates: scoredRuns.length,
+    recommended_sample_count: selectedPreview.length,
+    clusters,
+    top_candidates: selectedPreview.map((entry) => ({
+      run_id: entry.run.id,
+      attachment_id: entry.run.input_attachment_id,
+      cluster_id: entry.cluster_id,
+      score: entry.score,
+      model_version_id: entry.run.model_version_id,
+      created_at: entry.run.updated_at
+    })),
+    refreshed_at: now()
+  };
 };
 
 const findOrCreateFeedbackDatasetForVisionTask = (
@@ -16056,39 +17397,30 @@ export async function generateVisionTaskFeedbackDataset(input: {
     throw new Error('No permission to generate feedback dataset for this vision task.');
   }
 
-  const modelVersionIds = new Set<string>();
-  if (task.model_version_id) {
-    modelVersionIds.add(task.model_version_id);
-  }
-  if (task.training_job_id) {
-    for (const version of modelVersions) {
-      if (version.training_job_id === task.training_job_id) {
-        modelVersionIds.add(version.id);
-      }
-    }
-  }
+  const modelVersionIds = resolveVisionTaskFeedbackModelVersionIds(task);
   if (modelVersionIds.size <= 0) {
     throw new Error('No linked model version available for badcase mining.');
   }
 
-  const candidateRuns = inferenceRuns
-    .filter((run) => modelVersionIds.has(run.model_version_id))
-    .filter((run) => run.status === 'completed')
-    .sort(
-      (left, right) =>
-        resolveInferenceQualityScore(left) - resolveInferenceQualityScore(right) ||
-        Date.parse(right.updated_at) - Date.parse(left.updated_at)
+  const scoredRuns = buildVisionTaskActiveLearningScoredRuns(task);
+  if (scoredRuns.length <= 0) {
+    const allCompletedRuns = resolveVisionTaskFeedbackCandidateRuns(task, {
+      excludeExistingFeedbackDataset: false
+    });
+    throw new Error(
+      allCompletedRuns.length > 0
+        ? 'No new active-learning candidates are available for badcase mining.'
+        : 'No inference runs available for badcase mining.'
     );
-  if (candidateRuns.length <= 0) {
-    throw new Error('No inference runs available for badcase mining.');
   }
 
   const maxSamples =
     typeof input.max_samples === 'number' && Number.isFinite(input.max_samples)
       ? Math.max(1, Math.min(30, Math.round(input.max_samples)))
       : 12;
-  const selectedRuns = candidateRuns.slice(0, maxSamples);
-  const inferredTaskType = selectedRuns[0]?.task_type ?? toTaskTypeFromVisionTaskType(task.spec.task_type);
+  const selectedRuns = selectVisionTaskActiveLearningRuns(scoredRuns, maxSamples);
+  const inferredTaskType =
+    selectedRuns[0]?.run.task_type ?? toTaskTypeFromVisionTaskType(task.spec.task_type);
   if (!inferredTaskType) {
     throw new Error('Unable to resolve task type for feedback dataset.');
   }
@@ -16096,7 +17428,8 @@ export async function generateVisionTaskFeedbackDataset(input: {
 
   const selectedRunIds: string[] = [];
   const badcases: Array<Record<string, string>> = [];
-  for (const run of selectedRuns) {
+  for (const entry of selectedRuns) {
+    const run = entry.run;
     await sendInferenceFeedback({
       run_id: run.id,
       dataset_id: feedbackDataset.id,
@@ -16105,7 +17438,8 @@ export async function generateVisionTaskFeedbackDataset(input: {
     selectedRunIds.push(run.id);
     badcases.push({
       run_id: run.id,
-      score: resolveInferenceQualityScore(run).toFixed(4),
+      score: entry.score.toFixed(4),
+      cluster_id: entry.cluster_id,
       input_attachment_id: run.input_attachment_id
     });
   }
@@ -16123,6 +17457,14 @@ export async function generateVisionTaskFeedbackDataset(input: {
       badcases
     };
   }
+  recordVisionTaskAgentOutcome(
+    task,
+    'mine_feedback',
+    'executed',
+    'Collected low-confidence samples into the feedback dataset.',
+    'The linked feedback dataset now stores mined badcases for this task.'
+  );
+  refreshVisionTaskAgentState(task);
   markAppStateDirty();
 
   logAudit('vision_task_feedback_dataset_generated', 'VisionTask', task.id, {
@@ -16208,6 +17550,14 @@ export async function registerVisionTaskModelVersion(input: {
   task.model_id = version.model_id;
   task.model_version_id = version.id;
   task.status = 'training_completed';
+  recordVisionTaskAgentOutcome(
+    task,
+    'register_model',
+    'executed',
+    'Registered the linked model version.',
+    'The linked training evidence satisfied the current registration path.'
+  );
+  refreshVisionTaskAgentState(task);
   task.updated_at = now();
   markAppStateDirty();
   logAudit('vision_task_model_registered', 'VisionTask', task.id, {
@@ -16246,6 +17596,17 @@ export async function autoAdvanceVisionTask(input: {
   syncVisionTaskWithRuntimeState(task);
 
   if (task.missing_requirements.length > 0) {
+    let changed = recordVisionTaskAgentOutcome(
+      task,
+      'requires_input',
+      'executed',
+      'Auto-advance stopped for missing requirements.',
+      'The task still needs more user input before the next safe mutation.'
+    );
+    if (refreshVisionTaskAgentState(task)) {
+      changed = true;
+    }
+    persistVisionTaskStateIfChanged(task, changed);
     return {
       task,
       action: 'requires_input',
@@ -16260,6 +17621,17 @@ export async function autoAdvanceVisionTask(input: {
     ? trainingJobs.find((item) => item.id === task.training_job_id) ?? null
     : null;
   if (currentJob && currentJob.status !== 'completed' && currentJob.status !== 'failed' && currentJob.status !== 'cancelled') {
+    let changed = recordVisionTaskAgentOutcome(
+      task,
+      'wait_training',
+      'executed',
+      'Auto-advance kept the task in waiting state.',
+      'A linked training job is still active.'
+    );
+    if (refreshVisionTaskAgentState(task)) {
+      changed = true;
+    }
+    persistVisionTaskStateIfChanged(task, changed);
     return {
       task,
       action: 'waiting_training',
@@ -16333,6 +17705,17 @@ export async function autoAdvanceVisionTask(input: {
         feedback_dataset_id: feedback.dataset_id
       };
     } catch (error) {
+      let changed = recordVisionTaskAgentOutcome(
+        task,
+        'completed',
+        'skipped',
+        'Feedback mining was skipped.',
+        `Model is ready, but feedback dataset generation failed: ${(error as Error).message}`
+      );
+      if (refreshVisionTaskAgentState(task)) {
+        changed = true;
+      }
+      persistVisionTaskStateIfChanged(task, changed);
       return {
         task,
         action: 'completed',
@@ -16344,6 +17727,17 @@ export async function autoAdvanceVisionTask(input: {
     }
   }
 
+  let changed = recordVisionTaskAgentOutcome(
+    task,
+    'completed',
+    'executed',
+    'Auto-advance found no additional required mutation.',
+    'The task already has linked training evidence, model version, and feedback dataset.'
+  );
+  if (refreshVisionTaskAgentState(task)) {
+    changed = true;
+  }
+  persistVisionTaskStateIfChanged(task, changed);
   return {
     task,
     action: 'completed',
@@ -16353,6 +17747,59 @@ export async function autoAdvanceVisionTask(input: {
     feedback_dataset_id: feedbackDatasetId
   };
 }
+
+const linkTrainingJobToVisionTask = (input: {
+  visionTaskId: string;
+  job: TrainingJobRecord;
+  dataset: DatasetRecord;
+  datasetVersion: DatasetVersionRecord;
+  currentUser: User;
+}) => {
+  const { visionTaskId, job, dataset, datasetVersion, currentUser } = input;
+  const task = findVisionModelingTask(visionTaskId);
+  if (!task) {
+    throw new Error('Vision modeling task not found.');
+  }
+  if (!(currentUser.role === 'admin' || task.created_by === currentUser.id)) {
+    throw new Error('No permission to link this vision modeling task.');
+  }
+
+  const nextSpec: VisionTaskSpec = {
+    ...task.spec,
+    task_type: toVisionTaskTypeFromTaskType(job.task_type),
+    missing_requirements: []
+  };
+  const nextDatasetProfile = buildDatasetProfileForVisionTask(dataset, nextSpec);
+  const nextTrainingPlan = buildTrainingPlanFromRecipe(nextSpec, nextDatasetProfile, {
+    baseModel: job.base_model,
+    trainConfig: job.config
+  });
+
+  task.dataset_id = dataset.id;
+  task.dataset_version_id = datasetVersion.id;
+  task.training_job_id = job.id;
+  task.status = 'training_started';
+  task.spec = nextSpec;
+  task.dataset_profile = nextDatasetProfile;
+  task.training_plan = nextTrainingPlan;
+  task.missing_requirements = [];
+  task.metadata = {
+    ...task.metadata,
+    linked_training_job_id: job.id,
+    linked_dataset_version_id: datasetVersion.id,
+    auto_tune_last_launch_at: now()
+  };
+  task.updated_at = now();
+  markAppStateDirty();
+
+  logAudit('vision_task_training_job_linked', 'VisionTask', task.id, {
+    training_job_id: job.id,
+    dataset_id: dataset.id,
+    dataset_version_id: datasetVersion.id,
+    task_type: job.task_type,
+    framework: job.framework
+  });
+};
 
 export async function createTrainingJob(input: CreateTrainingJobInput): Promise<TrainingJobRecord> {
   await delay(120);
@@ -16439,11 +17886,22 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
   created.status = 'queued';
   created.updated_at = now();
 
+  if ((input.vision_task_id ?? '').trim()) {
+    linkTrainingJobToVisionTask({
+      visionTaskId: input.vision_task_id!.trim(),
+      job: created,
+      dataset,
+      datasetVersion,
+      currentUser
+    });
+  }
+
   trainingJobs.unshift(created);
   logAudit('training_job_created', 'TrainingJob', created.id, {
     framework: created.framework,
     task_type: created.task_type,
     dataset_version_id: created.dataset_version_id ?? '',
+    vision_task_id: (input.vision_task_id ?? '').trim(),
     requested_execution_target: requestedExecutionTarget ?? '',
     requested_worker_id: requestedWorkerId,
     execution_target: created.execution_target,
@@ -18264,12 +19722,12 @@ const buildRuntimeDeviceAccessSnippets = (
     `curl -X POST '${inferenceEndpoint}' \\\n` +
     `  -H 'Authorization: Bearer ${apiKey}' \\\n` +
     `  -H 'Content-Type: application/json' \\\n` +
-    `  -d '{\"model_version_id\":\"${version.id}\",\"task_type\":\"${version.task_type}\",\"filename\":\"device-input.jpg\",\"mime_type\":\"image/jpeg\",\"image_base64\":\"<base64_image>\"}'`;
+    `  -d '{"model_version_id":"${version.id}","task_type":"${version.task_type}","filename":"device-input.jpg","mime_type":"image/jpeg","image_base64":"<base64_image>"}'`;
   const sampleModelPackageCurl =
     `curl -X POST '${modelPackageEndpoint}' \\\n` +
     `  -H 'Authorization: Bearer ${apiKey}' \\\n` +
     `  -H 'Content-Type: application/json' \\\n` +
-    `  -d '{\"model_version_id\":\"${version.id}\",\"encryption_key\":\"<device_side_secret>\"}'`;
+    `  -d '{"model_version_id":"${version.id}","encryption_key":"<device_side_secret>"}'`;
 
   return {
     inference_endpoint: inferenceEndpoint,

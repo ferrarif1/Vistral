@@ -2125,7 +2125,7 @@ export default function TrainingJobsPage() {
         detail: t('Start from a fixed dataset snapshot so downstream objects stay traceable.'),
         tone: jobs.length > 0 ? 'success' : 'warning',
         label: jobs.length > 0 ? t('Done') : t('Required'),
-        action: jobs.length > 0 ? undefined : { label: t('Create Training Job'), to: scopedCreatePath }
+        action: jobs.length > 0 ? undefined : { label: t('Smart Launch'), to: scopedCreatePath }
       },
       {
         key: 'observe',
@@ -2469,7 +2469,7 @@ export default function TrainingJobsPage() {
           badgeLabel: t('Scope empty'),
           actions: [
             { label: t('Clear scope'), to: clearScopePath },
-            { label: t('Create Training Job'), to: scopedCreatePath, variant: 'secondary' }
+            { label: t('Smart Launch'), to: scopedCreatePath, variant: 'secondary' }
           ]
         };
       }
@@ -2480,7 +2480,7 @@ export default function TrainingJobsPage() {
         detail: t('Start from one dataset snapshot so logs, artifacts, and later version registration stay tied to the same run.'),
         badgeTone: 'warning',
         badgeLabel: t('No runs'),
-        actions: [{ label: t('Create Training Job'), to: scopedCreatePath }]
+        actions: [{ label: t('Smart Launch'), to: scopedCreatePath }]
       };
     }
 
@@ -2904,7 +2904,7 @@ export default function TrainingJobsPage() {
           </div>
         }
         primaryAction={{
-          label: t('Create Training Job'),
+          label: t('Smart Launch'),
           onClick: () => {
             navigate(scopedCreatePath);
           }
@@ -2996,7 +2996,7 @@ export default function TrainingJobsPage() {
                 {t('Clear scope')}
               </ButtonLink>
               <ButtonLink to={scopedCreatePath} variant="ghost" size="sm">
-                {t('Create Training Job')}
+                {t('Smart Launch')}
               </ButtonLink>
             </div>
           }
@@ -3148,7 +3148,7 @@ export default function TrainingJobsPage() {
                   extra={
                     <div className="row gap wrap">
                       <ButtonLink to={scopedCreatePath} variant="secondary" size="sm">
-                        {t('Create Training Job')}
+                        {t('Smart Launch')}
                       </ButtonLink>
                       {scopeBlockerHint ? (
                         <ButtonLink to={clearScopePath} variant="ghost" size="sm">
@@ -3340,7 +3340,7 @@ export default function TrainingJobsPage() {
                       </Button>
                     ) : (
                       <ButtonLink to={scopedCreatePath} variant="secondary" size="sm">
-                        {t('Create Training Job')}
+                        {t('Smart Launch')}
                       </ButtonLink>
                     )
                   ) : null}

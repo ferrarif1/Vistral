@@ -43,11 +43,20 @@ Operational branch inside the same flow:
 6. system calls the corresponding backend API only after confirmation is received
 7. assistant returns a `completed` or `failed` action card with created entity summary and next-step guidance
 7a. when a request needs structured vision-task understanding before or alongside training orchestration, assistant may create/update a `VisionTask` and return its deep link as the primary continuation surface
+7b. when the action summary is backed by a `VisionTask`, the same completed card should also explain:
+   - current evaluation suite
+   - promotion gate interpretation
+   - run comparison / champion-challenger outcome when relevant
 8. for power users / agentic bridge, user can use `/ops {json}`; for normal users, natural-language intents can also be mapped to the same bridge APIs automatically; high-risk calls still require confirmation before mutation
 8a. when `/ops {json}` or natural-language bridge intent has missing required parameters, assistant must return `requires_input` with explicit missing fields and allow the user to continue by supplying only those fields in follow-up turns
 8b. runtime setup operations can also run from bridge (`activate_runtime_profile`, `auto_configure_runtime_settings`); both remain behind explicit high-risk confirmation
 8c. conversation action cards may surface a derived "suggested next step" for training-job failures or incomplete operations; clicking an executable suggestion sends the equivalent bridge action in-thread, and mutating actions such as `retry_training_job` still pause at the same explicit confirmation gate before execution
 8d. the bridge may also use a goal-orchestration lane that creates/updates a `VisionTask` first and then auto-calls follow-up actions such as `auto_advance_vision_task` when enough information is available; missing business requirements and mutating follow-up confirmation still remain in-thread
+8e. `goal_orchestration` / `auto_advance_vision_task` replies should reuse `VisionTask` evidence instead of only returning raw action codes:
+   - evaluation suite
+   - gate result
+   - comparison decision
+   - next recommended action
 
 Attachment states:
 - `uploading`
@@ -219,15 +228,18 @@ Actor: `user` (annotator/reviewer by capability)
 Actor: `user`
 
 1. open `/training/jobs/new`
-2. stepper flow:
-   - Step 1 task + framework
-   - Step 2 dataset + dataset version snapshot + base model
-   - Step 3 parameters (advanced collapsed)
-   - Step 4 review + submit
+2. default launch path is agent-first:
+   - user describes the target in natural language
+   - user confirms the dataset + dataset-version snapshot
+   - system derives task type / framework / base model / recommended core params
+   - when a goal prompt is present, Smart Launch should create or reuse a linked `VisionTask` before the run is submitted so the job remains attached to a durable orchestration object
+   - compact launch progress indicator stays visible (`goal -> snapshot -> launch`)
 3. select a dataset version snapshot, confirm launch readiness (dataset status / split summary / annotation coverage), then create training job
    - launch is blocked when `split_summary.train <= 0` or `annotation_coverage <= 0`
    - when runtime strict training guard (`disable_simulated_train_fallback`) is off, launch also requires explicit risk confirmation from the operator before submit
    - when runtime strict mode status cannot be loaded, launch remains blocked until runtime settings become available again
+   - manual task/framework/base-model/dispatch/param overrides are still available, but only in collapsed expert controls
+   - when a linked `VisionTask` is present, the created run stores that linkage so downstream detail pages can continue in the same agent lane
 4. job transitions through:
    - `draft`
    - `queued`
@@ -253,6 +265,9 @@ Actor: `user`
 8. training detail also exposes scheduler decision history (latest snapshot plus prior reschedule/failover/fallback entries) for auditability
 9. when a completed job is ready for promotion, open `/models/versions` with the job prefilled so version registration starts from the finished run
 10. version registration still requires selecting an owned model, but the completed job and suggested version name should already be filled in
+10a. when the run is linked to a `VisionTask`, job detail should also expose one direct `Continue as agent` action:
+   - if validation report passed, it can register the model version directly and auto-create a matching model draft when no owned model exists yet
+   - if validation report did not pass, it can schedule the next round from the same task context
 11. for cross-machine model handoff, worker can deploy encrypted artifact via:
    - `POST /api/worker/models/pull-encrypted` (worker-auth protected)
    - worker internally calls `POST /api/runtime/public/model-package` (runtime bearer key) and decrypts payload locally
@@ -264,24 +279,37 @@ Actor: `user`
 2. system builds a structured `VisionTask`:
    - task understanding/spec
    - dataset inspection profile
+   - lightweight dataset diagnostics (duplicates / overlap / long-tail / charset-width / recommended data actions)
    - recipe-based training plan
    - missing requirements list
 3. when critical inputs are missing (`dataset_id`, non-image examples, trainability issues, unknown task type), task lands in `requires_input` and the assistant/task page exposes direct follow-up links
 4. operator opens `/vision/tasks/:taskId` from chat or `/vision/tasks` list to continue outside the original conversation turn
-5. task detail keeps one recommended next action visible:
-   - `Launch training` when no job exists and requirements are already complete
-   - `Start round 1` / `Run next round` for auto-tune iteration
-   - `Register model` once metrics pass and no model version exists yet
-   - `Mine badcases` after model registration when no feedback dataset exists yet
-6. `Auto advance` follows the same state-aware sequence:
+4a. if the operator opens the regular training launcher from this task, the page keeps `source_vision_task` context so Smart Launch still creates a linked run instead of an orphaned training job
+4b. `/vision/tasks` list itself should already surface one explicit `Continue as agent` action for the highest-priority visible tasks, so operators do not need to open every row just to keep the loop moving
+5. backend refreshes one explicit agent recommendation whenever task runtime state changes:
+   - recommended action
+   - short summary
+   - operator-facing reason / evidence
+   - visible confirmation requirement for mutating actions
+   - one evaluation-suite summary (metric contract + threshold source)
+   - one promotion-gate summary (pass / needs review / fail / pending)
+   - one run-comparison summary (promote / train again / collect data / observe / pending), including champion / challenger context when available
+   - one active-learning pool summary that groups likely-error samples into a few operator-readable buckets
+   - dataset-diagnostic context that can explain why `collect_data` is currently a better next step than blindly launching another round
+6. task detail keeps that recommended next action visible:
+   - `Continue as agent` when the system can safely choose the next step
+   - `Launch training` / `Run next round` / `Register model` / `Mine badcases` remain secondary manual controls
+7. `Auto advance` follows the same state-aware sequence and appends a compact decision-log entry:
    - `requires_input` -> return missing requirements only
    - no training job yet -> start next round
    - job still running -> wait
    - metrics passed and no model version -> register model
    - model version exists but no feedback dataset -> mine badcases
    - otherwise -> closed-loop state, no further mutation
-7. task detail keeps deep links to dataset, training job, model version, and feedback dataset so the engineer can move into the owning page for deeper work
-8. owner/admin visibility applies to task list/detail, and runtime sync keeps validation report + status aligned with the linked training job/model version
+8. task detail keeps deep links to dataset, training job, model version, and feedback dataset so the engineer can move into the owning page for deeper work
+9. when mining a feedback dataset, backend should diversify selected samples across active-learning clusters when possible instead of filling the set with only one repeated failure mode
+10. when opening inference validation from a task's active-learning pool, the page should keep task context (`vision_task`, selected run, return path) so engineers can inspect one candidate, route it to feedback, and jump back without rebuilding context
+11. owner/admin visibility applies to task list/detail, and runtime sync keeps validation report + status aligned with the linked training job/model version
 
 ## 7. Flow F: Model Version Registration
 Actor: `user`

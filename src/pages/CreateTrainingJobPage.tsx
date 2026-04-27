@@ -13,7 +13,8 @@ import type {
   DatasetVersionRecord,
   RequirementTaskDraft,
   TrainingJobRecord,
-  TrainingWorkerNodeView
+  TrainingWorkerNodeView,
+  VisionModelingTaskRecord
 } from '../../shared/domain';
 import {
   UPLOAD_SOFT_LIMIT_LABEL,
@@ -320,6 +321,7 @@ const buildTrainingJobDetailPath = (
   options?: {
     datasetId?: string | null;
     versionId?: string | null;
+    visionTaskId?: string | null;
     created?: boolean;
     launchContext?: TrainingLaunchContext;
     returnTo?: string | null;
@@ -332,6 +334,9 @@ const buildTrainingJobDetailPath = (
   if (options?.versionId?.trim()) {
     searchParams.set('version', options.versionId.trim());
   }
+  if (options?.visionTaskId?.trim()) {
+    searchParams.set('vision_task', options.visionTaskId.trim());
+  }
   if (options?.created) {
     searchParams.set('created', '1');
   }
@@ -341,6 +346,8 @@ const buildTrainingJobDetailPath = (
   const encodedJobId = encodeURIComponent(jobId);
   return query ? `/training/jobs/${encodedJobId}?${query}` : `/training/jobs/${encodedJobId}`;
 };
+
+const buildVisionTaskDetailPath = (taskId: string): string => `/vision/tasks/${encodeURIComponent(taskId)}`;
 
 export default function CreateTrainingJobPage() {
   const { t } = useI18n();
@@ -368,6 +375,7 @@ export default function CreateTrainingJobPage() {
       : 'auto';
   const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
   const preferredSourceJobId = (searchParams.get('source_job') ?? searchParams.get('sourceJob') ?? '').trim();
+  const preferredSourceVisionTaskId = (searchParams.get('source_vision_task') ?? searchParams.get('vision_task') ?? '').trim();
 
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetVersions, setDatasetVersions] = useState<DatasetVersionRecord[]>([]);
@@ -403,6 +411,10 @@ export default function CreateTrainingJobPage() {
   const [sourceJobPrefillLoading, setSourceJobPrefillLoading] = useState(false);
   const [sourceJobPrefillError, setSourceJobPrefillError] = useState('');
   const [sourceJobPrefillJob, setSourceJobPrefillJob] = useState<TrainingJobRecord | null>(null);
+  const [sourceVisionTaskLoading, setSourceVisionTaskLoading] = useState(false);
+  const [sourceVisionTaskError, setSourceVisionTaskError] = useState('');
+  const [sourceVisionTask, setSourceVisionTask] = useState<VisionModelingTaskRecord | null>(null);
+  const [agentTaskPreparing, setAgentTaskPreparing] = useState(false);
   const [nonStrictLaunchConfirmed, setNonStrictLaunchConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -457,11 +469,14 @@ export default function CreateTrainingJobPage() {
     sourceJobPrefillAppliedRef.current = false;
     setSourceJobPrefillError('');
     setSourceJobPrefillJob(null);
+    setSourceVisionTaskError('');
+    setSourceVisionTask(null);
   }, [
     preferredDatasetId,
     preferredExecutionTarget,
     preferredFramework,
     preferredSourceJobId,
+    preferredSourceVisionTaskId,
     preferredTaskTypeNormalized,
     preferredVersionId,
     preferredWorkerId
@@ -497,7 +512,7 @@ export default function CreateTrainingJobPage() {
           return;
         }
 
-        const first = result.find((dataset) => dataset.task_type === taskType);
+        const first = result.find((dataset) => dataset.task_type === taskType) ?? result[0] ?? null;
         if (preferredDatasetId && result.length > 0 && !preferredDatasetRecoveryAppliedRef.current) {
           preferredDatasetRecoveryAppliedRef.current = true;
           appendPreferredLaunchContextHint(
@@ -505,14 +520,14 @@ export default function CreateTrainingJobPage() {
           );
         }
         setDatasetId((current) =>
-          current && result.some((dataset) => dataset.id === current && dataset.task_type === taskType)
+          current && result.some((dataset) => dataset.id === current)
             ? current
             : (first?.id ?? '')
         );
       })
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }))
       .finally(() => setLoading(false));
-  }, [preferredDatasetId, taskType]);
+  }, [appendPreferredLaunchContextHint, preferredDatasetId, taskType, t]);
 
   useEffect(() => {
     if (!datasetId) {
@@ -567,7 +582,7 @@ export default function CreateTrainingJobPage() {
     return () => {
       active = false;
     };
-  }, [datasetId, preferredVersionId]);
+  }, [appendPreferredLaunchContextHint, datasetId, preferredVersionId, t]);
 
   useEffect(() => {
     if (taskType === 'ocr' && framework === 'yolo') {
@@ -702,6 +717,85 @@ export default function CreateTrainingJobPage() {
       active = false;
     };
   }, [appendPreferredLaunchContextHint, preferredSourceJobId, t]);
+
+  useEffect(() => {
+    if (!preferredSourceVisionTaskId) {
+      return;
+    }
+    let active = true;
+    setSourceVisionTaskLoading(true);
+    setSourceVisionTaskError('');
+    api
+      .getVisionTask(preferredSourceVisionTaskId)
+      .then((task) => {
+        if (!active) {
+          return;
+        }
+        setSourceVisionTask(task);
+        setRequirementDescription((current) => (current.trim().length > 0 ? current : task.source_prompt));
+        if (task.spec.task_type && task.spec.task_type !== 'unknown') {
+          setTaskType(task.spec.task_type as TrainingTaskType);
+        }
+        if (task.dataset_id) {
+          setDatasetId(task.dataset_id);
+        }
+        if (task.dataset_version_id) {
+          setDatasetVersionId(task.dataset_version_id);
+        }
+        if (task.training_plan?.base_model) {
+          setBaseModel(task.training_plan.base_model);
+        }
+        const pickTrainArg = (...keys: string[]) => {
+          const trainArgs = task.training_plan?.train_args ?? {};
+          for (const key of keys) {
+            const value = trainArgs[key];
+            if (typeof value === 'string' && value.trim().length > 0) {
+              return value.trim();
+            }
+          }
+          return '';
+        };
+        const nextEpochs = pickTrainArg('epochs');
+        const nextBatchSize = pickTrainArg('batch_size', 'batchSize');
+        const nextLearningRate = pickTrainArg('learning_rate', 'learningRate');
+        const nextWarmupRatio = pickTrainArg('warmup_ratio', 'warmupRatio');
+        const nextWeightDecay = pickTrainArg('weight_decay', 'weightDecay');
+        if (nextEpochs) {
+          setEpochs(nextEpochs);
+        }
+        if (nextBatchSize) {
+          setBatchSize(nextBatchSize);
+        }
+        if (nextLearningRate) {
+          setLearningRate(nextLearningRate);
+        }
+        if (nextWarmupRatio) {
+          setWarmupRatio(nextWarmupRatio);
+        }
+        if (nextWeightDecay) {
+          setWeightDecay(nextWeightDecay);
+        }
+        setName((current) => (current.trim().length > 0 ? current : `${task.id}-launch`));
+        appendPreferredLaunchContextHint(
+          t('Linked Smart Launch back to vision task {taskId}.', { taskId: task.id })
+        );
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setSourceVisionTaskError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setSourceVisionTaskLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [appendPreferredLaunchContextHint, preferredSourceVisionTaskId, t]);
 
   useEffect(() => {
     let active = true;
@@ -889,11 +983,18 @@ export default function CreateTrainingJobPage() {
     });
   }, [baseModelOptions]);
 
-  const filteredDatasets = useMemo(() => datasets.filter((dataset) => dataset.task_type === taskType), [datasets, taskType]);
   const selectedDataset = useMemo(
-    () => filteredDatasets.find((dataset) => dataset.id === datasetId) ?? null,
-    [datasetId, filteredDatasets]
+    () => datasets.find((dataset) => dataset.id === datasetId) ?? null,
+    [datasetId, datasets]
   );
+  useEffect(() => {
+    if (!selectedDataset) {
+      return;
+    }
+    if (selectedDataset.task_type !== taskType) {
+      setTaskType(selectedDataset.task_type);
+    }
+  }, [selectedDataset, taskType]);
   const preferredDatasetRecord = useMemo(
     () => (preferredDatasetId ? datasets.find((dataset) => dataset.id === preferredDatasetId) ?? null : null),
     [datasets, preferredDatasetId]
@@ -939,6 +1040,13 @@ export default function CreateTrainingJobPage() {
     const next = new URLSearchParams(searchParams);
     next.delete('source_job');
     next.delete('sourceJob');
+    const query = next.toString();
+    return query ? `${location.pathname}?${query}` : location.pathname;
+  }, [location.pathname, searchParams]);
+  const clearSourceVisionTaskPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('source_vision_task');
+    next.delete('vision_task');
     const query = next.toString();
     return query ? `${location.pathname}?${query}` : location.pathname;
   }, [location.pathname, searchParams]);
@@ -1023,6 +1131,10 @@ export default function CreateTrainingJobPage() {
       returnTo: currentTaskPath
     });
   }, [currentTaskPath, launchContext, sourceJobPrefillJob]);
+  const sourceVisionTaskDetailPath = useMemo(
+    () => (sourceVisionTask ? buildVisionTaskDetailPath(sourceVisionTask.id) : ''),
+    [sourceVisionTask]
+  );
   const runtimeReadinessPath = useMemo(
     () => buildRuntimeSettingsPath('readiness', framework, launchContext, outboundReturnTo),
     [framework, launchContext, outboundReturnTo]
@@ -1500,8 +1612,120 @@ export default function CreateTrainingJobPage() {
     }
   }, [datasetId, datasetVersionId, preferredVersionId, selectedDataset, t]);
 
+  const ensureTaskDraftFromRequirement = useCallback(
+    async (options?: { silent?: boolean }) => {
+      const prompt = requirementDescription.trim();
+      if (!prompt) {
+        if (!options?.silent) {
+          setFeedback({ variant: 'error', text: t('Please describe your requirement first.') });
+        }
+        return null;
+      }
+
+      setDrafting(true);
+      if (!options?.silent) {
+        setFeedback(null);
+      }
+
+      try {
+        const draft = await api.draftTaskFromRequirement(prompt);
+        const lockedTaskType = selectedDataset?.task_type ?? null;
+        const effectiveTaskType = lockedTaskType ?? draft.task_type;
+        const effectiveFramework: TrainingFramework =
+          effectiveTaskType === 'ocr'
+            ? draft.recommended_framework === 'paddleocr' || draft.recommended_framework === 'doctr'
+              ? draft.recommended_framework
+              : 'paddleocr'
+            : 'yolo';
+
+        setTaskDraft(draft);
+        if (effectiveTaskType !== taskType) {
+          setTaskType(effectiveTaskType);
+        }
+        if (effectiveFramework !== framework) {
+          setFramework(effectiveFramework);
+        }
+        if (!name.trim()) {
+          setName(
+            `${selectedDataset?.name ?? effectiveTaskType}-${effectiveFramework}-job-${Date.now().toString().slice(-6)}`
+          );
+        }
+        if (!options?.silent) {
+          setFeedback({
+            variant: 'success',
+            text:
+              lockedTaskType && lockedTaskType !== draft.task_type
+                ? t('Requirement was understood. Dataset task type stays fixed, and the launch plan was updated around that dataset.')
+                : t('Requirement was understood and the launch plan was updated.')
+          });
+        }
+        return draft;
+      } catch (error) {
+        setFeedback({ variant: 'error', text: (error as Error).message });
+        return null;
+      } finally {
+        setDrafting(false);
+      }
+    },
+    [framework, name, requirementDescription, selectedDataset, t, taskType]
+  );
+
+  const resolveLaunchVisionTaskContext = useCallback(
+    async (options: { datasetId: string; datasetVersionId: string }) => {
+      if (preferredSourceVisionTaskId) {
+        if (sourceVisionTask?.id === preferredSourceVisionTaskId) {
+          return sourceVisionTask;
+        }
+        setAgentTaskPreparing(true);
+        try {
+          const task = await api.getVisionTask(preferredSourceVisionTaskId);
+          setSourceVisionTask(task);
+          setSourceVisionTaskError('');
+          return task;
+        } catch (error) {
+          setSourceVisionTaskError((error as Error).message);
+          return null;
+        } finally {
+          setAgentTaskPreparing(false);
+        }
+      }
+
+      const prompt = requirementDescription.trim();
+      if (!prompt) {
+        return null;
+      }
+
+      setAgentTaskPreparing(true);
+      try {
+        const result = await api.understandVisionTask({
+          prompt,
+          dataset_id: options.datasetId,
+          dataset_version_id: options.datasetVersionId
+        });
+        setSourceVisionTask(result.task);
+        setSourceVisionTaskError('');
+        return result.task;
+      } catch (error) {
+        setSourceVisionTaskError((error as Error).message);
+        return null;
+      } finally {
+        setAgentTaskPreparing(false);
+      }
+    },
+    [preferredSourceVisionTaskId, requirementDescription, sourceVisionTask]
+  );
+
   const submit = async (options?: { autoFill?: boolean }) => {
     const autoFill = options?.autoFill ?? false;
+    if (agentTaskPreparing) {
+      return;
+    }
+    if (requirementDescription.trim()) {
+      const ensuredDraft = await ensureTaskDraftFromRequirement({ silent: true });
+      if (!ensuredDraft) {
+        return;
+      }
+    }
     const generatedName = `${selectedDataset?.name ?? taskType}-${framework}-job-${Date.now().toString().slice(-6)}`;
     const effectiveName = name.trim() || (autoFill ? generatedName : '');
     if (!effectiveName) {
@@ -1668,6 +1892,18 @@ export default function CreateTrainingJobPage() {
       return;
     }
 
+    const linkedVisionTask = await resolveLaunchVisionTaskContext({
+      datasetId: resolvedDatasetId,
+      datasetVersionId: resolvedVersion.id
+    });
+    if (preferredSourceVisionTaskId && !linkedVisionTask) {
+      setFeedback({
+        variant: 'error',
+        text: t('Source vision task is unavailable. Reload the agent context before launching.')
+      });
+      return;
+    }
+
     setSubmitting(true);
     setFeedback(null);
 
@@ -1684,6 +1920,7 @@ export default function CreateTrainingJobPage() {
         framework,
         dataset_id: resolvedDatasetId,
         dataset_version_id: resolvedVersion.id,
+        ...(linkedVisionTask ? { vision_task_id: linkedVisionTask.id } : {}),
         base_model: baseModel.trim() || baseModelOptions[0] || `${framework}-base`,
         config: {
           epochs: effectiveEpochs,
@@ -1700,6 +1937,7 @@ export default function CreateTrainingJobPage() {
         buildTrainingJobDetailPath(created.id, {
           datasetId: resolvedDatasetId,
           versionId: resolvedVersion.id,
+          visionTaskId: linkedVisionTask?.id ?? null,
           created: true,
           launchContext,
           returnTo: outboundReturnTo
@@ -1713,70 +1951,65 @@ export default function CreateTrainingJobPage() {
   };
 
   const createTaskDraft = async () => {
-    if (!requirementDescription.trim()) {
-      setFeedback({ variant: 'error', text: t('Please describe your requirement first.') });
-      return;
-    }
-
-    setDrafting(true);
-    setFeedback(null);
-
-    try {
-      const draft = await api.draftTaskFromRequirement(requirementDescription.trim());
-      setTaskDraft(draft);
-      setTaskType(draft.task_type);
-      setFramework(draft.recommended_framework);
-      if (!name.trim()) {
-        setName(`${draft.task_type}-job-${Date.now().toString().slice(-6)}`);
-      }
-    } catch (error) {
-      setFeedback({ variant: 'error', text: (error as Error).message });
-    } finally {
-      setDrafting(false);
-    }
+    await ensureTaskDraftFromRequirement();
   };
 
-  const wizardStep = !name.trim()
-    ? 0
-    : !selectedDataset || !selectedDatasetVersion
-      ? 1
-      : !paramsReady
-        ? 2
-        : !dispatchReady
-          ? 3
-          : 4;
+  const wizardStep =
+    !requirementDescription.trim() && !taskDraft && !name.trim()
+      ? 0
+      : !selectedDatasetVersion
+        ? 1
+        : 2;
 
   return (
     <WorkspacePage>
       <PageHeader
-        eyebrow={t('Training Run')}
+        eyebrow={t('Smart Launch')}
         title={t('Create Training Run')}
-        description={t('Create a run from one fixed snapshot.')}
+        description={t('Describe the target, confirm one snapshot, and let Vistral assemble the launch plan.')}
         primaryAction={{
-          label: creatingDatasetFromSamples
+          label: sourceVisionTaskLoading || agentTaskPreparing
+            ? t('Preparing agent...')
+            : creatingDatasetFromSamples
             ? t('Preparing dataset...')
             : preparingSnapshot
             ? t('Preparing snapshot...')
             : submitting
-              ? t('Submitting...')
-              : t('Create Training Run'),
+              ? t('Launching...')
+              : t('Smart Launch'),
           onClick: () => {
-            void submit();
+            void submit({ autoFill: true });
           },
-          disabled: submitting || creatingDatasetFromSamples || preparingSnapshot || loading || versionsLoading || !submitReady
+          disabled:
+            submitting ||
+            sourceVisionTaskLoading ||
+            agentTaskPreparing ||
+            creatingDatasetFromSamples ||
+            preparingSnapshot ||
+            loading ||
+            versionsLoading ||
+            !submitReady
         }}
         secondaryActions={
           <div className="row gap wrap">
             <Button
               type="button"
-              variant="secondary"
+              variant="ghost"
               size="sm"
               onClick={() => {
-                void submit({ autoFill: true });
+                void submit();
               }}
-              disabled={submitting || creatingDatasetFromSamples || preparingSnapshot || loading || versionsLoading}
+              disabled={
+                submitting ||
+                sourceVisionTaskLoading ||
+                agentTaskPreparing ||
+                creatingDatasetFromSamples ||
+                preparingSnapshot ||
+                loading ||
+                versionsLoading
+              }
             >
-              {submitting || creatingDatasetFromSamples || preparingSnapshot ? t('Launching...') : t('Smart Launch')}
+              {t('Use manual launch')}
             </Button>
             <ButtonLink to={datasetsPath} variant="ghost" size="sm">
               {t('Open datasets')}
@@ -1796,14 +2029,9 @@ export default function CreateTrainingJobPage() {
         meta={
           <div className="stack tight">
             <div className="row gap wrap align-center">
-              <Badge tone="info">{t('Task')}: {t(taskType)}</Badge>
+              <Badge tone="info">{t('Task')}: {t(selectedDataset?.task_type ?? taskType)}</Badge>
               <Badge tone={snapshotPrefilledFromLink ? 'success' : 'neutral'}>
                 {t('Snapshot prefill')}: {snapshotPrefilledFromLink ? t('Ready') : t('N/A')}
-              </Badge>
-              <Badge
-                tone={dispatchPreference === 'auto' ? 'neutral' : dispatchPreference === 'control_plane' ? 'warning' : 'info'}
-              >
-                {t('Dispatch')}: {dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}
               </Badge>
               <Badge
                 tone={
@@ -1839,10 +2067,10 @@ export default function CreateTrainingJobPage() {
       />
 
       <ProgressStepper
-        steps={[t('Run identity'), t('Dataset snapshot'), t('Core params'), t('Dispatch strategy'), t('Review and launch')]}
+        steps={[t('Requirement'), t('Dataset snapshot'), t('Smart Launch')]}
         current={wizardStep}
         title={t('Launch steps')}
-        caption={t('Fill them in order.')}
+        caption={t('Tell the agent what to train, then confirm the snapshot.')}
       />
 
       {loading ? (
@@ -1895,6 +2123,49 @@ export default function CreateTrainingJobPage() {
               </ButtonLink>
             </div>
           }
+        />
+      ) : null}
+      {preferredSourceVisionTaskId ? (
+        <InlineAlert
+          tone={sourceVisionTaskError ? 'warning' : sourceVisionTaskLoading ? 'info' : sourceVisionTask ? 'success' : 'info'}
+          title={
+            sourceVisionTaskError
+              ? t('Agent context unavailable')
+              : sourceVisionTaskLoading
+                ? t('Loading agent context...')
+                : sourceVisionTask
+                  ? t('Agent context active')
+                  : t('Agent continuation ready')
+          }
+          description={
+            sourceVisionTaskError
+              ? t('The linked vision task could not be loaded. Launch can continue only after that context is restored.')
+              : sourceVisionTaskLoading
+                ? t('Loading linked vision task {taskId}.', { taskId: preferredSourceVisionTaskId })
+                : sourceVisionTask
+                  ? t('Training will stay linked to vision task {taskId} so Vistral can continue toward model registration.', {
+                      taskId: sourceVisionTask.id
+                    })
+                  : t('This launch will stay attached to its agent task.')
+          }
+          actions={
+            <div className="row gap wrap">
+              {sourceVisionTaskDetailPath ? (
+                <ButtonLink to={sourceVisionTaskDetailPath} variant="ghost" size="sm">
+                  {t('Open vision task')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={clearSourceVisionTaskPath} variant="ghost" size="sm">
+                {t('Clear agent context')}
+              </ButtonLink>
+            </div>
+          }
+        />
+      ) : requirementDescription.trim() ? (
+        <InlineAlert
+          tone="info"
+          title={t('Agent continuation ready')}
+          description={t('Smart Launch will keep this run attached to a vision task so Vistral can continue from training to model output.')}
         />
       ) : null}
       {preferredLaunchContextHint ? (
@@ -1953,52 +2224,107 @@ export default function CreateTrainingJobPage() {
           <div className="workspace-main-stack training-launch-stack">
             <Card as="article" className="stack">
               <WorkspaceSectionHeader
-                title={t('1. Run identity')}
-                description={t('Name it first, then choose task and framework.')}
-                actions={<Badge tone="neutral">{taskType.toUpperCase()}</Badge>}
+                title={t('1. Requirement')}
+                description={t('Describe the model goal first. Run name and recipe can be generated for you.')}
+                actions={<Badge tone="neutral">{t(selectedDataset?.task_type ?? taskType)}</Badge>}
               />
               <div className="workspace-form-grid">
                 <label className="workspace-form-span-2">
+                  {t('Requirement')}
+                  <Textarea
+                    value={requirementDescription}
+                    onChange={(event) => setRequirementDescription(event.target.value)}
+                    rows={4}
+                    placeholder={t('For example: detect vehicle defects or read a vehicle number')}
+                  />
+                </label>
+                <label className="workspace-form-span-2">
                   {t('Run Name')}
-                  <Input ref={jobNameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
-                </label>
-                <label>
-                  {t('Task Type')}
-                  <Select
-                    value={taskType}
-                    onChange={(event) =>
-                      setTaskType(
-                        event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
-                      )
-                    }
-                  >
-                    {taskTypeOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {t(option)}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <label>
-                  {t('Framework')}
-                  <Select
-                    value={framework}
-                    onChange={(event) => setFramework(event.target.value as 'paddleocr' | 'doctr' | 'yolo')}
-                  >
-                    {taskFrameworkOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {t(option)}
-                      </option>
-                    ))}
-                  </Select>
+                  <Input
+                    ref={jobNameInputRef}
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder={t('Optional. Smart Launch can generate one automatically.')}
+                  />
                 </label>
               </div>
+              <div className="row gap wrap align-center">
+                <Button type="button" size="sm" variant="secondary" onClick={createTaskDraft} disabled={drafting || loading}>
+                  {drafting ? t('Generating...') : t('Preview agent plan')}
+                </Button>
+                <small className="muted">
+                  {taskDraft
+                    ? t('The inferred plan is shown below and will be reused during Smart Launch.')
+                    : t('If you skip the requirement text, launch will follow the selected dataset defaults.')}
+                </small>
+              </div>
+              <Panel className="stack tight" tone="soft">
+                <div className="row gap wrap align-center">
+                  <Badge tone="info">{t('Task')}: {t(selectedDataset?.task_type ?? taskDraft?.task_type ?? taskType)}</Badge>
+                  <Badge tone="neutral">{t('Framework')}: {t(taskDraft?.recommended_framework ?? framework)}</Badge>
+                  <Badge tone="neutral">{t('Base Model')}: {baseModel.trim() || baseModelOptions[0] || `${framework}-base`}</Badge>
+                </div>
+                {taskDraft ? (
+                  <small className="muted">{taskDraft.rationale}</small>
+                ) : (
+                  <small className="muted">
+                    {t('Smart Launch will infer task type, framework, and baseline params from your dataset scope and requirement.')}
+                  </small>
+                )}
+              </Panel>
+              <AdvancedSection
+                title={t('Expert overrides')}
+                description={t('Only open this when the agent defaults are wrong.')}
+              >
+                <div className="workspace-form-grid">
+                  <label>
+                    {t('Task Type')}
+                    <Select
+                      value={taskType}
+                      onChange={(event) =>
+                        setTaskType(
+                          event.target.value as 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb'
+                        )
+                      }
+                    >
+                      {taskTypeOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {t(option)}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <label>
+                    {t('Framework')}
+                    <Select
+                      value={framework}
+                      onChange={(event) => setFramework(event.target.value as 'paddleocr' | 'doctr' | 'yolo')}
+                    >
+                      {taskFrameworkOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {t(option)}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <label className="workspace-form-span-2">
+                    {t('Base Model')}
+                    <Select value={baseModel} onChange={(event) => setBaseModel(event.target.value)}>
+                      {baseModelOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                </div>
+              </AdvancedSection>
             </Card>
 
             <Card as="article" className="stack">
               <WorkspaceSectionHeader
                 title={t('2. Dataset snapshot')}
-                description={t('Choose the dataset, then lock the snapshot.')}
+                description={t('Choose one reproducible snapshot. Smart Launch can prepare it when the data is close but not fully ready.')}
                 actions={
                   selectedDatasetVersion ? (
                     <StatusTag status={launchReady ? 'ready' : 'draft'}>
@@ -2007,11 +2333,11 @@ export default function CreateTrainingJobPage() {
                   ) : null
                 }
               />
-              {filteredDatasets.length === 0 ? (
-                  <StateBlock
-                    variant="empty"
-                    title={t('No matching dataset')}
-                    description={t('Create a dataset for this task type first.')}
+              {datasets.length === 0 ? (
+                <StateBlock
+                  variant="empty"
+                  title={t('No dataset yet')}
+                  description={t('Create a dataset first, or let Smart Launch bootstrap one from sample files.')}
                   extra={
                     <div className="row gap wrap">
                       <ButtonLink to={datasetsPath} variant="secondary" size="sm">
@@ -2021,106 +2347,14 @@ export default function CreateTrainingJobPage() {
                   }
                 />
               ) : null}
-              <Panel className="stack tight" tone="soft">
-                <div className="row gap wrap align-center">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => bootstrapSampleFileInputRef.current?.click()}
-                    disabled={submitting || preparingSnapshot || creatingDatasetFromSamples}
-                  >
-                    {t('Upload sample files')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={clearBootstrapSampleFiles}
-                    disabled={
-                      bootstrapSampleFiles.length === 0 || submitting || preparingSnapshot || creatingDatasetFromSamples
-                    }
-                  >
-                    {t('Clear files')}
-                  </Button>
-                  <span className="muted">
-                    {t('{count} local sample file(s) queued', { count: bootstrapSampleFiles.length })}
-                  </span>
-                </div>
-                <HiddenFileInput
-                  ref={bootstrapSampleFileInputRef}
-                  multiple
-                  onChange={handleBootstrapSampleFileInput}
-                  disabled={submitting || preparingSnapshot || creatingDatasetFromSamples}
-                />
-                <div
-                  className={`training-bootstrap-dropzone${bootstrapDropActive ? ' is-active' : ''}`}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'copy';
-                    if (!bootstrapDropActive) {
-                      setBootstrapDropActive(true);
-                    }
-                  }}
-                  onDragLeave={() => setBootstrapDropActive(false)}
-                  onDrop={handleBootstrapDrop}
-                >
-                  <strong>{t('Drag and drop sample files here')}</strong>
-                  <small className="muted">
-                    {t('BMP and common image/document files are supported. Keep each file under {limit}.', {
-                      limit: UPLOAD_SOFT_LIMIT_LABEL
-                    })}
-                  </small>
-                </div>
-                {bootstrapSampleFiles.length > 0 ? (
-                  <ul className="workspace-record-list compact">
-                    {bootstrapSampleFiles.map((file) => {
-                      const fileKey = buildBootstrapSampleFileKey(file);
-                      return (
-                        <Panel key={fileKey} as="li" className="workspace-record-item stack tight" tone="soft">
-                          <div className="row between gap wrap align-center">
-                            <small>{file.name}</small>
-                            <div className="row gap">
-                              <Badge tone="neutral">{formatByteSize(file.size)}</Badge>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => removeBootstrapSampleFile(fileKey)}
-                              >
-                                {t('Delete')}
-                              </Button>
-                            </div>
-                          </div>
-                        </Panel>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <small className="muted">{t('No local sample files queued yet.')}</small>
-                )}
-                <label>
-                  {t('Sample filenames for Smart Launch')}
-                  <Textarea
-                    value={bootstrapSampleFilenames}
-                    onChange={(event) => setBootstrapSampleFilenames(event.target.value)}
-                    rows={3}
-                    placeholder={t('One filename per line, e.g. wagon_001.jpg')}
-                  />
-                </label>
-                <small className="muted">
-                  {t(
-                    'When no dataset is selected, Smart Launch can auto-create dataset from local files and filenames, then continue training setup.'
-                  )}
-                </small>
-              </Panel>
               <div className="workspace-form-grid">
                 <label className="workspace-form-span-2">
                   {t('Dataset')}
                   <Select ref={datasetSelectRef} value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
-                    {filteredDatasets.map((dataset) => (
+                    <option value="">{t('Pick a dataset')}</option>
+                    {datasets.map((dataset) => (
                       <option key={dataset.id} value={dataset.id}>
-                        {dataset.name} ({t(dataset.status)})
+                        {dataset.name} · {t(dataset.task_type)} · {t(dataset.status)}
                       </option>
                     ))}
                   </Select>
@@ -2140,16 +2374,6 @@ export default function CreateTrainingJobPage() {
                       <option key={version.id} value={version.id}>
                         {version.version_name} · {t('train')} {version.split_summary.train} ·{' '}
                         {formatCoveragePercent(version.annotation_coverage)}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <label>
-                  {t('Base Model')}
-                  <Select value={baseModel} onChange={(event) => setBaseModel(event.target.value)}>
-                    {baseModelOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
                       </option>
                     ))}
                   </Select>
@@ -2180,6 +2404,104 @@ export default function CreateTrainingJobPage() {
               {snapshotPreparationNote ? (
                 <small className="muted">{snapshotPreparationNote}</small>
               ) : null}
+              <AdvancedSection
+                title={t('No dataset yet? Bootstrap from samples')}
+                description={t('Optional. Smart Launch can create a dataset first, then continue the training plan.')}
+              >
+                <Panel className="stack tight" tone="soft">
+                  <div className="row gap wrap align-center">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => bootstrapSampleFileInputRef.current?.click()}
+                      disabled={submitting || preparingSnapshot || creatingDatasetFromSamples}
+                    >
+                      {t('Upload sample files')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearBootstrapSampleFiles}
+                      disabled={
+                        bootstrapSampleFiles.length === 0 || submitting || preparingSnapshot || creatingDatasetFromSamples
+                      }
+                    >
+                      {t('Clear files')}
+                    </Button>
+                    <span className="muted">
+                      {t('{count} local sample file(s) queued', { count: bootstrapSampleFiles.length })}
+                    </span>
+                  </div>
+                  <HiddenFileInput
+                    ref={bootstrapSampleFileInputRef}
+                    multiple
+                    onChange={handleBootstrapSampleFileInput}
+                    disabled={submitting || preparingSnapshot || creatingDatasetFromSamples}
+                  />
+                  <div
+                    className={`training-bootstrap-dropzone${bootstrapDropActive ? ' is-active' : ''}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'copy';
+                      if (!bootstrapDropActive) {
+                        setBootstrapDropActive(true);
+                      }
+                    }}
+                    onDragLeave={() => setBootstrapDropActive(false)}
+                    onDrop={handleBootstrapDrop}
+                  >
+                    <strong>{t('Drag and drop sample files here')}</strong>
+                    <small className="muted">
+                      {t('BMP and common image/document files are supported. Keep each file under {limit}.', {
+                        limit: UPLOAD_SOFT_LIMIT_LABEL
+                      })}
+                    </small>
+                  </div>
+                  {bootstrapSampleFiles.length > 0 ? (
+                    <ul className="workspace-record-list compact">
+                      {bootstrapSampleFiles.map((file) => {
+                        const fileKey = buildBootstrapSampleFileKey(file);
+                        return (
+                          <Panel key={fileKey} as="li" className="workspace-record-item stack tight" tone="soft">
+                            <div className="row between gap wrap align-center">
+                              <small>{file.name}</small>
+                              <div className="row gap">
+                                <Badge tone="neutral">{formatByteSize(file.size)}</Badge>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => removeBootstrapSampleFile(fileKey)}
+                                >
+                                  {t('Delete')}
+                                </Button>
+                              </div>
+                            </div>
+                          </Panel>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <small className="muted">{t('No local sample files queued yet.')}</small>
+                  )}
+                  <label>
+                    {t('Sample filenames for Smart Launch')}
+                    <Textarea
+                      value={bootstrapSampleFilenames}
+                      onChange={(event) => setBootstrapSampleFilenames(event.target.value)}
+                      rows={3}
+                      placeholder={t('One filename per line, e.g. wagon_001.jpg')}
+                    />
+                  </label>
+                  <small className="muted">
+                    {t(
+                      'When no dataset is selected, Smart Launch can auto-create dataset from local files and filenames, then continue training setup.'
+                    )}
+                  </small>
+                </Panel>
+              </AdvancedSection>
               {selectedDatasetVersion ? (
                 <Panel className="stack tight" tone="soft">
                   <div className="row gap wrap align-center">
@@ -2217,43 +2539,36 @@ export default function CreateTrainingJobPage() {
 
             <Card as="article" className="stack">
               <WorkspaceSectionHeader
-                title={t('3. Core params')}
-                description={t('Keep the core params visible.')}
+                title={t('3. Launch plan')}
+                description={t('Review the auto-composed plan. Expert controls stay collapsed unless you really need them.')}
                 actions={
                   <div className="row gap wrap align-center">
-                    {paramsReady ? (
-                      <Badge tone="success">{t('Ready')}</Badge>
-                    ) : (
-                      <Badge tone="warning">{t('Needs review')}</Badge>
-                    )}
+                    <Badge tone={blockedLaunchCheckpoints.length === 0 ? 'success' : 'warning'}>
+                      {blockedLaunchCheckpoints.length === 0 ? t('Ready') : t('Needs review')}
+                    </Badge>
                     <Button type="button" size="sm" variant="ghost" onClick={applyRecommendedParams}>
                       {t('Use recommended params')}
                     </Button>
                   </div>
                 }
               />
-              <div className="three-col">
-                <label>
-                  {t('Epochs')}
-                  <Input
-                    ref={paramsEpochsInputRef}
-                    value={epochs}
-                    inputMode="numeric"
-                    onChange={(event) => setEpochs(event.target.value)}
-                  />
-                </label>
-                <label>
-                  {t('Batch Size')}
-                  <Input value={batchSize} inputMode="numeric" onChange={(event) => setBatchSize(event.target.value)} />
-                </label>
-                <label>
-                  {t('Learning Rate')}
-                  <Input
-                    value={learningRate}
-                    inputMode="decimal"
-                    onChange={(event) => setLearningRate(event.target.value)}
-                  />
-                </label>
+              <div className="workspace-keyline-list">
+                <div className="workspace-keyline-item">
+                  <span>{t('Task Type')}</span>
+                  <strong>{t(selectedDataset?.task_type ?? taskDraft?.task_type ?? taskType)}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Framework')}</span>
+                  <strong>{t(taskDraft?.recommended_framework ?? framework)}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Base Model')}</span>
+                  <strong>{baseModel.trim() || baseModelOptions[0] || `${framework}-base`}</strong>
+                </div>
+                <div className="workspace-keyline-item">
+                  <span>{t('Dispatch')}</span>
+                  <strong>{dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}</strong>
+                </div>
               </div>
               {!paramsReady ? (
                 <InlineAlert
@@ -2264,11 +2579,93 @@ export default function CreateTrainingJobPage() {
               ) : (
                 <small className="muted">{t('Core params checked.')}</small>
               )}
+              <Panel className="stack tight" tone="soft">
+                <div className="row gap wrap align-center">
+                  <Badge tone={preferredSourceVisionTaskId ? 'success' : requirementDescription.trim() ? 'info' : 'neutral'}>
+                    {t('Agent lane')}: {preferredSourceVisionTaskId ? t('Linked') : requirementDescription.trim() ? t('Will create') : t('Standalone')}
+                  </Badge>
+                  {sourceVisionTask ? <Badge tone="neutral">{sourceVisionTask.id}</Badge> : null}
+                </div>
+                <small className="muted">
+                  {preferredSourceVisionTaskId
+                    ? t('This launch will reuse the linked vision task so post-training actions stay in one agent lane.')
+                    : requirementDescription.trim()
+                      ? t('Smart Launch will create an agent continuation task before submit so the run can keep flowing toward model registration.')
+                      : t('Without a goal description, this run launches as a standalone training job.')}
+                </small>
+              </Panel>
+              <div className="row gap wrap">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    void submit({ autoFill: true });
+                  }}
+                  disabled={
+                    submitting ||
+                    sourceVisionTaskLoading ||
+                    agentTaskPreparing ||
+                    creatingDatasetFromSamples ||
+                    preparingSnapshot ||
+                    loading ||
+                    versionsLoading ||
+                    !submitReady
+                  }
+                >
+                  {submitting || creatingDatasetFromSamples || preparingSnapshot
+                    ? t('Launching...')
+                    : sourceVisionTaskLoading || agentTaskPreparing
+                      ? t('Preparing agent...')
+                      : t('Smart Launch')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    void submit();
+                  }}
+                  disabled={
+                    submitting ||
+                    sourceVisionTaskLoading ||
+                    agentTaskPreparing ||
+                    creatingDatasetFromSamples ||
+                    preparingSnapshot ||
+                    loading ||
+                    versionsLoading ||
+                    !submitReady
+                  }
+                >
+                  {t('Use manual launch')}
+                </Button>
+              </div>
               <AdvancedSection
-                title={t('Advanced helper')}
-                description={t('Use only when you need draft suggestions.')}
+                title={t('Expert controls')}
+                description={t('Manual overrides for params, dispatch, runtime guard, and worker routing.')}
               >
                 <div className="three-col">
+                  <label>
+                    {t('Epochs')}
+                    <Input
+                      ref={paramsEpochsInputRef}
+                      value={epochs}
+                      inputMode="numeric"
+                      onChange={(event) => setEpochs(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    {t('Batch Size')}
+                    <Input value={batchSize} inputMode="numeric" onChange={(event) => setBatchSize(event.target.value)} />
+                  </label>
+                  <label>
+                    {t('Learning Rate')}
+                    <Input
+                      value={learningRate}
+                      inputMode="decimal"
+                      onChange={(event) => setLearningRate(event.target.value)}
+                    />
+                  </label>
                   <label>
                     {t('Warmup Ratio')}
                     <Input
@@ -2285,117 +2682,77 @@ export default function CreateTrainingJobPage() {
                       onChange={(event) => setWeightDecay(event.target.value)}
                     />
                   </label>
-                </div>
-                <details className="workspace-details">
-                  <summary>{t('Requirement to Task Draft')}</summary>
-                  <div className="workspace-disclosure-content stack">
-                    <label>
-                      {t('Requirement')}
-                      <Textarea
-                        value={requirementDescription}
-                        onChange={(event) => setRequirementDescription(event.target.value)}
-                        rows={3}
-                        placeholder={t('For example: detect vehicle defects or read a vehicle number')}
-                      />
-                    </label>
-                    <Button type="button" onClick={createTaskDraft} disabled={drafting || loading} block>
-                      {drafting ? t('Generating...') : t('Draft from requirement')}
-                    </Button>
-                    {taskDraft ? (
-                      <div className="stack tight">
-                        <div className="workspace-keyline-list">
-                          <div className="workspace-keyline-item">
-                            <span>{t('Task Type')}</span>
-                            <strong>{t(taskDraft.task_type)}</strong>
-                          </div>
-                          <div className="workspace-keyline-item">
-                            <span>{t('Framework')}</span>
-                            <strong>{t(taskDraft.recommended_framework)}</strong>
-                          </div>
-                          <div className="workspace-keyline-item">
-                            <span>{t('Labels')}</span>
-                            <strong>{taskDraft.label_hints.length}</strong>
-                          </div>
-                        </div>
-                        <small className="muted">{taskDraft.rationale}</small>
-                      </div>
-                    ) : (
-                      <small className="muted">
-                        {t('This is only a helper. Launch still depends on the snapshot and checks.')}
-                      </small>
-                    )}
-                  </div>
-                </details>
-              </AdvancedSection>
-            </Card>
-
-            <Card as="article" className="stack">
-              <WorkspaceSectionHeader
-                title={t('4. Dispatch strategy')}
-                description={t('Choose whether this run is auto-scheduled, control-plane only, or worker-oriented.')}
-                actions={
-                  <Badge tone={dispatchPreference === 'auto' ? 'neutral' : dispatchPreference === 'control_plane' ? 'warning' : 'info'}>
-                    {dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}
-                  </Badge>
-                }
-              />
-              <div className="workspace-form-grid">
-                <label className="workspace-form-span-2">
-                  {t('Dispatch target')}
-                  <Select
-                    value={dispatchPreference}
-                    onChange={(event) =>
-                      setDispatchPreference(event.target.value as 'auto' | 'control_plane' | 'worker')
-                    }
-                  >
-                    <option value="auto">{t('Auto (scheduler decides)')}</option>
-                    <option value="control_plane">{t('Force control-plane')}</option>
-                    <option value="worker">{t('Prefer worker dispatch')}</option>
-                  </Select>
-                </label>
-                {dispatchPreference === 'worker' ? (
                   <label className="workspace-form-span-2">
-                    {t('Worker preference (optional)')}
+                    {t('Dispatch target')}
                     <Select
-                      value={selectedWorkerId}
-                      onChange={(event) => setSelectedWorkerId(event.target.value)}
-                      disabled={workersLoading || workersAccessDenied || workers.length === 0}
+                      value={dispatchPreference}
+                      onChange={(event) =>
+                        setDispatchPreference(event.target.value as 'auto' | 'control_plane' | 'worker')
+                      }
                     >
-                      <option value="">{t('Auto-select from online workers')}</option>
-                      {onlineWorkers.map((worker) => (
-                        <option key={worker.id} value={worker.id}>
-                          {worker.name} · {worker.id}
-                        </option>
-                      ))}
+                      <option value="auto">{t('Auto (scheduler decides)')}</option>
+                      <option value="control_plane">{t('Force control-plane')}</option>
+                      <option value="worker">{t('Prefer worker dispatch')}</option>
                     </Select>
                   </label>
-                ) : null}
-              </div>
-              <small className="muted">{dispatchSummary}</small>
-              {dispatchPreference === 'worker' ? (
-                <div className="row gap wrap">
-                  <Badge tone={onlineWorkers.length > 0 ? 'success' : 'warning'}>
-                    {t('Online workers')}: {onlineWorkers.length}
-                  </Badge>
-                  {selectedWorkerId ? (
-                    <Badge tone={selectedWorkerAvailable ? 'success' : 'danger'}>
-                      {selectedWorkerAvailable ? t('Selected worker ready') : t('Selected worker missing')}
-                    </Badge>
+                  {dispatchPreference === 'worker' ? (
+                    <label className="workspace-form-span-2">
+                      {t('Worker preference (optional)')}
+                      <Select
+                        value={selectedWorkerId}
+                        onChange={(event) => setSelectedWorkerId(event.target.value)}
+                        disabled={workersLoading || workersAccessDenied || workers.length === 0}
+                      >
+                        <option value="">{t('Auto-select from online workers')}</option>
+                        {onlineWorkers.map((worker) => (
+                          <option key={worker.id} value={worker.id}>
+                            {worker.name} · {worker.id}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
                   ) : null}
                 </div>
-              ) : null}
-              {workersLoading ? <small className="muted">{t('Loading worker inventory...')}</small> : null}
-              {workersAccessDenied ? (
-                <small className="muted">{t('Worker inventory is restricted to admins.')}</small>
-              ) : null}
-              {!workersAccessDenied && workersError ? <small className="muted">{workersError}</small> : null}
-              {dispatchPreference === 'worker' && !workersLoading && !workersAccessDenied && onlineWorkers.length === 0 ? (
-                <InlineAlert
-                  tone="warning"
-                  title={t('No online worker')}
-                  description={t('Worker dispatch may fail if no eligible online worker is available.')}
-                />
-              ) : null}
+                <small className="muted">{dispatchSummary}</small>
+                <div className="row gap wrap">
+                  <ButtonLink to={runtimeReadinessPath} variant="secondary" size="sm">
+                    {t('Open Runtime Settings')}
+                  </ButtonLink>
+                  <ButtonLink
+                    to={dispatchPreference === 'worker' && onlineWorkers.length === 0 ? workerPairingPath : workerInventoryPath}
+                    variant="ghost"
+                    size="sm"
+                  >
+                    {t('Worker Settings')}
+                  </ButtonLink>
+                </div>
+                {nextLaunchCheckpoint?.key === 'runtime' &&
+                !runtimeSettingsLoading &&
+                !runtimeSettingsError &&
+                !runtimeDisableSimulatedTrainFallback ? (
+                  <label className="row gap wrap align-center">
+                    <input
+                      type="checkbox"
+                      className="ui-checkbox"
+                      checked={nonStrictLaunchConfirmed}
+                      onChange={(event) => setNonStrictLaunchConfirmed(event.target.checked)}
+                    />
+                    <span>{t('Confirm risk')}</span>
+                  </label>
+                ) : null}
+                {workersLoading ? <small className="muted">{t('Loading worker inventory...')}</small> : null}
+                {workersAccessDenied ? (
+                  <small className="muted">{t('Worker inventory is restricted to admins.')}</small>
+                ) : null}
+                {!workersAccessDenied && workersError ? <small className="muted">{workersError}</small> : null}
+                {dispatchPreference === 'worker' && !workersLoading && !workersAccessDenied && onlineWorkers.length === 0 ? (
+                  <InlineAlert
+                    tone="warning"
+                    title={t('No online worker')}
+                    description={t('Worker dispatch may fail if no eligible online worker is available.')}
+                  />
+                ) : null}
+              </AdvancedSection>
             </Card>
 
           </div>
@@ -2404,7 +2761,7 @@ export default function CreateTrainingJobPage() {
           <div className="workspace-inspector-rail">
             <Card as="article" className="workspace-inspector-card">
               <div className="row between gap wrap align-center">
-                <h3>{t('Next step')}</h3>
+                <h3>{t('Agent launch status')}</h3>
                 <StatusTag status={blockedLaunchCheckpoints.length === 0 ? 'ready' : 'draft'}>
                   {blockedLaunchCheckpoints.length === 0 ? t('Ready') : t('Needs review')}
                 </StatusTag>
@@ -2449,49 +2806,6 @@ export default function CreateTrainingJobPage() {
                   ))}
                 </div>
               </details>
-            </Card>
-
-            <Card as="article" className="workspace-inspector-card">
-              <div className="stack tight">
-                <h3>{t('Runtime & worker handoff')}</h3>
-                <small className="muted">
-                  {dispatchPreference === 'worker'
-                    ? onlineWorkers.length > 0
-                      ? t('Worker dispatch is available. Use Worker Settings only when you need to inspect inventory or open one concrete worker.')
-                      : t('No online worker is visible yet. Open Worker Settings to pair a node or inspect inventory before launch.')
-                    : t('Runtime readiness still governs whether this run can launch safely. Open Runtime Settings when you need strict-readiness checks or fixes.')}
-                </small>
-              </div>
-              <div className="row gap wrap">
-                <ButtonLink to={runtimeReadinessPath} variant="secondary" size="sm">
-                  {t('Open Runtime Settings')}
-                </ButtonLink>
-                <ButtonLink
-                  to={dispatchPreference === 'worker' && onlineWorkers.length === 0 ? workerPairingPath : workerInventoryPath}
-                  variant="ghost"
-                  size="sm"
-                >
-                  {t('Worker Settings')}
-                </ButtonLink>
-              </div>
-              <div className="workspace-keyline-list">
-                <div className="workspace-keyline-item">
-                  <span>{t('Runtime')}</span>
-                  <small>
-                    {runtimeSettingsError
-                      ? t('Unavailable')
-                      : runtimeSettingsLoading
-                        ? t('Checking...')
-                        : runtimeDisableSimulatedTrainFallback
-                          ? t('Guarded')
-                          : t('Review')}
-                  </small>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Online workers')}</span>
-                  <small>{onlineWorkers.length}</small>
-                </div>
-              </div>
             </Card>
 
             <Card as="article" className="workspace-inspector-card">

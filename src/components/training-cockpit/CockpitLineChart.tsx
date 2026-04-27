@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useI18n } from '../../i18n/I18nProvider';
 import type { TrainingCockpitMetricPoint } from './types';
 
 const chartWidth = 720;
@@ -31,6 +32,7 @@ export default function CockpitLineChart({
   emptyTitle,
   emptyDescription
 }: CockpitLineChartProps) {
+  const { t } = useI18n();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   const chart = useMemo(() => {
@@ -125,14 +127,17 @@ export default function CockpitLineChart({
           <small className="muted">{description}</small>
         </div>
         {hoveredPoint ? (
-          <div className="training-cockpit-chart-tooltip">
+          <div className="training-cockpit-chart-tooltip" role="status" aria-live="polite">
             <strong>
-              Epoch {hoveredPoint.epoch} · Step {hoveredPoint.step}
+              {t('Epoch {epoch} · Step {step}', {
+                epoch: hoveredPoint.epoch,
+                step: hoveredPoint.step
+              })}
             </strong>
             <small className="muted">{new Date(hoveredPoint.recordedAt).toLocaleTimeString()}</small>
           </div>
         ) : (
-          <small className="muted">Hover to inspect exact values.</small>
+          <small className="muted">{t('Latest values remain visible below. Hover to inspect exact values.')}</small>
         )}
       </div>
 
@@ -141,7 +146,7 @@ export default function CockpitLineChart({
           viewBox={`0 0 ${chartWidth} ${chartHeight}`}
           className="training-cockpit-chart"
           role="img"
-          aria-label={`${title} chart`}
+          aria-label={t('{title} chart', { title })}
           onMouseLeave={() => setActiveIndex(null)}
         >
           {Array.from({ length: 4 }, (_, index) => {
@@ -157,12 +162,7 @@ export default function CockpitLineChart({
                   stroke="rgba(255,255,255,0.08)"
                   strokeWidth="1"
                 />
-                <text
-                  x={8}
-                  y={y + 4}
-                  fill="rgba(224,232,255,0.64)"
-                  fontSize="12"
-                >
+                <text x={8} y={y + 4} fill="rgba(224,232,255,0.64)" fontSize="12">
                   {(chart.max - ((chart.max - chart.min) * index) / 3).toFixed(2)}
                 </text>
               </g>
@@ -222,7 +222,9 @@ export default function CockpitLineChart({
 
       <div className="training-cockpit-chart-legend">
         {chart.visibleSeries.map((item) => {
-          const value = hoveredPoint ? item.valueAccessor(hoveredPoint) : item.valueAccessor(points.at(-1) ?? points[0]);
+          const value = hoveredPoint
+            ? item.valueAccessor(hoveredPoint)
+            : item.valueAccessor(points.at(-1) ?? points[0]);
           return (
             <div key={item.key} className="training-cockpit-chart-legend__item">
               <span className="training-cockpit-chart-legend__swatch" style={{ background: item.color }} />

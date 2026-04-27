@@ -5,7 +5,8 @@ import type {
   FileAttachment,
   InferenceRunRecord,
   ModelVersionRecord,
-  RuntimeConnectivityRecord
+  RuntimeConnectivityRecord,
+  VisionModelingTaskRecord
 } from '../../shared/domain';
 import AttachmentUploader from '../components/AttachmentUploader';
 import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
@@ -298,6 +299,8 @@ export default function InferenceValidationPage() {
   const [runtimeChecks, setRuntimeChecks] = useState<RuntimeConnectivityRecord[]>([]);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
   const [runSelectionSyncHint, setRunSelectionSyncHint] = useState('');
+  const [linkedVisionTask, setLinkedVisionTask] = useState<VisionModelingTaskRecord | null>(null);
+  const [linkedVisionTaskError, setLinkedVisionTaskError] = useState('');
   const preferredDatasetId = (searchParams.get('dataset') ?? '').trim();
   const preferredDatasetVersionId = (searchParams.get('version') ?? '').trim();
   const preferredTaskTypeRaw = (searchParams.get('task_type') ?? '').trim().toLowerCase();
@@ -318,6 +321,7 @@ export default function InferenceValidationPage() {
   const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
   const preferredModelVersionId = (searchParams.get('modelVersion') ?? searchParams.get('model_version') ?? '').trim();
   const preferredRunId = (searchParams.get('run') ?? '').trim();
+  const preferredVisionTaskId = (searchParams.get('vision_task') ?? '').trim();
   const preferredFocus = (searchParams.get('focus') ?? '').trim();
   const preferredContextAppliedRef = useRef(false);
   const resourcesSignatureRef = useRef('');
@@ -460,6 +464,24 @@ export default function InferenceValidationPage() {
     () => (selectedRun ? versionsById.get(selectedRun.model_version_id) ?? null : null),
     [selectedRun, versionsById]
   );
+  const selectedActiveLearningCandidate = useMemo(
+    () =>
+      selectedRun && linkedVisionTask?.active_learning_pool
+        ? linkedVisionTask.active_learning_pool.top_candidates.find(
+            (candidate) => candidate.run_id === selectedRun.id
+          ) ?? null
+        : null,
+    [linkedVisionTask?.active_learning_pool, selectedRun]
+  );
+  const selectedActiveLearningCluster = useMemo(
+    () =>
+      selectedActiveLearningCandidate && linkedVisionTask?.active_learning_pool
+        ? linkedVisionTask.active_learning_pool.clusters.find(
+            (cluster) => cluster.cluster_id === selectedActiveLearningCandidate.cluster_id
+          ) ?? null
+        : null,
+    [linkedVisionTask?.active_learning_pool, selectedActiveLearningCandidate]
+  );
   const runPrefillMissing = useMemo(
     () => Boolean(preferredRunId && runs.length > 0 && !prefilledRun),
     [prefilledRun, preferredRunId, runs.length]
@@ -486,6 +508,14 @@ export default function InferenceValidationPage() {
         : null,
     [datasets, selectedRun?.feedback_dataset_id]
   );
+  const linkedVisionTaskFeedbackDatasetId = (linkedVisionTask?.metadata.feedback_dataset_id ?? '').trim();
+  const linkedVisionTaskFeedbackDataset = useMemo(
+    () =>
+      linkedVisionTaskFeedbackDatasetId
+        ? datasets.find((dataset) => dataset.id === linkedVisionTaskFeedbackDatasetId) ?? null
+        : null,
+    [datasets, linkedVisionTaskFeedbackDatasetId]
+  );
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) ?? null,
     [datasets, selectedDatasetId]
@@ -499,6 +529,9 @@ export default function InferenceValidationPage() {
     [datasets.length, preferredDatasetId, preferredDatasetRecord]
   );
   const effectiveLaunchDatasetId = preferredDatasetRecord?.id ?? selectedDataset?.id ?? null;
+  const linkedVisionTaskPath = preferredVisionTaskId
+    ? `/vision/tasks/${encodeURIComponent(preferredVisionTaskId)}`
+    : null;
   const launchContext = useMemo(
     () => ({
       datasetId: effectiveLaunchDatasetId,
@@ -545,28 +578,11 @@ export default function InferenceValidationPage() {
         selectedRunVersion?.id ?? selectedVersion?.id ?? preferredModelVersionId,
         launchContext
       ),
-    [
-      launchContext.datasetId,
-      launchContext.executionTarget,
-      launchContext.framework,
-      launchContext.taskType,
-      launchContext.versionId,
-      launchContext.workerId,
-      preferredModelVersionId,
-      selectedRunVersion?.id,
-      selectedVersion?.id
-    ]
+    [launchContext, preferredModelVersionId, selectedRunVersion?.id, selectedVersion?.id]
   );
   const scopedDatasetsPath = useMemo(
     () => buildDatasetsPath(launchContext),
-    [
-      launchContext.datasetId,
-      launchContext.executionTarget,
-      launchContext.framework,
-      launchContext.taskType,
-      launchContext.versionId,
-      launchContext.workerId
-    ]
+    [launchContext]
   );
   const selectedFeedbackDatasetPath = useMemo(
     () =>
@@ -600,52 +616,22 @@ export default function InferenceValidationPage() {
   );
   const returnTrainingLaunchPath = useMemo(
     () => buildTrainingLaunchPath(launchContext),
-    [
-      launchContext.datasetId,
-      launchContext.executionTarget,
-      launchContext.framework,
-      launchContext.taskType,
-      launchContext.versionId,
-      launchContext.workerId
-    ]
+    [launchContext]
   );
   const runtimeSettingsPath = useMemo(
     () => buildRuntimeSettingsPath(launchContext, outboundReturnTo),
-    [
-      launchContext.datasetId,
-      launchContext.executionTarget,
-      launchContext.framework,
-      launchContext.taskType,
-      launchContext.versionId,
-      launchContext.workerId,
-      outboundReturnTo
-    ]
+    [launchContext, outboundReturnTo]
   );
   const workerSettingsPath = useMemo(
     () => buildWorkerSettingsPath(launchContext, outboundReturnTo),
-    [
-      launchContext.datasetId,
-      launchContext.executionTarget,
-      launchContext.framework,
-      launchContext.taskType,
-      launchContext.versionId,
-      launchContext.workerId,
-      outboundReturnTo
-    ]
+    [launchContext, outboundReturnTo]
   );
   const clearPrefillPath = useMemo(() => {
     const nextParams = new URLSearchParams();
     appendTrainingLaunchContext(nextParams, launchContext);
     const query = nextParams.toString();
     return query ? `/inference/validate?${query}` : '/inference/validate';
-  }, [
-    launchContext.datasetId,
-    launchContext.executionTarget,
-    launchContext.framework,
-    launchContext.taskType,
-    launchContext.versionId,
-    launchContext.workerId
-  ]);
+  }, [launchContext]);
   const clearDatasetContextPath = useMemo(() => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete('dataset');
@@ -973,6 +959,35 @@ export default function InferenceValidationPage() {
   }, [loadRuntimeConnectivity]);
 
   useEffect(() => {
+    if (!preferredVisionTaskId) {
+      setLinkedVisionTask(null);
+      setLinkedVisionTaskError('');
+      return;
+    }
+
+    let active = true;
+    api
+      .getVisionTask(preferredVisionTaskId)
+      .then((task) => {
+        if (!active) {
+          return;
+        }
+        setLinkedVisionTask(task);
+        setLinkedVisionTaskError('');
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setLinkedVisionTask(null);
+        setLinkedVisionTaskError((error as Error).message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [preferredVisionTaskId]);
+
+  useEffect(() => {
     if (feedbackDatasets.length === 0) {
       if (selectedDatasetId) {
         setSelectedDatasetId('');
@@ -994,6 +1009,28 @@ export default function InferenceValidationPage() {
       setSelectedDatasetId(selectedRun.feedback_dataset_id);
     }
   }, [feedbackDatasets, selectedDatasetId, selectedRun?.feedback_dataset_id]);
+
+  useEffect(() => {
+    if (
+      linkedVisionTaskFeedbackDatasetId &&
+      feedbackDatasets.some((dataset) => dataset.id === linkedVisionTaskFeedbackDatasetId) &&
+      selectedDatasetId !== linkedVisionTaskFeedbackDatasetId
+    ) {
+      setSelectedDatasetId(linkedVisionTaskFeedbackDatasetId);
+    }
+  }, [feedbackDatasets, linkedVisionTaskFeedbackDatasetId, selectedDatasetId]);
+
+  useEffect(() => {
+    const clusterId = selectedActiveLearningCandidate?.cluster_id?.trim() ?? '';
+    if (!clusterId) {
+      return;
+    }
+    setFeedbackReason((previous) =>
+      !previous || previous === 'missing_detection' || previous.startsWith('active_learning:')
+        ? `active_learning:${clusterId}`
+        : previous
+    );
+  }, [selectedActiveLearningCandidate?.cluster_id]);
 
   const focusInputUploader = useCallback(() => {
     inputUploaderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1485,6 +1522,9 @@ export default function InferenceValidationPage() {
           }
         />
       ) : null}
+      {linkedVisionTaskError ? (
+        <InlineAlert tone="warning" title={t('Vision task context unavailable')} description={linkedVisionTaskError} />
+      ) : null}
 
       <WorkspaceWorkbench
         toolbar={
@@ -1692,6 +1732,55 @@ export default function InferenceValidationPage() {
                 )
               )}
             />
+            {linkedVisionTask ? (
+              <SectionCard
+                title={t('Vision task context')}
+                description={t('This validation run was opened from a task-level active-learning lane.')}
+                actions={
+                  <div className="inline-actions">
+                    <Badge tone="info">{linkedVisionTask.id}</Badge>
+                    {selectedActiveLearningCluster ? (
+                      <Badge tone="neutral">{t(selectedActiveLearningCluster.title)}</Badge>
+                    ) : null}
+                  </div>
+                }
+              >
+                <div className="stack-tight">
+                  <small className="muted">
+                    {selectedActiveLearningCandidate
+                      ? t('This run is one of the task\'s current active-learning candidates.')
+                      : t('Keep task context visible while you inspect and route the current run.')}
+                  </small>
+                  {linkedVisionTask.active_learning_pool ? (
+                    <small className="muted">
+                      {t('Active learning pool')}: {linkedVisionTask.active_learning_pool.total_candidates} ·{' '}
+                      {t('Candidate clusters')}: {linkedVisionTask.active_learning_pool.clusters.length}
+                    </small>
+                  ) : null}
+                  {linkedVisionTaskFeedbackDataset ? (
+                    <small className="muted">
+                      {t('This task already has a linked feedback dataset. Routing this run there keeps the data loop tight.')}
+                    </small>
+                  ) : null}
+                  <ActionBar
+                    primary={
+                      linkedVisionTaskPath ? (
+                        <ButtonLink to={linkedVisionTaskPath} variant="secondary" size="sm">
+                          {t('Open vision task')}
+                        </ButtonLink>
+                      ) : undefined
+                    }
+                    secondary={
+                      requestedReturnTo ? (
+                        <ButtonLink to={requestedReturnTo} variant="ghost" size="sm">
+                          {t('Return to task')}
+                        </ButtonLink>
+                      ) : undefined
+                    }
+                  />
+                </div>
+              </SectionCard>
+            ) : null}
             <div ref={feedbackPanelRef}>
               <SectionCard
                 title={t('Feedback')}
@@ -1725,6 +1814,17 @@ export default function InferenceValidationPage() {
                     {t('Only datasets with task type {taskType} are shown.', {
                       taskType: t(feedbackTaskType)
                     })}
+                  </small>
+                ) : null}
+                {linkedVisionTaskFeedbackDataset ? (
+                  <small className="muted">
+                    {t('Prefilled feedback dataset from linked vision task.')}
+                  </small>
+                ) : null}
+                {selectedActiveLearningCluster ? (
+                  <small className="muted">
+                    {t('Suggested feedback reason')}: {`active_learning:${selectedActiveLearningCandidate?.cluster_id ?? ''}`} ·{' '}
+                    {t(selectedActiveLearningCluster.title)}
                   </small>
                 ) : null}
 

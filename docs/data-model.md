@@ -144,6 +144,12 @@ Attributes:
 - `training_plan` (nullable JSON: recipe/base-model/config suggestion)
 - `validation_report` (nullable JSON: primary metric summary + recommendations)
 - `missing_requirements` (JSON array)
+- `agent_next_action` (nullable JSON: current backend-generated recommendation)
+- `agent_decision_log` (JSON array: compact agent reasoning trail)
+- `evaluation_suite` (nullable JSON: active metric contract used by the agent)
+- `promotion_gate` (nullable JSON: current gate interpretation for registration readiness)
+- `run_comparison` (nullable JSON: current comparison view over linked training rounds)
+- `active_learning_pool` (nullable JSON: clustered low-confidence / likely-error candidate pool for feedback mining)
 - `training_job_id` (nullable FK TrainingJob)
 - `model_id` (nullable FK Model)
 - `model_version_id` (nullable FK ModelVersion)
@@ -161,8 +167,95 @@ Rules:
   - `recommended_metrics`
   - `deployment_hint`
   - `constraints`
-- `dataset_profile` records current dataset trainability (`sample_count`, `splits`, `label_coverage`, `issues`, `is_trainable`)
+- `dataset_profile` records current dataset trainability and lightweight data diagnostics:
+  - `sample_count`
+  - `splits`
+  - `label_coverage`
+  - `class_names`
+  - `charset`
+  - `issues`
+  - `is_trainable`
+  - `label_stats[]` (`label`, `count`, `share`) for the most relevant observed labels
+  - `diagnostics`
+    - `duplicate_attachment_ratio`
+    - `split_overlap_detected`
+    - `label_balance_score`
+    - `long_tail_labels[]`
+    - `charset_size`
+    - `recommended_data_actions[]`
 - `training_plan` records recipe id, recommended base model, and train/eval/export args
+- `agent_next_action` records the current operator-facing recommendation:
+  - `action`
+  - `title`
+  - `summary`
+  - `reason`
+  - `blocking_items`
+  - `evidence`
+  - `requires_confirmation`
+  - `created_at`
+- `agent_decision_log` stores recent compact reasoning/output entries with:
+  - `action`
+  - `outcome`
+  - `summary`
+  - `reason`
+  - `created_at`
+- `evaluation_suite` records the currently active evaluation contract:
+  - `suite_id`
+  - `title`
+  - `summary`
+  - `primary_metric`
+  - `threshold_target`
+  - `status`
+  - `threshold_source`
+  - `basis[]`
+  - `created_at`
+- `promotion_gate` records the current registration-readiness interpretation:
+  - `evaluation_suite_id`
+  - `status`
+  - `title`
+  - `summary`
+  - `reason`
+  - `threshold_metric`
+  - `threshold_target`
+  - `current_value`
+  - `best_value`
+  - `best_training_job_id`
+  - `created_at`
+- `run_comparison` records the current comparison decision across linked rounds:
+  - `evaluation_suite_id`
+  - `decision`
+  - `title`
+  - `summary`
+  - `reason`
+  - `best_training_job_id`
+  - `champion_training_job_id`
+  - `challenger_training_job_id`
+  - `latest_training_job_id`
+  - `champion_value`
+  - `challenger_value`
+  - `champion_margin`
+  - `best_value`
+  - `latest_value`
+  - `improvement`
+  - `candidates[]`
+  - `created_at`
+- `active_learning_pool` records the current feedback-mining candidate pool:
+  - `summary`
+  - `total_candidates`
+  - `recommended_sample_count`
+  - `clusters[]`
+    - `cluster_id`
+    - `title`
+    - `count`
+    - `average_score`
+  - `top_candidates[]`
+    - `run_id`
+    - `attachment_id`
+    - `cluster_id`
+    - `score`
+    - `model_version_id`
+    - `created_at`
+  - `refreshed_at`
 - `sample_attachment_ids` stores at most 10 image attachments used as the task-understanding sample set; non-image attachments are ignored for this field
 - `metadata` currently carries orchestration helpers such as:
   - `auto_tune_rounds_json`
@@ -173,6 +266,8 @@ Rules:
   - `auto_feedback_last_generated_at`
   - `auto_feedback_sample_count`
 - linked training job/model version fields are backfilled from runtime progress so task detail can stay a reliable continuation surface
+- linked runtime refresh should also recompute `agent_next_action`; the log only appends when recommendation meaningfully changes or the agent executes a mutating next step
+- the same refresh should also recompute `evaluation_suite`, `promotion_gate`, `run_comparison`, and `active_learning_pool`
 
 ### 4.4 Message
 Attributes:

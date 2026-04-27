@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useI18n } from '../../i18n/I18nProvider';
 import { Badge, StatusTag } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Panel } from '../ui/Surface';
 import CockpitLineChart, { type CockpitLineChartSeries } from './CockpitLineChart';
+import TrainingFluxScene from './TrainingFluxScene';
 import type {
   TrainingCockpitEventLog,
   TrainingCockpitResourcePoint,
@@ -22,18 +24,40 @@ const chartPalette = {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-const formatDuration = (seconds: number) => {
+const availabilityTone = (value: TrainingCockpitSummary['availability']['resources']) =>
+  value === 'real' ? 'success' : value === 'derived' ? 'warning' : 'neutral';
+
+export { TrainingFluxScene };
+
+const stageStateTone = (value: 'complete' | 'active' | 'upcoming' | 'failed') =>
+  value === 'complete' ? 'success' : value === 'active' ? 'info' : value === 'failed' ? 'danger' : 'neutral';
+
+const trialStatusTone = (value: TrainingCockpitTrial['status']) =>
+  value === 'best'
+    ? 'success'
+    : value === 'running'
+      ? 'info'
+      : value === 'rejected'
+        ? 'danger'
+        : value === 'completed'
+          ? 'neutral'
+          : 'warning';
+
+const formatDuration = (
+  seconds: number,
+  t: (source: string, vars?: Record<string, string | number>) => string
+) => {
   const safeSeconds = Math.max(0, Math.round(seconds));
   const hours = Math.floor(safeSeconds / 3600);
   const minutes = Math.floor((safeSeconds % 3600) / 60);
   const secs = safeSeconds % 60;
   if (hours > 0) {
-    return `${hours}h ${minutes}m`;
+    return t('{hours}h {minutes}m', { hours, minutes });
   }
   if (minutes > 0) {
-    return `${minutes}m ${secs}s`;
+    return t('{minutes}m {seconds}s', { minutes, seconds: secs });
   }
-  return `${secs}s`;
+  return t('{seconds}s', { seconds: secs });
 };
 
 const formatPercent = (value: number | null) => (value === null ? '—' : `${value.toFixed(1)}%`);
@@ -50,7 +74,10 @@ const formatMemory = (value: number | null, total: number | null) => {
 
 const formatScore = (value: number | null) => (value === null ? '—' : value.toFixed(4));
 
-const formatParamValue = (value: string | number | boolean) => {
+const formatParamValue = (
+  value: string | number | boolean,
+  t: (source: string, vars?: Record<string, string | number>) => string
+) => {
   if (typeof value === 'number') {
     if (Number.isInteger(value)) {
       return String(value);
@@ -58,13 +85,52 @@ const formatParamValue = (value: string | number | boolean) => {
     return value.toFixed(Math.abs(value) >= 1 ? 3 : 5);
   }
   if (typeof value === 'boolean') {
-    return value ? 'On' : 'Off';
+    return value ? t('On') : t('Off');
   }
   return value;
 };
 
-const availabilityTone = (value: TrainingCockpitSummary['availability']['resources']) =>
-  value === 'real' ? 'success' : value === 'derived' ? 'warning' : 'neutral';
+const availabilityLabel = (
+  value: TrainingCockpitSummary['availability']['resources'],
+  t: (source: string, vars?: Record<string, string | number>) => string
+) =>
+  value === 'real' ? t('Real') : value === 'derived' ? t('Derived') : t('Unavailable');
+
+const availabilityDescription = (
+  value: TrainingCockpitSummary['availability']['resources'],
+  t: (source: string, vars?: Record<string, string | number>) => string
+) =>
+  value === 'real'
+    ? t('This panel is backed by the current live run.')
+    : value === 'derived'
+      ? t('This panel is currently derived from adjacent telemetry and run progress.')
+      : t('No stream is available for this panel on the current run.');
+
+const stageStateLabel = (
+  value: 'complete' | 'active' | 'upcoming' | 'failed',
+  t: (source: string, vars?: Record<string, string | number>) => string
+) =>
+  value === 'complete'
+    ? t('Completed')
+    : value === 'active'
+      ? t('In progress')
+      : value === 'failed'
+        ? t('Failed')
+        : t('Upcoming');
+
+const trialStatusLabel = (
+  value: TrainingCockpitTrial['status'],
+  t: (source: string, vars?: Record<string, string | number>) => string
+) =>
+  value === 'best'
+    ? t('Best')
+    : value === 'running'
+      ? t('Running')
+      : value === 'rejected'
+        ? t('Rejected')
+        : value === 'completed'
+          ? t('Completed')
+          : t('Pending');
 
 function OverviewCard({
   label,
@@ -97,37 +163,55 @@ function OverviewCard({
 }
 
 export function TrainingCockpitOverview({ summary }: { summary: TrainingCockpitSummary }) {
+  const { t } = useI18n();
+
   return (
-    <section className="training-cockpit-overview-grid">
-      <OverviewCard label="Training task" value={summary.name} note={summary.modelType} accent status={summary.status} />
+    <section className="training-cockpit-overview-grid" data-testid="training-cockpit-overview">
       <OverviewCard
-        label="Dataset snapshot"
-        value={summary.datasetVersion}
-        note={`Model version · ${summary.modelVersion}`}
+        label={t('Training task')}
+        value={summary.name}
+        note={t(summary.modelType)}
+        accent
+        status={t(summary.status)}
       />
       <OverviewCard
-        label="Epoch progress"
+        label={t('Dataset snapshot')}
+        value={summary.datasetVersion}
+        note={t('Model version · {version}', { version: summary.modelVersion })}
+      />
+      <OverviewCard
+        label={t('Epoch progress')}
         value={`${summary.currentEpoch}/${summary.totalEpoch || '—'}`}
         note={summary.currentStageLabel}
       />
       <OverviewCard
-        label="Best metric"
+        label={t('Best metric')}
         value={summary.bestMetricValue === null ? '—' : `${summary.bestMetricValue.toFixed(4)}`}
         note={summary.bestMetricLabel}
       />
-      <OverviewCard label="Elapsed" value={formatDuration(summary.durationSeconds)} note={summary.tuningStrategy} />
-      <OverviewCard label="Execution device" value={summary.deviceLabel} note="Live lane or demo GPU target" />
+      <OverviewCard
+        label={t('Elapsed')}
+        value={formatDuration(summary.durationSeconds, t)}
+        note={summary.tuningStrategy}
+      />
+      <OverviewCard
+        label={t('Execution device')}
+        value={summary.deviceLabel}
+        note={t('Live lane or demo GPU target')}
+      />
     </section>
   );
 }
 
 export function TrainingStageRail({ snapshot }: { snapshot: TrainingCockpitSnapshot }) {
+  const { t } = useI18n();
+
   return (
-    <div className="training-cockpit-panel training-cockpit-stage-rail">
+    <div className="training-cockpit-panel training-cockpit-stage-rail" data-testid="training-cockpit-stage-rail">
       <div className="training-cockpit-panel__header">
         <div className="stack tight">
-          <h3>Execution flow</h3>
-          <small className="muted">The current run advances through one readable phase rail.</small>
+          <h3>{t('Execution flow')}</h3>
+          <small className="muted">{t('The current run advances through one readable phase rail.')}</small>
         </div>
       </div>
       <div className="training-cockpit-stage-list">
@@ -140,9 +224,7 @@ export function TrainingStageRail({ snapshot }: { snapshot: TrainingCockpitSnaps
             <div className="training-cockpit-stage__copy">
               <div className="row gap wrap align-center">
                 <strong>{stage.label}</strong>
-                <Badge tone={stage.state === 'complete' ? 'success' : stage.state === 'active' ? 'info' : stage.state === 'failed' ? 'danger' : 'neutral'}>
-                  {stage.state}
-                </Badge>
+                <Badge tone={stageStateTone(stage.state)}>{stageStateLabel(stage.state, t)}</Badge>
               </div>
               <small className="muted">{stage.description}</small>
             </div>
@@ -154,6 +236,7 @@ export function TrainingStageRail({ snapshot }: { snapshot: TrainingCockpitSnaps
 }
 
 export function TrainingMetricPanel({ snapshot }: { snapshot: TrainingCockpitSnapshot }) {
+  const { t } = useI18n();
   const [family, setFamily] = useState<'quality' | 'loss' | 'optimizer' | 'validation'>('quality');
 
   const seriesByFamily = useMemo<Record<typeof family, CockpitLineChartSeries[]>>(
@@ -167,19 +250,19 @@ export function TrainingMetricPanel({ snapshot }: { snapshot: TrainingCockpitSna
         },
         {
           key: 'accuracy',
-          label: 'Accuracy',
+          label: t('Accuracy'),
           color: chartPalette.green,
           valueAccessor: (point) => point.accuracy
         },
         {
           key: 'precision',
-          label: 'Precision',
+          label: t('Precision'),
           color: chartPalette.blue,
           valueAccessor: (point) => point.precision
         },
         {
           key: 'recall',
-          label: 'Recall',
+          label: t('Recall'),
           color: chartPalette.amber,
           valueAccessor: (point) => point.recall
         }
@@ -187,13 +270,13 @@ export function TrainingMetricPanel({ snapshot }: { snapshot: TrainingCockpitSna
       loss: [
         {
           key: 'loss',
-          label: 'Loss',
+          label: t('Loss'),
           color: chartPalette.coral,
           valueAccessor: (point) => point.loss
         },
         {
           key: 'valLoss',
-          label: 'Val loss',
+          label: t('Val loss'),
           color: chartPalette.amber,
           valueAccessor: (point) => point.valLoss
         }
@@ -201,7 +284,7 @@ export function TrainingMetricPanel({ snapshot }: { snapshot: TrainingCockpitSna
       optimizer: [
         {
           key: 'learningRate',
-          label: 'Learning rate',
+          label: t('Learning rate'),
           color: chartPalette.violet,
           valueAccessor: (point) => point.learningRate
         }
@@ -209,7 +292,7 @@ export function TrainingMetricPanel({ snapshot }: { snapshot: TrainingCockpitSna
       validation: [
         {
           key: 'valLoss',
-          label: 'Val loss',
+          label: t('Val loss'),
           color: chartPalette.amber,
           valueAccessor: (point) => point.valLoss
         },
@@ -221,17 +304,17 @@ export function TrainingMetricPanel({ snapshot }: { snapshot: TrainingCockpitSna
         },
         {
           key: 'accuracy',
-          label: 'Accuracy',
+          label: t('Accuracy'),
           color: chartPalette.green,
           valueAccessor: (point) => point.accuracy
         }
       ]
     }),
-    []
+    [t]
   );
 
   return (
-    <div className="stack">
+    <div className="stack" data-testid="training-cockpit-metrics">
       <div className="training-cockpit-subnav">
         {(['quality', 'loss', 'optimizer', 'validation'] as const).map((item) => (
           <Button
@@ -240,33 +323,34 @@ export function TrainingMetricPanel({ snapshot }: { snapshot: TrainingCockpitSna
             variant={family === item ? 'secondary' : 'ghost'}
             size="sm"
             onClick={() => setFamily(item)}
+            aria-pressed={family === item}
           >
             {item === 'quality'
-              ? 'Quality'
+              ? t('Quality')
               : item === 'loss'
-                ? 'Loss'
+                ? t('Loss')
                 : item === 'optimizer'
-                  ? 'Optimizer'
-                  : 'Validation'}
+                  ? t('Optimizer')
+                  : t('Validation')}
           </Button>
         ))}
-        <Badge tone="info">{snapshot.metrics.length} points</Badge>
+        <Badge tone="info">{t('{count} points', { count: snapshot.metrics.length })}</Badge>
       </div>
       <CockpitLineChart
         title={
           family === 'quality'
-            ? 'Quality trends'
+            ? t('Quality trends')
             : family === 'loss'
-              ? 'Loss trends'
+              ? t('Loss trends')
               : family === 'optimizer'
-                ? 'Optimizer schedule'
-                : 'Validation signals'
+                ? t('Optimizer schedule')
+                : t('Validation signals')
         }
-        description="The chart refreshes as telemetry arrives or as demo playback advances."
+        description={t('The chart refreshes as telemetry arrives or as demo playback advances.')}
         points={snapshot.metrics}
         series={seriesByFamily[family]}
-        emptyTitle="No metric series yet"
-        emptyDescription="Switch to demo mode or wait for the first live telemetry points."
+        emptyTitle={t('No metric series yet')}
+        emptyDescription={t('Switch to demo mode or wait for the first live telemetry points.')}
       />
     </div>
   );
@@ -327,7 +411,7 @@ function ResourceCard({
   const circumference = 2 * Math.PI * 30;
   const dashOffset = circumference - (progress / 100) * circumference;
   return (
-    <article className="training-cockpit-resource-card">
+    <article className="training-cockpit-resource-card" aria-label={label}>
       <div className="training-cockpit-resource-card__top">
         <div className="stack tight">
           <small>{label}</small>
@@ -355,74 +439,94 @@ function ResourceCard({
 }
 
 export function TrainingResourcePanel({ snapshot }: { snapshot: TrainingCockpitSnapshot }) {
+  const { t } = useI18n();
   const latest = snapshot.resources.at(-1) ?? null;
+  const throughput = latest?.throughput ?? null;
+  const etaSeconds = latest?.etaSeconds ?? null;
+
   return (
-    <div className="training-cockpit-panel stack">
+    <div className="training-cockpit-panel stack" data-testid="training-cockpit-resources">
       <div className="training-cockpit-panel__header">
         <div className="stack tight">
-          <h3>Resource telemetry</h3>
-          <small className="muted">GPU, CPU, memory, throughput, and ETA stay in one compact monitoring lane.</small>
+          <h3>{t('Resource telemetry')}</h3>
+          <small className="muted">
+            {t('GPU, CPU, memory, throughput, and ETA stay in one compact monitoring lane.')}
+          </small>
         </div>
         <Badge tone={availabilityTone(snapshot.summary.availability.resources)}>
-          {snapshot.summary.availability.resources}
+          {availabilityLabel(snapshot.summary.availability.resources, t)}
         </Badge>
       </div>
-      <div className="training-cockpit-resource-grid">
-        <ResourceCard
-          label="GPU util"
-          value={formatPercent(latest?.gpuUtil ?? null)}
-          note="Compute occupancy"
-          percent={latest?.gpuUtil ?? null}
-          points={snapshot.resources}
-          accessor={(point) => point.gpuUtil}
-        />
-        <ResourceCard
-          label="GPU memory"
-          value={formatMemory(latest?.gpuMemory ?? null, latest?.gpuMemoryTotal ?? null)}
-          note="Reserved VRAM"
-          percent={latest?.gpuMemory !== null && latest?.gpuMemoryTotal ? (latest.gpuMemory / latest.gpuMemoryTotal) * 100 : null}
-          points={snapshot.resources}
-          accessor={(point) => point.gpuMemory}
-          maxValue={latest?.gpuMemoryTotal ?? 24}
-        />
-        <ResourceCard
-          label="CPU util"
-          value={formatPercent(latest?.cpuUtil ?? null)}
-          note="Loader + orchestration"
-          percent={latest?.cpuUtil ?? null}
-          points={snapshot.resources}
-          accessor={(point) => point.cpuUtil}
-        />
-        <ResourceCard
-          label="Memory util"
-          value={formatPercent(latest?.memoryUtil ?? null)}
-          note="System memory pressure"
-          percent={latest?.memoryUtil ?? null}
-          points={snapshot.resources}
-          accessor={(point) => point.memoryUtil}
-        />
-        <ResourceCard
-          label="Throughput"
-          value={latest?.throughput === null ? '—' : `${latest.throughput.toFixed(1)} step/s`}
-          note="Steady-state speed"
-          percent={latest?.throughput !== null ? (latest.throughput / 22) * 100 : null}
-          points={snapshot.resources}
-          accessor={(point) => point.throughput}
-          maxValue={22}
-        />
-        <ResourceCard
-          label="ETA"
-          value={latest?.etaSeconds ? formatDuration(latest.etaSeconds) : 'Ready'}
-          note="Estimated time left"
-          percent={
-            latest?.etaSeconds !== null && latest.etaSeconds > 0
-              ? clamp(100 - latest.etaSeconds / 40, 0, 100)
-              : 100
-          }
-          points={snapshot.resources}
-          accessor={(point) => (point.etaSeconds !== null ? clamp(100 - point.etaSeconds / 40, 0, 100) : null)}
-        />
-      </div>
+      {snapshot.resources.length === 0 ? (
+        <Panel tone="soft" className="stack tight">
+          <strong>{t('No resource telemetry yet')}</strong>
+          <small className="muted">{availabilityDescription(snapshot.summary.availability.resources, t)}</small>
+        </Panel>
+      ) : (
+        <>
+          <small className="muted training-cockpit-panel__note">
+            {availabilityDescription(snapshot.summary.availability.resources, t)}
+          </small>
+          <div className="training-cockpit-resource-grid">
+            <ResourceCard
+              label={t('GPU util')}
+              value={formatPercent(latest?.gpuUtil ?? null)}
+              note={t('Compute occupancy')}
+              percent={latest?.gpuUtil ?? null}
+              points={snapshot.resources}
+              accessor={(point) => point.gpuUtil}
+            />
+            <ResourceCard
+              label={t('GPU memory')}
+              value={formatMemory(latest?.gpuMemory ?? null, latest?.gpuMemoryTotal ?? null)}
+              note={t('Reserved VRAM')}
+              percent={latest?.gpuMemory !== null && latest?.gpuMemoryTotal ? (latest.gpuMemory / latest.gpuMemoryTotal) * 100 : null}
+              points={snapshot.resources}
+              accessor={(point) => point.gpuMemory}
+              maxValue={latest?.gpuMemoryTotal ?? 24}
+            />
+            <ResourceCard
+              label={t('CPU util')}
+              value={formatPercent(latest?.cpuUtil ?? null)}
+              note={t('Loader + orchestration')}
+              percent={latest?.cpuUtil ?? null}
+              points={snapshot.resources}
+              accessor={(point) => point.cpuUtil}
+            />
+            <ResourceCard
+              label={t('Memory util')}
+              value={formatPercent(latest?.memoryUtil ?? null)}
+              note={t('System memory pressure')}
+              percent={latest?.memoryUtil ?? null}
+              points={snapshot.resources}
+              accessor={(point) => point.memoryUtil}
+            />
+            <ResourceCard
+              label={t('Throughput')}
+              value={throughput === null ? '—' : t('{value} step/s', { value: throughput.toFixed(1) })}
+              note={t('Steady-state speed')}
+              percent={throughput !== null ? (throughput / 22) * 100 : null}
+              points={snapshot.resources}
+              accessor={(point) => point.throughput}
+              maxValue={22}
+            />
+            <ResourceCard
+              label={t('ETA')}
+              value={etaSeconds && etaSeconds > 0 ? formatDuration(etaSeconds, t) : t('Ready')}
+              note={t('Estimated time left')}
+              percent={
+                etaSeconds !== null && etaSeconds > 0
+                  ? clamp(100 - etaSeconds / 40, 0, 100)
+                  : 100
+              }
+              points={snapshot.resources}
+              accessor={(point) =>
+                point.etaSeconds !== null ? clamp(100 - point.etaSeconds / 40, 0, 100) : null
+              }
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -443,13 +547,14 @@ function TrialScoreBar({ trial, bestScore }: { trial: TrainingCockpitTrial; best
 }
 
 function TuningConvergence({ trials }: { trials: TrainingCockpitTrial[] }) {
+  const { t } = useI18n();
   const resolvedTrials = trials.filter((trial) => trial.score !== null);
   const maxScore = resolvedTrials.reduce((best, trial) => Math.max(best, trial.score ?? 0), 0);
   return (
     <div className="training-cockpit-convergence">
       <div className="training-cockpit-convergence__header">
-        <strong>Search convergence</strong>
-        <small className="muted">The candidate band narrows as the score frontier stabilizes.</small>
+        <strong>{t('Search convergence')}</strong>
+        <small className="muted">{t('The candidate band narrows as the score frontier stabilizes.')}</small>
       </div>
       <div className="training-cockpit-convergence__rows">
         {trials.map((trial, index) => {
@@ -473,7 +578,10 @@ function TuningConvergence({ trials }: { trials: TrainingCockpitTrial[] }) {
 }
 
 export function AutoTuningPanel({ snapshot }: { snapshot: TrainingCockpitSnapshot }) {
-  const [selectedTrialId, setSelectedTrialId] = useState<string | null>(snapshot.tuningTrials.find((trial) => trial.isBest)?.trialId ?? snapshot.tuningTrials[0]?.trialId ?? null);
+  const { t } = useI18n();
+  const [selectedTrialId, setSelectedTrialId] = useState<string | null>(
+    snapshot.tuningTrials.find((trial) => trial.isBest)?.trialId ?? snapshot.tuningTrials[0]?.trialId ?? null
+  );
   const [paramPulse, setParamPulse] = useState(false);
 
   useEffect(() => {
@@ -494,7 +602,9 @@ export function AutoTuningPanel({ snapshot }: { snapshot: TrainingCockpitSnapsho
       return;
     }
     if (!selectedTrialId || !snapshot.tuningTrials.some((trial) => trial.trialId === selectedTrialId)) {
-      setSelectedTrialId(snapshot.tuningTrials.find((trial) => trial.isBest)?.trialId ?? snapshot.tuningTrials[0].trialId);
+      setSelectedTrialId(
+        snapshot.tuningTrials.find((trial) => trial.isBest)?.trialId ?? snapshot.tuningTrials[0].trialId
+      );
     }
   }, [selectedTrialId, snapshot.tuningTrials]);
 
@@ -511,31 +621,39 @@ export function AutoTuningPanel({ snapshot }: { snapshot: TrainingCockpitSnapsho
   }, null);
 
   return (
-    <div className="training-cockpit-panel stack">
+    <div className="training-cockpit-panel stack" data-testid="training-cockpit-tuning">
       <div className="training-cockpit-panel__header">
         <div className="stack tight">
-          <h3>Auto tuning</h3>
-          <small className="muted">Generated candidates, trial outcomes, and promoted parameters stay visible here.</small>
+          <h3>{t('Auto tuning')}</h3>
+          <small className="muted">
+            {t('Generated candidates, trial outcomes, and promoted parameters stay visible here.')}
+          </small>
         </div>
-        <Badge tone={availabilityTone(snapshot.summary.availability.tuning)}>{snapshot.summary.availability.tuning}</Badge>
+        <Badge tone={availabilityTone(snapshot.summary.availability.tuning)}>
+          {availabilityLabel(snapshot.summary.availability.tuning, t)}
+        </Badge>
       </div>
 
       <Panel tone="soft" className={`training-cockpit-current-params${paramPulse ? ' pulsing' : ''}`}>
         <div className="row between gap wrap align-center">
           <div className="stack tight">
-            <strong>Current active parameters</strong>
+            <strong>{t('Current active parameters')}</strong>
             <small className="muted">
               {snapshot.summary.autoTuningEnabled
-                ? `${snapshot.summary.tuningStrategy} · ${snapshot.summary.tuningAttempt}/${snapshot.summary.tuningTotal} attempts`
-                : 'Auto tuning is currently not streaming from the backend.'}
+                ? t('{strategy} · {attempt}/{total} attempts', {
+                    strategy: snapshot.summary.tuningStrategy,
+                    attempt: snapshot.summary.tuningAttempt,
+                    total: snapshot.summary.tuningTotal
+                  })
+                : t('Auto tuning is currently not streaming from the backend.')}
             </small>
           </div>
           <div className="row gap wrap">
             <Badge tone={snapshot.summary.autoTuningEnabled ? 'info' : 'neutral'}>
-              {snapshot.summary.autoTuningEnabled ? 'Enabled' : 'Unavailable'}
+              {snapshot.summary.autoTuningEnabled ? t('Enabled') : t('Unavailable')}
             </Badge>
             <Badge tone={snapshot.summary.recommendedParamsApplied ? 'success' : 'warning'}>
-              {snapshot.summary.recommendedParamsApplied ? 'Applied' : 'Pending apply'}
+              {snapshot.summary.recommendedParamsApplied ? t('Applied') : t('Pending apply')}
             </Badge>
           </div>
         </div>
@@ -543,17 +661,23 @@ export function AutoTuningPanel({ snapshot }: { snapshot: TrainingCockpitSnapsho
           {Object.entries(snapshot.summary.currentParams).map(([key, value]) => (
             <div key={key} className="training-cockpit-param-pill">
               <span>{key}</span>
-              <strong>{formatParamValue(value)}</strong>
+              <strong>{formatParamValue(value, t)}</strong>
             </div>
           ))}
         </div>
       </Panel>
 
+      <small className="muted training-cockpit-panel__note">
+        {availabilityDescription(snapshot.summary.availability.tuning, t)}
+      </small>
+
       {snapshot.tuningTrials.length === 0 ? (
         <Panel tone="soft" className="stack tight">
-          <strong>No live tuning stream yet</strong>
+          <strong>{t('No live tuning stream yet')}</strong>
           <small className="muted">
-            Switch to demo mode to see the full optimization animation, or wait until a related Vision Task exposes tuning history.
+            {t(
+              'Switch to demo mode to see the full optimization animation, or wait until a related Vision Task exposes tuning history.'
+            )}
           </small>
         </Panel>
       ) : (
@@ -565,24 +689,26 @@ export function AutoTuningPanel({ snapshot }: { snapshot: TrainingCockpitSnapsho
                 type="button"
                 className={`training-cockpit-trial-card ${trial.status}${selectedTrialId === trial.trialId ? ' selected' : ''}`}
                 onClick={() => setSelectedTrialId(trial.trialId)}
+                aria-pressed={selectedTrialId === trial.trialId}
+                data-testid={`training-cockpit-trial-${trial.trialId}`}
               >
                 <div className="row between gap wrap align-center">
                   <strong>{trial.trialId.toUpperCase()}</strong>
                   <div className="row gap wrap">
-                    {trial.isBest ? <Badge tone="success">Best</Badge> : null}
-                    <Badge tone={trial.status === 'running' ? 'info' : trial.status === 'rejected' ? 'danger' : trial.status === 'best' ? 'success' : trial.status === 'completed' ? 'neutral' : 'warning'}>
-                      {trial.status}
-                    </Badge>
+                    {trial.isBest ? <Badge tone="success">{t('Best')}</Badge> : null}
+                    <Badge tone={trialStatusTone(trial.status)}>{trialStatusLabel(trial.status, t)}</Badge>
                   </div>
                 </div>
-                <small className="muted">{trial.note || 'Candidate parameter sweep.'}</small>
+                <small className="muted">{trial.note || t('Candidate parameter sweep.')}</small>
                 <TrialScoreBar trial={trial} bestScore={bestScore} />
                 <div className="training-cockpit-trial-delta">
                   {trial.diffFromBest === null
-                    ? 'Awaiting score'
+                    ? t('Awaiting score')
                     : trial.diffFromBest === 0
-                      ? 'Current frontier'
-                      : `${trial.diffFromBest > 0 ? '+' : ''}${trial.diffFromBest.toFixed(4)} vs best`}
+                      ? t('Current frontier')
+                      : t('{delta} vs best', {
+                          delta: `${trial.diffFromBest > 0 ? '+' : ''}${trial.diffFromBest.toFixed(4)}`
+                        })}
                 </div>
                 {trial.status === 'running' ? (
                   <div className="training-cockpit-trial-progress">
@@ -599,23 +725,41 @@ export function AutoTuningPanel({ snapshot }: { snapshot: TrainingCockpitSnapsho
             <Panel tone="soft" className="stack tight">
               <div className="row between gap wrap align-center">
                 <div className="stack tight">
-                  <strong>{selectedTrial.trialId.toUpperCase()} details</strong>
-                  <small className="muted">{selectedTrial.note || 'No note recorded for this trial.'}</small>
+                  <strong>{t('{trialId} details', { trialId: selectedTrial.trialId.toUpperCase() })}</strong>
+                  <small className="muted">{selectedTrial.note || t('No note recorded for this trial.')}</small>
                 </div>
-                <Badge tone={selectedTrial.isBest ? 'success' : selectedTrial.status === 'rejected' ? 'danger' : selectedTrial.status === 'running' ? 'info' : 'neutral'}>
-                  {selectedTrial.isBest ? 'Best' : selectedTrial.status}
+                <Badge
+                  tone={
+                    selectedTrial.isBest
+                      ? 'success'
+                      : selectedTrial.status === 'rejected'
+                        ? 'danger'
+                        : selectedTrial.status === 'running'
+                          ? 'info'
+                          : 'neutral'
+                  }
+                >
+                  {selectedTrial.isBest ? t('Best') : trialStatusLabel(selectedTrial.status, t)}
                 </Badge>
               </div>
               <div className="row gap wrap">
-                <Badge tone="info">Score {formatScore(selectedTrial.score)}</Badge>
-                <Badge tone="neutral">{selectedTrial.startTime ? new Date(selectedTrial.startTime).toLocaleTimeString() : 'Start pending'}</Badge>
-                <Badge tone="neutral">{selectedTrial.endTime ? new Date(selectedTrial.endTime).toLocaleTimeString() : 'Still active'}</Badge>
+                <Badge tone="info">{t('Score {score}', { score: formatScore(selectedTrial.score) })}</Badge>
+                <Badge tone="neutral">
+                  {selectedTrial.startTime
+                    ? new Date(selectedTrial.startTime).toLocaleTimeString()
+                    : t('Start pending')}
+                </Badge>
+                <Badge tone="neutral">
+                  {selectedTrial.endTime
+                    ? new Date(selectedTrial.endTime).toLocaleTimeString()
+                    : t('Still active')}
+                </Badge>
               </div>
               <div className="training-cockpit-param-grid">
                 {Object.entries(selectedTrial.params).map(([key, value]) => (
                   <div key={`${selectedTrial.trialId}-${key}`} className="training-cockpit-param-pill compact">
                     <span>{key}</span>
-                    <strong>{formatParamValue(value)}</strong>
+                    <strong>{formatParamValue(value, t)}</strong>
                   </div>
                 ))}
               </div>
@@ -628,6 +772,7 @@ export function AutoTuningPanel({ snapshot }: { snapshot: TrainingCockpitSnapsho
 }
 
 export function TrainingEventStream({ events }: { events: TrainingCockpitEventLog[] }) {
+  const { t } = useI18n();
   const [autoScroll, setAutoScroll] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -639,29 +784,45 @@ export function TrainingEventStream({ events }: { events: TrainingCockpitEventLo
   }, [autoScroll, events]);
 
   return (
-    <div className="training-cockpit-panel stack">
+    <div className="training-cockpit-panel stack" data-testid="training-cockpit-events">
       <div className="training-cockpit-panel__header">
         <div className="stack tight">
-          <h3>Event stream</h3>
-          <small className="muted">Structured lifecycle events and log continuity stay together in one terminal-like lane.</small>
+          <h3>{t('Event stream')}</h3>
+          <small className="muted">
+            {t('Structured lifecycle events and log continuity stay together in one terminal-like lane.')}
+          </small>
         </div>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setAutoScroll((previous) => !previous)}>
-          {autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => setAutoScroll((previous) => !previous)}
+          aria-pressed={!autoScroll}
+        >
+          {autoScroll ? t('Pause auto-scroll') : t('Resume auto-scroll')}
         </Button>
       </div>
       <div ref={containerRef} className="training-cockpit-event-stream">
         {events.length === 0 ? (
           <div className="training-cockpit-event-row">
-            <small className="muted">No events yet. Switch to demo mode or wait for the first live updates.</small>
+            <small className="muted">{t('No events yet. Switch to demo mode or wait for the first live updates.')}</small>
           </div>
         ) : (
           events.map((event) => (
             <div key={event.id} className={`training-cockpit-event-row ${event.level}${event.emphasis ? ' emphasis' : ''}`}>
-              <small className="training-cockpit-event-row__time">
-                {new Date(event.time).toLocaleTimeString()}
-              </small>
-              <Badge tone={event.level === 'success' ? 'success' : event.level === 'warning' ? 'warning' : event.level === 'error' ? 'danger' : 'info'}>
-                {event.eventType}
+              <small className="training-cockpit-event-row__time">{new Date(event.time).toLocaleTimeString()}</small>
+              <Badge
+                tone={
+                  event.level === 'success'
+                    ? 'success'
+                    : event.level === 'warning'
+                      ? 'warning'
+                      : event.level === 'error'
+                        ? 'danger'
+                        : 'info'
+                }
+              >
+                {t(event.eventType)}
               </Badge>
               <div className="training-cockpit-event-row__message">{event.message}</div>
             </div>

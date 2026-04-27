@@ -1343,7 +1343,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     readAppChatDockCollapsedFromStorage()
   );
   const isCompactViewport = useCompactViewport(960);
-  const isNarrowWorkbenchViewport = useCompactViewport(1360);
+  const isNarrowWorkbenchViewport = useCompactViewport(1520);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isImmersiveWorkspace = location.pathname === '/workspace/chat';
   const isAnnotationFocusRoute = /^\/datasets\/[^/]+\/annotate$/.test(location.pathname);

@@ -43,7 +43,6 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/training-engineer-quickstart.md`
 4. Review active execution docs before continuing in-progress work:
    - `PLANS.md`
-   - `PLAN_llm.md`
    - `docs/work-handoff.md`
 5. Follow the single Docker deployment path in `docs/deployment.docker.md`.
 6. If a new request interrupts unfinished work, append a handoff entry to `docs/work-handoff.md` before switching context.
@@ -51,7 +50,7 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
 ## Repository Working Model (How Codex should work in this repo)
 - Collaboration and execution rules: `AGENTS.md`
 - Product and engineering contracts: `docs/*`
-- Active roadmap / round-by-round execution: `PLANS.md`, `PLAN_llm.md`, `docs/work-handoff.md`
+- Active roadmap / round-by-round execution: `PLANS.md`, `docs/work-handoff.md`
 - Reusable skills: `.agents/skills/`
 - Delivery order: plan first, align contracts, then implement
 

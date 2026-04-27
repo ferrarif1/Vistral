@@ -67,6 +67,10 @@ Vistral must provide one closed-loop platform where engineers can:
 - assistant execution results should stay readable in the timeline as compact action cards with status, missing inputs, and created-entity summary
 - conversation actions may create or update a `VisionTask` so users can continue the same requirement from a dedicated detail page instead of repeating the prompt
 - completed/failed operation cards may surface derived next-step actions that either navigate to the correct page or send the guarded follow-up `/ops` input back into the same thread
+- when the conversation lane uses a structured `VisionTask`, its completed action summary should also surface the same agent evidence now visible on task detail:
+  - evaluation suite / active metric contract
+  - promotion gate interpretation
+  - run comparison conclusion (including champion/challenger when available)
 
 ### FR-002 File Attachment Baseline
 - conversation draft attachments appear as current-message chips while composing
@@ -125,26 +129,49 @@ Vistral must provide one closed-loop platform where engineers can:
 
 ### FR-009 Training Jobs
 - create training job
-- choose task type/framework/base model
+- the primary training entry should feel agentic: user provides a natural-language goal plus a dataset (or dataset-version scope), and the system infers task type / framework / base model / recommended core params by default
+- explicit task/framework/base-model/dispatch overrides must remain available only as expert controls, collapsed by default
 - every new training job must bind to an explicit dataset version snapshot instead of an implicit "latest" dataset state
 - training launch readiness must surface at least dataset status, selected dataset-version split summary, and annotation coverage before submit
 - training launch must be blocked when selected dataset version has zero annotation coverage (`annotation_coverage <= 0`)
 - training launch may also be initiated from a structured `VisionTask`, but the actual submitted job must still persist the explicit dataset + dataset-version snapshot + framework + base model choices
 - base model choices exposed in normal workspace flows must come from a curated foundation catalog suitable for future fine-tuning
 - internal smoke/verification/demo fixtures must not remain visible in the default workspace catalog; when sample records are needed, keep at most 1-2 curated examples
-- configure parameters and submit
+- the product-wide visual system should follow a Notion-inspired language as documented in `notion/DESIGN.md`: warm neutral surfaces, whisper borders, restrained shadows, compressed headings, and one consistent accent blue across all primary interactions
+- shared layout, chat workspace, workbench pages, and training cockpit should all inherit that same system rather than keeping page-specific visual dialects; cockpit may remain cinematic, but not as an isolated dark sci-fi theme
+- configure parameters and submit, but the default path should minimize visible form work and let the system auto-fill a launchable plan whenever possible
+- when Smart Launch includes a natural-language goal (or comes from a structured `VisionTask`), it should create or reuse that `VisionTask` as the durable orchestration anchor so training detail can keep a direct "continue as agent" handoff toward model output
 - support start/cancel/retry lifecycle
+- completed training should hand off into model registration as directly as possible so the user experiences one continuous "dataset -> train -> model" lane rather than many separate training sub-tools
 - provide a dedicated training visualization cockpit for one run, accessible from both training job list and training detail without replacing the existing detail workflow
+- cockpit, worker routing, scheduler evidence, and other deep operational diagnostics should be treated as secondary/expert continuations, not first-screen blockers on the default launch path
 - training cockpit must support `live` and `demo` modes:
   - `live`: consume real training-job status, metric timeline, and logs from backend APIs with non-jumping refresh
   - `demo`: replay a deterministic mock timeline for presentation, screenshots, and product demos when backend tuning/resource streams are not available
+- training cockpit must keep all user-visible cockpit copy inside the existing i18n system; Chinese-default environments must not leak raw fallback English from panel/chart/hook internals
+- training cockpit must keep live-state degradation explicit:
+  - `real`: value comes from backend-backed training evidence
+  - `derived`: value is a front-end visualization derived from related telemetry/config and must be labeled as such
+  - `unavailable`: this data stream is currently absent and the UI should explain that absence instead of fabricating persisted truth
 - training cockpit must visualize at minimum:
   - stage progression from data preparation to registration/publish handoff
   - metric curves (for example `loss`, `val_loss`, `accuracy`, `mAP`, `learning_rate`)
   - resource usage (`gpu`, `gpu_memory`, `cpu`, `memory`, throughput, `eta`)
   - auto-tuning attempts (candidate params, trial status, best selection, applied config)
   - timestamped event/log stream with highlighted important events
+- training cockpit should include one cinematic training-scene surface above the dense telemetry panels:
+  - dataset-side structure should present as a thumbnail album / mini-gallery rather than abstract bars, so operators can immediately understand the scene still represents real sample images
+  - the active mini-batch should be visually sampled from that thumbnail album, then pushed through an augmentation / forward-pass lane toward the model core
+  - dataset file/count indicators may be derived in the frontend when the backend does not expose file-level depletion, but derived status must remain visually consistent with existing `derived` semantics
+  - model-side visuals should show parameter-vector or optimization activity through animated particles / nodes / pulse fields instead of static decoration
+  - the interaction between dataset thumbnails and the model core should match training logic: sampled batch -> transformed input -> model forward / optimization response, instead of arbitrary decorative motion
+  - the same scene should expose a compact parameter-curve band so operators can correlate the cinematic motion with actual metric/parameter change
+  - scene motion discipline matters as much as spectacle: prefer one dominant transfer corridor plus a restrained model-core response, and avoid multiple equally loud animations competing for attention
+  - the desired tone is closer to a premium cinematic control-room / hacker-console surface than a dashboard full of independent widgets; peripheral elements should mostly stay calm while only the active training path carries motion
 - auto-tuning visualization must make "system is actively searching for a better config" obvious even when the current backend only provides partial data; mock/demo output must stay decoupled from persisted training-job truth
+- training cockpit demo mode must keep playback state explicit (`playing`, `paused`, `replay`, speed state, finished`) so operators can tell whether the animation is still advancing
+- training cockpit should remain readable on narrower viewports by collapsing into a stable top-to-bottom order (`scene -> overview -> stage flow -> metrics -> resources -> tuning -> event stream`) without horizontal overflow
+- training cockpit should respect reduced-motion preferences and retain readable current values even when hover-driven chart inspection is unavailable
 - training scheduling must support control-plane/worker topology:
   - Vistral app can run as control plane on machine `A`
   - one or more training workers can run on machines `B/C/D...`
@@ -238,16 +265,44 @@ Framework integrations must follow unified trainer interface:
 - the task record must persist:
   - prompt understanding result (`task_type`, expected output, constraints)
   - dataset inspection result
+  - compact dataset diagnostics that tell the agent whether the next improvement should come from more data rather than more rounds:
+    - duplicate / split-overlap signals
+    - label-balance or long-tail signals for labeled tasks
+    - charset-width signal for OCR tasks
+    - one short list of recommended data actions
   - recipe-based training plan
   - validation summary from linked training jobs
-  - missing requirements and next-step guidance
+  - missing requirements and backend-generated next-step guidance
+  - a compact agent decision trail that explains why the current next step is recommended
+  - one evaluation-suite summary that defines the active metric contract
+  - a promotion-gate summary that explains whether current evidence is good enough for registration
+  - a run-comparison summary that explains whether the best action is promote / train again / collect more data / observe, including champion / challenger context
+  - one active-learning pool summary that explains which low-confidence / likely-error samples should be mined next and how they are clustered
 - the product must expose both `/vision/tasks` and `/vision/tasks/:taskId` so engineers can reopen or continue the workflow outside the original chat turn
+- `/vision/tasks` should feel like an operator inbox rather than a plain run table:
+  - blocked tasks
+  - tasks currently training
+  - tasks ready for the next agent-guided operator action
 - task detail must provide one obvious follow-up action at each stage:
   - fix missing requirements
   - start or continue the next round
   - register the model version after metrics pass
   - mine badcases into a feedback dataset after registration
+- task detail should also explain data quality pressure in one compact operator-readable block, so engineers can tell when “collect data” is a justified recommendation instead of a vague fallback
+- when a task already has linked inference evidence, badcase mining should prefer a diversified candidate set rather than blindly taking the globally lowest scores from one failure mode
+- training launches opened from `/training/jobs/new` with a goal prompt should bind back to the same `VisionTask` whenever possible, so the resulting run is not an orphaned job
+- a linked training detail should expose one direct `Continue as agent` action:
+  - if metrics passed, it may register the model version and auto-create the missing model draft when needed
+  - if metrics did not pass, it may schedule the next round from the same task context
 - auto-advance is allowed to choose the current best next step, but it must still respect the same training launch and model-registration safety gates as the manual path
+- whenever runtime state changes, the linked `VisionTask` should refresh one explicit agent recommendation with:
+  - recommended action
+  - short summary
+  - operator-facing rationale / evidence
+  - whether the action still requires a visible confirmation click
+- the same refresh should also produce:
+  - one current promotion-gate result
+  - one current run-comparison result based on linked training history
 
 Reference planning document:
 - `docs/visual-data-loop-evolution.md`

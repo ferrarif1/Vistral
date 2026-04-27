@@ -12,6 +12,16 @@ export type TrainingCockpitPlaybackSpeed = 1 | 2 | 4;
 
 export type TrainingCockpitParamValue = string | number | boolean;
 
+export interface TrainingCockpitDatasetPreview {
+  id: string;
+  attachmentId: string | null;
+  filename: string;
+  split: 'train' | 'val' | 'test' | 'unassigned';
+  status: 'ready' | 'processing' | 'uploading' | 'error';
+  previewUrl: string | null;
+  source: 'real' | 'derived' | 'demo';
+}
+
 export interface TrainingCockpitStage {
   id:
     | 'data_preparation'
@@ -107,6 +117,9 @@ export interface TrainingCockpitSnapshot {
   source: TrainingCockpitMode;
   lastUpdatedAt: string;
   summary: TrainingCockpitSummary;
+  datasetLabel: string;
+  datasetPreviews: TrainingCockpitDatasetPreview[];
+  datasetPreviewAvailability: TrainingCockpitAvailabilityState;
   stages: TrainingCockpitStage[];
   metrics: TrainingCockpitMetricPoint[];
   resources: TrainingCockpitResourcePoint[];

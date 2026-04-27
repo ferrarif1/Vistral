@@ -783,6 +783,7 @@ export const api = {
     framework: 'paddleocr' | 'doctr' | 'yolo';
     dataset_id: string;
     dataset_version_id: string;
+    vision_task_id?: string;
     base_model: string;
     config: Record<string, string>;
     execution_target?: 'control_plane' | 'worker';

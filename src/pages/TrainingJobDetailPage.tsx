@@ -8,7 +8,8 @@ import type {
   TrainingArtifactSummary,
   TrainingJobRecord,
   TrainingMetricRecord,
-  RuntimeSettingsView
+  RuntimeSettingsView,
+  VisionModelingTaskRecord
 } from '../../shared/domain';
 import StateBlock from '../components/StateBlock';
 import VirtualList from '../components/VirtualList';
@@ -222,6 +223,34 @@ const buildScopedJobCockpitPath = (jobId: string, params?: URLSearchParams): str
   return query ? `/training/jobs/${jobId}/cockpit?${query}` : `/training/jobs/${jobId}/cockpit`;
 };
 
+const buildTrainingJobDetailPath = (
+  jobId: string,
+  options?: {
+    datasetId?: string | null;
+    versionId?: string | null;
+    visionTaskId?: string | null;
+    launchContext?: LaunchContext;
+    returnTo?: string | null;
+  }
+): string => {
+  const searchParams = new URLSearchParams();
+  if (options?.datasetId?.trim()) {
+    searchParams.set('dataset', options.datasetId.trim());
+  }
+  if (options?.versionId?.trim()) {
+    searchParams.set('version', options.versionId.trim());
+  }
+  if (options?.visionTaskId?.trim()) {
+    searchParams.set('vision_task', options.visionTaskId.trim());
+  }
+  appendTrainingLaunchContext(searchParams, options?.launchContext);
+  appendReturnTo(searchParams, options?.returnTo);
+  const query = searchParams.toString();
+  return query ? `/training/jobs/${encodeURIComponent(jobId)}?${query}` : `/training/jobs/${encodeURIComponent(jobId)}`;
+};
+
+const buildVisionTaskDetailPath = (taskId: string): string => `/vision/tasks/${encodeURIComponent(taskId)}`;
+
 const buildScopedModelVersionsPath = (
   job: TrainingJobRecord,
   versionName?: string,
@@ -382,6 +411,10 @@ export default function TrainingJobDetailPage() {
     return 'overview';
   });
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const [linkedVisionTask, setLinkedVisionTask] = useState<VisionModelingTaskRecord | null>(null);
+  const [linkedVisionTaskLoading, setLinkedVisionTaskLoading] = useState(false);
+  const [linkedVisionTaskError, setLinkedVisionTaskError] = useState('');
+  const [agentAdvancing, setAgentAdvancing] = useState(false);
   const detailSignatureRef = useRef('');
   const retryDispatchTouchedRef = useRef(false);
   const scopedContextSyncAppliedRef = useRef('');
@@ -392,6 +425,7 @@ export default function TrainingJobDetailPage() {
   const launchFrameworkFromQuery = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
   const launchExecutionTargetFromQuery = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
   const launchWorkerFromQuery = (searchParams.get('worker') ?? '').trim();
+  const linkedVisionTaskIdFromQuery = (searchParams.get('vision_task') ?? '').trim();
   const launchContextForDetail = useMemo(
     () => ({
       taskType: launchTaskTypeFromQuery || job?.task_type || null,
@@ -536,7 +570,7 @@ export default function TrainingJobDetailPage() {
     if (nextEvidenceView !== evidenceView) {
       setEvidenceView(nextEvidenceView);
     }
-  }, [searchParams]);
+  }, [evidenceView, searchParams]);
 
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
@@ -561,6 +595,50 @@ export default function TrainingJobDetailPage() {
     setScopedContextSyncHint('');
     scopedContextSyncAppliedRef.current = '';
   }, [jobId]);
+
+  useEffect(() => {
+    if (!job) {
+      setLinkedVisionTask(null);
+      setLinkedVisionTaskError('');
+      setLinkedVisionTaskLoading(false);
+      return;
+    }
+    let active = true;
+    setLinkedVisionTaskLoading(true);
+    setLinkedVisionTaskError('');
+    api
+      .listVisionTasks()
+      .then((tasks) => {
+        if (!active) {
+          return;
+        }
+        const taskFromQuery = linkedVisionTaskIdFromQuery
+          ? tasks.find((item) => item.id === linkedVisionTaskIdFromQuery) ?? null
+          : null;
+        const taskFromJob = tasks.find((item) => item.training_job_id === job.id) ?? null;
+        const resolvedTask =
+          taskFromQuery && taskFromQuery.training_job_id === job.id
+            ? taskFromQuery
+            : taskFromJob ?? taskFromQuery ?? null;
+        setLinkedVisionTask(resolvedTask);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setLinkedVisionTask(null);
+        setLinkedVisionTaskError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setLinkedVisionTaskLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [job, linkedVisionTaskIdFromQuery]);
 
   useEffect(() => {
     if (!job) {
@@ -1190,7 +1268,7 @@ export default function TrainingJobDetailPage() {
         setRecommendationActionBusy('');
       }
     },
-    [busy, job, jobId, launchContextForDetail, load, navigate, outboundReturnTo, t]
+    [job, jobId, launchContextForDetail, load, navigate, outboundReturnTo, t]
   );
   const runTopTroubleshootingSuggestion = useCallback(() => {
     if (!primaryTroubleshootingRecommendation) {
@@ -1511,10 +1589,88 @@ export default function TrainingJobDetailPage() {
           : t('The run is complete, but you still need a matching owned model before registering a version.')
       : t('This run was just created. Keep this page open to watch progress and return here for the next step.')
     : '';
+  const linkedVisionTaskPassStatus = linkedVisionTask?.validation_report?.summary.pass_status ?? 'needs_review';
+  const linkedVisionTaskFeedbackDatasetId = (linkedVisionTask?.metadata.feedback_dataset_id ?? '').trim();
+  const linkedVisionTaskDetailPath = linkedVisionTask ? buildVisionTaskDetailPath(linkedVisionTask.id) : '';
+  const linkedVisionTaskNextSummary = !linkedVisionTask
+    ? ''
+    : linkedVisionTask.agent_next_action?.summary
+      ? t(linkedVisionTask.agent_next_action.summary)
+      : linkedVisionTask.missing_requirements.length > 0
+        ? t('More requirements are still missing before the agent can continue.')
+        : linkedVisionTask.model_version_id
+          ? t('Model version is already produced from this task.')
+          : linkedVisionTaskPassStatus === 'pass'
+            ? t('Metrics passed threshold. Agent can register the model version now.')
+            : t('Metrics still need improvement. Agent can schedule the next round from this same task.');
+  const linkedVisionTaskEvidenceSummary = !linkedVisionTask
+    ? ''
+    : [linkedVisionTask.promotion_gate?.summary, linkedVisionTask.run_comparison?.summary]
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .map((item) => t(item))
+        .filter(Boolean)
+        .join(' ');
   const refreshDetail = () => {
     load('manual')
       .then(() => setFeedback(null))
       .catch((error) => setFeedback({ variant: 'error', text: (error as Error).message }));
+  };
+  const handleContinueAsAgent = async () => {
+    if (!linkedVisionTask || agentAdvancing) {
+      return;
+    }
+    setAgentAdvancing(true);
+    setFeedback(null);
+    try {
+      const result = await api.autoAdvanceVisionTask(linkedVisionTask.id, { max_rounds: 3 });
+      setLinkedVisionTask(result.task);
+      if (result.action === 'training_started' && result.training_job_id && result.training_job_id !== job.id) {
+        navigate(
+          buildTrainingJobDetailPath(result.training_job_id, {
+            datasetId: result.task.dataset_id ?? job.dataset_id,
+            versionId: result.task.dataset_version_id ?? job.dataset_version_id,
+            visionTaskId: result.task.id,
+            launchContext: launchContextForDetail,
+            returnTo: outboundReturnTo
+          })
+        );
+        return;
+      }
+      if (result.action === 'registered' || result.action === 'feedback_mined' || result.action === 'completed') {
+        load('manual').catch(() => undefined);
+      }
+      const nextGuidance =
+        result.task.agent_next_action?.summary && result.task.agent_next_action.summary.trim().length > 0
+          ? ` ${t(result.task.agent_next_action.summary)}`
+          : '';
+      setFeedback({
+        variant: 'success',
+        text:
+          (result.action === 'registered'
+            ? t('Agent registered model version {versionId}.', {
+                versionId: result.model_version_id ?? '-'
+              })
+            : result.action === 'training_started'
+              ? t('Agent started the next training round: {jobId}.', {
+                  jobId: result.training_job_id ?? '-'
+                })
+              : result.action === 'waiting_training'
+                ? t('Agent is waiting on training job {jobId}.', {
+                    jobId: result.training_job_id ?? '-'
+                  })
+                : result.action === 'feedback_mined'
+                  ? t('Agent updated feedback dataset {datasetId}.', {
+                      datasetId: result.feedback_dataset_id ?? '-'
+                    })
+                  : result.action === 'requires_input'
+                    ? t('Agent still needs more input before continuing.')
+                    : t('Agent flow is already complete.')) + nextGuidance
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setAgentAdvancing(false);
+    }
   };
 
   type GuidanceAction = {
@@ -1539,12 +1695,19 @@ export default function TrainingJobDetailPage() {
       return {
         current: 2,
         total: 5,
-        title: t('Keep watching this run until artifacts are ready'),
-        detail: t('The job is still executing. Stay on this page for logs and metrics, then continue to version registration when it completes.'),
+        title: linkedVisionTask
+          ? t('Agent is still watching this run')
+          : t('Keep watching this run until artifacts are ready'),
+        detail: linkedVisionTask
+          ? t('This run is still linked to its vision task. Watch logs here, then continue as agent when execution finishes.')
+          : t('The job is still executing. Stay on this page for logs and metrics, then continue to version registration when it completes.'),
         badgeTone: 'info',
         badgeLabel: t('In progress'),
         actions: [
           { label: t('Refresh now'), onClick: refreshDetail },
+          ...(linkedVisionTaskDetailPath
+            ? [{ label: t('Open vision task'), to: linkedVisionTaskDetailPath, variant: 'ghost' as const }]
+            : []),
           { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
         ]
       };
@@ -1554,11 +1717,25 @@ export default function TrainingJobDetailPage() {
       return {
         current: 2,
         total: 5,
-        title: t('Review logs and retry this run'),
-        detail: t('The run ended early. Check logs first, then retry with a clearer dispatch choice if needed.'),
+        title: linkedVisionTask ? t('Review logs, then continue as agent') : t('Review logs and retry this run'),
+        detail: linkedVisionTask
+          ? t('The run ended early. Check the evidence here, then let the agent decide whether to schedule the next round.')
+          : t('The run ended early. Check logs first, then retry with a clearer dispatch choice if needed.'),
         badgeTone: 'danger',
         badgeLabel: t('Needs retry'),
         actions: [
+          ...(linkedVisionTask
+            ? [
+                {
+                  label: agentAdvancing ? t('Agent continuing...') : t('Continue as agent'),
+                  onClick: () => {
+                    void handleContinueAsAgent();
+                  },
+                  disabled: agentAdvancing,
+                  variant: 'primary' as const
+                }
+              ]
+            : []),
           {
             label: t('Open logs'),
             onClick: () => {
@@ -1627,6 +1804,56 @@ export default function TrainingJobDetailPage() {
 	          { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
 	        ]
 	      };
+    }
+
+    if (linkedVisionTask) {
+      if (linkedVisionTask.model_version_id) {
+        return {
+          current: 5,
+          total: 5,
+          title: t('Agent already produced the linked model version'),
+          detail: t('Vision task {taskId} already has model version {versionId}. Continue into validation or delivery from the linked version lane.', {
+            taskId: linkedVisionTask.id,
+            versionId: linkedVisionTask.model_version_id
+          }),
+          badgeTone: 'success',
+          badgeLabel: t('Model output ready'),
+          actions: [
+            { label: t('Continue in version delivery lane'), to: versionDeliveryPath },
+            { label: t('Open vision task'), to: linkedVisionTaskDetailPath, variant: 'ghost' },
+            { label: t('Validate inference'), to: scopedInferencePath, variant: 'secondary' }
+          ]
+        };
+      }
+
+      return {
+        current: 5,
+        total: 5,
+        title:
+          linkedVisionTaskPassStatus === 'pass'
+            ? t('Continue as agent to produce the model version')
+            : t('Continue as agent for the next training round'),
+        detail:
+          linkedVisionTaskPassStatus === 'pass'
+            ? t('The linked task can register the model version directly from this run and auto-create a matching model draft when needed.')
+            : t('The linked task is still below threshold. Continue as agent to schedule the next round without rebuilding context.'),
+        badgeTone: 'success',
+        badgeLabel:
+          linkedVisionTaskPassStatus === 'pass'
+            ? t('Agent ready')
+            : t('Another round suggested'),
+        actions: [
+          {
+            label: agentAdvancing ? t('Agent continuing...') : t('Continue as agent'),
+            onClick: () => {
+              void handleContinueAsAgent();
+            },
+            disabled: agentAdvancing
+          },
+          { label: t('Open vision task'), to: linkedVisionTaskDetailPath, variant: 'ghost' },
+          { label: t('Open closure lane'), to: scopedClosurePath, variant: 'ghost' }
+        ]
+      };
     }
 
     if (modelsLoaded && !matchingOwnedModel) {
@@ -1714,7 +1941,7 @@ export default function TrainingJobDetailPage() {
                 {completionAction.label}
               </ButtonLink>
             ) : null}
-            <ButtonLink to={cockpitPath} variant="secondary" size="sm">
+            <ButtonLink to={cockpitPath} variant="ghost" size="sm">
               {t('Open cockpit')}
             </ButtonLink>
             <ButtonLink to={scopedClosurePath} variant="ghost" size="sm">
@@ -2415,6 +2642,88 @@ export default function TrainingJobDetailPage() {
                 )
               )}
             />
+
+            {linkedVisionTaskLoading || linkedVisionTask || linkedVisionTaskError ? (
+              <SectionCard
+                title={t('Agent lane')}
+                description={t('Keep this run attached to the original goal so training can keep flowing toward model output.')}
+              >
+                {linkedVisionTaskLoading ? (
+                  <small className="muted">{t('Loading linked vision task...')}</small>
+                ) : linkedVisionTaskError ? (
+                  <InlineAlert
+                    tone="warning"
+                    title={t('Agent lane unavailable')}
+                    description={linkedVisionTaskError}
+                  />
+                ) : linkedVisionTask ? (
+                  <div className="stack tight">
+                    <DetailList
+                      items={[
+                        { label: t('Vision task'), value: linkedVisionTask.id },
+                        { label: t('Task status'), value: t(linkedVisionTask.status) },
+                        {
+                          label: t('Promotion gate'),
+                          value:
+                            linkedVisionTask.promotion_gate?.title
+                              ? t(linkedVisionTask.promotion_gate.title)
+                              : linkedVisionTask.validation_report?.summary.pass_status === 'pass'
+                                ? t('Ready to register')
+                                : linkedVisionTask.validation_report?.summary.pass_status === 'fail'
+                                  ? t('Needs another round')
+                                  : t('Needs review')
+                        },
+                        {
+                          label: t('Comparison decision'),
+                          value: linkedVisionTask.run_comparison?.decision
+                            ? t(linkedVisionTask.run_comparison.decision)
+                            : '-'
+                        },
+                        {
+                          label: t('Evaluation suite'),
+                          value: linkedVisionTask.evaluation_suite
+                            ? `${linkedVisionTask.evaluation_suite.primary_metric} >= ${linkedVisionTask.evaluation_suite.threshold_target ?? '-'}`
+                            : '-'
+                        },
+                        { label: t('Model version'), value: linkedVisionTask.model_version_id ?? '-' },
+                        { label: t('Feedback dataset'), value: linkedVisionTaskFeedbackDatasetId || '-' }
+                      ]}
+                    />
+                    <small className="muted">{linkedVisionTaskNextSummary}</small>
+                    {linkedVisionTaskEvidenceSummary ? (
+                      <small className="muted">{linkedVisionTaskEvidenceSummary}</small>
+                    ) : null}
+                    <div className="row gap wrap">
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => {
+                          void handleContinueAsAgent();
+                        }}
+                        disabled={agentAdvancing}
+                      >
+                        {agentAdvancing ? t('Agent continuing...') : t('Continue as agent')}
+                      </Button>
+                      <ButtonLink to={linkedVisionTaskDetailPath} variant="ghost" size="sm">
+                        {t('Open vision task')}
+                      </ButtonLink>
+                      {linkedVisionTaskFeedbackDatasetId ? (
+                        <ButtonLink
+                          to={`/datasets/${encodeURIComponent(linkedVisionTaskFeedbackDatasetId)}`}
+                          variant="ghost"
+                          size="sm"
+                        >
+                          {t('Open feedback dataset')}
+                        </ButtonLink>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <small className="muted">{t('No linked vision task for this run yet.')}</small>
+                )}
+              </SectionCard>
+            ) : null}
 
             <SectionCard
               title={t('Downstream snapshot')}

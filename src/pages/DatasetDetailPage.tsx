@@ -1650,7 +1650,7 @@ export default function DatasetDetailPage() {
           tone: 'success' as const,
           title: t('Launch-ready version is available'),
           description: t('Continue directly into training, closure verification, or inference validation from the selected ready snapshot.'),
-          label: t('Create Training Job'),
+          label: t('Smart Launch'),
           to: buildTrainingJobCreatePath(dataset.id, preferredLaunchReadyVersion.id, launchContextForDatasetFlow)
         };
   const handleNextDatasetAction = () => {
@@ -2178,7 +2178,7 @@ export default function DatasetDetailPage() {
                   variant="secondary"
                   size="sm"
                 >
-                  {preferredLaunchReadyVersion ? t('Create Training Job') : t('Open Training Jobs')}
+                  {preferredLaunchReadyVersion ? t('Smart Launch') : t('Open Training Jobs')}
                 </ButtonLink>
                 <ButtonLink to={closureWizardPath} variant="ghost" size="sm">
                   {t('Open Closure Wizard')}
