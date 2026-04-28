@@ -330,5 +330,25 @@
 - 当侧栏内容密度过高时，次级区块应支持折叠
 - 空态/加载态/错误态/成功态全站统一
 - 页面风格与交互语义保持一致
+- chat、task、training、model-version、inference、feedback 页面共用紧凑 action-card 语义
+- 后台刷新必须保留滚动、焦点、已输入内容、筛选、选中项与展开态
+- 用户提交 prompt、上传文件、训练启动意图时，应立即显示本地反馈，再与后端状态 reconcile
+- blocked/failed 状态只突出一个主修复动作，诊断信息折叠或作为次级信息展示
+- readiness/gate/evidence badge 全站统一使用 pass/warn/block/pending 语义
 - 视觉数据闭环改造优先信息架构与操作效率，不做功能堆砌，并保持 chat-first 产品定位
 - 参考规划基线：`docs/visual-data-loop-evolution.zh-CN.md`
+
+## 13. 2026-04 补充：Recipe、Readiness、Evaluation Gate 流程
+- 训练启动前先解析 `TrainingRecipe`：
+  - 展示 recipe id/version、默认 base model、默认参数、允许覆盖项、校验范围与 runner 映射
+  - 用户可保持默认，也可展开专家控件覆盖参数
+- 后端执行 `RealTrainingReadinessReport`：
+  - 数据集样本数、split、annotation coverage、类别均衡/OCR charset
+  - runtime 依赖、device、worker、fallback 策略
+  - artifact evidence 预期
+  - `blocked` 阻止 launch，`warning` 可在明确提示/确认后继续
+- 训练完成后执行 `EvaluationSuite` / `PromotionGate`：
+  - 读取 metrics、artifact summary、dataset-version context、real-execution evidence
+  - 计算 primary metric 与阈值结果
+  - 与 champion/challenger 比较
+  - 输出 promote / train_again / collect_data / clean_annotations / fix_runtime / observe / stop

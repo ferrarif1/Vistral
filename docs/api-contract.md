@@ -1499,6 +1499,140 @@ Rules:
   - `task`
   - `model_version`
 
+## 12.2 Training Planning Endpoints
+
+### GET /training/recipes
+List available training recipe contracts.
+
+Query:
+- `task_type`
+- `framework`
+
+Response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "recipe_id": "yolo-detection-default",
+      "recipe_version": "2026-04",
+      "title": "YOLO detection default",
+      "task_type": "detection",
+      "framework": "yolo",
+      "default_base_model": "yolo11n",
+      "base_model_options": ["yolo11n", "yolo11s", "yolo11m"],
+      "params": [
+        {
+          "key": "epochs",
+          "label": "Epochs",
+          "type": "int",
+          "unit": "epoch",
+          "default": "30",
+          "min": 1,
+          "max": 300,
+          "required": true,
+          "ui_control": "number",
+          "expert": false,
+          "runner_arg": "epochs"
+        }
+      ],
+      "evaluation_suite_id": "eval-detection-map",
+      "readiness_policy_id": "ready-visual-training-v1"
+    }
+  ]
+}
+```
+
+Rules:
+- recipe ids are stable and versioned.
+- normal launch UI must not expose a parameter unless the recipe defines validation and runner mapping for it.
+- expert parameters are collapsed by default.
+
+### POST /training/readiness/evaluate
+Evaluate whether a dataset-version + recipe + runtime context is ready for real training.
+
+Request:
+```json
+{
+  "task_type": "detection",
+  "framework": "yolo",
+  "dataset_id": "d-1",
+  "dataset_version_id": "dv-1",
+  "recipe_id": "yolo-detection-default",
+  "base_model": "yolo11n",
+  "config": {
+    "epochs": "30",
+    "batch_size": "16",
+    "learning_rate": "0.001"
+  },
+  "execution_target": "auto",
+  "worker_id": ""
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "status": "warning",
+    "summary": "Dataset is trainable, but class balance is weak and strict real execution is off.",
+    "checks": [
+      {
+        "key": "dataset.ready_visual_samples",
+        "title": "Ready visual samples",
+        "status": "pass",
+        "message": "42 ready visual samples found.",
+        "owner_surface": "dataset"
+      },
+      {
+        "key": "runtime.strict_real",
+        "title": "Strict real execution",
+        "status": "warning",
+        "message": "Simulated fallback is allowed; registration will still block non-real artifacts.",
+        "owner_surface": "runtime"
+      }
+    ],
+    "dataset": {
+      "ready_visual_sample_count": 42,
+      "split_summary": { "train": 34, "val": 4, "test": 4 },
+      "annotation_coverage": 0.95
+    },
+    "runtime": {
+      "dependencies_ready": true,
+      "strict_real_enabled": false,
+      "fallback_policy": "allowed_with_warning"
+    },
+    "artifact_expectation": {
+      "requires_real_execution": true,
+      "required_fields": ["training_performed", "primary_model_path"],
+      "registration_blockers": []
+    }
+  }
+}
+```
+
+Rules:
+- request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
+- `dataset_id`, `dataset_version_id`, `task_type`, `framework`, and `recipe_id` are required.
+- `status=blocked` prevents normal training launch.
+- `status=warning` may launch only when the UI keeps the warning visible and records acknowledgement when required.
+- the report must separate dataset, annotation, runtime, worker, and artifact blockers so the UI can route users to the correct fix.
+
+### GET /training/evaluation-suites
+List evaluation suite contracts.
+
+Query:
+- `task_type`
+- `framework`
+- `recipe_id`
+
+Rules:
+- OCR suites must expose CER/WER/accuracy semantics and threshold source.
+- detection suites must expose mAP/precision/recall plus per-class regression support.
+- segmentation suites must expose mIoU or framework-specific mask/polygon mAP plus mask/polygon coverage context.
+- response shape follows the `EvaluationSuite` contract in `docs/data-model.md`.
+
 ## 13. Training Job Endpoints
 
 ### GET /training/jobs
@@ -1529,11 +1663,18 @@ Request:
   "dataset_id": "d-1",
   "dataset_version_id": "dv-1",
   "vision_task_id": "vt-1",
+  "recipe_id": "paddleocr-ocr-default",
+  "recipe_version": "2026-04",
   "base_model": "paddleocr-PP-OCRv4",
   "config": {
     "epochs": 20,
     "batch_size": 16,
-    "learning_rate": 0.001
+    "learning_rate": 0.001,
+    "resolved_params": {
+      "epochs": "20",
+      "batch_size": "16",
+      "learning_rate": "0.001"
+    }
   }
 }
 ```
@@ -1548,12 +1689,17 @@ Request rules:
 - selected dataset must already be launch-ready for training (`status=ready`)
 - selected dataset version must include at least one `train` item in `split_summary`
 - selected dataset version must have positive annotation coverage (`annotation_coverage > 0`)
+- when `recipe_id` is provided, it must reference a known recipe compatible with `task_type` and `framework`
+- submitted params must satisfy the selected recipe's parameter contract
+- backend may reject params that are not mapped to a runner config unless the recipe marks them as pass-through
 - `vision_task_id` is optional; when provided, it must reference a visible `VisionTask` owned by the current user or accessible to `admin`
 - `config` is optional; non-string primitive values are normalized to string form by backend before persistence
+- structured config snapshots (`resolved_params`, `user_overrides`, `readiness_snapshot`) are the target contract; until structured persistence is implemented everywhere, prototype adapters may store nested values as JSON strings but must preserve their content losslessly
 
 Server behavior (current):
 - create in `draft`, then queue into local single-node executor
 - when `vision_task_id` is provided, backend links the created run back to that task and refreshes the task's dataset/version/training-plan context so downstream `auto-advance` or `register-model` calls keep operating on the same goal
+- when `recipe_id` is provided, backend persists the recipe id/version, resolved params, user overrides, readiness snapshot, and evaluation suite id into the job config snapshot
 - executor creates workspace at `TRAINING_WORKDIR_ROOT/{job_id}`
 - executor writes:
   - `job-config.json`

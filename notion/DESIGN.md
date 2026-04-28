@@ -277,7 +277,49 @@ What makes Notion's visual language distinctive is its border philosophy. Rather
 - Blue CTA (#0075de) on white: ~4.6:1 ratio (WCAG AA for large text)
 - Badge text (#097fe8) on badge bg (#f2f9ff): ~4.5:1 ratio (WCAG AA for large text)
 
-## 9. Agent Prompt Guide
+## 9. Vistral AI-Native Interaction Addendum
+
+Vistral uses the Notion-inspired visual foundation above, but the interaction feel should be closer to a modern conversational AI workspace: fast, continuous, calm, and evidence-aware.
+
+### Conversation Smoothness
+- User intent should appear immediately in the timeline or launcher as an optimistic draft state.
+- Assistant/action responses should stream or progressively reveal status where possible instead of waiting on a blank page.
+- Long operations use compact action cards with stable height: `queued`, `running`, `blocked`, `completed`, `failed`, and `needs confirmation`.
+- Background refresh must be non-jumping: update only changed values and preserve scroll position, input focus, selected rows, filters, expanded disclosures, and composer text.
+- Error recovery should keep the user in place with one clear repair action instead of sending them to a disconnected page.
+
+### Agent Evidence Cards
+Action cards should be visually calm and compact:
+- top row: status badge + action title + timestamp
+- body: one short summary
+- evidence row: dataset version, recipe, readiness/gate state, or artifact truth marker when relevant
+- footer: one primary next action plus secondary links
+- confirmation row appears only for mutating actions that need explicit operator approval
+
+Do not turn action cards into dashboards. Deep diagnostics belong behind a disclosure or in the owning detail page.
+
+### Training Launcher Feel
+- The first screen should read as `goal -> snapshot -> launch`.
+- Recipe, readiness, and gate evidence should appear as one compact summary block, not separate warning cards.
+- Expert controls remain collapsed by default and use tight, form-like controls instead of large decorative cards.
+- Parameter controls should match type: number input or slider for numeric values, select for options, toggle for booleans.
+- The launch button should never shift position when readiness checks resolve.
+
+### Modern Operator Surfaces
+- Use dense but readable workbench layouts for datasets, annotation, training, models, and inference.
+- Prefer stable three-zone layouts: context toolbar, main work area, right inspector.
+- Avoid nested cards, oversized headings inside panels, decorative gradients, and isolated page-specific themes.
+- Use subtle motion only to show continuity: panel open/close, progress update, selected item change, or live training state.
+- Respect reduced-motion preferences and keep values readable without hover-only inspection.
+
+### Visual Polish Rules
+- Primary actions use one consistent blue.
+- Status colors are semantic and restrained: success, warning, danger, neutral, info.
+- Empty/loading/error/success states use the same component family everywhere.
+- Every async control needs a disabled/submitting visual state that does not resize the control.
+- Text in buttons, chips, cards, and side panels must fit on mobile without overlap.
+
+## 10. Agent Prompt Guide
 
 ### Quick Color Reference
 - Primary CTA: Notion Blue (`#0075de`)

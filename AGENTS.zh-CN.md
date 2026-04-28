@@ -19,7 +19,8 @@ Vistral 是一个**AI-native、对话与附件驱动**的视觉模型平台。
 6. `docs/flows.md`（关键流程）
 7. `docs/data-model.md`（数据模型与状态枚举）
 8. `docs/api-contract.md`（接口契约）
-9. `.agents/skills/**/SKILL.md`（按任务调用）
+9. `docs/agent-development-guidelines.md`（agent 开发与评审纪律）
+10. `.agents/skills/**/SKILL.md`（按任务调用）
 
 若文档冲突，按“更具体、更新近、影响面更大”优先，并在变更说明中记录。
 
@@ -51,6 +52,7 @@ Vistral 是一个**AI-native、对话与附件驱动**的视觉模型平台。
 - 相同语义能力（上传列表、stepper、状态反馈）应抽象复用；
 - 保持 AI-native 体验语义一致。
 - 路线图、阶段计划与里程碑只维护在 `PLANS.md`，不要新增并行的 `PLAN*.md` 文件。
+- 非平凡 agent / 平台改动必须遵循 `docs/agent-development-guidelines.md`：先说明假设，保持最小可验证目标，避免无关重构，并明确区分真实执行证据与 fallback/template 输出。
 
 ## 7）验证要求
 每次改动后至少执行与改动面匹配的最小检查：

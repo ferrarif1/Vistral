@@ -826,3 +826,69 @@
 实现说明：
 - 后端优先通过错误消息模式归类（权限/资源不存在/状态迁移），由共享错误归一模块实现
 - 对未命中模式的边界消息保留显式映射兜底
+
+## 2026-04 补充：训练规划接口合同
+
+### GET /training/recipes
+列出可用训练 recipe。
+
+Query：
+- `task_type`
+- `framework`
+
+返回项至少包含：
+- `recipe_id`
+- `recipe_version`
+- `task_type`
+- `framework`
+- `default_base_model`
+- `base_model_options`
+- `params[]`
+- `evaluation_suite_id`
+- `readiness_policy_id`
+
+规则：
+- recipe id 必须稳定且带版本。
+- 普通 UI 不得暴露 recipe 未声明校验与 runner mapping 的参数。
+- `expert=true` 的参数默认折叠。
+
+### POST /training/readiness/evaluate
+评估 dataset-version + recipe + runtime/worker 是否可进行真实训练。
+
+请求至少包含：
+- `task_type`
+- `framework`
+- `dataset_id`
+- `dataset_version_id`
+- `recipe_id`
+- `base_model`
+- `config`
+- `execution_target`
+- `worker_id`
+
+返回：
+- `status`：`pass | warning | blocked | unknown`
+- `checks[]`
+- `dataset`
+- `runtime`
+- `worker`
+- `artifact_expectation`
+
+规则：
+- `blocked` 阻止普通训练启动。
+- `warning` 可继续，但 UI 必须保留提示，并在需要时记录用户确认。
+- report 必须区分 dataset / annotation / runtime / workers / artifact blockers，方便跳转修复。
+
+### GET /training/evaluation-suites
+列出评估 suite 合同。
+
+Query：
+- `task_type`
+- `framework`
+- `recipe_id`
+
+规则：
+- OCR suite 必须解释 CER/WER/accuracy 与阈值来源。
+- detection suite 必须解释 mAP/precision/recall 与 per-class regression。
+- segmentation suite 必须解释 mIoU 或 mask/polygon mAP。
+- 返回结构应与英文 `docs/data-model.md` 中的 `EvaluationSuite` 合同保持一致。

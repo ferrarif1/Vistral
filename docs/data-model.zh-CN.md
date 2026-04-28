@@ -256,3 +256,51 @@
 - `Model.owner_user_id + status`
 - `Message.conversation_id + created_at`
 - `AuditLog.user_id + timestamp`
+
+## 2026-04 补充：训练 recipe、readiness 与评估 gate
+
+### TrainingRecipe（目录对象）
+- `recipe_id`
+- `recipe_version`
+- `task_type`
+- `framework`
+- `default_base_model`
+- `base_model_options`
+- `params[]`
+  - `key`
+  - `type`
+  - `unit`
+  - `default`
+  - `min` / `max`
+  - `ui_control`
+  - `expert`
+  - `runner_arg`
+- `evaluation_suite_id`
+- `readiness_policy_id`
+- `artifact_expectation`
+
+规则：
+- 普通训练入口只展示 recipe 摘要，专家参数默认折叠。
+- UI 不得暴露后端/runner 不校验或不消费的参数。
+- 训练任务需在 `TrainingJob.config` 中保存 recipe id/version、resolved params 与用户覆盖项。
+
+### RealTrainingReadinessReport（计算对象）
+- `status`：`pass | warning | blocked | unknown`
+- `checks[]`：每项包含 key/title/status/message/evidence/remediation/owner_surface
+- `dataset`：ready visual sample count、split、annotation coverage、label completeness、class balance、OCR charset
+- `runtime`：dependency、device、strict real、fallback policy
+- `worker`：eligible worker count、selected worker、blockers
+- `artifact_expectation`：registration 所需真实执行证据
+
+规则：
+- `blocked` 阻止普通训练启动。
+- `warning` 可继续，但必须保留在提交快照中。
+- readiness 必须能区分数据问题、标注问题、runtime 问题、worker 问题与 artifact 证据问题。
+
+### EvaluationSuite / PromotionGate / RunComparison
+- OCR 默认主指标：`cer`（越低越好），缺失时可用 `accuracy`
+- detection 默认主指标：`map`
+- segmentation 默认主指标：`miou`，不可用时使用框架可提供的 mask/polygon mAP
+- `PromotionGate.status`：`pass | needs_review | fail | pending`
+- `recommended_action`：`register_model | train_again | collect_data | clean_annotations | fix_runtime | observe | stop`
+- run comparison 必须携带 champion/challenger/latest run 语义，避免只看单次 raw metric。

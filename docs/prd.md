@@ -131,6 +131,19 @@ Vistral must provide one closed-loop platform where engineers can:
 - create training job
 - the primary training entry should feel agentic: user provides a natural-language goal plus a dataset (or dataset-version scope), and the system infers task type / framework / base model / recommended core params by default
 - explicit task/framework/base-model/dispatch overrides must remain available only as expert controls, collapsed by default
+- training recommendation must be recipe-backed rather than ad-hoc:
+  - each supported `task_type + framework` pair has a named `TrainingRecipe`
+  - each recipe defines default params, allowed overrides, validation ranges, units, UI control hints, and runner mapping
+  - agent-created plans must explain which recipe was selected and why
+  - user overrides must be persisted as part of the submitted job config snapshot
+- training launch must use one consolidated real-readiness gate:
+  - dataset size / ready visual sample count
+  - train/val/test split quality
+  - annotation coverage and label completeness
+  - class balance / long-tail warnings for detection, segmentation, and classification
+  - OCR charset coverage and text-label completeness for OCR
+  - runtime dependency readiness, GPU/CPU/device availability, worker eligibility, and fallback policy
+  - expected artifact evidence required for model registration
 - every new training job must bind to an explicit dataset version snapshot instead of an implicit "latest" dataset state
 - training launch readiness must surface at least dataset status, selected dataset-version split summary, and annotation coverage before submit
 - training launch must be blocked when selected dataset version has zero annotation coverage (`annotation_coverage <= 0`)
@@ -182,6 +195,15 @@ Vistral must provide one closed-loop platform where engineers can:
 ### FR-010 Evaluation and Model Versioning
 - OCR metrics: accuracy/CER/WER
 - detection metrics: mAP/precision/recall
+- segmentation metrics: mIoU plus mask/polygon quality summary where available
+- each task type must define an `EvaluationSuite` with:
+  - primary metric
+  - threshold target and threshold source
+  - benchmark or dataset-version basis
+  - regression comparison scope
+  - gate interpretation (`pass`, `needs_review`, `fail`, `pending`)
+- promotion logic must compare current run evidence with champion/challenger context before recommending registration
+- failed gates must produce a specific next recommendation: tune params, clean annotations, collect data, fix runtime, train again, observe, or stop
 - store error sample analysis
 - register model version with training linkage
 - register model version must reject jobs with `execution_mode=simulated|unknown`
@@ -304,6 +326,27 @@ Framework integrations must follow unified trainer interface:
   - one current promotion-gate result
   - one current run-comparison result based on linked training history
 
+### FR-017 Smooth AI-Native Interaction System
+- the product should feel closer to a conversational copilot than a traditional MLOps dashboard:
+  - natural-language intent stays primary
+  - compact action cards summarize mutations, missing inputs, created entities, and next steps
+  - side panels and expert controls support inspection without stealing the primary flow
+- major operations should provide immediate local feedback before backend completion:
+  - optimistic draft state for user-submitted prompts, uploads, and job launch intent
+  - non-jumping background refresh that updates only changed data
+  - visible progress, cancellability, and retry paths for long-running jobs
+- navigation should preserve context across modules:
+  - dataset/version/task/job/model-version ids remain in query params or linked cards
+  - returning from dataset, training, model version, inference, or feedback loops should not force the operator to reconstruct context
+- UI surfaces should use one calm modern design system:
+  - warm neutral canvas, restrained borders, compact typography, and one consistent primary blue
+  - cards only for repeated items, modals, and framed tools; avoid nested card-heavy dashboards
+  - dense operator surfaces should favor clear hierarchy, stable panels, and subtle motion over decorative spectacle
+- the assistant must never hide uncertainty:
+  - missing requirements are explicit
+  - fallback/template/simulated outputs are labeled as non-real
+  - agent recommendations show evidence and confirmation requirements
+
 Reference planning document:
 - `docs/visual-data-loop-evolution.md`
 
@@ -312,6 +355,8 @@ Reference planning document:
 ### NFR-001 Performance
 - page interactions under 2s for baseline operations
 - long-running jobs have visible status transitions and logs
+- interaction-critical UI should respond within 100-200ms locally where possible, then reconcile with backend state
+- background refresh must avoid layout jumps and preserve active focus/input state
 
 ### NFR-002 Security
 - in-transit encryption

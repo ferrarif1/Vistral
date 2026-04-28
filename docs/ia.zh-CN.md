@@ -429,3 +429,16 @@
 - Phase 2：最小在线标注与审核闭环
 - Phase 3+：真实框架适配器与训练执行器
 - 视觉数据闭环演进轨道（参考 `docs/visual-data-loop-evolution.zh-CN.md`）以增量方式升级数据浏览/复核/版本流程，不改变 chat-first IA 主轴
+
+## 8. 2026-04 补充：顺滑 AI-native 工作台 IA
+- 所有核心工作台应围绕“一个主任务 + 一个主下一步”组织，不把相邻领域的完整工作流嵌入当前页。
+- `/training/jobs/new` 首屏保持 `goal -> snapshot -> launch`：
+  - readiness gate 以一个 pass/warn/block 证据块展示
+  - recipe 摘要可见，参数覆盖折叠在专家控件中
+  - launch 按钮位置不因 readiness 刷新而跳动
+- `/vision/tasks` 应像 agent inbox：
+  - blocked / training / next-action-ready 分组或等效视图
+  - 每行展示推荐动作、理由、readiness/gate 状态与关联实体
+- `/vision/tasks/:taskId` 应把 recipe、readiness、evaluation gate、champion/challenger 放在同一证据链中，手动入口作为次级 escape hatch。
+- 全站 action card 统一结构：状态、摘要、证据、一个主下一步、必要时显示确认要求。
+- 现代视觉基线继续遵循 `notion/DESIGN.md`，并采用其中 Vistral AI-native interaction addendum。

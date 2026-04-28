@@ -63,6 +63,28 @@ Define executable route and page structure for the AI-native conversation worksp
   - operational pages should reuse `WorkspaceWorkbench` to keep control surfaces consistent across dataset/training/model lanes
   - rollout update (2026-04): for high-frequency console routes, heavy onboarding cards are replaced with a compact single-task hint block to reduce first-screen noise while keeping clear next-action links
 
+### 3.4A Smooth Interaction System
+- all workspace pages should feel like one continuous assistant-guided loop, not disconnected tools:
+  - primary action stays visually obvious
+  - cross-domain follow-ups appear as compact next-step actions, not embedded duplicate workflows
+  - background refresh is quiet and only changes visible state when data actually changes
+  - active text inputs, filters, selected rows, and expanded expert sections are not reset by polling
+- assistant/action-card patterns should be reused across chat, task detail, training detail, and right-side Dock:
+  - status
+  - missing inputs
+  - created entities
+  - evidence summary
+  - next recommended action
+  - confirmation requirement for mutating actions
+- motion should be functional:
+  - short transitions for panel open/close and status changes
+  - no layout jump during loading/success/error transitions
+  - reduced-motion preference respected
+- visual tone:
+  - warm neutral surfaces and whisper borders remain the default
+  - one consistent blue for primary actions
+  - avoid saturated gradients, nested cards, decorative clutter, and page-specific visual dialects
+
 ### 3.4.1 Single-Task Hint Rollout (2026-04)
 - migrated routes:
   - `/workspace/console`
@@ -164,6 +186,8 @@ Define executable route and page structure for the AI-native conversation worksp
     - when goal text is present or the page is opened from a `VisionTask`, Smart Launch should keep or create that task context so the launched run stays attached to the same orchestration lane
   - dataset selection still binds an explicit dataset-version snapshot, not an implicit latest dataset state
   - selected dataset-version readiness summary stays visible before launch (dataset status, split summary, annotation coverage, train-split availability)
+  - consolidated real-readiness gate should appear as one compact evidence block with pass/warn/block rows rather than scattered warnings
+  - recipe selection should be inspectable in the main summary, while parameter overrides stay inside collapsed expert controls
   - task/framework/base-model/core-param choices should be auto-derived when possible and only exposed for manual override inside collapsed expert controls
   - onboarding card should frame this page as "tell the agent what to train, confirm the snapshot, then launch"
   - the main workspace should mirror the first incomplete training-setup step with one explicit next-action card, and blocked states should point back to dataset detail or runtime settings when relevant instead of expanding more configuration by default
@@ -207,6 +231,7 @@ Define executable route and page structure for the AI-native conversation worksp
   - every visible task row/card should surface:
     - current recommendation title
     - one-line rationale
+    - readiness/gate status when available
     - linked entities needed to continue (`dataset`, `training job`, `model version`)
 - `/vision/tasks/:taskId`
   - dedicated continuation page for one structured vision-task record
@@ -228,6 +253,8 @@ Define executable route and page structure for the AI-native conversation worksp
     - whether the result is strong enough to promote now
     - whether the safer next move is train again or collect more data
   - main sections should expose structured understanding, dataset inspection, training plan, auto-tune history, validation report, and missing requirements without forcing the engineer back into the chat thread
+  - training plan section should show recipe id/version, default params, user overrides, and readiness blockers in one inspectable block
+  - evaluation section should show primary metric, threshold source, champion/challenger comparison, and gate interpretation before manual registration controls
   - quick actions can open linked dataset, training job, model version, or feedback dataset directly, but those linked domains still own their own primary workflows
 
 ### 3.8 Inference Validation Domain

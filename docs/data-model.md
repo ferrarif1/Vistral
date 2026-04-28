@@ -184,6 +184,18 @@ Rules:
     - `charset_size`
     - `recommended_data_actions[]`
 - `training_plan` records recipe id, recommended base model, and train/eval/export args
+- `training_plan` should use recipe-backed structure:
+  - `recipe_id`
+  - `recipe_version`
+  - `recipe_title`
+  - `selection_reason`
+  - `base_model`
+  - `default_params`
+  - `resolved_params`
+  - `user_overrides`
+  - `param_contract`
+  - `runner_mapping`
+  - `readiness_summary`
 - `agent_next_action` records the current operator-facing recommendation:
   - `action`
   - `title`
@@ -265,6 +277,7 @@ Rules:
   - `feedback_dataset_id`
   - `auto_feedback_last_generated_at`
   - `auto_feedback_sample_count`
+  - `training_readiness_report_json`
 - linked training job/model version fields are backfilled from runtime progress so task detail can stay a reliable continuation surface
 - linked runtime refresh should also recompute `agent_next_action`; the log only appends when recommendation meaningfully changes or the agent executes a mutating next step
 - the same refresh should also recompute `evaluation_suite`, `promotion_gate`, `run_comparison`, and `active_learning_pool`
@@ -391,6 +404,132 @@ Attributes:
 - `created_by` (FK User)
 - `created_at`
 
+### 4.11A TrainingRecipe Catalog Object
+`TrainingRecipe` is a versioned catalog object used by the agent and launcher. It can start as static/shared configuration and does not require a dedicated database table in the current prototype.
+
+Attributes:
+- `recipe_id` (stable string, for example `yolo-detection-default`)
+- `recipe_version` (semantic or date version)
+- `title`
+- `task_type` (TaskType)
+- `framework` (Framework)
+- `base_model_options` (JSON array)
+- `default_base_model`
+- `params` (JSON array)
+  - `key`
+  - `label`
+  - `type` (`int` | `float` | `boolean` | `string` | `enum`)
+  - `unit` (nullable string)
+  - `default`
+  - `min` / `max` (nullable)
+  - `options` (nullable array for enum)
+  - `required` (bool)
+  - `ui_control` (`number` | `slider` | `select` | `toggle` | `text`)
+  - `expert` (bool; true means collapsed by default)
+  - `runner_arg` (framework runner argument or config key)
+  - `description`
+- `evaluation_suite_id`
+- `readiness_policy_id`
+- `artifact_expectation` (JSON: required artifact/evidence fields for registration)
+- `created_at`, `updated_at`
+
+Rules:
+- normal launch surfaces show recipe summary and keep expert params collapsed by default.
+- backend validation must reject submitted params outside the recipe contract unless the recipe explicitly marks the param as pass-through.
+- runner mapping must exist before a UI control is exposed; ignored parameters are not allowed in normal flows.
+- submitted training jobs persist the selected recipe id/version and resolved params inside `TrainingJob.config`.
+
+### 4.11B RealTrainingReadinessReport
+`RealTrainingReadinessReport` is a computed object returned before training launch and optionally stored in `VisionModelingTask.metadata.training_readiness_report_json` or `TrainingJob.config.readiness_snapshot`.
+
+Attributes:
+- `status` (`pass` | `warning` | `blocked` | `unknown`)
+- `summary`
+- `dataset_version_id`
+- `recipe_id`
+- `framework`
+- `task_type`
+- `checks[]`
+  - `key`
+  - `title`
+  - `status` (`pass` | `warning` | `blocked` | `unknown`)
+  - `message`
+  - `evidence`
+  - `remediation_action`
+  - `owner_surface` (`dataset` | `annotation` | `runtime` | `workers` | `training` | `models`)
+- `dataset`
+  - `ready_visual_sample_count`
+  - `total_item_count`
+  - `split_summary`
+  - `annotation_coverage`
+  - `label_completeness`
+  - `class_balance_summary`
+  - `ocr_charset_summary`
+- `runtime`
+  - `dependencies_ready`
+  - `device_summary`
+  - `strict_real_enabled`
+  - `fallback_policy`
+- `worker`
+  - `eligible_worker_count`
+  - `selected_worker_id`
+  - `worker_blockers[]`
+- `artifact_expectation`
+  - `requires_real_execution`
+  - `required_fields[]`
+  - `registration_blockers[]`
+- `created_at`
+
+Rules:
+- `blocked` prevents normal training launch.
+- `warning` may allow launch but must stay visible in the submitted snapshot.
+- readiness must distinguish data blockers from runtime/worker blockers so the UI can send users to the correct page.
+
+### 4.11C EvaluationSuite and Promotion Gate Contract
+`EvaluationSuite`, `PromotionGate`, and `RunComparison` can be persisted inside `VisionModelingTask` JSON fields at the current stage, but their shape must remain stable.
+
+EvaluationSuite attributes:
+- `suite_id`
+- `suite_version`
+- `task_type`
+- `primary_metric`
+- `direction` (`higher_is_better` | `lower_is_better`)
+- `threshold_target`
+- `threshold_source` (`recipe_default` | `dataset_baseline` | `champion_margin` | `manual_override`)
+- `secondary_metrics[]`
+- `regression_slices[]` (for example per-class, charset bucket, low-confidence cluster)
+- `basis[]` (dataset version, benchmark, prior champion, manual rule)
+- `created_at`
+
+PromotionGate attributes:
+- `evaluation_suite_id`
+- `status` (`pass` | `needs_review` | `fail` | `pending`)
+- `threshold_metric`
+- `threshold_target`
+- `current_value`
+- `best_value`
+- `reason`
+- `recommended_action` (`register_model` | `train_again` | `collect_data` | `clean_annotations` | `fix_runtime` | `observe` | `stop`)
+- `requires_confirmation`
+- `created_at`
+
+RunComparison attributes:
+- `decision` (`promote` | `train_again` | `collect_data` | `observe` | `pending`)
+- `champion_training_job_id`
+- `challenger_training_job_id`
+- `latest_training_job_id`
+- `champion_value`
+- `challenger_value`
+- `champion_margin`
+- `candidate_summaries[]`
+- `reason`
+- `created_at`
+
+Task-specific metric baseline:
+- OCR: primary metric defaults to `cer` (lower is better) or `accuracy` when CER is unavailable; secondary metrics include `wer`, `norm_edit_distance`, and charset coverage.
+- detection: primary metric defaults to `map`; secondary metrics include `precision`, `recall`, and per-class regression slices.
+- segmentation: primary metric defaults to `miou` when available, otherwise framework-specific mask/polygon mAP; secondary metrics include mask coverage and polygon quality warnings.
+
 ### 4.12 TrainingJob
 Attributes:
 - `id` (PK)
@@ -417,6 +556,13 @@ Launch readiness rules:
 - selected dataset version must include at least one `train` item (`split_summary.train > 0`)
 - selected dataset version must have positive annotation coverage (`annotation_coverage > 0`)
 - `split_summary` and `annotation_coverage` readiness checks should be computed from trainable visual samples (ready image attachments), excluding non-visual helper imports (for example annotation import `.txt/.json` files)
+- new agent-first training jobs should also persist:
+  - `config.recipe_id`
+  - `config.recipe_version`
+  - `config.resolved_params`
+  - `config.user_overrides`
+  - `config.readiness_snapshot`
+  - `config.evaluation_suite_id`
 
 Relationships:
 - has many `TrainingMetric`

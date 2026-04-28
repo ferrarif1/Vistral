@@ -241,9 +241,25 @@ Actor: `user`
    - compact launch progress indicator stays visible (`goal -> snapshot -> launch`)
 3. select a dataset version snapshot, confirm launch readiness (dataset status / split summary / annotation coverage), then create training job
    - launch is blocked when `split_summary.train <= 0` or `annotation_coverage <= 0`
+   - launch also evaluates the consolidated real-training readiness report:
+     - dataset size / ready visual sample count
+     - split quality
+     - annotation and label completeness
+     - class balance or OCR charset coverage
+     - runtime dependency readiness
+     - GPU/CPU/device and worker eligibility
+     - fallback policy and expected artifact evidence
+   - blocking readiness rows prevent launch; warning rows remain visible and require explicit operator acknowledgement only when they can affect training truthfulness
    - when runtime strict training guard (`disable_simulated_train_fallback`) is off, launch also requires explicit risk confirmation from the operator before submit
    - when runtime strict mode status cannot be loaded, launch remains blocked until runtime settings become available again
    - manual task/framework/base-model/dispatch/param overrides are still available, but only in collapsed expert controls
+   - recipe selection and resolved config are shown before submit:
+     - `recipe_id`
+     - `recipe_version`
+     - recommended base model
+     - default params
+     - user overrides
+     - runner mapping summary
    - when a linked `VisionTask` is present, the created run stores that linkage so downstream detail pages can continue in the same agent lane
 4. job transitions through:
    - `draft`
@@ -276,6 +292,30 @@ Actor: `user`
 11. for cross-machine model handoff, worker can deploy encrypted artifact via:
    - `POST /api/worker/models/pull-encrypted` (worker-auth protected)
    - worker internally calls `POST /api/runtime/public/model-package` (runtime bearer key) and decrypts payload locally
+
+## 6.0A Flow E0: Training Recipe and Readiness Planning
+Actor: `user` / `VisionTask agent`
+
+1. user describes the goal or opens a dataset-version-scoped training launcher
+2. system resolves `task_type`, framework, base model, and recipe candidate
+3. system loads the recipe contract for the selected `task_type + framework`
+4. system displays the recipe summary:
+   - purpose
+   - compatible task/framework
+   - default params
+   - allowed overrides
+   - validation ranges and units
+   - UI control hints
+   - runner mapping
+5. operator may keep defaults or expand expert controls to override params
+6. backend evaluates real-training readiness against the selected dataset version and runtime/worker context
+7. if readiness has blockers, the launch surface shows the smallest next fix:
+   - return to dataset upload/split/version
+   - annotate/review more samples
+   - fix runtime dependencies
+   - choose another worker/device
+   - enable strict real execution or explicitly acknowledge fallback risk
+8. if readiness passes or only has acknowledged warnings, submit creates a `TrainingJob` with the recipe and resolved config snapshot persisted
 
 ## 6.1 Flow E1: Vision Modeling Task Orchestration (implemented MVP)
 Actor: `user`
@@ -315,6 +355,30 @@ Actor: `user`
 9. when mining a feedback dataset, backend should diversify selected samples across active-learning clusters when possible instead of filling the set with only one repeated failure mode
 10. when opening inference validation from a task's active-learning pool, the page should keep task context (`vision_task`, selected run, return path) so engineers can inspect one candidate, route it to feedback, and jump back without rebuilding context
 11. owner/admin visibility applies to task list/detail, and runtime sync keeps validation report + status aligned with the linked training job/model version
+
+## 6.2 Flow E2: Evaluation Suite and Promotion Gate
+Actor: `user` / `VisionTask agent`
+
+1. a training job reaches `completed`
+2. backend reads metrics, artifact summary, dataset-version context, and real-execution evidence
+3. backend selects the active `EvaluationSuite` for the task:
+   - OCR: CER/WER/accuracy plus charset/text coverage context
+   - detection: mAP/precision/recall plus per-class regression context
+   - segmentation: mIoU or mAP-style quality summary plus mask/polygon coverage context
+4. backend compares the latest run against the current champion/challenger set for the linked `VisionTask`
+5. backend computes one `promotion_gate`:
+   - `pass`: safe to register
+   - `needs_review`: metrics pass but evidence or regression context needs human review
+   - `fail`: do not register
+   - `pending`: metrics/artifacts still unavailable
+6. backend chooses a recommendation when the gate does not pass:
+   - tune params
+   - train again
+   - clean annotations
+   - collect more data
+   - fix runtime/artifact evidence
+   - observe / stop
+7. task detail, training detail, and chat action cards render the same gate interpretation and next action
 
 ## 7. Flow F: Model Version Registration
 Actor: `user`
@@ -440,5 +504,10 @@ Actor: `admin` (control plane operator), `worker operator`
 - secondary sidebar blocks should collapse when density becomes distracting
 - all pages use consistent empty/loading/error/success state blocks
 - style and interaction semantics stay consistent across modules
+- chat, task, training, model-version, inference, and feedback surfaces should share compact action-card semantics
+- background refresh must preserve scroll position, focus, typed input, filters, selected rows, and expanded disclosures
+- optimistic local feedback should appear immediately for user submissions, uploads, and launch intent before backend completion
+- blocked or failed states should show one primary repair action and secondary diagnostic details, not a scatter of unrelated buttons
+- readiness/gate/evidence badges should use the same pass/warn/block/pending language across pages
 - visual-data-loop enhancements should prioritize IA and operational throughput over feature bloat, while preserving chat-first product identity
 - reference planning baseline: `docs/visual-data-loop-evolution.md`
