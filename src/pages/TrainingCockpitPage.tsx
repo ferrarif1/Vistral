@@ -55,11 +55,12 @@ export default function TrainingCockpitPage() {
   const cleanDetailParams = new URLSearchParams(searchParams);
   cleanDetailParams.delete('mode');
   const detailQuery = cleanDetailParams.toString();
+  const trainingJobsPath = detailQuery ? `/training/jobs?${detailQuery}` : '/training/jobs';
   const detailPath = jobId
     ? detailQuery
       ? `/training/jobs/${encodeURIComponent(jobId)}?${detailQuery}`
       : `/training/jobs/${encodeURIComponent(jobId)}`
-    : '/training/jobs';
+    : trainingJobsPath;
   const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
   const backPath = requestedReturnTo ?? detailPath;
   const availabilityLabel = (value: 'real' | 'derived' | 'unavailable') =>
@@ -73,7 +74,7 @@ export default function TrainingCockpitPage() {
           title={t('Training Cockpit')}
           description={t('Open this page from a training job so telemetry can be visualized.')}
           secondaryActions={
-            <ButtonLink to="/training/jobs" variant="ghost" size="sm">
+            <ButtonLink to={trainingJobsPath} variant="ghost" size="sm">
               {t('Open Training Jobs')}
             </ButtonLink>
           }

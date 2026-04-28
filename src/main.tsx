@@ -7,6 +7,7 @@ import './styles/tokens.css';
 import './styles/theme.css';
 import './styles/workspace.css';
 import './styles/visualization.css';
+import './styles/workshop.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -68,6 +68,18 @@
 说明：
 - `/workspace/console` 现保持在共享应用壳层，并统一为专业工作台结构（顶部工具栏 + 中间主区 + 右侧检查器），滚动按区域拆分。
 
+Pixel Lab 分支：
+1. 用户从任意已登录工作面点击页面顶部共享平台栏中的常驻模式开关
+2. 系统打开 `/workspace/pixel-lab`
+3. 系统从现有 API 读取 datasets、model versions、training jobs、inference runs 与 vision tasks
+4. 像素房间按当前工作流阶段展示动画：
+   - 数据集或标注是瓶颈时展示数据整理
+   - 任务排队或运行时展示模型学习 / 训练
+   - 推理验证是最佳下一步时展示考试模式
+   - 已有注册版本或发布证据时展示交付模式
+5. 考试模式激活时，用户可保留自动选择的数据集 / 模型版本组合，或改选后带上下文跳转到 `/inference/validate`
+6. 用户可从同一个顶部平台开关返回专业控制台
+
 ## 2.2 Flow A2：统一设置页（已实现）
 执行者：`user` / `admin`
 
@@ -160,6 +172,14 @@
 5. 执行 `train/val/test` 切分
 6. 创建数据集版本快照
 
+数据包导入分支：
+1. 在 `/datasets/:datasetId` 选择本地文件夹或 `.zip` 数据包
+2. 客户端先检查数据包内容，识别图片与支持的标注负载（`yolo` / `coco` / `labelme` / `ocr`），并在真正上传前提示重名或缺失问题
+3. 系统将图片通过现有数据集附件链路上传，确保上传状态、删除能力和审计语义保持一致
+4. 若数据包包含标注，系统会生成或复用一个数据集作用域的导入源文件，并调用既有标注导入动作
+5. 用户可选择一键继续执行切分与数据集版本快照准备
+6. 流程结束后，直接带上 `dataset/version` 上下文进入训练启动页，而不是要求用户手动重建上下文
+
 ## 4.1 Flow C1：样本浏览与批量整理（演进轨道）
 执行者：`user`
 
@@ -242,6 +262,13 @@
    - `live`：轮询真实训练详情并映射为驾驶舱视图状态
    - `demo`：使用确定性的 mock 时间线回放训练、调参与资源动画，并提供 `播放 / 暂停 / 重播 / 1x / 2x / 4x`
 5c. 当后端尚未提供资源流或调参流时，`live` 模式应保持这些面板为空/派生状态，而 `demo` 模式仍需给出演示级完整流程
+5d. 当操作员需要流程级、教学级或录屏演示视角时，可进入 `/training-workshop`：
+   - 用户选择一个活动模型角色和训练数据集，场景中只显示该活动角色
+   - 选择数据集后角色进入数据集仓库并进入样本整理
+   - 自动演示推进 `idle -> dataset_selecting -> dataset_preparing -> labeling_or_reviewing -> training -> tuning -> inference_validating -> human_review_required`
+   - 推理验证阶段允许选择验证数据集或自动选择推荐数据集，再执行“考试”动画并生成 mock 指标
+   - 人工确认阶段必须等待用户选择通过发布、退回训练或重新选择数据集
+   - 真实接入时使用 `mapVistralTaskToWorkshopStage(task)` 映射后端训练任务状态，不引入第二套业务状态机
 6. 在任务详情页可带相同数据集/版本上下文跳转到推理验证和任务列表范围视图
 6a. 当已完成任务没有与其任务类型匹配的自有模型时，任务详情页应直接提供带任务类型预填的模型草稿创建入口，方便先补模型再注册版本
 6b. 从已完成任务打开的模型草稿页应持续保留版本注册回流入口，方便使用同一个任务上下文返回
@@ -347,8 +374,10 @@
   - runtime 依赖、device、worker、fallback 策略
   - artifact evidence 预期
   - `blocked` 阻止 launch，`warning` 可在明确提示/确认后继续
+  - 每个 blocker 都应给出直达修复入口：数据集详情、标注工作台、Runtime 设置、Workers 或训练参数区
 - 训练完成后执行 `EvaluationSuite` / `PromotionGate`：
   - 读取 metrics、artifact summary、dataset-version context、real-execution evidence
+  - 按任务选择 suite：OCR 使用 CER/WER/accuracy，detection 使用 mAP/precision/recall，segmentation 使用 mIoU 或 mask/polygon mAP，OBB 使用 rotated-box mAP + angle-error/angle-bucket regression
   - 计算 primary metric 与阈值结果
   - 与 champion/challenger 比较
   - 输出 promote / train_again / collect_data / clean_annotations / fix_runtime / observe / stop

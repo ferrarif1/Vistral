@@ -17,8 +17,8 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.2 Entry
 - `/`
-  - redirects to `/workspace/chat`
-  - professional console remains directly accessible via `/workspace/console`
+  - redirects to `/workspace/console`
+  - `/workspace/chat` remains available as an on-demand conversation route instead of a shared-shell default entry
 
 ### 3.3 Conversation Workspace
 - `/workspace/chat`
@@ -44,6 +44,20 @@ Define executable route and page structure for the AI-native conversation worksp
   - when operation input is incomplete, conversation stays in the same thread and requests only the missing fields needed to continue
   - action cards may deep-link to `/vision/tasks/:taskId` when the backend creates or updates a structured `VisionTask`
   - completed or failed action cards may surface `Suggested next steps`; navigation links open the correct page, while executable next steps still go back through the guarded in-thread `/ops` path
+
+### 3.3A Pixel Lab
+- `/workspace/pixel-lab`
+  - standalone playful visualization mode that mirrors the same closed-loop workflow as the professional console
+  - reachable from a persistent top platform switch in the shared page header; when users are already in Pixel Lab, the same control returns to the professional console
+  - should render one house with rooms for:
+    - dataset warehouse
+    - model character studio
+    - training workshop
+    - inference exam room
+    - delivery / version room
+  - should read existing API data only; no separate pixel-mode backend state is introduced in this phase
+  - primary actions deep-link into the canonical workflow pages (`/datasets`, `/training/jobs/new`, `/training/jobs`, `/inference/validate`, `/models/versions`)
+  - the page can use a richer visual dialect than the professional console, but it must keep status, errors, loading, and next-step semantics explicit
 
 ### 3.4 Professional Console
 - `/workspace/console`
@@ -76,6 +90,14 @@ Define executable route and page structure for the AI-native conversation worksp
   - evidence summary
   - next recommended action
   - confirmation requirement for mutating actions
+- high-intent workbench flows may use an agent-mode panel as the top control surface:
+  - one objective statement
+  - step rail
+  - decision summary
+  - evidence chips
+  - one primary action plus secondary repair links
+  - details disclosure for diagnostics
+  - expert controls remain outside the agent panel and collapsed by default
 - motion should be functional:
   - short transitions for panel open/close and status changes
   - no layout jump during loading/success/error transitions
@@ -143,6 +165,11 @@ Define executable route and page structure for the AI-native conversation worksp
   - the main workspace should also mirror the first incomplete detail-step with one explicit next-action card so operators can keep moving without re-reading the full page
   - top stepper for ingestion/split/version
   - dataset attachments always visible/deletable/status-aware
+  - dataset detail should include one bundle-import helper for local folders and `.zip` files:
+    - detect images plus supported annotation payloads (`yolo`, `coco`, `labelme`, `ocr`)
+    - surface a compact import summary before mutation
+    - optionally auto-run split + dataset-version snapshot preparation after import
+    - finish with a direct continuation into training launch using the prepared dataset-version context
   - visual sample browser area supports grid/list switch, fast filters, and bulk item operations
   - item browser filters should include at minimum search, split, item status, annotation queue status, and metadata/tag hints
   - dataset detail also surfaces annotation summary cards and direct queue links into annotation workspace (`needs_work`, `in_review`, `rejected`, `approved`)
@@ -214,6 +241,17 @@ Define executable route and page structure for the AI-native conversation worksp
     - overall styling should feel like a premium film-style control console: dark, sharp, minimal, and technical, with motion reserved for the live training path and convergence signals
   - supports mode switch between `live` and `demo`
   - `demo` mode must expose playback controls (`play`, `pause`, `replay`, `1x/2x/4x`)
+- `/training-workshop`
+  - focused pixel-style Model Training Workshop reachable from the Data & Run navigation group.
+  - first screen is the actual interactive workshop, not a landing page.
+  - four zones are required:
+    - main pixel house scene with exactly three rooms: dataset warehouse, training lab, inference exam room.
+    - right status panel with task, selected model character, stage, dataset, progress, metrics, latest event, and next suggested action.
+    - bottom Vistral training timeline from dataset selection through model publish.
+    - model/dataset selector area for changing the single active character and selecting train/validation datasets.
+  - the scene renders only the selected active model character. Additional base-model options remain selector cards and must not animate as separate workers.
+  - the page can run without backend data using mock state, while reserving `mapVistralTaskToWorkshopStage(task)` for real task integration.
+  - human review is a blocking interaction state; publish cannot occur without an explicit operator decision.
   - playback state should stay readable in-page (`playing`, `paused`, `finished`) so demo sessions never look frozen by accident
   - `live` mode should prefer real backend data, while missing tuning/resource feeds stay clearly marked as unavailable or derived instead of pretending to be persisted truth
   - current degradation messaging should stay inside the same page instead of auto-forcing demo mode when only part of the telemetry surface is missing
@@ -227,6 +265,7 @@ Define executable route and page structure for the AI-native conversation worksp
     - which task is blocked by missing requirements
     - which task is currently training
     - which task is ready for the next operator action
+  - the first control surface should be an agent-mode panel for the highest-priority visible task, with one goal summary, step rail, evidence chips, and one explicit primary next action
   - filters should stay lightweight (`status` first); row click opens detail; one explicit `Continue as agent` control may call task auto-advance, but it must remain a visible operator action rather than an always-on background mutation
   - every visible task row/card should surface:
     - current recommendation title

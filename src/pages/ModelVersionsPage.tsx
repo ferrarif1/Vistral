@@ -482,15 +482,26 @@ export default function ModelVersionsPage() {
   const preferredFramework = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
   const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
   const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
-  const launchContextFromQuery: LaunchContext = {
-    datasetId: preferredDatasetId || null,
-    versionId: preferredVersionId || null,
-    taskType: preferredTaskType || null,
-    framework: preferredFramework || null,
-    executionTarget: preferredExecutionTarget || null,
-    workerId: preferredWorkerId || null,
-    returnTo: outboundReturnTo
-  };
+  const launchContextFromQuery: LaunchContext = useMemo(
+    () => ({
+      datasetId: preferredDatasetId || null,
+      versionId: preferredVersionId || null,
+      taskType: preferredTaskType || null,
+      framework: preferredFramework || null,
+      executionTarget: preferredExecutionTarget || null,
+      workerId: preferredWorkerId || null,
+      returnTo: outboundReturnTo
+    }),
+    [
+      outboundReturnTo,
+      preferredDatasetId,
+      preferredExecutionTarget,
+      preferredFramework,
+      preferredTaskType,
+      preferredVersionId,
+      preferredWorkerId
+    ]
+  );
   const modelTouchedRef = useRef(false);
   const jobTouchedRef = useRef(false);
   const versionNameTouchedRef = useRef(false);
@@ -1370,26 +1381,11 @@ export default function ModelVersionsPage() {
   );
   const selectedVersionDeviceDeliveryPath = useMemo(
     () => buildScopedVersionDeliveryPath(selectedVersion?.id, activeLaunchContext),
-    [
-      activeLaunchContext.datasetId,
-      activeLaunchContext.executionTarget,
-      activeLaunchContext.framework,
-      activeLaunchContext.taskType,
-      activeLaunchContext.versionId,
-      activeLaunchContext.workerId,
-      selectedVersion?.id
-    ]
+    [activeLaunchContext, selectedVersion?.id]
   );
   const clearRegistrationPrefillPath = useMemo(
     () => buildScopedVersionDeliveryPath(undefined, launchContextFromQuery),
-    [
-      launchContextFromQuery.datasetId,
-      launchContextFromQuery.executionTarget,
-      launchContextFromQuery.framework,
-      launchContextFromQuery.taskType,
-      launchContextFromQuery.versionId,
-      launchContextFromQuery.workerId
-    ]
+    [launchContextFromQuery]
   );
   const latestPublicInferenceInvocation =
     deviceLifecycle?.public_inference_invocations[0] ?? null;

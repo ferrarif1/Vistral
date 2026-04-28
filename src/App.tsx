@@ -7,6 +7,7 @@ import { useI18n } from './i18n/I18nProvider';
 
 const ConversationPage = lazy(() => import('./pages/ConversationPage'));
 const ProfessionalConsolePage = lazy(() => import('./pages/ProfessionalConsolePage'));
+const PixelLabPage = lazy(() => import('./pages/PixelLabPage'));
 const ModelsExplorePage = lazy(() => import('./pages/ModelsExplorePage'));
 const MyModelsPage = lazy(() => import('./pages/MyModelsPage'));
 const CreateModelPage = lazy(() => import('./pages/CreateModelPage'));
@@ -20,6 +21,7 @@ const DatasetsPage = lazy(() => import('./pages/DatasetsPage'));
 const DatasetDetailPage = lazy(() => import('./pages/DatasetDetailPage'));
 const AnnotationWorkspacePage = lazy(() => import('./pages/AnnotationWorkspacePage'));
 const TrainingJobsPage = lazy(() => import('./pages/TrainingJobsPage'));
+const TrainingWorkshopPage = lazy(() => import('./pages/TrainingWorkshopPage'));
 const CreateTrainingJobPage = lazy(() => import('./pages/CreateTrainingJobPage'));
 const TrainingJobDetailPage = lazy(() => import('./pages/TrainingJobDetailPage'));
 const TrainingCockpitPage = lazy(() => import('./pages/TrainingCockpitPage'));
@@ -57,9 +59,10 @@ export default function App() {
           }
         >
           <Routes>
-            <Route path="/" element={<PreserveQueryRedirect to="/workspace/chat" />} />
+            <Route path="/" element={<PreserveQueryRedirect to="/workspace/console" />} />
             <Route path="/workspace/chat" element={<ConversationPage />} />
             <Route path="/workspace/console" element={<ProfessionalConsolePage />} />
+            <Route path="/workspace/pixel-lab" element={<PixelLabPage />} />
             <Route path="/settings" element={<PreserveQueryRedirect to="/settings/account" />} />
             <Route path="/settings/account" element={<AccountSettingsPage />} />
             <Route path="/settings/llm" element={<LlmSettingsPage />} />
@@ -75,6 +78,7 @@ export default function App() {
             <Route path="/datasets/:datasetId" element={<DatasetDetailPage />} />
             <Route path="/datasets/:datasetId/annotate" element={<AnnotationWorkspacePage />} />
             <Route path="/training/jobs" element={<TrainingJobsPage />} />
+            <Route path="/training-workshop" element={<TrainingWorkshopPage />} />
             <Route path="/training/jobs/new" element={<CreateTrainingJobPage />} />
             <Route path="/training/jobs/:jobId" element={<TrainingJobDetailPage />} />
             <Route path="/training/jobs/:jobId/cockpit" element={<TrainingCockpitPage />} />
@@ -87,7 +91,7 @@ export default function App() {
             <Route path="/admin/verification-reports" element={<AdminVerificationReportsPage />} />
             <Route path="/auth/register" element={<PreserveQueryRedirect to="/auth/login" />} />
             <Route path="/auth/login" element={<AuthLoginPage />} />
-            <Route path="*" element={<PreserveQueryRedirect to="/workspace/chat" />} />
+            <Route path="*" element={<PreserveQueryRedirect to="/workspace/console" />} />
           </Routes>
         </Suspense>
       </AppShell>

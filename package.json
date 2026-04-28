@@ -45,6 +45,7 @@
     "smoke:conversation-next-steps-ui-wiring": "tsx scripts/smoke-conversation-next-steps-ui-wiring.ts",
     "smoke:conversation-next-steps-browser": "tsx scripts/smoke-conversation-next-steps-browser.ts",
     "smoke:training-cockpit-browser": "tsx scripts/smoke-training-cockpit-browser.ts",
+    "smoke:training-workshop-contract": "bash scripts/smoke-training-workshop-contract.sh",
     "smoke:conversation-ops-bridge": "bash scripts/smoke-conversation-ops-bridge.sh",
     "smoke:runtime-profile-activation": "bash scripts/smoke-runtime-profile-activation.sh",
     "smoke:inference-feedback-guard": "bash scripts/smoke-inference-feedback-guard.sh",
@@ -86,14 +87,15 @@
     "docker:verify:pure-real": "OCR_CLOSURE_STRICT_LOCAL_COMMAND=true OCR_CLOSURE_REQUIRE_REAL_MODE=true OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION=true REAL_CLOSURE_STRICT_REGISTRATION=true REAL_CLOSURE_REQUIRE_REAL_MODE=true REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION=true REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION=false bash scripts/docker-verify-full.sh"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.30.1"
   },
   "devDependencies": {
+    "@types/node": "^22.15.17",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@types/node": "^22.15.17",
     "@typescript-eslint/eslint-plugin": "^8.33.1",
     "@typescript-eslint/parser": "^8.33.1",
     "@vitejs/plugin-react": "^4.5.2",

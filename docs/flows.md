@@ -76,6 +76,18 @@ Actor: `user` / `admin`
 7. on desktop, open the shared account menu from the sidebar footer or compact rail avatar to reach settings or logout without leaving the current work lane; compact/mobile layouts may still use the header as fallback
 8. continue the current task without losing active route context or footer controls such as language/session status
 
+Pixel Lab branch:
+1. user clicks the persistent top platform switch in the shared page header from any authenticated work surface
+2. system opens `/workspace/pixel-lab`
+3. system loads datasets, model versions, training jobs, inference runs, and vision tasks from existing APIs
+4. house rooms animate the current workflow phase:
+   - data sorting when datasets or annotations are the bottleneck
+   - character study/training when jobs are queued or running
+   - exam mode when inference validation is the best next step
+   - delivery mode when registered versions are available
+5. when exam mode is active, user can keep the auto-selected dataset/model-version pair or choose another pair, then jump to `/inference/validate` with context preserved
+6. user can return to the professional console from the same top platform switch
+
 Note:
 - `/workspace/console` now stays in the shared app shell and uses a professional workbench layout (`context toolbar + main work area + right inspector`) with partitioned scrolling.
 
@@ -170,6 +182,14 @@ Actor: `user`
 4. upload dataset files
 5. run split operation (`train/val/test`)
 6. create dataset version snapshot
+
+Bundle-import branch:
+1. from `/datasets/:datasetId`, user chooses local folder import or `.zip` import
+2. client inspects the bundle, identifies image files plus supported annotation payloads (`yolo`, `coco`, `labelme`, `ocr`), and warns about filename collisions or missing labels before upload
+3. system uploads image files into the normal dataset attachment lane so file status remains visible/deletable/auditable
+4. when annotation payloads are present, system uploads one ready dataset-scoped import source and calls the existing dataset import action
+5. operator may enable one assisted follow-up that auto-runs split and dataset-version snapshot creation
+6. workflow ends with one direct continuation into `/training/jobs/new?dataset=<id>&version=<dataset_version_id>` instead of forcing the operator to rebuild context manually
 
 ## 4.1 Flow C1: Dataset Sample Browser + Batch Curation (evolution track)
 Actor: `user`
@@ -279,6 +299,15 @@ Actor: `user`
    - `live`: poll current training detail and map the result into cockpit view state without disrupting the rest of the page
    - `demo`: replay deterministic mock training/tuning/resource events with playback controls (`play`, `pause`, `replay`, `1x/2x/4x`)
 5c. when backend lacks tuning/resource streams, cockpit may leave those panels empty/derived in `live` mode, while `demo` mode continues to provide a full presentation-grade animation lane
+5d. optionally open `/training-workshop` when the operator needs a lightweight process-level visualization rather than a single-run telemetry cockpit:
+   - user selects one active model character (`robot`, `scientist`, or `wizard`) and one training dataset
+   - the scene keeps only that active character visible in the workshop
+   - selecting a dataset moves the character to the dataset warehouse and then into sample preparation
+   - auto demo advances through `idle -> dataset_selecting -> dataset_preparing -> labeling_or_reviewing -> training -> tuning -> inference_validating -> human_review_required`
+   - when `inference_validating` is active, user chooses a validation dataset or accepts the recommended one, then starts the exam animation
+   - the system generates mock validation metrics and enters `human_review_required`
+   - `human_review_required` must wait for an explicit operator choice: approve/publish, return to training, or reselect dataset
+   - real task integration maps backend statuses through `mapVistralTaskToWorkshopStage(task)` instead of introducing a second workflow state machine
 6. from job detail, operators can jump to scoped inference validation and scoped jobs list with the same dataset/version context
 6a. when a completed job has no owned model matching its task type, the detail page should surface a direct prefilled model-draft creation path so the operator can create the missing model before registering the version
 6b. model-draft creation opened from a completed job should keep the version-registration handoff visible so the operator can return with the same job context
@@ -311,9 +340,10 @@ Actor: `user` / `VisionTask agent`
 6. backend evaluates real-training readiness against the selected dataset version and runtime/worker context
 7. if readiness has blockers, the launch surface shows the smallest next fix:
    - return to dataset upload/split/version
-   - annotate/review more samples
-   - fix runtime dependencies
-   - choose another worker/device
+   - open the annotation workspace for annotation coverage / class-balance issues
+   - open Runtime settings for runtime dependency / strict-real issues
+   - open Workers for worker/device eligibility issues
+   - focus the training parameter section for recipe parameter violations
    - enable strict real execution or explicitly acknowledge fallback risk
 8. if readiness passes or only has acknowledged warnings, submit creates a `TrainingJob` with the recipe and resolved config snapshot persisted
 
@@ -365,6 +395,7 @@ Actor: `user` / `VisionTask agent`
    - OCR: CER/WER/accuracy plus charset/text coverage context
    - detection: mAP/precision/recall plus per-class regression context
    - segmentation: mIoU or mAP-style quality summary plus mask/polygon coverage context
+   - OBB: rotated-box mAP plus angle-error and angle-bucket regression context
 4. backend compares the latest run against the current champion/challenger set for the linked `VisionTask`
 5. backend computes one `promotion_gate`:
    - `pass`: safe to register

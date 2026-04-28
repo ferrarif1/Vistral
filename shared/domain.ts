@@ -61,6 +61,9 @@ export type TrainingJobStatus =
   | 'cancelled';
 export type TrainingExecutionMode = 'simulated' | 'local_command' | 'unknown';
 export type TrainingExecutionTarget = 'control_plane' | 'worker';
+export type TrainingRecipeParamType = 'int' | 'float' | 'boolean' | 'string' | 'enum';
+export type TrainingRecipeParamUiControl = 'number' | 'slider' | 'select' | 'toggle' | 'text';
+export type TrainingReadinessStatus = 'pass' | 'warning' | 'blocked' | 'unknown';
 export type TrainingWorkerStatus = 'online' | 'offline' | 'draining';
 export type TrainingWorkerAuthMode = 'shared' | 'dedicated';
 export type TrainingWorkerBootstrapStatus =
@@ -104,6 +107,113 @@ export interface TrainingSchedulerDecision {
   fallback_reason: string | null;
   note: string;
   decided_at: string;
+}
+
+export interface TrainingRecipeParamContract {
+  key: string;
+  label: string;
+  type: TrainingRecipeParamType;
+  unit: string | null;
+  default: string;
+  min: number | null;
+  max: number | null;
+  options: string[] | null;
+  required: boolean;
+  ui_control: TrainingRecipeParamUiControl;
+  expert: boolean;
+  runner_arg: string;
+  description: string;
+  pass_through?: boolean;
+}
+
+export interface TrainingRecipeRecord {
+  recipe_id: string;
+  recipe_version: string;
+  title: string;
+  task_type: TaskType;
+  framework: ModelFramework;
+  default_base_model: string;
+  base_model_options: string[];
+  params: TrainingRecipeParamContract[];
+  evaluation_suite_id: string;
+  readiness_policy_id: string;
+  artifact_expectation: {
+    requires_real_execution: boolean;
+    required_fields: string[];
+    registration_blockers: string[];
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrainingReadinessCheck {
+  key: string;
+  title: string;
+  status: TrainingReadinessStatus;
+  message: string;
+  evidence: Record<string, unknown>;
+  remediation_action: string | null;
+  owner_surface: 'dataset' | 'annotation' | 'runtime' | 'workers' | 'training' | 'models';
+}
+
+export interface TrainingReadinessReport {
+  status: TrainingReadinessStatus;
+  summary: string;
+  dataset_version_id: string;
+  recipe_id: string;
+  framework: ModelFramework;
+  task_type: TaskType;
+  checks: TrainingReadinessCheck[];
+  dataset: {
+    ready_visual_sample_count: number;
+    total_item_count: number;
+    split_summary: DatasetVersionRecord['split_summary'];
+    annotation_coverage: number;
+    label_completeness: number;
+    class_balance_summary: string;
+    ocr_charset_summary: string | null;
+  };
+  runtime: {
+    dependencies_ready: boolean;
+    device_summary: string;
+    strict_real_enabled: boolean;
+    fallback_policy: 'strict_real' | 'allowed_with_warning';
+  };
+  worker: {
+    eligible_worker_count: number;
+    selected_worker_id: string | null;
+    worker_blockers: string[];
+  };
+  artifact_expectation: TrainingRecipeRecord['artifact_expectation'];
+  created_at: string;
+}
+
+export interface EvaluateTrainingReadinessInput {
+  task_type: TaskType;
+  framework: ModelFramework;
+  dataset_id: string;
+  dataset_version_id: string;
+  recipe_id: string;
+  base_model?: string;
+  config?: Record<string, string>;
+  execution_target?: TrainingExecutionTarget;
+  worker_id?: string;
+}
+
+export interface EvaluationSuiteRecord {
+  suite_id: string;
+  suite_version: string;
+  task_type: TaskType;
+  framework: ModelFramework;
+  primary_metric: string;
+  direction: 'higher_is_better' | 'lower_is_better';
+  threshold_target: number;
+  threshold_source: 'recipe_default' | 'dataset_baseline' | 'champion_margin' | 'manual_override';
+  notes?: string;
+  secondary_metrics: string[];
+  regression_slices: string[];
+  basis: string[];
+  created_at: string;
 }
 
 export type ModelVersionStatus = 'registered' | 'deprecated';
@@ -883,6 +993,8 @@ export interface CreateTrainingJobInput {
   dataset_id: string;
   dataset_version_id: string;
   vision_task_id?: string;
+  recipe_id?: string;
+  recipe_version?: string;
   base_model: string;
   config: Record<string, string>;
   execution_target?: TrainingExecutionTarget;

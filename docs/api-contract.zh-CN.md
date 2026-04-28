@@ -891,4 +891,5 @@ Query：
 - OCR suite 必须解释 CER/WER/accuracy 与阈值来源。
 - detection suite 必须解释 mAP/precision/recall 与 per-class regression。
 - segmentation suite 必须解释 mIoU 或 mask/polygon mAP。
+- OBB suite 必须解释 rotated-box mAP、precision/recall、angle error 与 angle-bucket regression。
 - 返回结构应与英文 `docs/data-model.md` 中的 `EvaluationSuite` 合同保持一致。

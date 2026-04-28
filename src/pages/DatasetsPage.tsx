@@ -424,7 +424,7 @@ export default function DatasetsPage() {
     setStatusFilter('all');
   };
 
-  const focusCreatePanel = () => {
+  const focusCreatePanel = useCallback(() => {
     if (createPanelRef.current) {
       createPanelRef.current.open = true;
     }
@@ -432,7 +432,7 @@ export default function DatasetsPage() {
     window.setTimeout(() => {
       datasetNameInputRef.current?.focus();
     }, 180);
-  };
+  }, []);
 
   const refreshSelectedDatasetSummary = useCallback(
     async (datasetId: string, options?: { preserveLoading?: boolean }) => {
@@ -514,7 +514,7 @@ export default function DatasetsPage() {
     window.setTimeout(() => {
       action();
     }, 120);
-  }, [preferredFocus, preferredTaskType, selectedDatasetId]);
+  }, [focusCreatePanel, preferredFocus, preferredTaskType, selectedDatasetId]);
 
   const createDataset = async () => {
     if (!name.trim() || !description.trim()) {

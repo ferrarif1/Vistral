@@ -529,6 +529,7 @@ Task-specific metric baseline:
 - OCR: primary metric defaults to `cer` (lower is better) or `accuracy` when CER is unavailable; secondary metrics include `wer`, `norm_edit_distance`, and charset coverage.
 - detection: primary metric defaults to `map`; secondary metrics include `precision`, `recall`, and per-class regression slices.
 - segmentation: primary metric defaults to `miou` when available, otherwise framework-specific mask/polygon mAP; secondary metrics include mask coverage and polygon quality warnings.
+- OBB: primary metric defaults to rotated-box mAP (`map_obb`); secondary metrics include precision, recall, angle error, and angle-bucket regression slices.
 
 ### 4.12 TrainingJob
 Attributes:

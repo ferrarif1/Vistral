@@ -719,24 +719,44 @@ export default function WorkerSettingsPage() {
     selectedWorker ??
     workers.find((worker) => worker.effective_status === 'online' && worker.enabled && Boolean(worker.endpoint)) ??
     null;
-  const trainingLaunchContext = {
-    datasetId: launchDatasetId || null,
-    versionId: launchVersionId || null,
-    taskType: launchTaskType || null,
-    framework: launchFramework || null,
-    executionTarget: launchExecutionTarget || null,
-    workerId: launchWorkerId || null
-  };
-  const fallbackReturnTaskPath = hasTrainingLaunchContext ? buildTrainingLaunchPath(trainingLaunchContext) : null;
+  const trainingLaunchContext = useMemo(
+    () => ({
+      datasetId: launchDatasetId || null,
+      versionId: launchVersionId || null,
+      taskType: launchTaskType || null,
+      framework: launchFramework || null,
+      executionTarget: launchExecutionTarget || null,
+      workerId: launchWorkerId || null
+    }),
+    [
+      launchDatasetId,
+      launchExecutionTarget,
+      launchFramework,
+      launchTaskType,
+      launchVersionId,
+      launchWorkerId
+    ]
+  );
+  const fallbackReturnTaskPath = useMemo(
+    () => (hasTrainingLaunchContext ? buildTrainingLaunchPath(trainingLaunchContext) : null),
+    [hasTrainingLaunchContext, trainingLaunchContext]
+  );
   const returnTaskPath = requestedReturnTo ?? fallbackReturnTaskPath;
-  const returnTrainingLaunchPath = buildTrainingLaunchPath(trainingLaunchContext, returnTaskPath);
-  const preferredWorkerTrainingPath = buildWorkerTrainingPath(
-    preferredWorkerForTraining
-      ? (resolveWorkerRuntimeProfile(preferredWorkerForTraining) as TrainingWorkerProfile | null)
-      : prefillProfile,
-    preferredWorkerForTraining?.id ?? null,
-    trainingLaunchContext,
-    returnTaskPath
+  const returnTrainingLaunchPath = useMemo(
+    () => buildTrainingLaunchPath(trainingLaunchContext, returnTaskPath),
+    [returnTaskPath, trainingLaunchContext]
+  );
+  const preferredWorkerTrainingPath = useMemo(
+    () =>
+      buildWorkerTrainingPath(
+        preferredWorkerForTraining
+          ? (resolveWorkerRuntimeProfile(preferredWorkerForTraining) as TrainingWorkerProfile | null)
+          : prefillProfile,
+        preferredWorkerForTraining?.id ?? null,
+        trainingLaunchContext,
+        returnTaskPath
+      ),
+    [prefillProfile, preferredWorkerForTraining, returnTaskPath, trainingLaunchContext]
   );
   const workerPairingPath = useMemo(
     () =>

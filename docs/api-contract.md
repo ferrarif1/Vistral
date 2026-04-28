@@ -1631,6 +1631,7 @@ Rules:
 - OCR suites must expose CER/WER/accuracy semantics and threshold source.
 - detection suites must expose mAP/precision/recall plus per-class regression support.
 - segmentation suites must expose mIoU or framework-specific mask/polygon mAP plus mask/polygon coverage context.
+- OBB suites must expose rotated-box mAP, precision/recall, angle error, and angle-bucket regression support.
 - response shape follows the `EvaluationSuite` contract in `docs/data-model.md`.
 
 ## 13. Training Job Endpoints

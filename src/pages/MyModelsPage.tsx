@@ -167,15 +167,26 @@ export default function MyModelsPage() {
   const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
   const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
   const preferredModelId = (searchParams.get('model') ?? searchParams.get('model_id') ?? '').trim();
-  const launchContext: LaunchContext = {
-    datasetId: preferredDatasetId || null,
-    versionId: preferredVersionId || null,
-    taskType: preferredTaskType || null,
-    framework: preferredFramework || null,
-    executionTarget: preferredExecutionTarget || null,
-    workerId: preferredWorkerId || null,
-    returnTo: outboundReturnTo
-  };
+  const launchContext: LaunchContext = useMemo(
+    () => ({
+      datasetId: preferredDatasetId || null,
+      versionId: preferredVersionId || null,
+      taskType: preferredTaskType || null,
+      framework: preferredFramework || null,
+      executionTarget: preferredExecutionTarget || null,
+      workerId: preferredWorkerId || null,
+      returnTo: outboundReturnTo
+    }),
+    [
+      outboundReturnTo,
+      preferredDatasetId,
+      preferredExecutionTarget,
+      preferredFramework,
+      preferredTaskType,
+      preferredVersionId,
+      preferredWorkerId
+    ]
+  );
   const versionRegistryLandingPath = useMemo(
     () => buildVersionRegistryLandingPath(launchContext),
     [launchContext]
@@ -228,7 +239,7 @@ export default function MyModelsPage() {
     'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
   );
 
-  const load = async (mode: LoadMode = 'initial'): Promise<boolean> => {
+  const load = useCallback(async (mode: LoadMode = 'initial'): Promise<boolean> => {
     if (mode === 'initial') {
       setLoading(true);
     } else if (mode === 'manual') {
@@ -267,13 +278,13 @@ export default function MyModelsPage() {
         setRefreshing(false);
       }
     }
-  };
+  }, [backgroundSyncHint]);
 
   useEffect(() => {
     load('initial').catch(() => {
       // no-op
     });
-  }, []);
+  }, [load]);
 
   const relevantModelIdSet = useMemo(() => new Set(models.map((model) => model.id)), [models]);
   const relevantVersions = useMemo(

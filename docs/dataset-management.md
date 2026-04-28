@@ -14,6 +14,11 @@ Define dataset lifecycle, ingestion, split/versioning, and import/export contrac
 - upload images/video/archives
 - upload list must remain visible, deletable, and status-aware (`uploading`, `processing`, `ready`, `error`)
 - asynchronous extraction/validation for archives
+- dataset detail may provide a client-assisted bundle importer for local folders and `.zip` files:
+  - inspect bundle contents before upload
+  - upload discovered image files through the same dataset attachment pipeline
+  - synthesize or forward one supported annotation-import payload (`yolo`, `coco`, `labelme`, `ocr`) into the existing import contract
+  - optionally continue into split + dataset-version preparation for training readiness
 
 ### 2.3 Sample explorer
 - sample list with filters by split/status/tag

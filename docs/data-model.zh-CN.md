@@ -301,6 +301,7 @@
 - OCR 默认主指标：`cer`（越低越好），缺失时可用 `accuracy`
 - detection 默认主指标：`map`
 - segmentation 默认主指标：`miou`，不可用时使用框架可提供的 mask/polygon mAP
+- OBB 默认主指标：旋转框 mAP（`map_obb`），辅助指标包含 precision、recall、angle error 与 angle-bucket regression slice
 - `PromotionGate.status`：`pass | needs_review | fail | pending`
 - `recommended_action`：`register_model | train_again | collect_data | clean_annotations | fix_runtime | observe | stop`
 - run comparison 必须携带 champion/challenger/latest run 语义，避免只看单次 raw metric。

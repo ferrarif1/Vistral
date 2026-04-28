@@ -160,6 +160,8 @@ Source-mode scripts such as `npm run dev`, `npm run dev:api`, and `npm run dev:w
   - guards that the full conversation page and right Dock both render shared suggested next steps and preserve guarded `/ops` inputs
 - `npm run smoke:conversation-next-steps-browser`
   - runs a local Chrome/CDP smoke against the full conversation page and right Dock, using a temporary app state and saving screenshots under `.data/verify-reports/`
+- `npm run smoke:training-workshop-contract`
+  - verifies `/training-workshop` route/nav wiring, required workshop stages, real-status adapter tokens, selector components, and the human-review publish gate
 - `npm run smoke:conversation-ops-bridge`
   - validates natural-language ops bridge end-to-end: intent routing, missing-field prompts, follow-up parameter completion, and high-risk confirmation gate
   - default mode keeps high-risk branches non-mutating to avoid local data/runtime drift; set `SMOKE_OPS_BRIDGE_EXECUTE_MUTATIONS=true` to include final mutation execution checks

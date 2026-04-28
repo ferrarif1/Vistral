@@ -89,9 +89,48 @@ Vistral must provide one closed-loop platform where engineers can:
 ### FR-005 Consistent State Feedback
 - all pages must use unified empty/loading/error/success patterns
 
+### FR-005A Agent Mode Interaction
+- high-intent workflows should expose one agent-mode control surface instead of scattered status cards.
+- the agent-mode surface must show:
+  - current objective
+  - stage progression
+  - current decision/status
+  - compact evidence chips
+  - one primary next action
+  - secondary repair/escape actions
+  - disclosures for deeper diagnostics
+- mutating actions remain behind explicit operator confirmation when risk is high.
+- forms remain available as expert controls, collapsed by default, rather than becoming the primary visual model.
+
+### FR-005B Pixel Lab View
+- the product may provide a separate playful visualization mode for the same engineering loop, reachable from a persistent top platform switch in the shared page header.
+- the Pixel Lab view must be a real workflow mirror, not a decorative landing page:
+  - dataset room reflects real dataset readiness and task types
+  - model character room reflects available base/foundation models and model versions
+  - training room reflects active queued/preparing/running/evaluating jobs
+  - exam room reflects inference validation readiness and recent inference runs
+  - delivery room reflects registered model versions and promotion/evidence state
+- the view should preserve explicit operator action boundaries. It may deep-link to training, annotation, model-version, and inference pages, but must not perform high-risk mutations silently.
+- when inference validation is the current phase, the view should let users choose or accept an auto-selected dataset/model-version pair and jump into the validation lane as a visible "exam" action.
+
+### FR-005C Model Training Workshop
+- the product may provide `/training-workshop` as a focused pixel-style training-flow visualization for demos, onboarding, and operator comprehension.
+- the workshop is narrower than Pixel Lab and must keep exactly three process rooms:
+  - dataset warehouse: dataset selection, ingest, version tags, and sample storage.
+  - training lab: data cleanup, labeling/review, training, progress, and tuning.
+  - inference exam room: validation dataset choice, metric generation, human confirmation, and publish handoff.
+- only one active model character is rendered in the scene at a time. Other base-model personalities may appear in the selector list only.
+- supported workshop stages are `idle`, `dataset_selecting`, `dataset_preparing`, `labeling_or_reviewing`, `training`, `tuning`, `inference_validating`, `human_review_required`, `publishing`, `completed`, and `failed`.
+- the workshop may run fully on mock state for presentation, but must expose an adapter that maps real Vistral training task statuses into the same stage model.
+- `human_review_required` remains a governance boundary: demo playback may pause there, but publish requires an explicit operator action.
+- when assets are absent, the page may use local CSS fallback visuals; production asset replacement must stay centralized under `public/assets/vistral-workshop/`.
+
 ### FR-006 Dataset Management
 - create/manage datasets
 - upload image/video/archive files
+- dataset ingestion should support folder-selected local bundles and `.zip` bundle import from the dataset detail workflow
+- bundle import should recognize image files plus paired annotation payloads, then reuse the existing dataset attachment + annotation import contracts instead of creating a second hidden dataset state
+- after bundle import, the workflow should optionally auto-run split + dataset-version snapshot preparation so the operator can continue directly into training launch
 - sample list/detail
 - label class management
 - train/val/test split
@@ -302,6 +341,7 @@ Framework integrations must follow unified trainer interface:
   - one active-learning pool summary that explains which low-confidence / likely-error samples should be mined next and how they are clustered
 - the product must expose both `/vision/tasks` and `/vision/tasks/:taskId` so engineers can reopen or continue the workflow outside the original chat turn
 - `/vision/tasks` should feel like an operator inbox rather than a plain run table:
+  - the first visible control should be an agent-mode panel for the highest-priority task, so the operator can understand the goal, evidence, and next step before scanning the table
   - blocked tasks
   - tasks currently training
   - tasks ready for the next agent-guided operator action

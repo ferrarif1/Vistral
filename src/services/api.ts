@@ -33,10 +33,14 @@ import type {
   RuntimeReadinessReport,
   RuntimeMetricsRetentionSummary,
   SubmitApprovalInput,
+  EvaluateTrainingReadinessInput,
+  EvaluationSuiteRecord,
   TrainingArtifactSummary,
   TrainingJobRecord,
   TrainingMetricRecord,
   TrainingMetricsExport,
+  TrainingReadinessReport,
+  TrainingRecipeRecord,
   TrainingWorkerBootstrapSessionRecord,
   TrainingWorkerNodeView,
   UpsertAnnotationInput,
@@ -777,6 +781,48 @@ export const api = {
   listTrainingJobs: async () =>
     filterVisibleTrainingJobs(await request<TrainingJobRecord[]>('/api/training/jobs')),
 
+  listTrainingRecipes: (filters?: {
+    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
+    framework?: 'paddleocr' | 'doctr' | 'yolo';
+  }) => {
+    const params = new URLSearchParams();
+    if (filters?.task_type) {
+      params.set('task_type', filters.task_type);
+    }
+    if (filters?.framework) {
+      params.set('framework', filters.framework);
+    }
+    const query = params.toString();
+    return request<TrainingRecipeRecord[]>(`/api/training/recipes${query ? `?${query}` : ''}`);
+  },
+
+  evaluateTrainingReadiness: (input: EvaluateTrainingReadinessInput) =>
+    request<TrainingReadinessReport>('/api/training/readiness/evaluate', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  listTrainingEvaluationSuites: (filters?: {
+    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
+    framework?: 'paddleocr' | 'doctr' | 'yolo';
+    recipe_id?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (filters?.task_type) {
+      params.set('task_type', filters.task_type);
+    }
+    if (filters?.framework) {
+      params.set('framework', filters.framework);
+    }
+    if (filters?.recipe_id) {
+      params.set('recipe_id', filters.recipe_id);
+    }
+    const query = params.toString();
+    return request<EvaluationSuiteRecord[]>(
+      `/api/training/evaluation-suites${query ? `?${query}` : ''}`
+    );
+  },
+
   createTrainingJob: (input: {
     name: string;
     task_type: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
@@ -784,6 +830,8 @@ export const api = {
     dataset_id: string;
     dataset_version_id: string;
     vision_task_id?: string;
+    recipe_id?: string;
+    recipe_version?: string;
     base_model: string;
     config: Record<string, string>;
     execution_target?: 'control_plane' | 'worker';

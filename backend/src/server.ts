@@ -5,6 +5,7 @@ import { URL } from 'node:url';
 import { UPLOAD_SOFT_LIMIT_BYTES, UPLOAD_SOFT_LIMIT_LABEL } from '../../shared/uploadLimits';
 import type {
   CreateTrainingJobInput,
+  EvaluateTrainingReadinessInput,
   InferenceFeedbackInput,
   LlmConfig,
   ModelFramework,
@@ -368,7 +369,102 @@ const parseCreateTrainingJobBody = (raw: unknown): ParseResult<CreateTrainingJob
       ...(toOptionalTrimmedString(raw.vision_task_id ?? raw.task_id)
         ? { vision_task_id: toOptionalTrimmedString(raw.vision_task_id ?? raw.task_id)! }
         : {}),
+      ...(toOptionalTrimmedString(raw.recipe_id)
+        ? { recipe_id: toOptionalTrimmedString(raw.recipe_id)! }
+        : {}),
+      ...(toOptionalTrimmedString(raw.recipe_version)
+        ? { recipe_version: toOptionalTrimmedString(raw.recipe_version)! }
+        : {}),
       base_model: baseModel,
+      config: normalizeTrainingConfigInput(raw.config),
+      ...(executionTarget ? { execution_target: executionTarget } : {}),
+      ...(workerId ? { worker_id: workerId } : {})
+    }
+  };
+};
+
+const parseEvaluateTrainingReadinessBody = (
+  raw: unknown
+): ParseResult<EvaluateTrainingReadinessInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Training readiness payload must be a JSON object.'
+    };
+  }
+
+  if (!isTaskType(raw.task_type)) {
+    return {
+      ok: false,
+      message: 'task_type is invalid.'
+    };
+  }
+
+  if (!isFramework(raw.framework)) {
+    return {
+      ok: false,
+      message: 'framework is invalid.'
+    };
+  }
+
+  const datasetId = toNonEmptyString(raw.dataset_id);
+  if (!datasetId) {
+    return {
+      ok: false,
+      message: 'dataset_id is required.'
+    };
+  }
+
+  const datasetVersionId = toNonEmptyString(raw.dataset_version_id);
+  if (!datasetVersionId) {
+    return {
+      ok: false,
+      message: 'dataset_version_id is required.'
+    };
+  }
+
+  const recipeId = toNonEmptyString(raw.recipe_id);
+  if (!recipeId) {
+    return {
+      ok: false,
+      message: 'recipe_id is required.'
+    };
+  }
+
+  let executionTarget: EvaluateTrainingReadinessInput['execution_target'] | undefined;
+  if (raw.execution_target !== undefined && raw.execution_target !== null) {
+    const normalizedExecutionTarget = toOptionalTrimmedString(raw.execution_target)?.toLowerCase() ?? '';
+    if (!normalizedExecutionTarget || normalizedExecutionTarget === 'auto') {
+      executionTarget = undefined;
+    } else if (normalizedExecutionTarget === 'control_plane' || normalizedExecutionTarget === 'worker') {
+      executionTarget = normalizedExecutionTarget;
+    } else {
+      return {
+        ok: false,
+        message: 'execution_target must be auto|control_plane|worker when provided.'
+      };
+    }
+  }
+
+  const workerId = toOptionalTrimmedString(raw.worker_id);
+  if (executionTarget === 'control_plane' && workerId) {
+    return {
+      ok: false,
+      message: 'worker_id cannot be set when execution_target is control_plane.'
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      task_type: raw.task_type,
+      framework: raw.framework,
+      dataset_id: datasetId,
+      dataset_version_id: datasetVersionId,
+      recipe_id: recipeId,
+      ...(toOptionalTrimmedString(raw.base_model)
+        ? { base_model: toOptionalTrimmedString(raw.base_model)! }
+        : {}),
       config: normalizeTrainingConfigInput(raw.config),
       ...(executionTarget ? { execution_target: executionTarget } : {}),
       ...(workerId ? { worker_id: workerId } : {})
@@ -3718,6 +3814,55 @@ const server = createServer(async (req, res) => {
       }
 
       return methodNotAllowed(res);
+    }
+
+    if (path === '/api/training/recipes' && req.method === 'GET') {
+      const taskTypeParam = url.searchParams.get('task_type');
+      const frameworkParam = url.searchParams.get('framework');
+      if (taskTypeParam && !isTaskType(taskTypeParam)) {
+        return sendJson(res, 400, errorJson('task_type is invalid.', 'VALIDATION_ERROR'));
+      }
+      if (frameworkParam && !isFramework(frameworkParam)) {
+        return sendJson(res, 400, errorJson('framework is invalid.', 'VALIDATION_ERROR'));
+      }
+      const taskTypeFilter = taskTypeParam && isTaskType(taskTypeParam) ? taskTypeParam : undefined;
+      const frameworkFilter = frameworkParam && isFramework(frameworkParam) ? frameworkParam : undefined;
+      return withUser(req, res, () =>
+        handlers.listTrainingRecipes({
+          ...(taskTypeFilter ? { task_type: taskTypeFilter } : {}),
+          ...(frameworkFilter ? { framework: frameworkFilter } : {})
+        })
+      );
+    }
+
+    if (path === '/api/training/readiness/evaluate' && req.method === 'POST') {
+      const parsed = parseEvaluateTrainingReadinessBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+
+      return withUser(req, res, () => handlers.evaluateTrainingReadiness(parsed.value));
+    }
+
+    if (path === '/api/training/evaluation-suites' && req.method === 'GET') {
+      const taskTypeParam = url.searchParams.get('task_type');
+      const frameworkParam = url.searchParams.get('framework');
+      const recipeIdParam = toOptionalTrimmedString(url.searchParams.get('recipe_id'));
+      if (taskTypeParam && !isTaskType(taskTypeParam)) {
+        return sendJson(res, 400, errorJson('task_type is invalid.', 'VALIDATION_ERROR'));
+      }
+      if (frameworkParam && !isFramework(frameworkParam)) {
+        return sendJson(res, 400, errorJson('framework is invalid.', 'VALIDATION_ERROR'));
+      }
+      const taskTypeFilter = taskTypeParam && isTaskType(taskTypeParam) ? taskTypeParam : undefined;
+      const frameworkFilter = frameworkParam && isFramework(frameworkParam) ? frameworkParam : undefined;
+      return withUser(req, res, () =>
+        handlers.listTrainingEvaluationSuites({
+          ...(taskTypeFilter ? { task_type: taskTypeFilter } : {}),
+          ...(frameworkFilter ? { framework: frameworkFilter } : {}),
+          ...(recipeIdParam ? { recipe_id: recipeIdParam } : {})
+        })
+      );
     }
 
     if (path === '/api/training/jobs' && req.method === 'GET') {

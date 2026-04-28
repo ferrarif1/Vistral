@@ -503,28 +503,12 @@ export default function RuntimeSettingsPage() {
   );
   const fallbackReturnPath = useMemo(
     () => (hasTrainingLaunchContext ? buildTrainingLaunchPath(launchContext) : null),
-    [
-      hasTrainingLaunchContext,
-      launchContext.datasetId,
-      launchContext.executionTarget,
-      launchContext.framework,
-      launchContext.taskType,
-      launchContext.versionId,
-      launchContext.workerId
-    ]
+    [hasTrainingLaunchContext, launchContext]
   );
   const returnTaskPath = requestedReturnTo ?? fallbackReturnPath;
   const inferenceValidationPath = useMemo(
     () => buildInferenceValidationPath(launchContext, returnTaskPath),
-    [
-      launchContext.datasetId,
-      launchContext.executionTarget,
-      launchContext.framework,
-      launchContext.taskType,
-      launchContext.versionId,
-      launchContext.workerId,
-      returnTaskPath
-    ]
+    [launchContext, returnTaskPath]
   );
 
   const describeErrorKind = useCallback((kind: RuntimeConnectivityRecord['error_kind']) => {
@@ -1876,15 +1860,7 @@ export default function RuntimeSettingsPage() {
     appendTrainingLaunchContext(params, launchContext);
     appendReturnTo(params, returnTaskPath);
     return `/settings/runtime?${params.toString()}`;
-  }, [
-    launchContext.datasetId,
-    launchContext.executionTarget,
-    launchContext.framework,
-    launchContext.taskType,
-    launchContext.versionId,
-    launchContext.workerId,
-    returnTaskPath
-  ]);
+  }, [launchContext, returnTaskPath]);
   const runtimeAdvancedPath = useMemo(() => {
     const params = new URLSearchParams();
     params.set('focus', 'advanced');
@@ -1894,16 +1870,7 @@ export default function RuntimeSettingsPage() {
     appendTrainingLaunchContext(params, launchContext);
     appendReturnTo(params, returnTaskPath);
     return `/settings/runtime?${params.toString()}`;
-  }, [
-    frameworkFilter,
-    launchContext.datasetId,
-    launchContext.executionTarget,
-    launchContext.framework,
-    launchContext.taskType,
-    launchContext.versionId,
-    launchContext.workerId,
-    returnTaskPath
-  ]);
+  }, [frameworkFilter, launchContext, returnTaskPath]);
   const workerSettingsPath = buildWorkerSettingsPath('inventory', {
     profile: frameworkFilter !== 'all' ? frameworkFilter : prefillFramework,
     context: launchContext,

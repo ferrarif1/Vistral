@@ -1650,7 +1650,7 @@ const normalizeDatasetProfile = (value: unknown): DatasetProfile | null => {
                 : null,
             long_tail_labels: Array.isArray((entry.diagnostics as Record<string, unknown>).long_tail_labels)
               ? ((entry.diagnostics as Record<string, unknown>).long_tail_labels as unknown[])
-                  .filter((item) => typeof item === 'string' && item.trim().length > 0)
+                  .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
                   .map((item) => item.trim())
                   .slice(0, 12)
               : [],
@@ -1663,7 +1663,7 @@ const normalizeDatasetProfile = (value: unknown): DatasetProfile | null => {
               (entry.diagnostics as Record<string, unknown>).recommended_data_actions
             )
               ? ((entry.diagnostics as Record<string, unknown>).recommended_data_actions as unknown[])
-                  .filter((item) => typeof item === 'string' && item.trim().length > 0)
+                  .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
                   .map((item) => item.trim())
                   .slice(0, 12)
               : []

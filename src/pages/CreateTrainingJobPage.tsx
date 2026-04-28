@@ -13,6 +13,9 @@ import type {
   DatasetVersionRecord,
   RequirementTaskDraft,
   TrainingJobRecord,
+  TrainingReadinessCheck,
+  TrainingReadinessReport,
+  TrainingRecipeRecord,
   TrainingWorkerNodeView,
   VisionModelingTaskRecord
 } from '../../shared/domain';
@@ -21,6 +24,10 @@ import {
   findOversizedUpload,
   formatByteSize
 } from '../../shared/uploadLimits';
+import AgentModePanel, {
+  type AgentModeEvidence,
+  type AgentModeStep
+} from '../components/agent/AgentModePanel';
 import AdvancedSection from '../components/AdvancedSection';
 import TrainingLaunchContextPills from '../components/onboarding/TrainingLaunchContextPills';
 import StateBlock from '../components/StateBlock';
@@ -252,6 +259,22 @@ const buildDatasetDetailPath = (
   return query ? `/datasets/${datasetId}?${query}` : `/datasets/${datasetId}`;
 };
 
+const buildAnnotationWorkspacePath = (
+  datasetId: string,
+  versionId?: string | null,
+  launchContext?: TrainingLaunchContext,
+  returnTo?: string | null
+): string => {
+  const searchParams = new URLSearchParams();
+  if (versionId?.trim()) {
+    searchParams.set('version', versionId.trim());
+  }
+  appendTrainingLaunchContext(searchParams, launchContext);
+  appendReturnTo(searchParams, returnTo);
+  const query = searchParams.toString();
+  return query ? `/datasets/${datasetId}/annotate?${query}` : `/datasets/${datasetId}/annotate`;
+};
+
 const buildClosurePath = (
   datasetId: string,
   versionId?: string | null,
@@ -271,6 +294,13 @@ const buildDatasetsPath = (launchContext?: TrainingLaunchContext): string => {
   appendTrainingLaunchContext(searchParams, launchContext);
   const query = searchParams.toString();
   return query ? `/datasets?${query}` : '/datasets';
+};
+
+const buildModelVersionsPath = (launchContext?: TrainingLaunchContext): string => {
+  const searchParams = new URLSearchParams();
+  appendTrainingLaunchContext(searchParams, launchContext);
+  const query = searchParams.toString();
+  return query ? `/models/versions?${query}` : '/models/versions';
 };
 
 const buildRuntimeSettingsPath = (
@@ -386,6 +416,12 @@ export default function CreateTrainingJobPage() {
       : 'ocr'
   );
   const [framework, setFramework] = useState<TrainingFramework>(preferredFramework ?? 'paddleocr');
+  const [trainingRecipes, setTrainingRecipes] = useState<TrainingRecipeRecord[]>([]);
+  const [trainingRecipesLoading, setTrainingRecipesLoading] = useState(false);
+  const [trainingRecipesError, setTrainingRecipesError] = useState('');
+  const [trainingReadiness, setTrainingReadiness] = useState<TrainingReadinessReport | null>(null);
+  const [trainingReadinessLoading, setTrainingReadinessLoading] = useState(false);
+  const [trainingReadinessError, setTrainingReadinessError] = useState('');
   const [datasetId, setDatasetId] = useState('');
   const [datasetVersionId, setDatasetVersionId] = useState('');
   const [baseModel, setBaseModel] = useState('');
@@ -612,6 +648,36 @@ export default function CreateTrainingJobPage() {
     preferredTaskFrameworkRecoveryAppliedRef.current = true;
     appendPreferredLaunchContextHint(t('Adjusted framework to align with task type compatibility.'));
   }, [appendPreferredLaunchContextHint, preferredFramework, preferredTaskTypeNormalized, t]);
+
+  useEffect(() => {
+    let active = true;
+    setTrainingRecipesLoading(true);
+    setTrainingRecipesError('');
+    api
+      .listTrainingRecipes()
+      .then((recipes) => {
+        if (!active) {
+          return;
+        }
+        setTrainingRecipes(recipes);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setTrainingRecipes([]);
+        setTrainingRecipesError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setTrainingRecipesLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -968,9 +1034,20 @@ export default function CreateTrainingJobPage() {
     taskType
   ]);
 
+  const currentTrainingRecipe = useMemo(
+    () =>
+      trainingRecipes.find(
+        (recipe) => recipe.task_type === taskType && recipe.framework === framework
+      ) ?? null,
+    [framework, taskType, trainingRecipes]
+  );
+
   const baseModelOptions = useMemo<string[]>(
-    () => resolveBaseModelOptions(framework, taskType),
-    [framework, taskType]
+    () =>
+      currentTrainingRecipe?.base_model_options.length
+        ? currentTrainingRecipe.base_model_options
+        : resolveBaseModelOptions(framework, taskType),
+    [currentTrainingRecipe, framework, taskType]
   );
 
   useEffect(() => {
@@ -979,9 +1056,9 @@ export default function CreateTrainingJobPage() {
         return current;
       }
 
-      return baseModelOptions[0] ?? '';
+      return currentTrainingRecipe?.default_base_model ?? baseModelOptions[0] ?? '';
     });
-  }, [baseModelOptions]);
+  }, [baseModelOptions, currentTrainingRecipe]);
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === datasetId) ?? null,
@@ -1094,6 +1171,76 @@ export default function CreateTrainingJobPage() {
     () => datasetVersions.find((version) => version.id === datasetVersionId) ?? null,
     [datasetVersionId, datasetVersions]
   );
+
+  useEffect(() => {
+    if (!selectedDataset || !selectedDatasetVersion || !currentTrainingRecipe) {
+      setTrainingReadiness(null);
+      setTrainingReadinessLoading(false);
+      setTrainingReadinessError('');
+      return;
+    }
+
+    let active = true;
+    setTrainingReadinessLoading(true);
+    setTrainingReadinessError('');
+    api
+      .evaluateTrainingReadiness({
+        task_type: taskType,
+        framework,
+        dataset_id: selectedDataset.id,
+        dataset_version_id: selectedDatasetVersion.id,
+        recipe_id: currentTrainingRecipe.recipe_id,
+        base_model: baseModel.trim() || currentTrainingRecipe.default_base_model,
+        config: {
+          epochs,
+          batch_size: batchSize,
+          learning_rate: learningRate,
+          warmup_ratio: warmupRatio,
+          weight_decay: weightDecay
+        },
+        ...(dispatchPreference === 'auto' ? {} : { execution_target: dispatchPreference }),
+        ...(dispatchPreference === 'worker' && selectedWorkerId.trim()
+          ? { worker_id: selectedWorkerId.trim() }
+          : {})
+      })
+      .then((report) => {
+        if (!active) {
+          return;
+        }
+        setTrainingReadiness(report);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setTrainingReadiness(null);
+        setTrainingReadinessError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) {
+          setTrainingReadinessLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    baseModel,
+    batchSize,
+    currentTrainingRecipe,
+    dispatchPreference,
+    epochs,
+    framework,
+    learningRate,
+    selectedDataset,
+    selectedDatasetVersion,
+    selectedWorkerId,
+    taskType,
+    warmupRatio,
+    weightDecay
+  ]);
+
   const launchContext = useMemo(
     () => ({
       datasetId: datasetId || null,
@@ -1106,12 +1253,25 @@ export default function CreateTrainingJobPage() {
     [datasetId, datasetVersionId, dispatchPreference, framework, selectedWorkerId, taskType]
   );
   const datasetsPath = useMemo(() => buildDatasetsPath(launchContext), [launchContext]);
+  const modelVersionsPath = useMemo(() => buildModelVersionsPath(launchContext), [launchContext]);
   const selectedDatasetDetailPath = useMemo(
     () =>
       selectedDataset
         ? buildDatasetDetailPath(selectedDataset.id, selectedDatasetVersion?.id, launchContext)
         : datasetsPath,
     [datasetsPath, launchContext, selectedDataset, selectedDatasetVersion?.id]
+  );
+  const selectedAnnotationWorkspacePath = useMemo(
+    () =>
+      selectedDataset
+        ? buildAnnotationWorkspacePath(
+            selectedDataset.id,
+            selectedDatasetVersion?.id,
+            launchContext,
+            outboundReturnTo
+          )
+        : datasetsPath,
+    [datasetsPath, launchContext, outboundReturnTo, selectedDataset, selectedDatasetVersion?.id]
   );
   const selectedClosurePath = useMemo(
     () =>
@@ -1198,10 +1358,95 @@ export default function CreateTrainingJobPage() {
   const paramsReady = paramValidationIssues.length === 0;
   const dispatchReady = dispatchPreference !== 'worker' || selectedWorkerAvailable;
   const snapshotAutoRecoverable = autoPrepareSnapshot && Boolean(selectedDataset) && datasetStatusReady;
+  const readinessBlockingChecks = useMemo(
+    () => trainingReadiness?.checks.filter((check) => check.status === 'blocked') ?? [],
+    [trainingReadiness]
+  );
+  const readinessWarningChecks = useMemo(
+    () => trainingReadiness?.checks.filter((check) => check.status === 'warning') ?? [],
+    [trainingReadiness]
+  );
+  const readinessTopIssues = useMemo(
+    () => [...readinessBlockingChecks, ...readinessWarningChecks].slice(0, 3),
+    [readinessBlockingChecks, readinessWarningChecks]
+  );
+  const readinessGateReady =
+    snapshotAutoRecoverable && !selectedDatasetVersion
+      ? true
+      : trainingReadiness !== null &&
+        !trainingReadinessLoading &&
+        !trainingReadinessError &&
+        trainingReadiness.status !== 'blocked';
+  const resolveReadinessFixAction = useCallback(
+    (
+      check?: TrainingReadinessCheck | null
+    ): { label: string; onClick: () => void } | null => {
+      if (!check) {
+        return null;
+      }
+
+      if (check.owner_surface === 'dataset') {
+        return {
+          label: t('Open dataset detail'),
+          onClick: () => navigate(selectedDatasetDetailPath)
+        };
+      }
+
+      if (check.owner_surface === 'annotation') {
+        return {
+          label: t('Open annotation workspace'),
+          onClick: () => navigate(selectedAnnotationWorkspacePath)
+        };
+      }
+
+      if (check.owner_surface === 'runtime') {
+        return {
+          label: t('Open Runtime Settings'),
+          onClick: () => navigate(runtimeReadinessPath)
+        };
+      }
+
+      if (check.owner_surface === 'workers') {
+        return {
+          label: t('Worker Settings'),
+          onClick: () => navigate(workerInventoryPath)
+        };
+      }
+
+      if (check.owner_surface === 'training') {
+        return {
+          label: t('Focus params'),
+          onClick: () => paramsEpochsInputRef.current?.focus()
+        };
+      }
+
+      if (check.owner_surface === 'models') {
+        return {
+          label: t('Open model versions'),
+          onClick: () => navigate(modelVersionsPath)
+        };
+      }
+
+      return null;
+    },
+    [
+      navigate,
+      modelVersionsPath,
+      runtimeReadinessPath,
+      selectedAnnotationWorkspacePath,
+      selectedDatasetDetailPath,
+      t,
+      workerInventoryPath
+    ]
+  );
+  const primaryReadinessFixAction = resolveReadinessFixAction(
+    readinessBlockingChecks[0] ?? readinessWarningChecks[0] ?? null
+  );
   const submitReady =
     (launchReady || snapshotAutoRecoverable) &&
     !runtimeSettingsLoading &&
     !runtimeSettingsError &&
+    readinessGateReady &&
     strictLaunchGateReady &&
     paramsReady &&
     dispatchReady;
@@ -1257,6 +1502,35 @@ export default function CreateTrainingJobPage() {
             : null
       },
       {
+        key: 'readiness',
+        label: t('Real readiness'),
+        state:
+          snapshotAutoRecoverable && !selectedDatasetVersion
+            ? ('pending' as const)
+            : trainingReadinessLoading
+              ? ('pending' as const)
+              : trainingReadinessError || !currentTrainingRecipe || trainingReadiness?.status === 'blocked'
+                ? ('blocked' as const)
+                : trainingReadiness?.status === 'warning'
+                  ? ('warning' as const)
+                  : trainingReadiness?.status === 'pass'
+                    ? ('ready' as const)
+                    : ('blocked' as const),
+        detail:
+          snapshotAutoRecoverable && !selectedDatasetVersion
+            ? t('Readiness will run after Smart Launch prepares a snapshot.')
+            : trainingReadinessLoading
+              ? t('Checking dataset, annotations, runtime, workers, and artifacts...')
+              : trainingReadinessError
+                ? trainingReadinessError
+                : !currentTrainingRecipe
+                  ? t('No recipe contract is available for this task/framework.')
+                  : trainingReadiness?.summary ?? t('Select a recipe-backed dataset snapshot first.'),
+        action: trainingReadinessError
+          ? () => navigate(runtimeReadinessPath)
+          : primaryReadinessFixAction?.onClick ?? null
+      },
+      {
         key: 'runtime',
         label: t('Runtime guard'),
         state: runtimeState,
@@ -1287,6 +1561,8 @@ export default function CreateTrainingJobPage() {
     onlineWorkers.length,
     paramsReady,
     paramValidationIssues,
+    currentTrainingRecipe,
+    primaryReadinessFixAction,
     runtimeDisableSimulatedTrainFallback,
     runtimeSettingsError,
     runtimeSettingsLoading,
@@ -1294,6 +1570,10 @@ export default function CreateTrainingJobPage() {
     selectedWorkerId,
     selectedDataset,
     selectedDatasetVersion,
+    snapshotAutoRecoverable,
+    trainingReadiness,
+    trainingReadinessError,
+    trainingReadinessLoading,
     workerInventoryPath,
     workerPairingPath,
     t
@@ -1304,7 +1584,7 @@ export default function CreateTrainingJobPage() {
     runtimeSettingsLoading && blockedLaunchCheckpoints.length > 0
       ? t('Runtime is still loading.')
       : blockedLaunchCheckpoints.length === 0
-        ? t('Snapshot, params, and Runtime are ready.')
+        ? t('Snapshot, params, readiness, and Runtime are ready.')
         : t('{count} check(s) still need attention.', { count: blockedLaunchCheckpoints.length });
   const launchStatusAction =
     nextLaunchCheckpoint?.action && nextLaunchCheckpoint.state !== 'pending'
@@ -1318,9 +1598,11 @@ export default function CreateTrainingJobPage() {
                   ? t('Focus params')
                   : nextLaunchCheckpoint.key === 'dispatch'
                     ? t('Worker Settings')
-                  : nextLaunchCheckpoint.key === 'runtime' && runtimeSettingsError
-                    ? t('Open Runtime Settings')
-                    : t('Confirm risk'),
+                    : nextLaunchCheckpoint.key === 'readiness'
+                      ? t('Fix readiness')
+                      : nextLaunchCheckpoint.key === 'runtime' && runtimeSettingsError
+                        ? t('Open Runtime Settings')
+                        : t('Confirm risk'),
           onClick: nextLaunchCheckpoint.action
         }
       : null;
@@ -1333,10 +1615,21 @@ export default function CreateTrainingJobPage() {
   }, [taskType]);
 
   const recommendedParams = useMemo(() => {
+    if (currentTrainingRecipe) {
+      const paramDefault = (key: string, fallback: string): string =>
+        currentTrainingRecipe.params.find((param) => param.key === key)?.default ?? fallback;
+      return {
+        epochs: paramDefault('epochs', '20'),
+        batchSize: paramDefault('batch_size', '16'),
+        learningRate: paramDefault('learning_rate', '0.001'),
+        warmupRatio: paramDefault('warmup_ratio', '0.1'),
+        weightDecay: paramDefault('weight_decay', '0.0001')
+      };
+    }
     const byFramework = recommendedTrainingConfigCatalog[framework];
     const fallbackTask = framework === 'yolo' ? 'detection' : 'ocr';
     return byFramework[taskType] ?? byFramework[fallbackTask] ?? null;
-  }, [framework, taskType]);
+  }, [currentTrainingRecipe, framework, taskType]);
 
   const applyRecommendedParams = useCallback(() => {
     const recommended = recommendedParams;
@@ -1921,6 +2214,12 @@ export default function CreateTrainingJobPage() {
         dataset_id: resolvedDatasetId,
         dataset_version_id: resolvedVersion.id,
         ...(linkedVisionTask ? { vision_task_id: linkedVisionTask.id } : {}),
+        ...(currentTrainingRecipe
+          ? {
+              recipe_id: currentTrainingRecipe.recipe_id,
+              recipe_version: currentTrainingRecipe.recipe_version
+            }
+          : {}),
         base_model: baseModel.trim() || baseModelOptions[0] || `${framework}-base`,
         config: {
           epochs: effectiveEpochs,
@@ -1953,6 +2252,127 @@ export default function CreateTrainingJobPage() {
   const createTaskDraft = async () => {
     await ensureTaskDraftFromRequirement();
   };
+
+  const launchBusy =
+    submitting ||
+    sourceVisionTaskLoading ||
+    agentTaskPreparing ||
+    creatingDatasetFromSamples ||
+    preparingSnapshot;
+  const launchDisabled = launchBusy || loading || versionsLoading || !submitReady;
+  const smartLaunchLabel =
+    submitting || creatingDatasetFromSamples || preparingSnapshot
+      ? t('Launching...')
+      : sourceVisionTaskLoading || agentTaskPreparing
+        ? t('Preparing agent...')
+        : t('Smart Launch');
+  const agentPanelStatusTone =
+    blockedLaunchCheckpoints.length === 0
+      ? ('success' as const)
+      : nextLaunchCheckpoint?.state === 'warning'
+        ? ('warning' as const)
+        : nextLaunchCheckpoint?.state === 'pending'
+          ? ('info' as const)
+          : ('danger' as const);
+  const agentPanelSteps: AgentModeStep[] = [
+    {
+      id: 'goal',
+      label: t('Goal'),
+      detail:
+        requirementDescription.trim() || taskDraft?.rationale || t('Describe the model target, or launch from selected defaults.'),
+      state: requirementDescription.trim() || taskDraft || name.trim() ? 'complete' : 'active',
+      action: {
+        label: t('Focus run name'),
+        onClick: () => jobNameInputRef.current?.focus()
+      }
+    },
+    {
+      id: 'snapshot',
+      label: t('Snapshot'),
+      detail: selectedDatasetVersion
+        ? [selectedDataset?.name, selectedDatasetVersion.version_name].filter(Boolean).join(' · ')
+        : autoPrepareSnapshot
+          ? t('Smart Launch can prepare a snapshot from this dataset.')
+          : t('Choose a dataset version snapshot.'),
+      state: launchReady ? 'complete' : selectedDataset ? 'active' : 'blocked',
+      action: selectedDataset
+        ? {
+            label: t('Open dataset detail'),
+            onClick: () => navigate(selectedDatasetDetailPath)
+          }
+        : {
+            label: t('Focus snapshot'),
+            onClick: () => datasetSelectRef.current?.focus()
+          }
+    },
+    {
+      id: 'plan',
+      label: t('Plan'),
+      detail: currentTrainingRecipe
+        ? `${currentTrainingRecipe.recipe_id} · ${baseModel.trim() || currentTrainingRecipe.default_base_model}`
+        : t('Recipe-backed plan is loading or unavailable.'),
+      state: currentTrainingRecipe && paramsReady ? 'complete' : currentTrainingRecipe ? 'blocked' : 'pending',
+      action: !paramsReady
+        ? {
+            label: t('Focus params'),
+            onClick: () => paramsEpochsInputRef.current?.focus()
+          }
+        : null
+    },
+    {
+      id: 'readiness',
+      label: t('Readiness'),
+      detail: trainingReadinessLoading
+        ? t('Checking dataset, runtime, workers, and evidence.')
+        : trainingReadiness?.summary ?? nextLaunchCheckpoint?.detail ?? t('Waiting for a recipe-backed snapshot.'),
+      state:
+        trainingReadiness?.status === 'blocked'
+          ? 'blocked'
+          : trainingReadiness?.status === 'warning'
+            ? 'warning'
+            : trainingReadiness?.status === 'pass'
+              ? 'complete'
+              : trainingReadinessLoading
+                ? 'pending'
+                : 'active',
+      action: primaryReadinessFixAction
+    }
+  ];
+  const agentPanelEvidence: AgentModeEvidence[] = [
+    {
+      id: 'recipe',
+      label: t('Recipe'),
+      value: currentTrainingRecipe?.recipe_id ?? t('Pending'),
+      tone: currentTrainingRecipe ? 'info' : 'neutral'
+    },
+    {
+      id: 'coverage',
+      label: t('Coverage'),
+      value: selectedDatasetVersion
+        ? formatCoveragePercent(selectedDatasetVersion.annotation_coverage)
+        : t('Pending'),
+      tone: datasetVersionHasAnnotationCoverage ? 'success' : 'warning'
+    },
+    {
+      id: 'readiness',
+      label: t('Readiness'),
+      value: trainingReadiness?.status ? t(trainingReadiness.status) : t('Pending'),
+      tone:
+        trainingReadiness?.status === 'pass'
+          ? 'success'
+          : trainingReadiness?.status === 'warning'
+            ? 'warning'
+            : trainingReadiness?.status === 'blocked'
+              ? 'danger'
+              : 'neutral'
+    },
+    {
+      id: 'dispatch',
+      label: t('Dispatch'),
+      value: dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker'),
+      tone: dispatchReady ? 'neutral' : 'danger'
+    }
+  ];
 
   const wizardStep =
     !requirementDescription.trim() && !taskDraft && !name.trim()
@@ -2226,7 +2646,18 @@ export default function CreateTrainingJobPage() {
               <WorkspaceSectionHeader
                 title={t('1. Requirement')}
                 description={t('Describe the model goal first. Run name and recipe can be generated for you.')}
-                actions={<Badge tone="neutral">{t(selectedDataset?.task_type ?? taskType)}</Badge>}
+                actions={
+                  <div className="row gap wrap">
+                    <Badge tone="neutral">{t(selectedDataset?.task_type ?? taskType)}</Badge>
+                    <Badge tone={trainingRecipesError ? 'warning' : currentTrainingRecipe ? 'info' : 'neutral'}>
+                      {trainingRecipesError
+                        ? t('Recipe fallback')
+                        : trainingRecipesLoading
+                          ? t('Recipe loading')
+                          : currentTrainingRecipe?.title ?? t('Recipe fallback')}
+                    </Badge>
+                  </div>
+                }
               />
               <div className="workspace-form-grid">
                 <label className="workspace-form-span-2">
@@ -2552,94 +2983,92 @@ export default function CreateTrainingJobPage() {
                   </div>
                 }
               />
-              <div className="workspace-keyline-list">
-                <div className="workspace-keyline-item">
-                  <span>{t('Task Type')}</span>
-                  <strong>{t(selectedDataset?.task_type ?? taskDraft?.task_type ?? taskType)}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Framework')}</span>
-                  <strong>{t(taskDraft?.recommended_framework ?? framework)}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Base Model')}</span>
-                  <strong>{baseModel.trim() || baseModelOptions[0] || `${framework}-base`}</strong>
-                </div>
-                <div className="workspace-keyline-item">
-                  <span>{t('Dispatch')}</span>
-                  <strong>{dispatchPreference === 'auto' ? t('Auto') : dispatchPreference === 'control_plane' ? t('Control-plane') : t('Worker')}</strong>
-                </div>
-              </div>
-              {!paramsReady ? (
-                <InlineAlert
-                  tone="warning"
-                  title={t('Params need attention')}
-                  description={paramValidationIssues.join(' ')}
-                />
-              ) : (
-                <small className="muted">{t('Core params checked.')}</small>
-              )}
-              <Panel className="stack tight" tone="soft">
-                <div className="row gap wrap align-center">
-                  <Badge tone={preferredSourceVisionTaskId ? 'success' : requirementDescription.trim() ? 'info' : 'neutral'}>
-                    {t('Agent lane')}: {preferredSourceVisionTaskId ? t('Linked') : requirementDescription.trim() ? t('Will create') : t('Standalone')}
-                  </Badge>
-                  {sourceVisionTask ? <Badge tone="neutral">{sourceVisionTask.id}</Badge> : null}
-                </div>
-                <small className="muted">
-                  {preferredSourceVisionTaskId
+              <AgentModePanel
+                eyebrow={t('Agent mode')}
+                title={t('Vistral is assembling this run')}
+                summary={
+                  preferredSourceVisionTaskId
                     ? t('This launch will reuse the linked vision task so post-training actions stay in one agent lane.')
                     : requirementDescription.trim()
                       ? t('Smart Launch will create an agent continuation task before submit so the run can keep flowing toward model registration.')
-                      : t('Without a goal description, this run launches as a standalone training job.')}
-                </small>
-              </Panel>
-              <div className="row gap wrap">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
+                      : t('Without a goal description, this run launches as a standalone training job.')
+                }
+                statusLabel={blockedLaunchCheckpoints.length === 0 ? t('Ready') : t('Needs review')}
+                statusTone={agentPanelStatusTone}
+                steps={agentPanelSteps}
+                evidence={agentPanelEvidence}
+                primaryAction={{
+                  label: smartLaunchLabel,
+                  onClick: () => {
                     void submit({ autoFill: true });
-                  }}
-                  disabled={
-                    submitting ||
-                    sourceVisionTaskLoading ||
-                    agentTaskPreparing ||
-                    creatingDatasetFromSamples ||
-                    preparingSnapshot ||
-                    loading ||
-                    versionsLoading ||
-                    !submitReady
-                  }
-                >
-                  {submitting || creatingDatasetFromSamples || preparingSnapshot
-                    ? t('Launching...')
-                    : sourceVisionTaskLoading || agentTaskPreparing
-                      ? t('Preparing agent...')
-                      : t('Smart Launch')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    void submit();
-                  }}
-                  disabled={
-                    submitting ||
-                    sourceVisionTaskLoading ||
-                    agentTaskPreparing ||
-                    creatingDatasetFromSamples ||
-                    preparingSnapshot ||
-                    loading ||
-                    versionsLoading ||
-                    !submitReady
-                  }
-                >
-                  {t('Use manual launch')}
-                </Button>
-              </div>
+                  },
+                  disabled: launchDisabled,
+                  busy: launchBusy
+                }}
+                secondaryActions={[
+                  {
+                    label: t('Use manual launch'),
+                    onClick: () => {
+                      void submit();
+                    },
+                    disabled: launchDisabled,
+                    busy: launchBusy
+                  },
+                  ...(primaryReadinessFixAction
+                    ? [
+                        {
+                          label: primaryReadinessFixAction.label,
+                          onClick: primaryReadinessFixAction.onClick,
+                          disabled: false
+                        }
+                      ]
+                    : [])
+                ]}
+                details={
+                  <div className="stack tight">
+                    {!paramsReady ? (
+                      <InlineAlert
+                        tone="warning"
+                        title={t('Params need attention')}
+                        description={paramValidationIssues.join(' ')}
+                      />
+                    ) : null}
+                    {readinessTopIssues.length > 0 ? (
+                      <div className="workspace-keyline-list">
+                        {readinessTopIssues.map((check) => {
+                          const fixAction = resolveReadinessFixAction(check);
+                          return (
+                            <div key={check.key} className="workspace-keyline-item">
+                              <span>{check.title}</span>
+                              <small>{check.message}</small>
+                              {fixAction ? (
+                                <Button type="button" variant="ghost" size="sm" onClick={fixAction.onClick}>
+                                  {fixAction.label}
+                                </Button>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <small className="muted">{t('Core params checked.')}</small>
+                    )}
+                    {trainingReadiness?.status === 'blocked' ? (
+                      <InlineAlert
+                        tone="warning"
+                        title={t('Readiness blocked')}
+                        description={readinessBlockingChecks[0]?.remediation_action ?? trainingReadiness.summary}
+                      />
+                    ) : trainingReadiness?.status === 'warning' ? (
+                      <InlineAlert
+                        tone="info"
+                        title={t('Readiness warning')}
+                        description={readinessWarningChecks[0]?.remediation_action ?? trainingReadiness.summary}
+                      />
+                    ) : null}
+                  </div>
+                }
+              />
               <AdvancedSection
                 title={t('Expert controls')}
                 description={t('Manual overrides for params, dispatch, runtime guard, and worker routing.')}
@@ -2806,6 +3235,29 @@ export default function CreateTrainingJobPage() {
                   ))}
                 </div>
               </details>
+              {trainingReadiness ? (
+                <details className="workspace-details">
+                  <summary>{t('Real readiness evidence')}</summary>
+                  <div className="workspace-keyline-list">
+                    <div className="workspace-keyline-item">
+                      <span>{t('Ready samples')}</span>
+                      <small>{trainingReadiness.dataset.ready_visual_sample_count}</small>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Annotation coverage')}</span>
+                      <small>{formatCoveragePercent(trainingReadiness.dataset.annotation_coverage)}</small>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Workers')}</span>
+                      <small>{trainingReadiness.worker.eligible_worker_count}</small>
+                    </div>
+                    <div className="workspace-keyline-item">
+                      <span>{t('Artifact evidence')}</span>
+                      <small>{trainingReadiness.artifact_expectation.required_fields.join(', ')}</small>
+                    </div>
+                  </div>
+                </details>
+              ) : null}
             </Card>
 
             <Card as="article" className="workspace-inspector-card">

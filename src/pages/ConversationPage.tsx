@@ -3204,7 +3204,7 @@ export default function ConversationPage() {
     setSidebarCollapsed((previous) => !previous);
   }, [isCompactViewport]);
 
-  const sendWithContent = async (content: string) => {
+  const sendWithContent = useCallback(async (content: string) => {
     setSending(true);
     setError('');
 
@@ -3246,7 +3246,15 @@ export default function ConversationPage() {
     } finally {
       setSending(false);
     }
-  };
+  }, [
+    conversation,
+    models,
+    refreshConversations,
+    selectedModelId,
+    selectedReadyAttachmentIds,
+    t,
+    upsertHistoryItem
+  ]);
 
   const send = async () => {
     const finalInput = input.trim();

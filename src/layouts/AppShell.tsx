@@ -1343,10 +1343,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
     readAppChatDockCollapsedFromStorage()
   );
   const isCompactViewport = useCompactViewport(960);
-  const isNarrowWorkbenchViewport = useCompactViewport(1520);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isImmersiveWorkspace = location.pathname === '/workspace/chat';
+  const isPixelLabRoute = location.pathname === '/workspace/pixel-lab';
   const isAnnotationFocusRoute = /^\/datasets\/[^/]+\/annotate$/.test(location.pathname);
+  const isAuthRoute = location.pathname.startsWith('/auth/');
 
   const refreshUser = useCallback(() => {
     api.me().then(setCurrentUser).catch(() => setCurrentUser(null));
@@ -1573,7 +1574,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [scopedExecutionTarget, t]);
   const sessionMenuItems = useMemo(
     () => [
-      { to: scopedNavTo('/workspace/chat'), label: t('Conversation Workspace') },
       { to: scopedNavTo('/settings/account'), label: t('Settings') },
       { label: t('Logout'), onSelect: logout, tone: 'danger' as const }
     ],
@@ -1587,6 +1587,39 @@ export default function AppShell({ children }: { children: ReactNode }) {
       currentPathname: location.pathname
     });
   }, [currentTaskPath, location.pathname]);
+  const modeSwitchPath = useMemo(
+    () => (isPixelLabRoute ? scopedNavTo('/workspace/console') : scopedNavTo('/workspace/pixel-lab')),
+    [isPixelLabRoute, scopedNavTo]
+  );
+  const modeSwitch = isAuthRoute ? null : (
+    <Link
+      to={modeSwitchPath}
+      className={`app-mode-switch${isPixelLabRoute ? ' is-pixel-active' : ''}`}
+      aria-label={isPixelLabRoute ? t('Switch to console mode') : t('Switch to Pixel Lab')}
+    >
+      <span className="app-mode-switch__track" aria-hidden="true">
+        <span className="app-mode-switch__thumb" />
+      </span>
+      <span className="app-mode-switch__copy">
+        <small>{isPixelLabRoute ? t('Pixel Lab active') : t('Vistral Platform')}</small>
+        <strong>{isPixelLabRoute ? t('Vistral Platform') : t('Pixel Lab')}</strong>
+      </span>
+    </Link>
+  );
+  const platformTopbar = isAuthRoute ? null : (
+    <header className={`app-platform-topbar${isPixelLabRoute ? ' is-pixel-active' : ''}`}>
+      <Link to={scopedNavTo('/workspace/console')} className="app-platform-brand">
+        <span className="app-platform-brand__mark" aria-hidden="true">
+          V
+        </span>
+        <span className="app-platform-brand__copy">
+          <strong>{t('Vistral Platform')}</strong>
+          <small>{isPixelLabRoute ? t('Pixel Lab') : t('AI-native workspace')}</small>
+        </span>
+      </Link>
+      {modeSwitch}
+    </header>
+  );
 
   const navigationGroups = useMemo<AppNavGroup[]>(
     () => [
@@ -1595,16 +1628,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
         label: t('Workspaces'),
         items: [
           {
-            to: scopedNavTo('/workspace/chat'),
-            label: t('Conversation Workspace'),
-            shortLabel: 'AI',
-            matchPrefixes: ['/workspace/chat']
-          },
-          {
             to: scopedNavTo('/workspace/console'),
             label: t('Professional Console'),
             shortLabel: 'PC',
             matchPrefixes: ['/workspace/console']
+          },
+          {
+            to: scopedNavTo('/workspace/pixel-lab'),
+            label: t('Pixel Lab'),
+            shortLabel: 'PX',
+            matchPrefixes: ['/workspace/pixel-lab']
           }
         ]
       },
@@ -1659,6 +1692,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
             label: t('Training Jobs'),
             shortLabel: 'T',
             matchPrefixes: ['/training/jobs']
+          },
+          {
+            to: scopedNavTo('/training-workshop'),
+            label: t('Training Workshop'),
+            shortLabel: 'TW',
+            matchPrefixes: ['/training-workshop']
           },
           {
             to: scopedNavTo('/vision/tasks'),
@@ -1717,16 +1756,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const railItems = useMemo<AppNavItem[]>(
     () => [
       {
-        to: scopedNavTo('/workspace/chat'),
-        label: t('Conversation Workspace'),
-        shortLabel: 'AI',
-        matchPrefixes: ['/workspace/chat']
-      },
-      {
         to: scopedNavTo('/workspace/console'),
         label: t('Professional Console'),
         shortLabel: 'PC',
         matchPrefixes: ['/workspace/console']
+      },
+      {
+        to: scopedNavTo('/workspace/pixel-lab'),
+        label: t('Pixel Lab'),
+        shortLabel: 'PX',
+        matchPrefixes: ['/workspace/pixel-lab']
       },
       {
         to: scopedNavTo('/models/explore'),
@@ -1753,6 +1792,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
         matchPrefixes: ['/training/jobs']
       },
       {
+        to: scopedNavTo('/training-workshop'),
+        label: t('Training Workshop'),
+        shortLabel: 'TW',
+        matchPrefixes: ['/training-workshop']
+      },
+      {
         to: scopedNavTo('/admin/verification-reports'),
         label: t('Admin Verify Reports'),
         shortLabel: 'G',
@@ -1777,14 +1822,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
-  const showWorkbenchChatDock =
-    !isCompactViewport &&
-    !isNarrowWorkbenchViewport &&
-    !isImmersiveWorkspace &&
-    !location.pathname.startsWith('/auth/');
+  const showWorkbenchChatDock = false;
   const shellClassName = [
     'app-shell',
-    'no-topbar',
     isDesktopSidebarCollapsed ? 'sidebar-collapsed' : '',
     isCompactViewport ? 'sidebar-compact' : '',
     mobileSidebarOpen ? 'mobile-sidebar-open' : ''
@@ -1800,12 +1840,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
       : t('Collapse sidebar');
   const sidebarToggleToken = isCompactViewport ? (mobileSidebarOpen ? 'X' : '=') : isDesktopSidebarCollapsed ? '>' : '<';
 
-  if (isImmersiveWorkspace) {
-    return <main className="chat-route-main">{children}</main>;
+  if (isImmersiveWorkspace || isPixelLabRoute) {
+    return (
+      <div className="app-top-route-shell">
+        {platformTopbar}
+        <main className={isPixelLabRoute ? 'pixel-route-main' : 'chat-route-main'}>{children}</main>
+      </div>
+    );
   }
 
   return (
     <div className={shellClassName}>
+      {platformTopbar}
       {isCompactViewport && !mobileSidebarOpen ? (
         <button
           type="button"
@@ -1883,7 +1929,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       }>
         <div className="sidebar-content">
           <div className="sidebar-brand-row">
-            <Link to={scopedNavTo('/workspace/chat')} className="sidebar-brand-link" onClick={closeMobileSidebar}>
+            <Link to={scopedNavTo('/workspace/console')} className="sidebar-brand-link" onClick={closeMobileSidebar}>
               <span className="sidebar-brand-mark" aria-hidden="true">
                 V
               </span>

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { VisionModelingTaskRecord } from '../../shared/domain';
+import AgentModePanel, {
+  type AgentModeEvidence,
+  type AgentModeStep
+} from '../components/agent/AgentModePanel';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
@@ -22,6 +26,12 @@ type VisionTaskStatusFilter = 'all' | VisionModelingTaskRecord['status'];
 type VisionTaskInboxLane = 'blocked' | 'training' | 'ready' | 'other';
 
 const actionableAgentActions = new Set(['start_training', 'register_model', 'mine_feedback']);
+const inboxLanePriority: Record<VisionTaskInboxLane, number> = {
+  ready: 0,
+  blocked: 1,
+  training: 2,
+  other: 3
+};
 
 const formatTimestamp = (value: string): string => {
   const parsed = Date.parse(value);
@@ -53,6 +63,11 @@ const getInboxLane = (task: VisionModelingTaskRecord): VisionTaskInboxLane => {
 
 const isRecommendationActionable = (task: VisionModelingTaskRecord): boolean =>
   actionableAgentActions.has(task.agent_next_action?.action ?? '');
+
+const getUpdatedTime = (task: VisionModelingTaskRecord): number => {
+  const parsed = Date.parse(task.updated_at);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
 
 export default function VisionModelingTasksPage() {
   const { t } = useI18n();
@@ -118,6 +133,19 @@ export default function VisionModelingTasksPage() {
       ready
     };
   }, [tasks]);
+
+  const featuredTask = useMemo(() => {
+    if (filteredTasks.length <= 0) {
+      return null;
+    }
+    return [...filteredTasks].sort((left, right) => {
+      const laneDelta = inboxLanePriority[getInboxLane(left)] - inboxLanePriority[getInboxLane(right)];
+      if (laneDelta !== 0) {
+        return laneDelta;
+      }
+      return getUpdatedTime(right) - getUpdatedTime(left);
+    })[0];
+  }, [filteredTasks]);
 
   const handleAutoAdvance = useCallback(
     async (task: VisionModelingTaskRecord) => {
@@ -326,6 +354,167 @@ export default function VisionModelingTasksPage() {
     [advancingTaskId, handleAutoAdvance, t]
   );
 
+  const featuredAgentPanel = useMemo(() => {
+    if (!featuredTask) {
+      return null;
+    }
+
+    const lane = getInboxLane(featuredTask);
+    const recommendation = featuredTask.agent_next_action;
+    const isActionable = isRecommendationActionable(featuredTask);
+    const statusTone =
+      lane === 'ready' ? 'success' : lane === 'blocked' ? 'warning' : lane === 'training' ? 'info' : 'neutral';
+    const statusLabel =
+      lane === 'ready'
+        ? t('Ready for next action')
+        : lane === 'blocked'
+          ? t('Blocked')
+          : lane === 'training'
+            ? t('Training is in progress')
+            : t('Review task');
+
+    const steps: AgentModeStep[] = [
+      {
+        id: 'understand',
+        label: t('Understand'),
+        detail: featuredTask.spec.target_description || featuredTask.source_prompt || t('Requirement captured.'),
+        state: featuredTask.spec.task_type === 'unknown' ? 'active' : 'complete'
+      },
+      {
+        id: 'data',
+        label: t('Prepare data'),
+        detail: featuredTask.dataset_id
+          ? `${featuredTask.dataset_id}${featuredTask.dataset_version_id ? ` · ${featuredTask.dataset_version_id}` : ''}`
+          : t('Dataset is not linked yet.'),
+        state:
+          featuredTask.missing_requirements.length > 0
+            ? 'blocked'
+            : featuredTask.dataset_version_id
+              ? 'complete'
+              : featuredTask.dataset_id
+                ? 'active'
+                : 'pending'
+      },
+      {
+        id: 'train',
+        label: t('Run training'),
+        detail: featuredTask.training_job_id || recommendation?.summary || t('Waiting for the next agent decision.'),
+        state:
+          featuredTask.status === 'training_started'
+            ? 'active'
+            : featuredTask.training_job_id
+              ? 'complete'
+              : lane === 'ready' && recommendation?.action === 'start_training'
+                ? 'active'
+                : 'pending'
+      },
+      {
+        id: 'promote',
+        label: t('Promote or improve'),
+        detail:
+          featuredTask.promotion_gate?.summary ??
+          featuredTask.run_comparison?.summary ??
+          t('Promotion evidence will appear after evaluation.'),
+        state: featuredTask.model_version_id
+          ? 'complete'
+          : featuredTask.promotion_gate?.status === 'fail'
+            ? 'warning'
+            : featuredTask.promotion_gate?.status === 'needs_review'
+              ? 'warning'
+              : recommendation?.action === 'register_model' || recommendation?.action === 'mine_feedback'
+                ? 'active'
+                : 'pending'
+      }
+    ];
+
+    const evidence: AgentModeEvidence[] = [
+      {
+        id: 'task',
+        label: t('Task'),
+        value: featuredTask.id,
+        tone: 'neutral'
+      },
+      {
+        id: 'type',
+        label: t('Task type'),
+        value: featuredTask.spec.task_type,
+        tone: featuredTask.spec.task_type === 'unknown' ? 'warning' : 'info'
+      },
+      {
+        id: 'metric',
+        label: t('Metric'),
+        value: featuredTask.evaluation_suite
+          ? `${featuredTask.evaluation_suite.primary_metric} ${featuredTask.evaluation_suite.threshold_target ?? '-'}`
+          : t('Pending'),
+        tone: featuredTask.evaluation_suite ? 'info' : 'neutral'
+      },
+      {
+        id: 'gate',
+        label: t('Gate'),
+        value: featuredTask.promotion_gate?.status ? t(featuredTask.promotion_gate.status) : t('Pending'),
+        tone:
+          featuredTask.promotion_gate?.status === 'pass'
+            ? 'success'
+            : featuredTask.promotion_gate?.status === 'fail'
+              ? 'danger'
+              : featuredTask.promotion_gate?.status === 'needs_review'
+                ? 'warning'
+                : 'neutral'
+      }
+    ];
+
+    return (
+      <AgentModePanel
+        eyebrow={t('Agent mode')}
+        title={t(recommendation?.title ?? 'Recommended action')}
+        summary={t(
+          recommendation?.summary ??
+            'The highest-priority visible task is ready for review or one explicit operator action.'
+        )}
+        statusLabel={statusLabel}
+        statusTone={statusTone}
+        steps={steps}
+        evidence={evidence}
+        primaryAction={
+          isActionable
+            ? {
+                label: advancingTaskId === featuredTask.id ? t('Agent continuing...') : t('Continue as agent'),
+                onClick: () => void handleAutoAdvance(featuredTask),
+                disabled: advancingTaskId === featuredTask.id,
+                busy: advancingTaskId === featuredTask.id
+              }
+            : null
+        }
+        secondaryActions={[
+          {
+            label: lane === 'blocked' ? t('Resolve inputs') : t('Open task'),
+            onClick: () => navigate(`/vision/tasks/${encodeURIComponent(featuredTask.id)}`)
+          }
+        ]}
+        details={
+          <ul className="workspace-keyline-list">
+            <li className="workspace-keyline-item">
+              <span>{t('Reason')}</span>
+              <strong>{t(recommendation?.reason ?? 'Backend-generated next step for the current goal state.')}</strong>
+            </li>
+            <li className="workspace-keyline-item">
+              <span>{t('Current evidence')}</span>
+              <strong>
+                {(recommendation?.evidence ?? []).length > 0
+                  ? recommendation?.evidence.join(' · ')
+                  : featuredTask.dataset_id || t('No linked dataset yet.')}
+              </strong>
+            </li>
+            <li className="workspace-keyline-item">
+              <span>{t('Updated')}</span>
+              <strong>{formatTimestamp(featuredTask.updated_at)}</strong>
+            </li>
+          </ul>
+        }
+      />
+    );
+  }, [advancingTaskId, featuredTask, handleAutoAdvance, navigate, t]);
+
   if (loading) {
     return (
       <WorkspacePage className="stack">
@@ -388,6 +577,8 @@ export default function VisionModelingTasksPage() {
           }
         ]}
       />
+
+      {featuredAgentPanel}
 
       <SectionCard
         title={t('Agent inbox')}

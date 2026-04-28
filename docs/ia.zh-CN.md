@@ -17,10 +17,10 @@
   - 重定向到 `/auth/login`
   - 不再提供公开自助注册界面
 
-### 3.2 双入口
+### 3.2 平台入口
 - `/`
-  - AI-native 对话工作区入口
-  - 专业控制台入口
+  - 默认进入专业控制台
+  - `/workspace/chat` 继续保留为按需进入的对话路线，不再作为共享壳层默认入口
 
 ### 3.3 对话工作区
 - `/workspace/chat`
@@ -119,6 +119,11 @@
   - 主工作区也应镜像当前第一个未完成的详情步骤，用一张明确的“下一步卡片”承接用户动作，避免反复通读整页
   - 顶部 stepper（导入/切分/版本）
   - 数据集附件始终可见/可删/有状态
+  - 详情页应提供一个数据包导入助手：
+    - 选择本地文件夹或 `.zip`
+    - 识别图片与支持的标注负载（`yolo` / `coco` / `labelme` / `ocr`）
+    - 导入前先展示紧凑摘要与风险提示
+    - 导入后可选自动执行切分与数据集版本快照准备，并直接继续到训练启动页
   - 样本浏览区支持网格/列表切换、快速筛选、批量样本操作
   - 筛选项至少覆盖：搜索、split、样本状态、标注队列状态、metadata/tag 提示
 - `/datasets/:datasetId/annotate`
@@ -437,8 +442,26 @@
   - recipe 摘要可见，参数覆盖折叠在专家控件中
   - launch 按钮位置不因 readiness 刷新而跳动
 - `/vision/tasks` 应像 agent inbox：
+  - 顶部优先展示最高优先级可见任务的 agent-mode panel，包含目标摘要、步骤 rail、证据 chips 和一个显式主下一步
   - blocked / training / next-action-ready 分组或等效视图
   - 每行展示推荐动作、理由、readiness/gate 状态与关联实体
 - `/vision/tasks/:taskId` 应把 recipe、readiness、evaluation gate、champion/challenger 放在同一证据链中，手动入口作为次级 escape hatch。
 - 全站 action card 统一结构：状态、摘要、证据、一个主下一步、必要时显示确认要求。
+- 高意图工作台可把 agent-mode panel 作为顶部控制面：
+  - 一个目标陈述、步骤 rail、决策摘要、证据 chips
+  - 一个主动作 + 次级修复入口
+  - 诊断信息折叠展示
+  - 专家控件留在 panel 外并默认折叠
+- `/workspace/pixel-lab` 是独立游戏化视图：
+  - 通过页面顶部共享平台栏中的模式切换进入；在 Pixel Lab 中同一入口返回专业控制台
+  - 使用一个像素房子承载数据集、模型、训练、推理考试、版本交付房间
+  - 数据来自现有 datasets / training jobs / model versions / inference runs / vision tasks API
+  - 主动作只跳转到 canonical workflow，不在该视图里静默执行高风险变更
+- `/training-workshop` 是聚焦训练流程的像素工坊入口：
+  - 位于 Data & Run 导航组
+  - 首屏即为可交互工坊，不做营销式介绍页
+  - 固定四个区域：三房间主场景、右侧状态面板、底部流程时间线、模型/数据集选择区
+  - 场景只显示一个当前活动模型角色；其他候选模型只作为选择卡片存在
+  - mock 演示可独立运行，真实接入时通过 `mapVistralTaskToWorkshopStage(task)` 映射训练任务状态
+  - 人工确认阶段必须等待用户显式决策，不能自动发布
 - 现代视觉基线继续遵循 `notion/DESIGN.md`，并采用其中 Vistral AI-native interaction addendum。

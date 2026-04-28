@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent as ReactChangeEvent } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
   AnnotationReviewReasonCode,
@@ -26,6 +26,7 @@ import {
   SectionCard
 } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
+import ProgressStepper from '../components/ui/ProgressStepper';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import {
   filterItemsByAnnotationQueue,
@@ -35,6 +36,13 @@ import {
   summarizeAnnotationQueues,
   type AnnotationQueueFilter
 } from '../features/annotationQueue';
+import {
+  buildBundleImportArtifact,
+  buildDatasetBundleFromFolderFiles,
+  buildDatasetBundleFromZipFile,
+  type DatasetBundleCandidate,
+  type DatasetBundleImportFormat
+} from '../features/datasetBundleImport';
 import { matchesMetadataFilter } from '../features/metadataFilter';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
@@ -299,6 +307,14 @@ export default function DatasetDetailPage() {
   const [importFormat, setImportFormat] = useState<'yolo' | 'coco' | 'labelme' | 'ocr'>('yolo');
   const [exportFormat, setExportFormat] = useState<'yolo' | 'coco' | 'labelme' | 'ocr'>('yolo');
   const [importAttachmentId, setImportAttachmentId] = useState('');
+  const [bundleCandidate, setBundleCandidate] = useState<DatasetBundleCandidate | null>(null);
+  const [bundleFormat, setBundleFormat] = useState<DatasetBundleImportFormat>('yolo');
+  const [bundleAutoPrepareTraining, setBundleAutoPrepareTraining] = useState(true);
+  const [bundleImporting, setBundleImporting] = useState(false);
+  const [bundleImportError, setBundleImportError] = useState('');
+  const [bundlePreparedVersionId, setBundlePreparedVersionId] = useState('');
+  const [bundlePreparedVersionName, setBundlePreparedVersionName] = useState('');
+  const [bundleActiveStep, setBundleActiveStep] = useState(0);
   const [referenceFilename, setReferenceFilename] = useState('');
   const [referenceSplit, setReferenceSplit] = useState<'train' | 'val' | 'test' | 'unassigned'>('unassigned');
   const [referenceStatus, setReferenceStatus] = useState<'uploading' | 'processing' | 'ready' | 'error'>('ready');
@@ -333,11 +349,28 @@ export default function DatasetDetailPage() {
     'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
   );
   const uploadSectionRef = useRef<HTMLDivElement | null>(null);
+  const bundleZipInputRef = useRef<HTMLInputElement | null>(null);
+  const bundleFolderInputRef = useRef<HTMLInputElement | null>(null);
   const sampleSectionRef = useRef<HTMLDivElement | null>(null);
   const versionSectionRef = useRef<HTMLDivElement | null>(null);
   const focusAppliedRef = useRef('');
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
   const preferredFocus = (searchParams.get('focus') ?? '').trim();
+  const focusUploadSection = useCallback(() => {
+    uploadSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusSamplesSection = useCallback(() => {
+    sampleSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusVersionsSection = useCallback(() => {
+    versionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusWorkflowPanel = useCallback(() => {
+    document.getElementById('dataset-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
   const preferredTaskTypeRaw = (searchParams.get('task_type') ?? '').trim().toLowerCase();
   const preferredTaskType =
     preferredTaskTypeRaw === 'ocr' ||
@@ -653,13 +686,23 @@ export default function DatasetDetailPage() {
     },
     [annotationSummary.approved, annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected, annotations, items, t]
   );
-  const launchContextForDatasetFlow: LaunchContext = {
-    taskType: preferredTaskType ?? dataset?.task_type ?? null,
-    framework: resolvePreferredFrameworkForTask(preferredTaskType ?? dataset?.task_type ?? null, preferredFramework),
-    executionTarget: preferredExecutionTarget || null,
-    workerId: preferredWorkerId || null,
-    returnTo: outboundReturnTo
-  };
+  const launchContextForDatasetFlow: LaunchContext = useMemo(
+    () => ({
+      taskType: preferredTaskType ?? dataset?.task_type ?? null,
+      framework: resolvePreferredFrameworkForTask(preferredTaskType ?? dataset?.task_type ?? null, preferredFramework),
+      executionTarget: preferredExecutionTarget || null,
+      workerId: preferredWorkerId || null,
+      returnTo: outboundReturnTo
+    }),
+    [
+      dataset?.task_type,
+      outboundReturnTo,
+      preferredExecutionTarget,
+      preferredFramework,
+      preferredTaskType,
+      preferredWorkerId
+    ]
+  );
   const datasetsPath = buildDatasetsPath(launchContextForDatasetFlow);
   const clearVersionContextPath = useMemo(() => {
     const nextParams = new URLSearchParams(searchParams);
@@ -723,6 +766,46 @@ export default function DatasetDetailPage() {
     sampleStatusFilter,
     selectedVersionId,
     selectedSampleItemIds
+  ]);
+
+  useEffect(() => {
+    if (!preferredFocus || !dataset?.id) {
+      return;
+    }
+
+    const focusKey = `${preferredFocus}:${dataset.id}:${selectedVersionId}`;
+    if (focusAppliedRef.current === focusKey) {
+      return;
+    }
+
+    const focusMap: Record<string, () => void> = {
+      upload: focusUploadSection,
+      files: focusUploadSection,
+      samples: focusSamplesSection,
+      sample: focusSamplesSection,
+      versions: focusVersionsSection,
+      version: focusVersionsSection,
+      workflow: focusWorkflowPanel,
+      advanced: focusWorkflowPanel
+    };
+
+    const action = focusMap[preferredFocus];
+    if (!action) {
+      return;
+    }
+
+    focusAppliedRef.current = focusKey;
+    window.setTimeout(() => {
+      action();
+    }, 120);
+  }, [
+    dataset?.id,
+    focusSamplesSection,
+    focusUploadSection,
+    focusVersionsSection,
+    focusWorkflowPanel,
+    preferredFocus,
+    selectedVersionId
   ]);
   const applySavedSampleView = useCallback(
     (viewId: string) => {
@@ -828,6 +911,17 @@ export default function DatasetDetailPage() {
   }, [attachments, importAttachmentId]);
 
   useEffect(() => {
+    if (!bundleCandidate) {
+      return;
+    }
+
+    const preferred = bundleCandidate.supportedFormats[0];
+    if (preferred && preferred !== bundleFormat) {
+      setBundleFormat(preferred);
+    }
+  }, [bundleCandidate, bundleFormat]);
+
+  useEffect(() => {
     if (items.length === 0) {
       if (selectedItemId) {
         setSelectedItemId('');
@@ -898,6 +992,211 @@ export default function DatasetDetailPage() {
     }
     await loadDetail('manual');
   };
+
+  const waitForDatasetAttachmentReady = useCallback(
+    async (attachmentId: string): Promise<FileAttachment> => {
+      if (!datasetId) {
+        throw new Error(t('Missing Dataset ID'));
+      }
+
+      const deadline = Date.now() + 15000;
+      let latest: FileAttachment | null = null;
+      while (Date.now() < deadline) {
+        const currentAttachments = await api.listDatasetAttachments(datasetId);
+        latest = currentAttachments.find((attachment) => attachment.id === attachmentId) ?? null;
+        if (!latest) {
+          throw new Error(t('Uploaded attachment disappeared before import could continue.'));
+        }
+        if (latest.status === 'ready') {
+          return latest;
+        }
+        if (latest.status === 'error') {
+          throw new Error(latest.upload_error || t('Attachment import source failed during processing.'));
+        }
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, 350);
+        });
+      }
+
+      throw new Error(t('Attachment did not become ready in time. Refresh and retry.'));
+    },
+    [datasetId, t]
+  );
+
+  const prepareBundleCandidateFromFolder = useCallback(
+    async (files: File[]) => {
+      if (!dataset) {
+        return;
+      }
+
+      setBundleImportError('');
+      setBundlePreparedVersionId('');
+      setBundlePreparedVersionName('');
+      setBundleActiveStep(0);
+
+      try {
+        const candidate = await buildDatasetBundleFromFolderFiles(dataset, files, t('Local folder'));
+        setBundleCandidate(candidate);
+      } catch (error) {
+        setBundleCandidate(null);
+        setBundleImportError(t((error as Error).message));
+      }
+    },
+    [dataset, t]
+  );
+
+  const prepareBundleCandidateFromZip = useCallback(
+    async (zipFile: File) => {
+      if (!dataset) {
+        return;
+      }
+
+      setBundleImportError('');
+      setBundlePreparedVersionId('');
+      setBundlePreparedVersionName('');
+      setBundleActiveStep(0);
+
+      try {
+        const candidate = await buildDatasetBundleFromZipFile(dataset, zipFile);
+        setBundleCandidate(candidate);
+      } catch (error) {
+        setBundleCandidate(null);
+        setBundleImportError(t((error as Error).message));
+      }
+    },
+    [dataset, t]
+  );
+
+  const handleFolderBundleSelection = useCallback(
+    async (event: ReactChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files ? Array.from(event.target.files) : [];
+      event.target.value = '';
+      if (files.length === 0) {
+        return;
+      }
+      await prepareBundleCandidateFromFolder(files);
+    },
+    [prepareBundleCandidateFromFolder]
+  );
+
+  const handleZipBundleSelection = useCallback(
+    async (event: ReactChangeEvent<HTMLInputElement>) => {
+      const selected = event.target.files ? Array.from(event.target.files) : [];
+      event.target.value = '';
+      const zipFile = selected[0];
+      if (!zipFile) {
+        return;
+      }
+      await prepareBundleCandidateFromZip(zipFile);
+    },
+    [prepareBundleCandidateFromZip]
+  );
+
+  const runBundleImport = useCallback(async () => {
+    if (!datasetId || !dataset || !bundleCandidate) {
+      return;
+    }
+
+    setBundleImporting(true);
+    setBundleImportError('');
+    setBundlePreparedVersionId('');
+    setBundlePreparedVersionName('');
+    setFeedback(null);
+
+    try {
+      if (bundleCandidate.imageEntries.length === 0) {
+        throw new Error(t('No image files were found in the selected bundle.'));
+      }
+      if (bundleCandidate.duplicateImageBasenames.length > 0) {
+        throw new Error(
+          t('Duplicate image filenames were found. Keep image basenames unique before import.')
+        );
+      }
+
+      setBundleActiveStep(1);
+      for (const imageEntry of bundleCandidate.imageEntries) {
+        const uploadedImageAttachment = await api.uploadDatasetFile(datasetId, imageEntry.file);
+        await waitForDatasetAttachmentReady(uploadedImageAttachment.id);
+      }
+
+      let importedRecordCount = 0;
+      let createdVersion: DatasetVersionRecord | null = null;
+
+      if (bundleCandidate.annotationEntries.length > 0) {
+        setBundleActiveStep(2);
+        const importArtifact = await buildBundleImportArtifact(bundleCandidate, bundleFormat, dataset);
+        importedRecordCount = importArtifact.recordCount;
+        const uploadedImportAttachment = await api.uploadDatasetFile(datasetId, importArtifact.file);
+        const readyImportAttachment = await waitForDatasetAttachmentReady(uploadedImportAttachment.id);
+        setImportAttachmentId(readyImportAttachment.id);
+        await api.importDatasetAnnotations({
+          dataset_id: datasetId,
+          format: importArtifact.format,
+          attachment_id: readyImportAttachment.id
+        });
+      }
+
+      if (bundleAutoPrepareTraining) {
+        setBundleActiveStep(3);
+        await api.splitDataset({
+          dataset_id: datasetId,
+          train_ratio: Number(splitTrain),
+          val_ratio: Number(splitVal),
+          test_ratio: Number(splitTest),
+          seed: 42
+        });
+        createdVersion = await api.createDatasetVersion(
+          datasetId,
+          `bundle-${Date.now().toString().slice(-6)}`
+        );
+        setSelectedVersionId(createdVersion.id);
+        setBundlePreparedVersionId(createdVersion.id);
+        setBundlePreparedVersionName(createdVersion.version_name);
+      }
+
+      await loadDetail('manual');
+      setBundleActiveStep(bundleAutoPrepareTraining ? 3 : 2);
+      setFeedback({
+        variant: 'success',
+        text: createdVersion
+          ? createdVersion.annotation_coverage > 0 && createdVersion.split_summary.train > 0
+            ? t(
+                'Bundle import finished. Uploaded {images} image files, imported {records} labeled records, and prepared dataset version {version}.',
+                {
+                  images: bundleCandidate.imageEntries.length,
+                  records: importedRecordCount,
+                  version: createdVersion.version_name
+                }
+              )
+            : t(
+                'Bundle import finished and dataset version {version} was created, but training readiness is still blocked by split or annotation coverage.',
+                {
+                  version: createdVersion.version_name
+                }
+              )
+          : t('Bundle import finished. Uploaded {images} image files and imported {records} labeled records.', {
+              images: bundleCandidate.imageEntries.length,
+              records: importedRecordCount
+            })
+      });
+    } catch (error) {
+      setBundleImportError(t((error as Error).message));
+    } finally {
+      setBundleImporting(false);
+    }
+  }, [
+    bundleAutoPrepareTraining,
+    bundleCandidate,
+    bundleFormat,
+    dataset,
+    datasetId,
+    loadDetail,
+    splitTest,
+    splitTrain,
+    splitVal,
+    t,
+    waitForDatasetAttachmentReady
+  ]);
 
   const deleteAttachment = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
@@ -1522,57 +1821,18 @@ export default function DatasetDetailPage() {
     );
   }
 
-  const focusUploadSection = () => {
-    uploadSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const focusSamplesSection = () => {
-    sampleSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const focusVersionsSection = () => {
-    versionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const focusWorkflowPanel = () => {
-    document.getElementById('dataset-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  useEffect(() => {
-    if (!preferredFocus) {
-      return;
-    }
-
-    const focusKey = `${preferredFocus}:${dataset.id}:${selectedVersionId}`;
-    if (focusAppliedRef.current === focusKey) {
-      return;
-    }
-
-    const focusMap: Record<string, () => void> = {
-      upload: focusUploadSection,
-      files: focusUploadSection,
-      samples: focusSamplesSection,
-      sample: focusSamplesSection,
-      versions: focusVersionsSection,
-      version: focusVersionsSection,
-      workflow: focusWorkflowPanel,
-      advanced: focusWorkflowPanel
-    };
-
-    const action = focusMap[preferredFocus];
-    if (!action) {
-      return;
-    }
-
-    focusAppliedRef.current = focusKey;
-    window.setTimeout(() => {
-      action();
-    }, 120);
-  }, [dataset.id, preferredFocus, selectedVersionId]);
-
   const preferredTrainingVersion = selectedVersion ?? versions[0] ?? null;
   const preferredLaunchReadyVersion =
     selectedVersionLaunchReady && selectedVersion ? selectedVersion : latestLaunchReadyVersion;
+  const bundleStepperSteps = [
+    t('Inspect bundle'),
+    t('Upload images'),
+    t('Import labels'),
+    t('Prepare training')
+  ];
+  const bundleTrainingPath = bundlePreparedVersionId
+    ? buildTrainingJobCreatePath(dataset.id, bundlePreparedVersionId, launchContextForDatasetFlow)
+    : '';
   const fallbackAnnotationWorkspacePath = buildAnnotationWorkspacePath(dataset.id, 'all', undefined, {
     versionId: selectedVersionId || undefined,
     launchContext: launchContextForDatasetFlow
@@ -1900,7 +2160,171 @@ export default function DatasetDetailPage() {
               </SectionCard>
             </div>
 
-            <div ref={uploadSectionRef}>
+            <div ref={uploadSectionRef} className="stack">
+              <SectionCard
+                title={t('Bundle Import')}
+                description={t('Select a local folder or ZIP package, then let Vistral organize upload, label import, and training preparation.')}
+              >
+                <div className="stack">
+                  <ProgressStepper
+                    steps={bundleStepperSteps}
+                    current={bundleActiveStep}
+                    title={t('Bundle workflow')}
+                    caption={bundleImporting ? t('Working...') : t('Inspect first, then run one guided import.')}
+                  />
+
+                  <div className="row gap wrap">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => bundleFolderInputRef.current?.click()}
+                      disabled={busy || bundleImporting}
+                    >
+                      {t('Choose Folder')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => bundleZipInputRef.current?.click()}
+                      disabled={busy || bundleImporting}
+                    >
+                      {t('Choose ZIP')}
+                    </Button>
+                    {bundleCandidate ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => {
+                          setBundleCandidate(null);
+                          setBundleImportError('');
+                          setBundlePreparedVersionId('');
+                          setBundlePreparedVersionName('');
+                          setBundleActiveStep(0);
+                        }}
+                        disabled={bundleImporting}
+                      >
+                        {t('Clear')}
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <input
+                    ref={bundleZipInputRef}
+                    type="file"
+                    accept=".zip,application/zip"
+                    onChange={(event) => {
+                      void handleZipBundleSelection(event);
+                    }}
+                    style={{ display: 'none' }}
+                    disabled={busy || bundleImporting}
+                  />
+                  <input
+                    ref={bundleFolderInputRef}
+                    type="file"
+                    multiple
+                    onChange={(event) => {
+                      void handleFolderBundleSelection(event);
+                    }}
+                    style={{ display: 'none' }}
+                    disabled={busy || bundleImporting}
+                    {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+                  />
+
+                  <small className="muted">
+                    {t('Folder import reads image files plus supported labels (YOLO / COCO / LabelMe / OCR). ZIP import is unpacked locally in the browser before upload.')}
+                  </small>
+
+                  {bundleImportError ? (
+                    <StateBlock
+                      variant="error"
+                      title={t('Bundle import failed')}
+                      description={bundleImportError}
+                    />
+                  ) : null}
+
+                  {bundleCandidate ? (
+                    <div className="stack">
+                      <div className="row gap wrap align-center">
+                        <Badge tone="neutral">{t('Source')}: {bundleCandidate.sourceLabel}</Badge>
+                        <Badge tone="neutral">{t('Images')}: {bundleCandidate.imageEntries.length}</Badge>
+                        <Badge tone="neutral">{t('Annotation files')}: {bundleCandidate.annotationEntries.length}</Badge>
+                        <Badge tone={bundleCandidate.duplicateImageBasenames.length > 0 ? 'warning' : 'success'}>
+                          {t('Duplicate names')}: {bundleCandidate.duplicateImageBasenames.length}
+                        </Badge>
+                      </div>
+
+                      {bundleCandidate.supportedFormats.length > 0 ? (
+                        <label>
+                          {t('Bundle label format')}
+                          <Select
+                            value={bundleFormat}
+                            onChange={(event) =>
+                              setBundleFormat(event.target.value as DatasetBundleImportFormat)
+                            }
+                            disabled={bundleImporting}
+                          >
+                            {bundleCandidate.supportedFormats.map((format) => (
+                              <option key={format} value={format}>
+                                {t(format)}
+                              </option>
+                            ))}
+                          </Select>
+                        </label>
+                      ) : (
+                        <InlineAlert
+                          tone="warning"
+                          title={t('No supported labels found')}
+                          description={t('Images can still be uploaded, but no importable labels were detected in this bundle.')}
+                        />
+                      )}
+
+                      <label className="row gap align-center">
+                        <input
+                          type="checkbox"
+                          checked={bundleAutoPrepareTraining}
+                          onChange={(event) => setBundleAutoPrepareTraining(event.target.checked)}
+                          disabled={bundleImporting}
+                        />
+                        <span>{t('After import, auto-run split and create a dataset version snapshot')}</span>
+                      </label>
+
+                      {bundlePreparedVersionId ? (
+                        <InlineAlert
+                          tone="success"
+                          title={t('Training snapshot prepared')}
+                          description={t('Dataset version {version} is ready for the next training step.', {
+                            version: bundlePreparedVersionName || bundlePreparedVersionId
+                          })}
+                          actions={
+                            bundleTrainingPath ? (
+                              <ButtonLink to={bundleTrainingPath} variant="secondary" size="sm">
+                                {t('Open Training Launch')}
+                              </ButtonLink>
+                            ) : undefined
+                          }
+                        />
+                      ) : null}
+
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          void runBundleImport();
+                        }}
+                        disabled={busy || bundleImporting || bundleCandidate.imageEntries.length === 0}
+                      >
+                        {bundleImporting ? t('Working...') : t('Run Bundle Import')}
+                      </Button>
+                    </div>
+                  ) : (
+                    <StateBlock
+                      variant="empty"
+                      title={t('No bundle selected')}
+                      description={t('Choose a local folder or ZIP package to inspect images and annotation files before import.')}
+                    />
+                  )}
+                </div>
+              </SectionCard>
+
               <AttachmentUploader
                 title={t('Files')}
                 items={attachments}
@@ -1910,7 +2334,7 @@ export default function DatasetDetailPage() {
                 onDelete={deleteAttachment}
                 emptyDescription={t('Upload files. They stay visible here.')}
                 uploadButtonLabel={t('Upload Dataset File')}
-                disabled={busy}
+                disabled={busy || bundleImporting}
                 headerActions={
                   <Button
                     type="button"
@@ -1919,7 +2343,7 @@ export default function DatasetDetailPage() {
                     onClick={() => {
                       void refreshAttachmentSection();
                     }}
-                    disabled={busy || sectionRefreshing === 'attachments'}
+                    disabled={busy || bundleImporting || sectionRefreshing === 'attachments'}
                   >
                     {sectionRefreshing === 'attachments' ? t('Refreshing...') : t('Refresh')}
                   </Button>

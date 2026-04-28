@@ -116,7 +116,13 @@ import type {
   PublicEncryptedModelPackageResult,
   PublicRuntimeInferenceInput,
   PublicRuntimeInferenceResult,
+  EvaluateTrainingReadinessInput,
+  EvaluationSuiteRecord,
   TrainingSchedulerDecision,
+  TrainingReadinessCheck,
+  TrainingReadinessReport,
+  TrainingRecipeParamContract,
+  TrainingRecipeRecord,
   TrainingWorkerBootstrapSessionRecord,
   TrainingWorkerCompatibilitySnapshot,
   TrainingWorkerDeploymentMode,
@@ -1088,6 +1094,330 @@ const getCurrentRuntimeSettingsRecord = (): RuntimeSettingsRecord => ({
   },
   controls: getStoredRuntimeControlConfig()
 });
+
+const trainingRecipeCatalogUpdatedAt = '2026-04-28T00:00:00.000Z';
+
+const buildTrainingParam = (
+  input: Omit<TrainingRecipeParamContract, 'unit' | 'min' | 'max' | 'options' | 'description'> &
+    Partial<Pick<TrainingRecipeParamContract, 'unit' | 'min' | 'max' | 'options' | 'description'>>
+): TrainingRecipeParamContract => ({
+  ...input,
+  unit: input.unit ?? null,
+  min: input.min ?? null,
+  max: input.max ?? null,
+  options: input.options ?? null,
+  description: input.description ?? ''
+});
+
+const baseTrainingParams = {
+  epochs: buildTrainingParam({
+    key: 'epochs',
+    label: 'Epochs',
+    type: 'int',
+    unit: 'epoch',
+    default: '30',
+    min: 1,
+    max: 300,
+    required: true,
+    ui_control: 'number',
+    expert: false,
+    runner_arg: 'epochs',
+    description: 'Maximum training epochs.'
+  }),
+  batchSize: buildTrainingParam({
+    key: 'batch_size',
+    label: 'Batch size',
+    type: 'int',
+    unit: 'sample',
+    default: '16',
+    min: 1,
+    max: 256,
+    required: true,
+    ui_control: 'number',
+    expert: false,
+    runner_arg: 'batch_size',
+    description: 'Samples per optimizer step before accumulation.'
+  }),
+  learningRate: buildTrainingParam({
+    key: 'learning_rate',
+    label: 'Learning rate',
+    type: 'float',
+    default: '0.001',
+    min: 0.000001,
+    max: 1,
+    required: true,
+    ui_control: 'number',
+    expert: true,
+    runner_arg: 'learning_rate',
+    description: 'Initial optimizer learning rate.'
+  }),
+  warmupRatio: buildTrainingParam({
+    key: 'warmup_ratio',
+    label: 'Warmup ratio',
+    type: 'float',
+    default: '0.05',
+    min: 0,
+    max: 0.5,
+    required: false,
+    ui_control: 'slider',
+    expert: true,
+    runner_arg: 'warmup_ratio',
+    description: 'Warmup share of total training steps.'
+  }),
+  weightDecay: buildTrainingParam({
+    key: 'weight_decay',
+    label: 'Weight decay',
+    type: 'float',
+    default: '0.0005',
+    min: 0,
+    max: 1,
+    required: false,
+    ui_control: 'number',
+    expert: true,
+    runner_arg: 'weight_decay',
+    description: 'Optimizer L2 regularization.'
+  })
+};
+
+const trainingRecipeCatalog: TrainingRecipeRecord[] = [
+  {
+    recipe_id: 'yolo-detection-default',
+    recipe_version: '2026-04',
+    title: 'YOLO detection default',
+    task_type: 'detection',
+    framework: 'yolo',
+    default_base_model: 'yolo11n',
+    base_model_options: ['yolo11n', 'yolo11s', 'yolo11m'],
+    params: [
+      baseTrainingParams.epochs,
+      baseTrainingParams.batchSize,
+      baseTrainingParams.learningRate,
+      baseTrainingParams.warmupRatio,
+      baseTrainingParams.weightDecay
+    ],
+    evaluation_suite_id: 'eval-detection-map',
+    readiness_policy_id: 'ready-visual-training-v1',
+    artifact_expectation: {
+      requires_real_execution: true,
+      required_fields: ['training_performed', 'primary_model_path', 'metrics'],
+      registration_blockers: []
+    },
+    created_at: trainingRecipeCatalogUpdatedAt,
+    updated_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    recipe_id: 'paddleocr-ocr-default',
+    recipe_version: '2026-04',
+    title: 'PaddleOCR OCR default',
+    task_type: 'ocr',
+    framework: 'paddleocr',
+    default_base_model: 'paddleocr-mobile',
+    base_model_options: ['paddleocr-mobile', 'paddleocr-server'],
+    params: [
+      { ...baseTrainingParams.epochs, default: '20', max: 200 },
+      { ...baseTrainingParams.batchSize, default: '8', max: 128 },
+      { ...baseTrainingParams.learningRate, default: '0.0005' },
+      baseTrainingParams.warmupRatio,
+      baseTrainingParams.weightDecay
+    ],
+    evaluation_suite_id: 'eval-ocr-cer',
+    readiness_policy_id: 'ready-ocr-training-v1',
+    artifact_expectation: {
+      requires_real_execution: true,
+      required_fields: ['training_performed', 'primary_model_path', 'cer_or_accuracy'],
+      registration_blockers: []
+    },
+    created_at: trainingRecipeCatalogUpdatedAt,
+    updated_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    recipe_id: 'doctr-ocr-default',
+    recipe_version: '2026-04',
+    title: 'docTR OCR default',
+    task_type: 'ocr',
+    framework: 'doctr',
+    default_base_model: 'doctr-crnn',
+    base_model_options: ['doctr-crnn', 'doctr-vitstr'],
+    params: [
+      { ...baseTrainingParams.epochs, default: '20', max: 200 },
+      { ...baseTrainingParams.batchSize, default: '8', max: 128 },
+      { ...baseTrainingParams.learningRate, default: '0.0005' },
+      baseTrainingParams.warmupRatio,
+      baseTrainingParams.weightDecay
+    ],
+    evaluation_suite_id: 'eval-ocr-cer',
+    readiness_policy_id: 'ready-ocr-training-v1',
+    artifact_expectation: {
+      requires_real_execution: true,
+      required_fields: ['training_performed', 'primary_model_path', 'cer_or_accuracy'],
+      registration_blockers: []
+    },
+    created_at: trainingRecipeCatalogUpdatedAt,
+    updated_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    recipe_id: 'yolo-segmentation-default',
+    recipe_version: '2026-04',
+    title: 'YOLO segmentation default',
+    task_type: 'segmentation',
+    framework: 'yolo',
+    default_base_model: 'yolo11n-seg',
+    base_model_options: ['yolo11n-seg', 'yolo11s-seg', 'yolo11m-seg'],
+    params: [
+      baseTrainingParams.epochs,
+      baseTrainingParams.batchSize,
+      baseTrainingParams.learningRate,
+      baseTrainingParams.warmupRatio,
+      baseTrainingParams.weightDecay
+    ],
+    evaluation_suite_id: 'eval-segmentation-miou',
+    readiness_policy_id: 'ready-visual-training-v1',
+    artifact_expectation: {
+      requires_real_execution: true,
+      required_fields: ['training_performed', 'primary_model_path', 'metrics'],
+      registration_blockers: []
+    },
+    created_at: trainingRecipeCatalogUpdatedAt,
+    updated_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    recipe_id: 'yolo-obb-default',
+    recipe_version: '2026-04',
+    title: 'YOLO OBB default',
+    task_type: 'obb',
+    framework: 'yolo',
+    default_base_model: 'yolo11n-obb',
+    base_model_options: ['yolo11n-obb', 'yolo11s-obb', 'yolo11m-obb'],
+    params: [
+      { ...baseTrainingParams.epochs, default: '36' },
+      baseTrainingParams.batchSize,
+      { ...baseTrainingParams.learningRate, default: '0.0008' },
+      baseTrainingParams.warmupRatio,
+      baseTrainingParams.weightDecay
+    ],
+    evaluation_suite_id: 'eval-obb-map',
+    readiness_policy_id: 'ready-visual-training-v1',
+    artifact_expectation: {
+      requires_real_execution: true,
+      required_fields: ['training_performed', 'primary_model_path', 'metrics'],
+      registration_blockers: []
+    },
+    created_at: trainingRecipeCatalogUpdatedAt,
+    updated_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    recipe_id: 'yolo-classification-default',
+    recipe_version: '2026-04',
+    title: 'YOLO classification default',
+    task_type: 'classification',
+    framework: 'yolo',
+    default_base_model: 'yolo11n-cls',
+    base_model_options: ['yolo11n-cls', 'yolo11s-cls', 'yolo11m-cls'],
+    params: [
+      { ...baseTrainingParams.epochs, default: '25' },
+      baseTrainingParams.batchSize,
+      baseTrainingParams.learningRate,
+      baseTrainingParams.warmupRatio,
+      baseTrainingParams.weightDecay
+    ],
+    evaluation_suite_id: 'eval-classification-accuracy',
+    readiness_policy_id: 'ready-visual-training-v1',
+    artifact_expectation: {
+      requires_real_execution: true,
+      required_fields: ['training_performed', 'primary_model_path', 'accuracy'],
+      registration_blockers: []
+    },
+    created_at: trainingRecipeCatalogUpdatedAt,
+    updated_at: trainingRecipeCatalogUpdatedAt
+  }
+];
+
+const evaluationSuiteCatalog: EvaluationSuiteRecord[] = [
+  {
+    suite_id: 'eval-ocr-cer',
+    suite_version: '2026-04',
+    task_type: 'ocr',
+    framework: 'paddleocr',
+    primary_metric: 'cer',
+    direction: 'lower_is_better',
+    threshold_target: 0.08,
+    threshold_source: 'recipe_default',
+    secondary_metrics: ['wer', 'accuracy', 'norm_edit_distance', 'charset_coverage'],
+    regression_slices: ['charset_bucket', 'field_type', 'low_confidence_cluster'],
+    basis: ['recipe_default', 'dataset_version', 'prior_champion_when_available'],
+    created_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    suite_id: 'eval-ocr-cer',
+    suite_version: '2026-04',
+    task_type: 'ocr',
+    framework: 'doctr',
+    primary_metric: 'cer',
+    direction: 'lower_is_better',
+    threshold_target: 0.08,
+    threshold_source: 'recipe_default',
+    secondary_metrics: ['wer', 'accuracy', 'norm_edit_distance', 'charset_coverage'],
+    regression_slices: ['charset_bucket', 'field_type', 'low_confidence_cluster'],
+    basis: ['recipe_default', 'dataset_version', 'prior_champion_when_available'],
+    created_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    suite_id: 'eval-detection-map',
+    suite_version: '2026-04',
+    task_type: 'detection',
+    framework: 'yolo',
+    primary_metric: 'map',
+    direction: 'higher_is_better',
+    threshold_target: 0.5,
+    threshold_source: 'recipe_default',
+    secondary_metrics: ['precision', 'recall', 'map50', 'per_class_map'],
+    regression_slices: ['class', 'small_object', 'low_confidence_cluster'],
+    basis: ['recipe_default', 'dataset_version', 'prior_champion_when_available'],
+    created_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    suite_id: 'eval-segmentation-miou',
+    suite_version: '2026-04',
+    task_type: 'segmentation',
+    framework: 'yolo',
+    primary_metric: 'miou',
+    direction: 'higher_is_better',
+    threshold_target: 0.45,
+    threshold_source: 'recipe_default',
+    secondary_metrics: ['mask_map', 'polygon_quality', 'coverage'],
+    regression_slices: ['class', 'mask_area_bucket', 'polygon_complexity'],
+    basis: ['recipe_default', 'dataset_version', 'prior_champion_when_available'],
+    created_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    suite_id: 'eval-obb-map',
+    suite_version: '2026-04',
+    task_type: 'obb',
+    framework: 'yolo',
+    primary_metric: 'map_obb',
+    direction: 'higher_is_better',
+    threshold_target: 0.45,
+    threshold_source: 'recipe_default',
+    secondary_metrics: ['precision', 'recall', 'angle_error', 'per_class_map'],
+    regression_slices: ['class', 'angle_bucket', 'small_object'],
+    basis: ['recipe_default', 'dataset_version', 'prior_champion_when_available'],
+    created_at: trainingRecipeCatalogUpdatedAt
+  },
+  {
+    suite_id: 'eval-classification-accuracy',
+    suite_version: '2026-04',
+    task_type: 'classification',
+    framework: 'yolo',
+    primary_metric: 'accuracy',
+    direction: 'higher_is_better',
+    threshold_target: 0.85,
+    threshold_source: 'recipe_default',
+    secondary_metrics: ['precision', 'recall', 'f1', 'per_class_accuracy'],
+    regression_slices: ['class', 'confusion_pair'],
+    basis: ['recipe_default', 'dataset_version', 'prior_champion_when_available'],
+    created_at: trainingRecipeCatalogUpdatedAt
+  }
+];
 
 const parseRuntimeProfilesFromEnv = (): RuntimeProfileRecord[] => {
   const raw = (process.env.VISTRAL_RUNTIME_PROFILES_JSON ?? '').trim();
@@ -4642,14 +4972,15 @@ const buildVisionTaskConversationEvidenceSummary = (input: {
       );
     }
   }
-  if (task.dataset_profile?.diagnostics.recommended_data_actions.length > 0) {
+  const recommendedDataActions = task.dataset_profile?.diagnostics.recommended_data_actions ?? [];
+  if (recommendedDataActions.length > 0) {
     parts.push(
       chinese
-        ? `数据建议：${task.dataset_profile.diagnostics.recommended_data_actions
+        ? `数据建议：${recommendedDataActions
             .slice(0, 3)
             .map((action) => labelVisionTaskConversationDataAction(action, true))
             .join('、')}。`
-        : `Data actions: ${task.dataset_profile.diagnostics.recommended_data_actions
+        : `Data actions: ${recommendedDataActions
             .slice(0, 3)
             .map((action) => labelVisionTaskConversationDataAction(action, false))
             .join(', ')}.`
@@ -15792,6 +16123,512 @@ export async function runDatasetPreAnnotations(
   };
 }
 
+const filterTrainingRecipes = (filters: {
+  taskType?: TaskType;
+  framework?: ModelFramework;
+}): TrainingRecipeRecord[] =>
+  trainingRecipeCatalog.filter((recipe) => {
+    if (filters.taskType && recipe.task_type !== filters.taskType) {
+      return false;
+    }
+    if (filters.framework && recipe.framework !== filters.framework) {
+      return false;
+    }
+    return true;
+  });
+
+const filterEvaluationSuites = (filters: {
+  taskType?: TaskType;
+  framework?: ModelFramework;
+  recipeId?: string;
+}): EvaluationSuiteRecord[] => {
+  const recipeId = filters.recipeId?.trim() ?? '';
+  const recipe = recipeId
+    ? trainingRecipeCatalog.find((item) => item.recipe_id === recipeId)
+    : null;
+  return evaluationSuiteCatalog.filter((suite) => {
+    if (recipe && suite.suite_id !== recipe.evaluation_suite_id) {
+      return false;
+    }
+    if (filters.taskType && suite.task_type !== filters.taskType) {
+      return false;
+    }
+    if (filters.framework && suite.framework !== filters.framework) {
+      return false;
+    }
+    return true;
+  });
+};
+
+const findTrainingRecipeForInput = (input: {
+  task_type: TaskType;
+  framework: ModelFramework;
+  recipe_id?: string;
+  recipe_version?: string;
+}): TrainingRecipeRecord | null => {
+  const requestedRecipeId = input.recipe_id?.trim() ?? '';
+  const requestedRecipeVersion = input.recipe_version?.trim() ?? '';
+
+  if (requestedRecipeId) {
+    const recipe = trainingRecipeCatalog.find((item) => item.recipe_id === requestedRecipeId) ?? null;
+    if (!recipe) {
+      throw new Error(`Training recipe not found: ${requestedRecipeId}.`);
+    }
+    if (recipe.task_type !== input.task_type || recipe.framework !== input.framework) {
+      throw new Error('Training recipe does not match selected task_type/framework.');
+    }
+    if (requestedRecipeVersion && requestedRecipeVersion !== recipe.recipe_version) {
+      throw new Error('Training recipe version does not match the active recipe contract.');
+    }
+    return recipe;
+  }
+
+  return (
+    trainingRecipeCatalog.find(
+      (item) => item.task_type === input.task_type && item.framework === input.framework
+    ) ?? null
+  );
+};
+
+const normalizeTrainingParamValue = (
+  param: TrainingRecipeParamContract,
+  rawValue: string | undefined
+): {
+  value: string;
+  valid: boolean;
+  message: string | null;
+} => {
+  const value = rawValue === undefined || rawValue === '' ? param.default : rawValue.trim();
+
+  if (param.required && !value) {
+    return {
+      value,
+      valid: false,
+      message: `${param.label} is required.`
+    };
+  }
+
+  if (!value) {
+    return { value, valid: true, message: null };
+  }
+
+  if (param.type === 'enum') {
+    const options = param.options ?? [];
+    return options.includes(value)
+      ? { value, valid: true, message: null }
+      : {
+          value,
+          valid: false,
+          message: `${param.label} must be one of: ${options.join(', ')}.`
+        };
+  }
+
+  if (param.type === 'boolean') {
+    return ['true', 'false'].includes(value.toLowerCase())
+      ? { value: value.toLowerCase(), valid: true, message: null }
+      : {
+          value,
+          valid: false,
+          message: `${param.label} must be true or false.`
+        };
+  }
+
+  if (param.type === 'int' || param.type === 'float') {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return {
+        value,
+        valid: false,
+        message: `${param.label} must be a number.`
+      };
+    }
+    if (param.type === 'int' && !Number.isInteger(numeric)) {
+      return {
+        value,
+        valid: false,
+        message: `${param.label} must be an integer.`
+      };
+    }
+    if (param.min !== null && numeric < param.min) {
+      return {
+        value,
+        valid: false,
+        message: `${param.label} must be >= ${param.min}.`
+      };
+    }
+    if (param.max !== null && numeric > param.max) {
+      return {
+        value,
+        valid: false,
+        message: `${param.label} must be <= ${param.max}.`
+      };
+    }
+  }
+
+  return { value, valid: true, message: null };
+};
+
+const buildRecipeParamSnapshot = (
+  recipe: TrainingRecipeRecord,
+  config: Record<string, string>,
+  options?: { rejectUnknownParams?: boolean }
+): {
+  resolvedParams: Record<string, string>;
+  userOverrides: Record<string, string>;
+  checks: TrainingReadinessCheck[];
+} => {
+  const paramKeys = new Set(recipe.params.map((param) => param.key));
+  const resolvedParams: Record<string, string> = {};
+  const userOverrides: Record<string, string> = {};
+  const checks: TrainingReadinessCheck[] = [];
+
+  for (const param of recipe.params) {
+    const submittedValue = config[param.key];
+    const normalized = normalizeTrainingParamValue(param, submittedValue);
+    resolvedParams[param.runner_arg || param.key] = normalized.value;
+    if (submittedValue !== undefined && submittedValue !== param.default) {
+      userOverrides[param.key] = submittedValue;
+    }
+    if (!normalized.valid) {
+      checks.push({
+        key: `training.param.${param.key}`,
+        title: param.label,
+        status: 'blocked',
+        message: normalized.message ?? 'Invalid recipe parameter.',
+        evidence: {
+          submitted_value: submittedValue ?? null,
+          default_value: param.default,
+          min: param.min,
+          max: param.max,
+          options: param.options
+        },
+        remediation_action: 'Update the training parameter to match the recipe contract.',
+        owner_surface: 'training'
+      });
+    }
+  }
+
+  if (options?.rejectUnknownParams) {
+    for (const key of Object.keys(config)) {
+      if (paramKeys.has(key) || key.startsWith('recipe_') || key.endsWith('_snapshot')) {
+        continue;
+      }
+      checks.push({
+        key: `training.param.${key}`,
+        title: 'Unknown parameter',
+        status: 'blocked',
+        message: `Parameter ${key} is not declared by recipe ${recipe.recipe_id}.`,
+        evidence: { submitted_value: config[key] },
+        remediation_action: 'Remove the parameter or add it to the recipe contract first.',
+        owner_surface: 'training'
+      });
+    }
+  }
+
+  return { resolvedParams, userOverrides, checks };
+};
+
+const isVisualReadyDatasetItem = (item: DatasetItemRecord): boolean => {
+  if (item.status !== 'ready') {
+    return false;
+  }
+  const attachment = attachments.find((entry) => entry.id === item.attachment_id) ?? null;
+  if (!attachment || attachment.status !== 'ready') {
+    return false;
+  }
+  const mime = attachment.mime_type?.toLowerCase() ?? '';
+  if (mime.startsWith('image/') || mime.startsWith('video/')) {
+    return true;
+  }
+  return /\.(png|jpe?g|webp|bmp|gif|tiff?|mp4|mov|avi|mkv)$/i.test(attachment.filename);
+};
+
+const summarizeClassBalance = (dataset: DatasetRecord, datasetVersion: DatasetVersionRecord): string => {
+  const classCount = dataset.label_schema.classes.length;
+  if (classCount <= 1) {
+    return classCount === 0 ? 'no_classes_defined' : 'single_class_dataset';
+  }
+  const annotatedCount = annotations.filter((annotation) => {
+    const item = datasetItems.find((entry) => entry.id === annotation.dataset_item_id);
+    return item?.dataset_id === dataset.id && annotation.status !== 'rejected';
+  }).length;
+  if (annotatedCount < classCount * 2 || datasetVersion.item_count < classCount * 2) {
+    return 'weak_or_unknown_balance';
+  }
+  return 'balance_requires_metric_slices';
+};
+
+const countEligibleTrainingWorkers = (taskType: TaskType, framework: ModelFramework): number => {
+  const nowMs = Date.now();
+  return trainingWorkerNodes
+    .filter((worker) => worker.enabled)
+    .filter((worker) => Boolean(worker.endpoint))
+    .filter((worker) => resolveWorkerEffectiveStatus(worker, nowMs) === 'online')
+    .filter((worker) => workerSupportsJob(worker, taskType, framework))
+    .filter((worker) => getWorkerInFlightJobs(worker.id) < Math.max(1, worker.max_concurrency)).length;
+};
+
+const buildTrainingReadinessReport = (params: {
+  dataset: DatasetRecord;
+  datasetVersion: DatasetVersionRecord;
+  recipe: TrainingRecipeRecord;
+  input: EvaluateTrainingReadinessInput;
+  rejectUnknownParams?: boolean;
+}): TrainingReadinessReport => {
+  const { dataset, datasetVersion, recipe, input } = params;
+  const datasetItemsForDataset = datasetItems.filter((item) => item.dataset_id === dataset.id);
+  const readyVisualSampleCount = datasetItemsForDataset.filter(isVisualReadyDatasetItem).length;
+  const classBalanceSummary = summarizeClassBalance(dataset, datasetVersion);
+  const runtimeControls = getStoredRuntimeControlConfig();
+  const runtimeFramework = getStoredRuntimeFrameworkConfig(input.framework);
+  const dependenciesReady = Boolean(
+    runtimeFramework.endpoint ||
+      runtimeFramework.local_train_command ||
+      runtimeFramework.local_model_path
+  );
+  const strictRealEnabled = runtimeControls.disable_simulated_train_fallback;
+  const eligibleWorkerCount = countEligibleTrainingWorkers(input.task_type, input.framework);
+  const requestedWorkerId = input.worker_id?.trim() ?? '';
+  const workerBlockers: string[] = [];
+  const configSnapshot = buildRecipeParamSnapshot(recipe, input.config ?? {}, {
+    rejectUnknownParams: params.rejectUnknownParams
+  });
+
+  if (input.execution_target === 'worker') {
+    if (requestedWorkerId) {
+      const selectedWorker = trainingWorkerNodes.find((worker) => worker.id === requestedWorkerId) ?? null;
+      if (!selectedWorker) {
+        workerBlockers.push('selected_worker_not_found');
+      } else if (
+        !selectedWorker.enabled ||
+        !selectedWorker.endpoint ||
+        resolveWorkerEffectiveStatus(selectedWorker) !== 'online' ||
+        !workerSupportsJob(selectedWorker, input.task_type, input.framework)
+      ) {
+        workerBlockers.push('selected_worker_not_eligible');
+      }
+    } else if (eligibleWorkerCount <= 0) {
+      workerBlockers.push('no_eligible_online_worker');
+    }
+  }
+
+  const checks: TrainingReadinessCheck[] = [
+    {
+      key: 'dataset.status',
+      title: 'Dataset ready state',
+      status: dataset.status === 'ready' ? 'pass' : 'blocked',
+      message:
+        dataset.status === 'ready'
+          ? 'Selected dataset is ready.'
+          : 'Selected dataset must be marked ready before launch.',
+      evidence: { dataset_status: dataset.status },
+      remediation_action: dataset.status === 'ready' ? null : 'Finish upload/import processing and mark the dataset ready.',
+      owner_surface: 'dataset'
+    },
+    {
+      key: 'dataset.ready_visual_samples',
+      title: 'Ready visual samples',
+      status: readyVisualSampleCount > 0 ? 'pass' : 'blocked',
+      message: `${readyVisualSampleCount} ready visual samples found.`,
+      evidence: {
+        ready_visual_sample_count: readyVisualSampleCount,
+        total_item_count: datasetVersion.item_count
+      },
+      remediation_action: readyVisualSampleCount > 0 ? null : 'Upload or import ready visual files into the dataset.',
+      owner_surface: 'dataset'
+    },
+    {
+      key: 'dataset.train_split',
+      title: 'Train split',
+      status: datasetVersion.split_summary.train > 0 ? 'pass' : 'blocked',
+      message: `${datasetVersion.split_summary.train} train split items found.`,
+      evidence: datasetVersion.split_summary,
+      remediation_action:
+        datasetVersion.split_summary.train > 0 ? null : 'Assign at least one ready item to the train split and create a new version.',
+      owner_surface: 'dataset'
+    },
+    {
+      key: 'annotation.coverage',
+      title: 'Annotation coverage',
+      status:
+        datasetVersion.annotation_coverage <= 0
+          ? 'blocked'
+          : datasetVersion.annotation_coverage < 0.8
+            ? 'warning'
+            : 'pass',
+      message: `Annotation coverage is ${Math.round(datasetVersion.annotation_coverage * 100)}%.`,
+      evidence: { annotation_coverage: datasetVersion.annotation_coverage },
+      remediation_action:
+        datasetVersion.annotation_coverage <= 0
+          ? 'Annotate or import labels before training.'
+          : datasetVersion.annotation_coverage < 0.8
+            ? 'Review low-coverage slices before relying on model quality.'
+            : null,
+      owner_surface: 'annotation'
+    },
+    {
+      key: 'annotation.class_balance',
+      title: 'Class balance',
+      status: classBalanceSummary === 'weak_or_unknown_balance' ? 'warning' : 'pass',
+      message:
+        classBalanceSummary === 'weak_or_unknown_balance'
+          ? 'Class balance is weak or cannot be verified from current annotations.'
+          : 'Class balance has no blocking issue in the current lightweight check.',
+      evidence: {
+        class_count: dataset.label_schema.classes.length,
+        class_balance_summary: classBalanceSummary
+      },
+      remediation_action:
+        classBalanceSummary === 'weak_or_unknown_balance'
+          ? 'Inspect per-class slices and collect or relabel underrepresented classes.'
+          : null,
+      owner_surface: 'annotation'
+    },
+    {
+      key: 'runtime.dependencies',
+      title: 'Runtime dependencies',
+      status: dependenciesReady ? 'pass' : 'warning',
+      message: dependenciesReady
+        ? 'Runtime has a train command, endpoint, or local model path configured.'
+        : 'Runtime training dependencies are not fully configured; launch may fall back or fail.',
+      evidence: {
+        has_endpoint: Boolean(runtimeFramework.endpoint),
+        has_local_train_command: Boolean(runtimeFramework.local_train_command),
+        has_local_model_path: Boolean(runtimeFramework.local_model_path)
+      },
+      remediation_action: dependenciesReady ? null : 'Configure runtime settings for the selected framework.',
+      owner_surface: 'runtime'
+    },
+    {
+      key: 'runtime.strict_real',
+      title: 'Strict real execution',
+      status: strictRealEnabled ? 'pass' : 'warning',
+      message: strictRealEnabled
+        ? 'Simulated fallback is disabled.'
+        : 'Simulated fallback is allowed; registration will still block non-real artifacts.',
+      evidence: { disable_simulated_train_fallback: strictRealEnabled },
+      remediation_action: strictRealEnabled ? null : 'Enable strict real training in runtime settings for production-quality evidence.',
+      owner_surface: 'runtime'
+    },
+    {
+      key: 'workers.eligibility',
+      title: 'Worker eligibility',
+      status: workerBlockers.length > 0 ? 'blocked' : eligibleWorkerCount > 0 ? 'pass' : 'warning',
+      message:
+        workerBlockers.length > 0
+          ? `Worker dispatch blocker: ${workerBlockers.join(', ')}.`
+          : eligibleWorkerCount > 0
+            ? `${eligibleWorkerCount} eligible online worker(s) found.`
+            : 'No eligible online worker found; control-plane execution may be used.',
+      evidence: {
+        eligible_worker_count: eligibleWorkerCount,
+        execution_target: input.execution_target ?? 'auto',
+        selected_worker_id: requestedWorkerId || null
+      },
+      remediation_action:
+        workerBlockers.length > 0 ? 'Select a compatible online worker or switch to auto/control-plane dispatch.' : null,
+      owner_surface: 'workers'
+    },
+    ...configSnapshot.checks
+  ];
+
+  const status: TrainingReadinessReport['status'] = checks.some((check) => check.status === 'blocked')
+    ? 'blocked'
+    : checks.some((check) => check.status === 'warning')
+      ? 'warning'
+      : 'pass';
+  const summary =
+    status === 'blocked'
+      ? 'Training launch is blocked until the required data, annotation, parameter, or worker issues are fixed.'
+      : status === 'warning'
+        ? 'Training can be launched, but warnings should remain visible and captured in the job snapshot.'
+        : 'Dataset, recipe, runtime, and dispatch checks are ready for launch.';
+
+  return {
+    status,
+    summary,
+    dataset_version_id: datasetVersion.id,
+    recipe_id: recipe.recipe_id,
+    framework: input.framework,
+    task_type: input.task_type,
+    checks,
+    dataset: {
+      ready_visual_sample_count: readyVisualSampleCount,
+      total_item_count: datasetVersion.item_count,
+      split_summary: datasetVersion.split_summary,
+      annotation_coverage: datasetVersion.annotation_coverage,
+      label_completeness: datasetVersion.annotation_coverage,
+      class_balance_summary: classBalanceSummary,
+      ocr_charset_summary: input.task_type === 'ocr' ? 'charset_profile_requires_dataset_diagnostics' : null
+    },
+    runtime: {
+      dependencies_ready: dependenciesReady,
+      device_summary: runtimeControls.python_bin ? `python=${runtimeControls.python_bin}` : 'device_not_reported',
+      strict_real_enabled: strictRealEnabled,
+      fallback_policy: strictRealEnabled ? 'strict_real' : 'allowed_with_warning'
+    },
+    worker: {
+      eligible_worker_count: eligibleWorkerCount,
+      selected_worker_id: requestedWorkerId || null,
+      worker_blockers: workerBlockers
+    },
+    artifact_expectation: recipe.artifact_expectation,
+    created_at: now()
+  };
+};
+
+export async function listTrainingRecipes(filters: {
+  task_type?: TaskType;
+  framework?: ModelFramework;
+} = {}): Promise<TrainingRecipeRecord[]> {
+  await delay(40);
+  return filterTrainingRecipes({
+    taskType: filters.task_type,
+    framework: filters.framework
+  });
+}
+
+export async function listTrainingEvaluationSuites(filters: {
+  task_type?: TaskType;
+  framework?: ModelFramework;
+  recipe_id?: string;
+} = {}): Promise<EvaluationSuiteRecord[]> {
+  await delay(40);
+  return filterEvaluationSuites({
+    taskType: filters.task_type,
+    framework: filters.framework,
+    recipeId: filters.recipe_id
+  });
+}
+
+export async function evaluateTrainingReadiness(
+  input: EvaluateTrainingReadinessInput
+): Promise<TrainingReadinessReport> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  const dataset = assertDatasetAccess(input.dataset_id, currentUser);
+  const datasetVersion = datasetVersions.find(
+    (version) => version.id === input.dataset_version_id && version.dataset_id === dataset.id
+  );
+  if (!datasetVersion) {
+    throw new Error('Dataset version not found for selected dataset.');
+  }
+  if (dataset.task_type !== input.task_type) {
+    throw new Error('Dataset task_type does not match training task_type.');
+  }
+  const recipe = findTrainingRecipeForInput(input);
+  if (!recipe) {
+    throw new Error('No training recipe is available for the selected task/framework.');
+  }
+  return buildTrainingReadinessReport({
+    dataset,
+    datasetVersion,
+    recipe,
+    input,
+    rejectUnknownParams: true
+  });
+}
+
 export async function listTrainingJobs(): Promise<TrainingJobRecord[]> {
   await delay(120);
   const currentUser = findCurrentUser();
@@ -17834,6 +18671,57 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     throw new Error('Selected dataset version must include annotation coverage before launch.');
   }
 
+  const recipe = findTrainingRecipeForInput(input);
+  let trainingConfig = { ...input.config };
+  if (recipe) {
+    const recipeWasExplicit = Boolean(input.recipe_id?.trim());
+    if (
+      recipeWasExplicit &&
+      input.base_model.trim() &&
+      !recipe.base_model_options.includes(input.base_model.trim())
+    ) {
+      throw new Error('Selected base_model is not allowed by the training recipe.');
+    }
+
+    const paramSnapshot = buildRecipeParamSnapshot(recipe, input.config, {
+      rejectUnknownParams: recipeWasExplicit
+    });
+    const blockedParamCheck = paramSnapshot.checks.find((check) => check.status === 'blocked');
+    if (blockedParamCheck) {
+      throw new Error(blockedParamCheck.message);
+    }
+
+    const readinessSnapshot = buildTrainingReadinessReport({
+      dataset,
+      datasetVersion,
+      recipe,
+      input: {
+        task_type: input.task_type,
+        framework: input.framework,
+        dataset_id: dataset.id,
+        dataset_version_id: datasetVersion.id,
+        recipe_id: recipe.recipe_id,
+        base_model: input.base_model,
+        config: input.config,
+        execution_target: input.execution_target,
+        worker_id: input.worker_id
+      },
+      rejectUnknownParams: recipeWasExplicit
+    });
+
+    trainingConfig = {
+      ...trainingConfig,
+      recipe_id: recipe.recipe_id,
+      recipe_version: recipe.recipe_version,
+      evaluation_suite_id: recipe.evaluation_suite_id,
+      readiness_policy_id: recipe.readiness_policy_id,
+      resolved_params: JSON.stringify(paramSnapshot.resolvedParams),
+      user_overrides: JSON.stringify(paramSnapshot.userOverrides),
+      artifact_expectation: JSON.stringify(recipe.artifact_expectation),
+      readiness_snapshot: JSON.stringify(readinessSnapshot)
+    };
+  }
+
   const trainer = getTrainerByFramework(input.framework);
   const validation = await trainer.validate_dataset({
     datasetId: dataset.id,
@@ -17865,7 +18753,7 @@ export async function createTrainingJob(input: CreateTrainingJobInput): Promise<
     dataset_id: dataset.id,
     dataset_version_id: datasetVersion.id,
     base_model: input.base_model.trim(),
-    config: input.config,
+    config: trainingConfig,
     execution_mode: 'unknown',
     execution_target: scheduling.execution_target,
     scheduled_worker_id: scheduling.worker?.id ?? null,

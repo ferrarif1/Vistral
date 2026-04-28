@@ -1,2 +1,2 @@
-torch==2.5.1+cpu
-torchvision==0.20.1+cpu
+https://download-r2.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp311-cp311-linux_x86_64.whl
+https://download-r2.pytorch.org/whl/cpu/torchvision-0.20.1%2Bcpu-cp311-cp311-linux_x86_64.whl
