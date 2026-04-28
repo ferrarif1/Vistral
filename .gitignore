@@ -12,3 +12,5 @@ __pycache__/
 *.pyc
 runtime-assets/doctr-preseed/*
 !runtime-assets/doctr-preseed/.gitkeep
+/.codex
+/.codex

@@ -184,6 +184,10 @@ Actor: `user`
 8. verify resulting queue distribution (`needs_work` / `in_review` / `rejected` / `approved`)
 9. jump into annotation workspace with queue/item context preselected (and keep `version` context when launched from a dataset snapshot)
 10. open training jobs or inference validation from a dataset-version action with preserved query context (`/training/jobs?dataset=<id>&version=<id>`, `/inference/validate?dataset=<id>&version=<id>`)
+11. when dataset detail or annotation workspace is opened from inference-validation active-learning follow-up, the current metadata scope must stay visible and executable:
+   - dataset detail restores sample-browser filters from URL (`queue`, `q`, `split`, `item_status`, `meta`)
+   - active-learning metadata such as `inference_run_id=<id>` and `feedback_reason=active_learning:<cluster>` remains visible as page context, not a hidden implementation detail
+   - users can continue into annotation with the same filtered slice or jump back to the originating validation lane without rebuilding the filter manually
 
 ## 5. Flow D: Annotation Workflow (Phase 2 minimum, implementing now)
 Actor: `user` (annotator), `user/admin` (reviewer by capability)
@@ -213,6 +217,7 @@ Current phase target:
 9. keyboard path remains equivalent to the primary UI path: `B/V` tool switch, `Ctrl/Cmd+S` save, `Enter` submit review, `ArrowLeft/ArrowRight` previous/next sample
 10. once an item enters `in_review`, annotation payload becomes read-only in the upsert path; only the review endpoint may move it to `approved`/`rejected`
 11. when rejected, reviewer must provide `review_reason_code`; latest review reason/comment remain visible during rework until next review, and moving the item back to `in_progress` should keep the same item open inside the `needs_work` queue before any further edits
+12. when annotation workspace is opened from the active-learning loop, the page keeps the same scoped metadata filter (`inference_run_id`, `feedback_reason`) and makes the validation return path obvious so returned samples can be corrected without losing run/task context
 
 ## 5.1 Flow D1: Single-Sample Review Workbench (evolution track)
 Actor: `user` (annotator/reviewer by capability)
