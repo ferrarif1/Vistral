@@ -39,13 +39,20 @@
     "smoke:account-governance": "bash scripts/smoke-account-governance.sh",
     "smoke:conversation-context": "bash scripts/smoke-conversation-context.sh",
     "smoke:conversation-actions": "bash scripts/smoke-conversation-actions.sh",
+    "smoke:conversation-goal-orchestration": "bash scripts/smoke-conversation-goal-orchestration.sh",
     "smoke:conversation-history-clear": "bash scripts/smoke-conversation-history-clear.sh",
     "smoke:vision-task-closure": "bash scripts/smoke-vision-task-closure.sh",
+    "smoke:vision-agent-multi-task": "bash scripts/smoke-vision-agent-multi-task.sh",
     "smoke:conversation-next-steps": "tsx scripts/smoke-conversation-next-steps.ts",
     "smoke:conversation-next-steps-ui-wiring": "tsx scripts/smoke-conversation-next-steps-ui-wiring.ts",
     "smoke:conversation-next-steps-browser": "tsx scripts/smoke-conversation-next-steps-browser.ts",
     "smoke:training-cockpit-browser": "tsx scripts/smoke-training-cockpit-browser.ts",
+<<<<<<< HEAD
+    "smoke:agent-studio": "bash scripts/smoke-agent-studio.sh",
     "smoke:training-workshop-contract": "bash scripts/smoke-training-workshop-contract.sh",
+    "smoke:pixel-workshop-skin": "bash scripts/smoke-pixel-workshop-skin.sh",
+=======
+>>>>>>> parent of 10605c8 (动画式交互)
     "smoke:conversation-ops-bridge": "bash scripts/smoke-conversation-ops-bridge.sh",
     "smoke:runtime-profile-activation": "bash scripts/smoke-runtime-profile-activation.sh",
     "smoke:inference-feedback-guard": "bash scripts/smoke-inference-feedback-guard.sh",
@@ -62,6 +69,7 @@
     "smoke:demo:train-data": "bash scripts/smoke-demo-train-data.sh",
     "smoke:ocr-closure": "bash scripts/smoke-ocr-closure.sh",
     "smoke:dataset-export-roundtrip": "bash scripts/smoke-dataset-export-roundtrip.sh",
+    "smoke:local-folder-import-train": "bash scripts/smoke-local-folder-import-train.sh",
     "smoke:dataset-delete-consistency": "bash scripts/smoke-dataset-delete-consistency.sh",
     "smoke:training-worker-scheduler": "bash scripts/smoke-training-worker-scheduler.sh",
     "smoke:training-worker-dispatch": "bash scripts/smoke-training-worker-dispatch.sh",
@@ -87,15 +95,14 @@
     "docker:verify:pure-real": "OCR_CLOSURE_STRICT_LOCAL_COMMAND=true OCR_CLOSURE_REQUIRE_REAL_MODE=true OCR_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION=true REAL_CLOSURE_STRICT_REGISTRATION=true REAL_CLOSURE_REQUIRE_REAL_MODE=true REAL_CLOSURE_REQUIRE_PURE_REAL_REGISTRATION=true REAL_CLOSURE_ALLOW_OCR_REAL_PROBE_REGISTRATION=false bash scripts/docker-verify-full.sh"
   },
   "dependencies": {
-    "jszip": "^3.10.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.30.1"
   },
   "devDependencies": {
-    "@types/node": "^22.15.17",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "@types/node": "^22.15.17",
     "@typescript-eslint/eslint-plugin": "^8.33.1",
     "@typescript-eslint/parser": "^8.33.1",
     "@vitejs/plugin-react": "^4.5.2",

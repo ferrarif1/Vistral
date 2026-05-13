@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" role="img" aria-label="Pixel bug fix feedback room">
+  <rect width="640" height="420" fill="#21130f"/>
+  <g shape-rendering="crispEdges">
+    <rect x="36" y="54" width="568" height="320" fill="#301b14" stroke="#ffb35d" stroke-width="8"/>
+    <rect x="62" y="82" width="516" height="252" fill="#5a3320"/>
+    <rect x="88" y="120" width="136" height="128" fill="#121923" stroke="#ff8b8b" stroke-width="6"/>
+    <rect x="106" y="140" width="98" height="18" fill="#ff8b8b"/>
+    <rect x="106" y="174" width="70" height="14" fill="#f3c267"/>
+    <rect x="106" y="202" width="86" height="14" fill="#75d8a7"/>
+    <rect x="272" y="126" width="108" height="120" fill="#151f2d" stroke="#e5b66a" stroke-width="6"/>
+    <rect x="292" y="148" width="68" height="58" fill="#6fb8ff"/>
+    <rect x="300" y="156" width="52" height="42" fill="#0b1b2c"/>
+    <rect x="430" y="118" width="84" height="134" fill="#291611" stroke="#f3c267" stroke-width="6"/>
+    <rect x="446" y="142" width="52" height="18" fill="#75d8a7"/>
+    <rect x="446" y="174" width="52" height="18" fill="#ff8b8b"/>
+    <rect x="446" y="206" width="52" height="18" fill="#f3c267"/>
+    <rect x="82" y="304" width="464" height="30" fill="#23130f"/>
+    <rect x="230" y="264" width="38" height="38" fill="#e85d48"/>
+    <rect x="238" y="250" width="10" height="18" fill="#e85d48"/>
+    <rect x="278" y="268" width="34" height="34" fill="#6fb8ff"/>
+    <rect x="372" y="262" width="46" height="44" fill="#d6d6c2"/>
+    <rect x="382" y="272" width="8" height="8" fill="#091522"/>
+    <rect x="402" y="272" width="8" height="8" fill="#091522"/>
+  </g>
+</svg>

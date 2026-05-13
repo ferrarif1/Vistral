@@ -377,7 +377,10 @@ ready_task_id="$(echo "${ready_understand_resp}" | jq -r '.data.task.id // empty
 ready_task_status="$(echo "${ready_understand_resp}" | jq -r '.data.task.status // empty')"
 ready_task_can_start="$(echo "${ready_understand_resp}" | jq -r '.data.can_start_training // false')"
 ready_task_missing_count="$(echo "${ready_understand_resp}" | jq -r '(.data.task.missing_requirements | length) // 0')"
-if [[ -z "${ready_task_id}" || "${ready_task_status}" != "plan_ready" || "${ready_task_can_start}" != "true" || "${ready_task_missing_count}" -ne 0 ]]; then
+ready_task_recipe_id="$(echo "${ready_understand_resp}" | jq -r '.data.task.training_plan.recipe_id // empty')"
+ready_task_recipe_version="$(echo "${ready_understand_resp}" | jq -r '.data.task.training_plan.recipe_version // empty')"
+ready_task_param_contract_count="$(echo "${ready_understand_resp}" | jq -r '(.data.task.training_plan.param_contract | length) // 0')"
+if [[ -z "${ready_task_id}" || "${ready_task_status}" != "plan_ready" || "${ready_task_can_start}" != "true" || "${ready_task_missing_count}" -ne 0 || "${ready_task_recipe_id}" != "yolo-detection-default" || -z "${ready_task_recipe_version}" || "${ready_task_param_contract_count}" -lt 1 ]]; then
   echo "[smoke-vision-task-closure] ready understand response did not match contract."
   echo "${ready_understand_resp}"
   exit 1
@@ -401,6 +404,9 @@ wait_training_job_status "${training_job_id}" "completed"
 job_detail_resp="${WAIT_JOB_PAYLOAD}"
 job_execution_mode="$(echo "${job_detail_resp}" | jq -r '.data.job.execution_mode // empty')"
 job_artifact_mode="$(echo "${job_detail_resp}" | jq -r '.data.artifact_summary.mode // empty')"
+job_recipe_id="$(echo "${job_detail_resp}" | jq -r '.data.job.config.recipe_id // empty')"
+job_recipe_version="$(echo "${job_detail_resp}" | jq -r '.data.job.config.recipe_version // empty')"
+job_readiness_snapshot_status="$(echo "${job_detail_resp}" | jq -r '(.data.job.config.readiness_snapshot // "{}" | fromjson? | .status) // empty')"
 if [[ "${job_execution_mode}" != "local_command" ]]; then
   echo "[smoke-vision-task-closure] training job did not use local_command execution."
   echo "${job_detail_resp}"
@@ -408,6 +414,11 @@ if [[ "${job_execution_mode}" != "local_command" ]]; then
 fi
 if [[ -z "${job_artifact_mode}" ]]; then
   echo "[smoke-vision-task-closure] training job artifact summary is missing."
+  echo "${job_detail_resp}"
+  exit 1
+fi
+if [[ "${job_recipe_id}" != "yolo-detection-default" || -z "${job_recipe_version}" || -z "${job_readiness_snapshot_status}" || "${job_readiness_snapshot_status}" == "blocked" ]]; then
+  echo "[smoke-vision-task-closure] training job is missing recipe/readiness agent evidence."
   echo "${job_detail_resp}"
   exit 1
 fi

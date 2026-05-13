@@ -278,27 +278,15 @@ export default function CreateModelPage() {
   const metadataLocked = Boolean(draftModel);
   const approvalSubmitted = draftModel?.status === 'pending_approval';
   const draftStatusLabel = draftModel ? t(draftModel.status) : t('not started');
-  const launchContext: LaunchContext = useMemo(
-    () => ({
-      datasetId: preferredDatasetId || null,
-      versionId: preferredDatasetVersionId || null,
-      taskType: modelType || preferredModelType || null,
-      framework: preferredFramework || null,
-      executionTarget: preferredExecutionTarget || null,
-      workerId: preferredWorkerId || null,
-      returnTo: outboundReturnTo
-    }),
-    [
-      modelType,
-      outboundReturnTo,
-      preferredDatasetId,
-      preferredDatasetVersionId,
-      preferredExecutionTarget,
-      preferredFramework,
-      preferredModelType,
-      preferredWorkerId
-    ]
-  );
+  const launchContext: LaunchContext = {
+    datasetId: preferredDatasetId || null,
+    versionId: preferredDatasetVersionId || null,
+    taskType: modelType || preferredModelType || null,
+    framework: preferredFramework || null,
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
   const pendingModelsPath = useMemo(
     () => buildPendingModelsPath(draftModel, launchContext),
     [draftModel, launchContext]

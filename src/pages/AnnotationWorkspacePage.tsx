@@ -1246,27 +1246,16 @@ export default function AnnotationWorkspacePage() {
     () => extractMetadataFilterValue(queueMetadataFilter, 'inference_run_id'),
     [queueMetadataFilter]
   );
-  const launchContextForAnnotationFlow: LaunchContext = useMemo(
-    () => ({
-      taskType: preferredTaskType ?? dataset?.task_type ?? null,
-      framework: resolvePreferredFrameworkForTask(
-        preferredTaskType ?? dataset?.task_type ?? null,
-        preferredFramework ?? selectedModelVersion?.framework ?? null
-      ),
-      executionTarget: preferredExecutionTarget || null,
-      workerId: preferredWorkerId || null,
-      returnTo: outboundReturnTo
-    }),
-    [
-      dataset?.task_type,
-      outboundReturnTo,
-      preferredExecutionTarget,
-      preferredFramework,
-      preferredTaskType,
-      preferredWorkerId,
-      selectedModelVersion?.framework
-    ]
-  );
+  const launchContextForAnnotationFlow: LaunchContext = {
+    taskType: preferredTaskType ?? dataset?.task_type ?? null,
+    framework: resolvePreferredFrameworkForTask(
+      preferredTaskType ?? dataset?.task_type ?? null,
+      preferredFramework ?? selectedModelVersion?.framework ?? null
+    ),
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
   const datasetsPath = buildDatasetsPath(launchContextForAnnotationFlow);
   const modelVersionsPath = buildModelVersionsPath(launchContextForAnnotationFlow, {
     selectedVersionId: selectedModelVersionId || undefined

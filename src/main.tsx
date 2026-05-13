@@ -7,7 +7,13 @@ import './styles/tokens.css';
 import './styles/theme.css';
 import './styles/workspace.css';
 import './styles/visualization.css';
+<<<<<<< HEAD
 import './styles/workshop.css';
+import './styles/game-workshop.css';
+import './styles/pixel-workshop-skin.css';
+import './styles/agent-studio.css';
+=======
+>>>>>>> parent of 10605c8 (动画式交互)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -1,0 +1,621 @@
+{
+  "input": "public/assets/vistral-workshop/generated/raw-magenta-sheets/furniture-equipment.png",
+  "rows": 4,
+  "cols": 4,
+  "threshold": 42,
+  "edge_threshold": 150,
+  "component_mode": "all",
+  "component_padding": 10,
+  "min_component_area": 300,
+  "edge_touch_margin": 0,
+  "accepted": [
+    {
+      "index": 0,
+      "label": "dataset-shelf",
+      "grid": [
+        0,
+        0
+      ],
+      "source_box": [
+        0,
+        0,
+        313,
+        313
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        64,
+        67,
+        309,
+        309
+      ],
+      "padded_crop_bbox": [
+        54,
+        57,
+        309,
+        309
+      ],
+      "edge_touch": true,
+      "output_size": [
+        255,
+        252
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/dataset-shelf/prop.png"
+    },
+    {
+      "index": 1,
+      "label": "data-crates",
+      "grid": [
+        0,
+        1
+      ],
+      "source_box": [
+        313,
+        0,
+        626,
+        313
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        73,
+        291,
+        309
+      ],
+      "padded_crop_bbox": [
+        0,
+        63,
+        301,
+        309
+      ],
+      "edge_touch": true,
+      "output_size": [
+        301,
+        246
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/data-crates/prop.png"
+    },
+    {
+      "index": 2,
+      "label": "annotation-desk",
+      "grid": [
+        0,
+        2
+      ],
+      "source_box": [
+        626,
+        0,
+        939,
+        313
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        63,
+        110,
+        267,
+        309
+      ],
+      "padded_crop_bbox": [
+        53,
+        100,
+        277,
+        309
+      ],
+      "edge_touch": true,
+      "output_size": [
+        224,
+        209
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/annotation-desk/prop.png"
+    },
+    {
+      "index": 3,
+      "label": "checklist-board",
+      "grid": [
+        0,
+        3
+      ],
+      "source_box": [
+        939,
+        0,
+        1252,
+        313
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        41,
+        106,
+        237,
+        309
+      ],
+      "padded_crop_bbox": [
+        31,
+        96,
+        247,
+        309
+      ],
+      "edge_touch": true,
+      "output_size": [
+        216,
+        213
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/checklist-board/prop.png"
+    },
+    {
+      "index": 4,
+      "label": "token-vector-blackboard",
+      "grid": [
+        1,
+        0
+      ],
+      "source_box": [
+        0,
+        313,
+        313,
+        626
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        27,
+        0,
+        309,
+        299
+      ],
+      "padded_crop_bbox": [
+        17,
+        0,
+        309,
+        309
+      ],
+      "edge_touch": true,
+      "output_size": [
+        292,
+        309
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/token-vector-blackboard/prop.png"
+    },
+    {
+      "index": 5,
+      "label": "gpu-server-rack",
+      "grid": [
+        1,
+        1
+      ],
+      "source_box": [
+        313,
+        313,
+        626,
+        626
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        304,
+        299
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        309,
+        309
+      ],
+      "edge_touch": true,
+      "output_size": [
+        309,
+        309
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/gpu-server-rack/prop.png"
+    },
+    {
+      "index": 6,
+      "label": "training-loss-monitor",
+      "grid": [
+        1,
+        2
+      ],
+      "source_box": [
+        626,
+        313,
+        939,
+        626
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        45,
+        0,
+        309,
+        285
+      ],
+      "padded_crop_bbox": [
+        35,
+        0,
+        309,
+        295
+      ],
+      "edge_touch": true,
+      "output_size": [
+        274,
+        295
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/training-loss-monitor/prop.png"
+    },
+    {
+      "index": 7,
+      "label": "validation-desk",
+      "grid": [
+        1,
+        3
+      ],
+      "source_box": [
+        939,
+        313,
+        1252,
+        626
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        231,
+        295
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        241,
+        305
+      ],
+      "edge_touch": true,
+      "output_size": [
+        241,
+        305
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/validation-desk/prop.png"
+    },
+    {
+      "index": 8,
+      "label": "package-version-table",
+      "grid": [
+        2,
+        0
+      ],
+      "source_box": [
+        0,
+        626,
+        313,
+        939
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        36,
+        49,
+        308,
+        309
+      ],
+      "padded_crop_bbox": [
+        26,
+        39,
+        309,
+        309
+      ],
+      "edge_touch": true,
+      "output_size": [
+        283,
+        270
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/package-version-table/prop.png"
+    },
+    {
+      "index": 9,
+      "label": "runtime-health-monitor",
+      "grid": [
+        2,
+        1
+      ],
+      "source_box": [
+        313,
+        626,
+        626,
+        939
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        60,
+        36,
+        307,
+        243
+      ],
+      "padded_crop_bbox": [
+        50,
+        26,
+        309,
+        253
+      ],
+      "edge_touch": false,
+      "output_size": [
+        259,
+        227
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/runtime-health-monitor/prop.png"
+    },
+    {
+      "index": 10,
+      "label": "worker-node-server",
+      "grid": [
+        2,
+        2
+      ],
+      "source_box": [
+        626,
+        626,
+        939,
+        939
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        41,
+        38,
+        301,
+        243
+      ],
+      "padded_crop_bbox": [
+        31,
+        28,
+        309,
+        253
+      ],
+      "edge_touch": false,
+      "output_size": [
+        278,
+        225
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/worker-node-server/prop.png"
+    },
+    {
+      "index": 11,
+      "label": "hanging-lamp",
+      "grid": [
+        2,
+        3
+      ],
+      "source_box": [
+        939,
+        626,
+        1252,
+        939
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        62,
+        38,
+        243,
+        243
+      ],
+      "padded_crop_bbox": [
+        52,
+        28,
+        253,
+        253
+      ],
+      "edge_touch": false,
+      "output_size": [
+        201,
+        225
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/hanging-lamp/prop.png"
+    },
+    {
+      "index": 12,
+      "label": "potted-plant",
+      "grid": [
+        3,
+        0
+      ],
+      "source_box": [
+        0,
+        939,
+        313,
+        1252
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        27,
+        0,
+        309,
+        201
+      ],
+      "padded_crop_bbox": [
+        17,
+        0,
+        309,
+        211
+      ],
+      "edge_touch": true,
+      "output_size": [
+        292,
+        211
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/potted-plant/prop.png"
+    },
+    {
+      "index": 13,
+      "label": "toolbox-cables",
+      "grid": [
+        3,
+        1
+      ],
+      "source_box": [
+        313,
+        939,
+        626,
+        1252
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        309,
+        203
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        309,
+        213
+      ],
+      "edge_touch": true,
+      "output_size": [
+        309,
+        213
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/toolbox-cables/prop.png"
+    },
+    {
+      "index": 14,
+      "label": "notification-board",
+      "grid": [
+        3,
+        2
+      ],
+      "source_box": [
+        626,
+        939,
+        939,
+        1252
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        23,
+        309,
+        203
+      ],
+      "padded_crop_bbox": [
+        0,
+        13,
+        309,
+        213
+      ],
+      "edge_touch": true,
+      "output_size": [
+        309,
+        200
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/notification-board/prop.png"
+    },
+    {
+      "index": 15,
+      "label": "active-glow-corners",
+      "grid": [
+        3,
+        3
+      ],
+      "source_box": [
+        939,
+        939,
+        1252,
+        1252
+      ],
+      "component_mode": "all",
+      "component_count": 5,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        17,
+        271,
+        204
+      ],
+      "padded_crop_bbox": [
+        0,
+        7,
+        281,
+        214
+      ],
+      "edge_touch": true,
+      "output_size": [
+        281,
+        207
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/furniture-equipment/active-glow-corners/prop.png"
+    }
+  ],
+  "rejected": [],
+  "edge_touch_props": [
+    "dataset-shelf",
+    "data-crates",
+    "annotation-desk",
+    "checklist-board",
+    "token-vector-blackboard",
+    "gpu-server-rack",
+    "training-loss-monitor",
+    "validation-desk",
+    "package-version-table",
+    "potted-plant",
+    "toolbox-cables",
+    "notification-board",
+    "active-glow-corners"
+  ]
+}

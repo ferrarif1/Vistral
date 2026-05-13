@@ -17,8 +17,8 @@ Define executable route and page structure for the AI-native conversation worksp
 
 ### 3.2 Entry
 - `/`
-  - redirects to `/workspace/console`
-  - `/workspace/chat` remains available as an on-demand conversation route instead of a shared-shell default entry
+  - redirects to `/workspace/chat`
+  - professional console remains directly accessible via `/workspace/console`
 
 ### 3.3 Conversation Workspace
 - `/workspace/chat`
@@ -45,24 +45,56 @@ Define executable route and page structure for the AI-native conversation worksp
   - action cards may deep-link to `/vision/tasks/:taskId` when the backend creates or updates a structured `VisionTask`
   - completed or failed action cards may surface `Suggested next steps`; navigation links open the correct page, while executable next steps still go back through the guarded in-thread `/ops` path
 
+<<<<<<< HEAD
 ### 3.3A Pixel Lab
 - `/workspace/pixel-lab`
+  - migration note: Pixel Lab is no longer the target primary authenticated experience after the frontend reset; keep it only as a temporary lab/fallback until the Agent Training Studio replaces the console shell
   - standalone playful visualization mode that mirrors the same closed-loop workflow as the professional console
   - reachable from a persistent top platform switch in the shared page header; when users are already in Pixel Lab, the same control returns to the professional console
-  - should render one house with rooms for:
-    - dataset warehouse
-    - model character studio
-    - training workshop
-    - inference exam room
-    - delivery / version room
+  - should render one bright daytime cross-section workshop house with nine numbered rooms:
+    - `1` reception / conversation command room
+    - `2` dataset warehouse
+    - `3` data processing / cleaning + annotation room
+    - `4` feature engineering / recipe room
+    - `5` model training room
+    - `6` inference validation / exam room
+    - `7` model graduation / publish room
+    - `8` deployment service / runtime monitoring room
+    - `9` bug / feedback repair room
+  - reception / conversation command and bug / feedback return are central rooms in the House; side rails, timeline/notification summaries, assistant suggestions, and canonical links provide supporting context
   - should read existing API data only; no separate pixel-mode backend state is introduced in this phase
+  - should keep a left overview rail for project/stage/model/tasks/notes, central nine-room house, right rail for notifications/statistics/metrics, lower workbench strip for model squad and flow overview, and a lower-right draggable/collapsible OpenClaw assistant
+  - room clicks may open drawers or navigate to canonical professional pages, but the game shell must not fork the actual business workflow
   - primary actions deep-link into the canonical workflow pages (`/datasets`, `/training/jobs/new`, `/training/jobs`, `/inference/validate`, `/models/versions`)
+  - the visual skin should use bright blue-sky, red-roof, warm-wood, light-wall workshop materials, not the previous dark cyber/night control-room tone
   - the page can use a richer visual dialect than the professional console, but it must keep status, errors, loading, and next-step semantics explicit
 
+### 3.3B Agent Training Studio
+- `/workspace/console`
+  - becomes the Agent Training Studio home defined in `docs/frontend-reset.md`
+  - first screen after login is a usable workbench, not a landing page
+  - primary layout:
+    - Mission Bar for user/role/objective/readiness/context chips
+    - Agent Flow Rail for goal, data, annotation, recipe, training, validation, promotion, deployment, and feedback
+    - Workbench for one active operator task, top stepper, evidence board, primary action, and secondary repair/diagnostic actions
+    - contextual OpenClaw panel that supports chat handoff without replacing the current task
+  - home must derive counts/evidence from real API records: datasets, training jobs, model versions, inference runs, approvals, runtime/worker readiness where available
+  - when the primary CTA is `fix_runtime`, Studio must show the delivery-oriented readiness summary in the workbench itself (`runtime.agent_delivery` when available, otherwise `VisionTask.agent_next_action.blocking_items`) so the user understands why the agent stopped before opening Runtime Settings
+  - for admins, the `fix_runtime` delivery summary may expose the guarded `prepare-real-training` action inline; non-admin users should see the blocker and handoff, not an unavailable mutation button
+  - canonical workflow routes remain deep-linked from the Studio during migration; they should be visually migrated into the same Studio contract before receiving new feature work
+  - deprecated as primary frontend targets:
+    - traditional stacked dashboard cards
+    - global Pixel Workshop skinning
+    - Pixel Lab as a mode switch competing with the Studio
+    - route-local decorative wrappers that do not improve workflow structure
+
+=======
+>>>>>>> parent of 10605c8 (动画式交互)
 ### 3.4 Professional Console
 - `/workspace/console`
+  - legacy note: this section describes the pre-reset console; new work should follow `3.3B Agent Training Studio`
   - shared app shell route (global left navigation + top context header), not chat-immersive layout
-  - visual language should stay aligned with `notion/DESIGN.md`: warm white canvas, subtle neutral section contrast, whisper-weight borders, restrained card elevation, and one consistent blue interaction accent
+  - visual language should use the shared Pixel Workshop skin when enabled: room-backed surfaces, pixel-workshop atmosphere, restrained shadows, and one consistent blue interaction accent
   - every engineering-console page must follow the `single primary job per page` rule:
     - one page owns one core operator task only
     - other task domains may appear only as summary context or navigation links
@@ -72,7 +104,7 @@ Define executable route and page structure for the AI-native conversation worksp
     - top context toolbar (`WorkspaceContextBar`) for search/filter/batch actions
     - middle main work area for operational lists/canvas/tables
     - right inspector panel for selected-object details and primary follow-up actions
-  - domain-specific pages may vary information density, but should not introduce separate visual systems that break the shared Notion-inspired shell
+  - domain-specific pages may vary information density, but should not introduce separate visual systems that break the shared Pixel Workshop shell
   - left global nav, middle work area, and right inspector are independently scrollable within the shell
   - operational pages should reuse `WorkspaceWorkbench` to keep control surfaces consistent across dataset/training/model lanes
   - rollout update (2026-04): for high-frequency console routes, heavy onboarding cards are replaced with a compact single-task hint block to reduce first-screen noise while keeping clear next-action links
@@ -90,22 +122,36 @@ Define executable route and page structure for the AI-native conversation worksp
   - evidence summary
   - next recommended action
   - confirmation requirement for mutating actions
-- high-intent workbench flows may use an agent-mode panel as the top control surface:
-  - one objective statement
-  - step rail
-  - decision summary
-  - evidence chips
-  - one primary action plus secondary repair links
-  - details disclosure for diagnostics
-  - expert controls remain outside the agent panel and collapsed by default
 - motion should be functional:
   - short transitions for panel open/close and status changes
   - no layout jump during loading/success/error transitions
   - reduced-motion preference respected
 - visual tone:
-  - warm neutral surfaces and whisper borders remain the default
+  - Pixel Workshop surfaces should remain operational and readable, not become decorative landing pages
   - one consistent blue for primary actions
+  - route-level room assets may decorate headers/backdrops, but dense tables/forms must stay scannable
   - avoid saturated gradients, nested cards, decorative clutter, and page-specific visual dialects
+
+### 3.4B Pixel Workshop Skin
+- authenticated pages use a pixel-game shell: the top HUD carries brand/session/status controls, the bottom room bar carries canonical navigation, and the traditional left sidebar is not shown because it duplicates the house room map.
+- the shared shell follows the `src-img/方案效果总览.png` prototype as the structural blueprint rather than as final art: top HUD, central room/work surface, right OpenClaw assistant dock, lower model/timeline/resource/work-note panels, and bottom room navigation.
+- the visual target remains the bright daytime workshop from `src-img/新工作台.png`; the darker prototype should not reintroduce a night/cyber palette.
+- the shell keeps one nine-room central House. Conversation/reception and bug/feedback repair are real rooms in that House, while the assistant dock, task/notification rail, timeline entries, rework badges, and canonical links remain supporting navigation/evidence surfaces.
+- shared authenticated workspace pages inherit the Pixel Workshop skin through `WorkspacePage`, the compact room-context strip, `PageHeader`, shared cards, workbench panels, and unified state feedback.
+- route-to-room mapping:
+  - `/workspace/console`, `/workspace/chat`, `/vision/tasks*` => command room
+  - `/datasets*` and annotation workspace => data warehouse / cleaning room
+  - `/training*` and `/training-workshop` => training room
+  - `/inference/validate` => exam room
+  - `/models*` and `/admin/models/pending` => graduation / publish room
+  - `/settings/runtime`, `/settings/workers`, and runtime templates => deployment / monitoring room
+  - `/admin/audit` and verification reports => governance / monitoring room
+- centralized assets live in `public/assets/vistral-workshop/`; current route-room additions include `command.svg`, `publish.svg`, and `runtime.svg` alongside the supplied PNG references.
+- missing room or character assets should be generated into the same folder or represented by CSS/SVG fallback visuals until generated.
+- the skin is not a new route family and does not replace canonical professional pages. It is a coherent presentation layer over the existing IA, and it should render actual pixel-game controls/panels rather than placing a reference image behind old screens.
+- professional pages should increasingly feel like entering the selected room from the training house. The page still owns its single primary task, but the surrounding shell supplies room identity, assistant context, live events, and game-style movement.
+- custom routes outside `WorkspacePage` must still expose a matching room-context element; current examples are chat command room and the focused training workshop.
+- annotation and training cockpit remain specialist operator surfaces, but their headers, panels, action bars, and telemetry cards should inherit the same workshop assets, borders, and blue/gold state language.
 
 ### 3.4.1 Single-Task Hint Rollout (2026-04)
 - migrated routes:
@@ -165,11 +211,6 @@ Define executable route and page structure for the AI-native conversation worksp
   - the main workspace should also mirror the first incomplete detail-step with one explicit next-action card so operators can keep moving without re-reading the full page
   - top stepper for ingestion/split/version
   - dataset attachments always visible/deletable/status-aware
-  - dataset detail should include one bundle-import helper for local folders and `.zip` files:
-    - detect images plus supported annotation payloads (`yolo`, `coco`, `labelme`, `ocr`)
-    - surface a compact import summary before mutation
-    - optionally auto-run split + dataset-version snapshot preparation after import
-    - finish with a direct continuation into training launch using the prepared dataset-version context
   - visual sample browser area supports grid/list switch, fast filters, and bulk item operations
   - item browser filters should include at minimum search, split, item status, annotation queue status, and metadata/tag hints
   - dataset detail also surfaces annotation summary cards and direct queue links into annotation workspace (`needs_work`, `in_review`, `rejected`, `approved`)
@@ -241,17 +282,6 @@ Define executable route and page structure for the AI-native conversation worksp
     - overall styling should feel like a premium film-style control console: dark, sharp, minimal, and technical, with motion reserved for the live training path and convergence signals
   - supports mode switch between `live` and `demo`
   - `demo` mode must expose playback controls (`play`, `pause`, `replay`, `1x/2x/4x`)
-- `/training-workshop`
-  - focused pixel-style Model Training Workshop reachable from the Data & Run navigation group.
-  - first screen is the actual interactive workshop, not a landing page.
-  - four zones are required:
-    - main pixel house scene with exactly three rooms: dataset warehouse, training lab, inference exam room.
-    - right status panel with task, selected model character, stage, dataset, progress, metrics, latest event, and next suggested action.
-    - bottom Vistral training timeline from dataset selection through model publish.
-    - model/dataset selector area for changing the single active character and selecting train/validation datasets.
-  - the scene renders only the selected active model character. Additional base-model options remain selector cards and must not animate as separate workers.
-  - the page can run without backend data using mock state, while reserving `mapVistralTaskToWorkshopStage(task)` for real task integration.
-  - human review is a blocking interaction state; publish cannot occur without an explicit operator decision.
   - playback state should stay readable in-page (`playing`, `paused`, `finished`) so demo sessions never look frozen by accident
   - `live` mode should prefer real backend data, while missing tuning/resource feeds stay clearly marked as unavailable or derived instead of pretending to be persisted truth
   - current degradation messaging should stay inside the same page instead of auto-forcing demo mode when only part of the telemetry surface is missing
@@ -265,7 +295,6 @@ Define executable route and page structure for the AI-native conversation worksp
     - which task is blocked by missing requirements
     - which task is currently training
     - which task is ready for the next operator action
-  - the first control surface should be an agent-mode panel for the highest-priority visible task, with one goal summary, step rail, evidence chips, and one explicit primary next action
   - filters should stay lightweight (`status` first); row click opens detail; one explicit `Continue as agent` control may call task auto-advance, but it must remain a visible operator action rather than an always-on background mutation
   - every visible task row/card should surface:
     - current recommendation title

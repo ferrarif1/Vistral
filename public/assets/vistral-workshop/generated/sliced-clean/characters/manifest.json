@@ -1,0 +1,395 @@
+{
+  "input": "public/assets/vistral-workshop/generated/raw-magenta-sheets/characters.png",
+  "rows": 2,
+  "cols": 5,
+  "threshold": 42,
+  "edge_threshold": 150,
+  "component_mode": "all",
+  "component_padding": 10,
+  "min_component_area": 300,
+  "edge_touch_margin": 2,
+  "accepted": [
+    {
+      "index": 0,
+      "label": "openclaw-crab",
+      "grid": [
+        0,
+        0
+      ],
+      "source_box": [
+        0,
+        0,
+        334,
+        470
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        25,
+        165,
+        310,
+        392
+      ],
+      "padded_crop_bbox": [
+        15,
+        155,
+        310,
+        402
+      ],
+      "edge_touch": true,
+      "output_size": [
+        295,
+        247
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/openclaw-crab/prop.png"
+    },
+    {
+      "index": 1,
+      "label": "robot-model",
+      "grid": [
+        0,
+        1
+      ],
+      "source_box": [
+        334,
+        0,
+        668,
+        470
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        83,
+        310,
+        396
+      ],
+      "padded_crop_bbox": [
+        0,
+        73,
+        310,
+        406
+      ],
+      "edge_touch": true,
+      "output_size": [
+        310,
+        333
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/robot-model/prop.png"
+    },
+    {
+      "index": 2,
+      "label": "dataset-keeper",
+      "grid": [
+        0,
+        2
+      ],
+      "source_box": [
+        668,
+        0,
+        1002,
+        470
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        73,
+        74,
+        310,
+        396
+      ],
+      "padded_crop_bbox": [
+        63,
+        64,
+        310,
+        406
+      ],
+      "edge_touch": true,
+      "output_size": [
+        247,
+        342
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/dataset-keeper/prop.png"
+    },
+    {
+      "index": 3,
+      "label": "annotation-specialist",
+      "grid": [
+        0,
+        3
+      ],
+      "source_box": [
+        1002,
+        0,
+        1336,
+        470
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        29,
+        94,
+        310,
+        396
+      ],
+      "padded_crop_bbox": [
+        19,
+        84,
+        310,
+        406
+      ],
+      "edge_touch": true,
+      "output_size": [
+        291,
+        322
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/annotation-specialist/prop.png"
+    },
+    {
+      "index": 4,
+      "label": "recipe-wizard",
+      "grid": [
+        0,
+        4
+      ],
+      "source_box": [
+        1336,
+        0,
+        1670,
+        470
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        74,
+        287,
+        396
+      ],
+      "padded_crop_bbox": [
+        0,
+        64,
+        297,
+        406
+      ],
+      "edge_touch": true,
+      "output_size": [
+        297,
+        342
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/recipe-wizard/prop.png"
+    },
+    {
+      "index": 5,
+      "label": "training-engineer",
+      "grid": [
+        1,
+        0
+      ],
+      "source_box": [
+        0,
+        470,
+        334,
+        940
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        63,
+        1,
+        309,
+        329
+      ],
+      "padded_crop_bbox": [
+        53,
+        0,
+        310,
+        339
+      ],
+      "edge_touch": true,
+      "output_size": [
+        257,
+        339
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/training-engineer/prop.png"
+    },
+    {
+      "index": 6,
+      "label": "validation-examiner",
+      "grid": [
+        1,
+        1
+      ],
+      "source_box": [
+        334,
+        470,
+        668,
+        940
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        72,
+        0,
+        287,
+        329
+      ],
+      "padded_crop_bbox": [
+        62,
+        0,
+        297,
+        339
+      ],
+      "edge_touch": true,
+      "output_size": [
+        235,
+        339
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/validation-examiner/prop.png"
+    },
+    {
+      "index": 7,
+      "label": "publishing-graduate",
+      "grid": [
+        1,
+        2
+      ],
+      "source_box": [
+        668,
+        470,
+        1002,
+        940
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        31,
+        0,
+        240,
+        329
+      ],
+      "padded_crop_bbox": [
+        21,
+        0,
+        250,
+        339
+      ],
+      "edge_touch": true,
+      "output_size": [
+        229,
+        339
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/publishing-graduate/prop.png"
+    },
+    {
+      "index": 8,
+      "label": "runtime-operator",
+      "grid": [
+        1,
+        3
+      ],
+      "source_box": [
+        1002,
+        470,
+        1336,
+        940
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        291,
+        329
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        301,
+        339
+      ],
+      "edge_touch": true,
+      "output_size": [
+        301,
+        339
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/runtime-operator/prop.png"
+    },
+    {
+      "index": 9,
+      "label": "worker-node-companion",
+      "grid": [
+        1,
+        4
+      ],
+      "source_box": [
+        1336,
+        470,
+        1670,
+        940
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        5,
+        38,
+        273,
+        327
+      ],
+      "padded_crop_bbox": [
+        0,
+        28,
+        283,
+        337
+      ],
+      "edge_touch": false,
+      "output_size": [
+        283,
+        309
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/characters/worker-node-companion/prop.png"
+    }
+  ],
+  "rejected": [],
+  "edge_touch_props": [
+    "openclaw-crab",
+    "robot-model",
+    "dataset-keeper",
+    "annotation-specialist",
+    "recipe-wizard",
+    "training-engineer",
+    "validation-examiner",
+    "publishing-graduate",
+    "runtime-operator"
+  ]
+}

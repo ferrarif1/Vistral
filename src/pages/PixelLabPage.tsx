@@ -1,66 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import type {
-  DatasetRecord,
-  InferenceRunRecord,
-  ModelRecord,
-  ModelVersionRecord,
-  TrainingJobRecord,
-  VisionModelingTaskRecord
-} from '../../shared/domain';
+import GameWorkshopAssistant from '../components/game-workshop/GameWorkshopAssistant';
+import GameWorkshopRoom from '../components/game-workshop/GameWorkshopRoom';
+import GameWorkshopTimeline from '../components/game-workshop/GameWorkshopTimeline';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
 import { ButtonLink } from '../components/ui/Button';
-import { Select } from '../components/ui/Field';
+import { Drawer } from '../components/ui/Overlay';
+import ProgressStepper from '../components/ui/ProgressStepper';
+import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
-import { api } from '../services/api';
-
-type PixelPhase = 'data' | 'design' | 'training' | 'exam' | 'delivery';
-
-interface PixelLabState {
-  datasets: DatasetRecord[];
-  models: ModelRecord[];
-  modelVersions: ModelVersionRecord[];
-  trainingJobs: TrainingJobRecord[];
-  inferenceRuns: InferenceRunRecord[];
-  visionTasks: VisionModelingTaskRecord[];
-}
-
-const initialState: PixelLabState = {
-  datasets: [],
-  models: [],
-  modelVersions: [],
-  trainingJobs: [],
-  inferenceRuns: [],
-  visionTasks: []
-};
-
-const activeTrainingStatuses = new Set(['queued', 'preparing', 'running', 'evaluating']);
-
-const formatDateTime = (value: string) => {
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) {
-    return value;
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(parsed));
-};
-
-const sortByUpdatedDesc = <T extends { updated_at?: string; created_at: string }>(items: T[]) =>
-  [...items].sort((left, right) => {
-    const leftTime = Date.parse(left.updated_at ?? left.created_at);
-    const rightTime = Date.parse(right.updated_at ?? right.created_at);
-    return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
-  });
-
-const getModelCharacterClass = (index: number) =>
-  ['pixel-character--rose', 'pixel-character--mint', 'pixel-character--violet', 'pixel-character--amber'][
-    index % 4
-  ];
+import {
+  loadGameWorkshopSnapshot,
+  type GameWorkshopRoomId,
+  type GameWorkshopSnapshot
+} from '../features/gameWorkshopSnapshot';
+import {
+  getPixelWorkshopRoomAsset,
+  pixelWorkshopFurnitureAssets,
+  pixelWorkshopHouseAssets
+} from '../features/pixelWorkshopAssets';
 
 const pixelScopedNavKeys = [
   'dataset',
@@ -86,401 +45,591 @@ const buildScopedPixelPath = (basePath: string, currentSearch: string): string =
   return nextQuery ? `${pathname}?${nextQuery}` : pathname;
 };
 
+const activeRoomPriority: GameWorkshopRoomId[] = [
+  'reception',
+  'training',
+  'exam',
+  'annotation',
+  'recipes',
+  'publish',
+  'runtime',
+  'bugs',
+  'datasets'
+];
+
+const coreRoomIds: GameWorkshopRoomId[] = [
+  'reception',
+  'datasets',
+  'annotation',
+  'recipes',
+  'training',
+  'exam',
+  'publish',
+  'runtime',
+  'bugs'
+];
+
+const resolveInitialRoom = (snapshot: GameWorkshopSnapshot): GameWorkshopRoomId => {
+  const coreRooms = snapshot.rooms.filter((room) => coreRoomIds.includes(room.id));
+  for (const roomId of activeRoomPriority) {
+    const room = coreRooms.find((entry) => entry.id === roomId);
+    if (!room) {
+      continue;
+    }
+    if (
+      room.badges.some((badge) => badge.tone === 'warning' || badge.tone === 'danger') ||
+      room.id === 'training'
+    ) {
+      return room.id;
+    }
+  }
+  return coreRooms[0]?.id ?? 'datasets';
+};
+
 export default function PixelLabPage() {
   const { t } = useI18n();
   const location = useLocation();
-  const [state, setState] = useState<PixelLabState>(initialState);
+  const [snapshot, setSnapshot] = useState<GameWorkshopSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedDatasetId, setSelectedDatasetId] = useState('');
-  const [selectedModelVersionId, setSelectedModelVersionId] = useState('');
-  const loginPath = useMemo(() => buildScopedPixelPath('/auth/login', location.search), [location.search]);
-  const datasetsPath = useMemo(() => buildScopedPixelPath('/datasets', location.search), [location.search]);
-  const smartLaunchPath = useMemo(
-    () => buildScopedPixelPath('/training/jobs/new', location.search),
-    [location.search]
-  );
-  const trainingJobsPath = useMemo(
-    () => buildScopedPixelPath('/training/jobs', location.search),
-    [location.search]
-  );
-  const modelVersionsPath = useMemo(
-    () => buildScopedPixelPath('/models/versions', location.search),
-    [location.search]
-  );
+  const [activeRoomId, setActiveRoomId] = useState<GameWorkshopRoomId>('datasets');
+  const [drawerRoomId, setDrawerRoomId] = useState<GameWorkshopRoomId | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
+  const loadSnapshot = async (mode: 'initial' | 'background' = 'initial') => {
+    if (mode === 'initial') {
       setLoading(true);
+    }
+    try {
+      const nextSnapshot = await loadGameWorkshopSnapshot();
+      setSnapshot(nextSnapshot);
       setError('');
-      try {
-        const [datasets, models, modelVersions, trainingJobs, inferenceRuns, visionTasks] = await Promise.all([
-          api.listDatasets(),
-          api.listModels(),
-          api.listModelVersions(),
-          api.listTrainingJobs(),
-          api.listInferenceRuns(),
-          api.listVisionTasks()
-        ]);
-
-        if (!cancelled) {
-          setState({
-            datasets,
-            models,
-            modelVersions,
-            trainingJobs,
-            inferenceRuns,
-            visionTasks
-          });
-        }
-      } catch (requestError) {
-        if (!cancelled) {
-          setError((requestError as Error).message);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+      setActiveRoomId((previous) => {
+        const stillVisible = nextSnapshot.rooms.some((room) => room.id === previous);
+        return stillVisible ? previous : resolveInitialRoom(nextSnapshot);
+      });
+    } catch (loadError) {
+      setError((loadError as Error).message);
+    } finally {
+      if (mode === 'initial') {
+        setLoading(false);
       }
-    };
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const readyDatasets = useMemo(
-    () => state.datasets.filter((dataset) => dataset.status === 'ready'),
-    [state.datasets]
-  );
-  const activeTrainingJobs = useMemo(
-    () => state.trainingJobs.filter((job) => activeTrainingStatuses.has(job.status)),
-    [state.trainingJobs]
-  );
-  const latestTrainingJob = useMemo(
-    () => sortByUpdatedDesc(state.trainingJobs)[0] ?? null,
-    [state.trainingJobs]
-  );
-  const latestInferenceRun = useMemo(
-    () => sortByUpdatedDesc(state.inferenceRuns)[0] ?? null,
-    [state.inferenceRuns]
-  );
-  const latestVisionTask = useMemo(
-    () => sortByUpdatedDesc(state.visionTasks)[0] ?? null,
-    [state.visionTasks]
-  );
-  const registeredVersions = useMemo(
-    () => state.modelVersions.filter((version) => version.status === 'registered'),
-    [state.modelVersions]
-  );
-
-  const phase = useMemo<PixelPhase>(() => {
-    if (activeTrainingJobs.length > 0) {
-      return 'training';
-    }
-    if (state.modelVersions.length > 0 && latestInferenceRun) {
-      return 'exam';
-    }
-    if (registeredVersions.length > 0) {
-      return 'delivery';
-    }
-    if (readyDatasets.length > 0 || state.modelVersions.length > 0) {
-      return 'design';
-    }
-    return 'data';
-  }, [activeTrainingJobs.length, latestInferenceRun, readyDatasets.length, registeredVersions.length, state.modelVersions.length]);
-
-  const autoDatasetId = readyDatasets[0]?.id ?? state.datasets[0]?.id ?? '';
-  const autoModelVersionId = registeredVersions[0]?.id ?? state.modelVersions[0]?.id ?? '';
-
-  useEffect(() => {
-    if (!selectedDatasetId && autoDatasetId) {
-      setSelectedDatasetId(autoDatasetId);
-    }
-  }, [autoDatasetId, selectedDatasetId]);
-
-  useEffect(() => {
-    if (!selectedModelVersionId && autoModelVersionId) {
-      setSelectedModelVersionId(autoModelVersionId);
-    }
-  }, [autoModelVersionId, selectedModelVersionId]);
-
-  const examSearch = useMemo(() => {
-    const params = new URLSearchParams();
-    if (selectedDatasetId) {
-      params.set('dataset', selectedDatasetId);
-    }
-    if (selectedModelVersionId) {
-      params.set('selectedVersion', selectedModelVersionId);
-    }
-    const query = params.toString();
-    return query ? `/inference/validate?${query}` : '/inference/validate';
-  }, [selectedDatasetId, selectedModelVersionId]);
-
-  const phaseCopy: Record<PixelPhase, { title: string; summary: string; badge: string }> = {
-    data: {
-      title: 'Dataset warehouse is sorting albums',
-      summary: 'Prepare or version a dataset before the model characters can study.',
-      badge: 'Data sorting'
-    },
-    design: {
-      title: 'Model characters are choosing study material',
-      summary: 'A ready dataset or version exists. Pick the next recipe-backed training run.',
-      badge: 'Design'
-    },
-    training: {
-      title: 'Training workshop is active',
-      summary: 'A model character is learning from the selected dataset. Watch the training lane for logs and evidence.',
-      badge: 'Learning'
-    },
-    exam: {
-      title: 'Exam room is ready for inference validation',
-      summary: 'Choose a dataset and model version, then send the character into an explicit validation exam.',
-      badge: 'Exam'
-    },
-    delivery: {
-      title: 'Delivery room has registered model versions',
-      summary: 'Promotion evidence exists. Continue into model versions or run an exam before shipping.',
-      badge: 'Delivery'
     }
   };
 
-  const baseCharacters = useMemo(() => {
-    if (state.models.length > 0) {
-      return state.models.slice(0, 4).map((model) => ({
-        id: model.id,
-        name: model.name,
-        label: model.model_type,
-        status: model.status
-      }));
+  useEffect(() => {
+    void loadSnapshot('initial');
+  }, []);
+
+  useBackgroundPolling(
+    () => loadSnapshot('background'),
+    {
+      intervalMs: 15000,
+      enabled: true
     }
-    return [
-      { id: 'yolo-guide', name: 'YOLO Scout', label: 'detection', status: 'foundation' },
-      { id: 'paddle-scribe', name: 'Paddle Scribe', label: 'ocr', status: 'foundation' },
-      { id: 'doctr-reader', name: 'docTR Reader', label: 'ocr', status: 'foundation' }
-    ];
-  }, [state.models]);
+  );
+
+  const scopedSnapshot = useMemo(() => {
+    if (!snapshot) {
+      return null;
+    }
+    return {
+      ...snapshot,
+      rooms: snapshot.rooms.map((room) => ({
+        ...room,
+        href: buildScopedPixelPath(room.href, location.search)
+      })),
+      timeline: snapshot.timeline.map((event) => ({
+        ...event,
+        href: buildScopedPixelPath(event.href, location.search)
+      })),
+      modelRoles: snapshot.modelRoles.map((role) => ({
+        ...role,
+        href: buildScopedPixelPath(role.href, location.search)
+      })),
+      assistantSuggestionsByRoom: Object.fromEntries(
+        Object.entries(snapshot.assistantSuggestionsByRoom).map(([roomId, suggestions]) => [
+          roomId,
+          suggestions.map((suggestion) => ({
+            ...suggestion,
+            href: buildScopedPixelPath(suggestion.href, location.search)
+          }))
+        ])
+      ) as GameWorkshopSnapshot['assistantSuggestionsByRoom']
+    };
+  }, [location.search, snapshot]);
+
+  const coreRooms = useMemo(
+    () =>
+      scopedSnapshot?.rooms
+        .filter((room) => coreRoomIds.includes(room.id))
+        .map((room, index) => ({
+          ...room,
+          number: index + 1
+        })) ?? [],
+    [scopedSnapshot]
+  );
+  const activeRoom = coreRooms.find((room) => room.id === activeRoomId) ?? coreRooms[0] ?? null;
+  const drawerRoom = drawerRoomId
+    ? coreRooms.find((room) => room.id === drawerRoomId) ?? null
+    : null;
+  const activeRoomIndex = activeRoom ? coreRooms.findIndex((room) => room.id === activeRoom.id) : -1;
+  const currentStepIndex = Math.max(activeRoomIndex, 0);
+  const stepperSteps = coreRooms.map((room) => room.title);
+  const stepperCaption =
+    coreRooms.length > 0
+      ? `当前 ${currentStepIndex + 1}/${coreRooms.length} · ${activeRoom?.subtitle ?? '等待房间状态'}`
+      : '等待房间状态';
+  const drawerRoomAsset = drawerRoom ? getPixelWorkshopRoomAsset(drawerRoom.id) : undefined;
+  const activeModelRole = scopedSnapshot?.modelRoles[0] ?? null;
+  const currentProjectName = activeModelRole?.name ?? scopedSnapshot?.modelVersions[0]?.version_name ?? 'Vistral-7B OCR 训练闭环';
+  const assistantSuggestions =
+    (scopedSnapshot?.assistantSuggestionsByRoom[activeRoomId] ?? []).slice(0, 3);
+  const activeRoomChatPath = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    params.set('room', activeRoomId);
+    params.set('return_to', '/workspace/pixel-lab');
+    params.set('prompt', `继续处理${activeRoom?.title ?? '训练之家'}的下一步。`);
+    return `/workspace/chat?${params.toString()}`;
+  }, [activeRoom?.title, activeRoomId, location.search]);
+  const agentEvidenceBadges = (activeRoom?.badges ?? []).slice(0, 3);
+  const agentDecisionCopy =
+    activeRoom?.details[0] ?? activeRoom?.summary ?? 'OpenClaw 会基于当前房间状态给出下一步。';
+  const modelRolesByRoom = useMemo(() => {
+    const rolesByRoom = new Map<GameWorkshopRoomId, GameWorkshopSnapshot['modelRoles']>();
+    scopedSnapshot?.modelRoles.forEach((role) => {
+      const current = rolesByRoom.get(role.roomId) ?? [];
+      rolesByRoom.set(role.roomId, [...current, role]);
+    });
+    return rolesByRoom;
+  }, [scopedSnapshot?.modelRoles]);
+  const trainingRoleCount = modelRolesByRoom.get('training')?.length ?? 0;
+  const examRoleCount = modelRolesByRoom.get('exam')?.length ?? 0;
+  const workshopCallout = `有 ${trainingRoleCount} 个模型正在训练，${examRoleCount} 个模型正在考试，快来指挥你的模型军团吧！`;
+
+  useEffect(() => {
+    if (!drawerRoomId) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setDrawerRoomId(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [drawerRoomId]);
 
   if (loading) {
     return (
-      <main className="pixel-lab-page pixel-lab-page--state">
+      <main className="game-workshop-page game-workshop-page--state">
         <StateBlock
           variant="loading"
-          title={t('Loading Pixel Lab')}
-          description={t('Preparing the pixel house from datasets, models, training jobs, and inference runs.')}
+          title={t('正在加载训练之家')}
+          description={t('正在读取数据集、模型、训练、推理和运行状态。')}
         />
       </main>
     );
   }
 
-  if (error) {
+  if (error || !scopedSnapshot) {
     return (
-      <main className="pixel-lab-page pixel-lab-page--state">
+      <main className="game-workshop-page game-workshop-page--state">
         <StateBlock
           variant="error"
-          title={t('Pixel Lab unavailable')}
-          description={error}
-          extra={<ButtonLink to={loginPath} variant="secondary">{t('Login')}</ButtonLink>}
+          title={t('训练之家不可用')}
+          description={error || t('无法读取当前状态')}
+          extra={
+            <ButtonLink to={buildScopedPixelPath('/workspace/console', location.search)} variant="secondary" size="sm">
+              返回控制台
+            </ButtonLink>
+          }
         />
       </main>
     );
   }
 
   return (
-    <main className={`pixel-lab-page pixel-lab-phase-${phase}`}>
-      <section className="pixel-lab-hud" aria-label={t('Pixel Lab status')}>
-        <div>
-          <small>{t('Pixel Lab')}</small>
-          <h1>{t('Vistral Model House')}</h1>
-          <p>{t(phaseCopy[phase].summary)}</p>
-        </div>
-        <div className="pixel-lab-hud__badges">
-          <Badge tone={phase === 'training' ? 'info' : phase === 'exam' ? 'warning' : 'success'}>
-            {t(phaseCopy[phase].badge)}
-          </Badge>
-          <Badge tone="neutral">{t('Datasets')}: {state.datasets.length}</Badge>
-          <Badge tone="neutral">{t('Training Jobs')}: {state.trainingJobs.length}</Badge>
-          <Badge tone="neutral">{t('Model Versions')}: {state.modelVersions.length}</Badge>
-        </div>
-      </section>
-
-      <section className="pixel-lab-stage" aria-label={t('Pixel house')}>
-        <div className="pixel-sky" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="pixel-house">
-          <section className={`pixel-room pixel-room--warehouse${phase === 'data' ? ' active' : ''}`}>
-            <div className="pixel-room__header">
-              <strong>{t('Dataset Warehouse')}</strong>
-              <Badge tone={readyDatasets.length > 0 ? 'success' : 'warning'}>
-                {readyDatasets.length}/{state.datasets.length || 0}
+    <main className="game-workshop-page">
+      <section className="game-workshop-shell">
+        <aside className="game-workshop-overview game-workshop-left-rail">
+          <section className="game-workshop-card">
+            <div className="game-workshop-card__header">
+              <strong>整体概览</strong>
+              <small>项目总览</small>
+            </div>
+            <p className="game-workshop-copy">
+              {currentProjectName} 正在通过数据、标注、训练、考试和发布形成闭环。
+            </p>
+            <div className="game-workshop-overview__badges">
+              <Badge tone="info">房间 9</Badge>
+              <Badge tone="success">模型角色 {scopedSnapshot.modelRoles.length}</Badge>
+              <Badge tone={scopedSnapshot.runtimeReadiness?.status === 'ready' ? 'success' : 'warning'}>
+                Runtime {scopedSnapshot.runtimeReadiness?.status ?? 'unknown'}
               </Badge>
             </div>
-            <div className="pixel-shelves" aria-hidden="true">
-              {state.datasets.slice(0, 8).map((dataset, index) => (
-                <span key={dataset.id} className={dataset.task_type} style={{ animationDelay: `${index * 120}ms` }} />
+          </section>
+
+          <section className="game-workshop-card">
+            <div className="game-workshop-card__header">
+              <strong>核心房间</strong>
+              <small>全部入口</small>
+            </div>
+            <ol className="game-workshop-room-list">
+              {coreRooms.map((room) => (
+                <li key={room.id}>
+                  <button
+                    type="button"
+                    className={`game-workshop-room-list__item${room.id === activeRoomId ? ' is-active' : ''}`}
+                    onClick={() => setActiveRoomId(room.id)}
+                  >
+                    <span>{room.number}</span>
+                    <strong>{room.title}</strong>
+                    <small>{room.subtitle}</small>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <section className="game-workshop-card">
+            <div className="game-workshop-card__header">
+              <strong>角色状态</strong>
+              <small>模型角色</small>
+            </div>
+            {activeModelRole ? (
+              <ButtonLink to={activeModelRole.href} variant="ghost" size="sm" className="game-workshop-role-mini">
+                <span className={`game-role-avatar persona-${activeModelRole.persona}`} aria-hidden="true" />
+                <span>
+                  <strong>{activeModelRole.name}</strong>
+                  <small>{activeModelRole.statusLabel}</small>
+                </span>
+              </ButtonLink>
+            ) : (
+              <p className="game-workshop-empty">当前还没有活跃模型。</p>
+            )}
+            <div className="game-workshop-role-legend" aria-label="角色状态示例">
+              {[
+                ['学习中', 'engineer'],
+                ['训练中', 'engineer'],
+                ['考试中', 'exam'],
+                ['已毕业', 'publish'],
+                ['待修复', 'repair']
+              ].map(([label, persona]) => (
+                <span key={label}>
+                  <i className={`game-role-avatar persona-${persona}`} aria-hidden="true" />
+                  {label}
+                </span>
               ))}
             </div>
-            <p>{t('Albums and tapes become trainable snapshots here.')}</p>
-            <ButtonLink to={datasetsPath} variant="secondary" size="sm">
-              {t('Open Datasets')}
-            </ButtonLink>
           </section>
-
-          <section className={`pixel-room pixel-room--studio${phase === 'design' ? ' active' : ''}`}>
-            <div className="pixel-room__header">
-              <strong>{t('Model Character Studio')}</strong>
-              <Badge tone="info">{baseCharacters.length}</Badge>
-            </div>
-            <div className="pixel-character-row">
-              {baseCharacters.map((character, index) => (
-                <div key={character.id} className={`pixel-character ${getModelCharacterClass(index)}`}>
-                  <span className="pixel-character__head" />
-                  <span className="pixel-character__body" />
-                  <small>{character.name}</small>
-                  <em>{t(character.label)}</em>
-                </div>
-              ))}
-            </div>
-            <p>{t('Base model characters wait here for a recipe and a dataset.')}</p>
-            <ButtonLink to={smartLaunchPath} variant="secondary" size="sm">
-              {t('Smart Launch')}
-            </ButtonLink>
-          </section>
-
-          <section className={`pixel-room pixel-room--training${phase === 'training' ? ' active' : ''}`}>
-            <div className="pixel-room__header">
-              <strong>{t('Training Workshop')}</strong>
-              <Badge tone={activeTrainingJobs.length > 0 ? 'info' : 'neutral'}>{activeTrainingJobs.length}</Badge>
-            </div>
-            <div className="pixel-machine" aria-hidden="true">
-              <span className="pixel-machine__screen" />
-              <span className="pixel-machine__belt" />
-              <span className="pixel-machine__spark" />
-            </div>
-            <p>
-              {latestTrainingJob
-                ? t('Latest job {{job}} is {{status}}.', {
-                    job: latestTrainingJob.id,
-                    status: t(latestTrainingJob.status)
-                  })
-                : t('No training run is active yet.')}
-            </p>
-            <ButtonLink to={trainingJobsPath} variant="secondary" size="sm">
-              {t('Open Training Jobs')}
-            </ButtonLink>
-          </section>
-
-          <section className={`pixel-room pixel-room--exam${phase === 'exam' ? ' active' : ''}`}>
-            <div className="pixel-room__header">
-              <strong>{t('Inference Exam Room')}</strong>
-              <Badge tone={latestInferenceRun ? 'success' : 'warning'}>
-                {latestInferenceRun ? t(latestInferenceRun.status) : t('Ready')}
-              </Badge>
-            </div>
-            <div className="pixel-exam" aria-hidden="true">
-              <span className="pixel-exam__desk" />
-              <span className="pixel-exam__paper" />
-              <span className="pixel-exam__timer" />
-            </div>
-            <div className="pixel-exam-controls">
-              <label>
-                <span>{t('Dataset')}</span>
-                <Select value={selectedDatasetId} onChange={(event) => setSelectedDatasetId(event.target.value)}>
-                  <option value="">{t('Auto select')}</option>
-                  {state.datasets.map((dataset) => (
-                    <option key={dataset.id} value={dataset.id}>
-                      {dataset.name} · {dataset.task_type}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label>
-                <span>{t('Model Version')}</span>
-                <Select value={selectedModelVersionId} onChange={(event) => setSelectedModelVersionId(event.target.value)}>
-                  <option value="">{t('Auto select')}</option>
-                  {state.modelVersions.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      {version.version_name} · {version.task_type}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-            </div>
-            <ButtonLink to={examSearch} variant="primary" size="sm">
-              {t('Start exam')}
-            </ButtonLink>
-          </section>
-
-          <section className={`pixel-room pixel-room--delivery${phase === 'delivery' ? ' active' : ''}`}>
-            <div className="pixel-room__header">
-              <strong>{t('Version Delivery Room')}</strong>
-              <Badge tone={registeredVersions.length > 0 ? 'success' : 'neutral'}>{registeredVersions.length}</Badge>
-            </div>
-            <div className="pixel-delivery" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-            <p>
-              {registeredVersions[0]
-                ? t('Latest registered version: {{version}}.', {
-                    version: registeredVersions[0].version_name
-                  })
-                : t('Registered versions will be packed here after promotion.')}
-            </p>
-            <ButtonLink to={modelVersionsPath} variant="secondary" size="sm">
-              {t('Open Model Versions')}
-            </ButtonLink>
-          </section>
-        </div>
-
-        <aside className="pixel-lab-director" aria-label={t('Current process')}>
-          <div className="pixel-dialog">
-            <span className="pixel-dialog__avatar" aria-hidden="true" />
-            <div>
-              <strong>{t(phaseCopy[phase].title)}</strong>
-              <p>{t('The house is synced from real Vistral records. Canonical actions still happen in the standard workflow pages.')}</p>
-            </div>
-          </div>
-          <ol className="pixel-process">
-            <li className={phase === 'data' ? 'active' : readyDatasets.length > 0 ? 'done' : ''}>
-              <span>{t('Sort data')}</span>
-              <strong>{readyDatasets.length} {t('ready')}</strong>
-            </li>
-            <li className={phase === 'design' ? 'active' : state.trainingJobs.length > 0 ? 'done' : ''}>
-              <span>{t('Choose character')}</span>
-              <strong>{baseCharacters[0]?.name ?? '-'}</strong>
-            </li>
-            <li className={phase === 'training' ? 'active' : state.modelVersions.length > 0 ? 'done' : ''}>
-              <span>{t('Learn dataset')}</span>
-              <strong>{activeTrainingJobs[0]?.status ? t(activeTrainingJobs[0].status) : t('Pending')}</strong>
-            </li>
-            <li className={phase === 'exam' ? 'active' : latestInferenceRun ? 'done' : ''}>
-              <span>{t('Take exam')}</span>
-              <strong>{latestInferenceRun ? formatDateTime(latestInferenceRun.updated_at) : t('Ready')}</strong>
-            </li>
-            <li className={phase === 'delivery' ? 'active' : registeredVersions.length > 0 ? 'done' : ''}>
-              <span>{t('Deliver version')}</span>
-              <strong>{registeredVersions.length}</strong>
-            </li>
-          </ol>
-          {latestVisionTask ? (
-            <ButtonLink
-              to={`/vision/tasks/${encodeURIComponent(latestVisionTask.id)}`}
-              variant="ghost"
-              size="sm"
-            >
-              {t('Open latest vision task')}
-            </ButtonLink>
-          ) : null}
         </aside>
+
+        <section className="game-workshop-main">
+          <section className="game-workshop-hero">
+            <div className="game-workshop-hero__brand">
+              <strong>Vistral 模型训练工坊</strong>
+              <small>v0.2</small>
+            </div>
+            <img
+              className="game-workshop-hero__building game-workshop-hero__building--left"
+              src={pixelWorkshopHouseAssets.window}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              decoding="async"
+            />
+            <div className="game-workshop-hero__callout" aria-live="polite">
+              <span className="game-workshop-hero__crab" aria-hidden="true" />
+              <strong>{workshopCallout}</strong>
+            </div>
+            <img
+              className="game-workshop-hero__building game-workshop-hero__building--right"
+              src={pixelWorkshopHouseAssets.planter}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              decoding="async"
+            />
+            <div className="game-workshop-hero__meta">
+              <Badge tone="neutral">{new Date(scopedSnapshot.generatedAt).toLocaleDateString()} {new Date(scopedSnapshot.generatedAt).toLocaleTimeString()}</Badge>
+              <Badge tone="success">服务 {scopedSnapshot.runtimeReadiness?.status ?? 'unknown'}</Badge>
+            </div>
+          </section>
+
+          <ProgressStepper
+            steps={stepperSteps}
+            current={currentStepIndex}
+            title="Agent 训练流程"
+            caption={stepperCaption}
+            className="game-workshop-top-stepper"
+          />
+
+          <section className="game-workshop-house game-workshop-house--core" aria-label="模型训练之家">
+            <img className="game-workshop-house__building game-workshop-house__building--facade" src={pixelWorkshopHouseAssets.facade} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--roof" src={pixelWorkshopHouseAssets.roof} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--roof-tiles" src={pixelWorkshopHouseAssets.roofTiles} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--ridge" src={pixelWorkshopHouseAssets.ridge} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--supports-left" src={pixelWorkshopHouseAssets.supports} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--supports-right" src={pixelWorkshopHouseAssets.supports} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--porch" src={pixelWorkshopHouseAssets.porch} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--chimney" src={pixelWorkshopHouseAssets.chimney} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--awning" src={pixelWorkshopHouseAssets.awning} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--planter" src={pixelWorkshopHouseAssets.planter} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__building game-workshop-house__building--plant" src={pixelWorkshopFurnitureAssets.plant} alt="" aria-hidden="true" />
+            <img className="game-workshop-house__frame" src={pixelWorkshopHouseAssets.frame} alt="" aria-hidden="true" />
+            {coreRooms.map((room) => (
+              <div
+                key={room.id}
+                className={`game-workshop-house__slot game-workshop-house__slot--${room.id}`}
+              >
+                <GameWorkshopRoom
+                  room={room}
+                  active={room.id === activeRoomId}
+                  modelRoles={modelRolesByRoom.get(room.id) ?? []}
+                  onFocusRoom={() => setActiveRoomId(room.id)}
+                  onOpenDetails={() => {
+                    setActiveRoomId(room.id);
+                    setDrawerRoomId(room.id);
+                  }}
+                />
+              </div>
+            ))}
+          </section>
+
+          <section className="game-workshop-bottom-workbench game-workshop-bottom-workbench--prototype" aria-label="模型训练工坊底部状态栏">
+            <section className="game-workshop-card game-workshop-card--compact">
+              <div className="game-workshop-card__header">
+                <strong>模型角色动态</strong>
+                <small>{scopedSnapshot.modelRoles.length} 个</small>
+              </div>
+              <div className="game-workshop-roles game-workshop-roles--compact">
+                {scopedSnapshot.modelRoles.slice(0, 4).map((role) => (
+                  <ButtonLink key={role.id} to={role.href} variant="ghost" size="sm" className="game-workshop-role">
+                    <span className={`game-role-avatar persona-${role.persona}`} aria-hidden="true" />
+                    <span className="game-workshop-role__copy">
+                      <strong>{role.name}</strong>
+                      <small>{role.statusLabel} · {role.subtitle}</small>
+                    </span>
+                  </ButtonLink>
+                ))}
+                {scopedSnapshot.modelRoles.length === 0 ? (
+                  <p className="game-workshop-empty">当前还没有模型角色动态。</p>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="game-workshop-card game-workshop-card--compact">
+              <div className="game-workshop-card__header">
+                <strong>工坊时间线</strong>
+                <small>{scopedSnapshot.timeline.length} 条</small>
+              </div>
+              <GameWorkshopTimeline events={scopedSnapshot.timeline.slice(0, 4)} />
+            </section>
+
+            <section className="game-workshop-card game-workshop-card--compact">
+              <div className="game-workshop-card__header">
+                <strong>工坊资源监控</strong>
+                <small>实时</small>
+              </div>
+              <div className="game-workshop-metrics game-workshop-metrics--compact">
+                {scopedSnapshot.resources.slice(0, 4).map((metric) => (
+                  <div key={`bottom-${metric.id}`} className="game-workshop-metric">
+                    <div className="game-workshop-metric__header">
+                      <span>{metric.label}</span>
+                      <strong>{metric.valueLabel}</strong>
+                    </div>
+                    <div className="game-workshop-metric__bar">
+                      <span className={`tone-${metric.tone}`} style={{ width: `${metric.percent}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="game-workshop-card game-workshop-card--compact">
+              <div className="game-workshop-card__header">
+                <strong>昨日工作小记</strong>
+                <small>记录</small>
+              </div>
+              <ul className="game-workshop-notes game-workshop-notes--compact">
+                {scopedSnapshot.dailyNotes.slice(0, 4).map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            </section>
+          </section>
+        </section>
+
+        <aside className="game-workshop-right-rail">
+          <GameWorkshopAssistant
+            activeRoomId={activeRoomId}
+            activeRoom={activeRoom}
+            messages={scopedSnapshot.assistantMessages}
+            suggestions={assistantSuggestions}
+            variant="docked"
+          />
+
+          <section className="game-workshop-card">
+            <div className="game-workshop-card__header">
+              <strong>成员栏 / 模型角色</strong>
+              <small>{scopedSnapshot.workers.length} 个 worker</small>
+            </div>
+            <div className="game-workshop-member-grid">
+              {scopedSnapshot.modelRoles.slice(0, 5).map((role) => (
+                <ButtonLink key={`member-${role.id}`} to={role.href} variant="ghost" size="sm" className="game-workshop-member">
+                  <span className={`game-role-avatar persona-${role.persona}`} aria-hidden="true" />
+                  <span>
+                    <strong>{role.statusLabel}</strong>
+                    <small>{role.name}</small>
+                  </span>
+                </ButtonLink>
+              ))}
+              {scopedSnapshot.workers.slice(0, 3).map((worker) => (
+                <ButtonLink key={`worker-${worker.id}`} to="/settings/workers" variant="ghost" size="sm" className="game-workshop-member">
+                  <span className="game-role-avatar persona-repair" aria-hidden="true" />
+                  <span>
+                    <strong>{worker.name}</strong>
+                    <small>{worker.effective_status}</small>
+                  </span>
+                </ButtonLink>
+              ))}
+            </div>
+          </section>
+
+          <section className="game-workshop-card game-agent-mission">
+            <div className="game-workshop-card__header">
+              <strong>Agent 下一步</strong>
+              <small>{activeRoom?.title ?? '当前房间'}</small>
+            </div>
+            <div className="game-agent-mission__progress" aria-label="Agent 阶段进度">
+              {coreRooms.map((room, index) => (
+                <span
+                  key={`agent-step-${room.id}`}
+                  className={[
+                    'game-agent-mission__step',
+                    index < activeRoomIndex ? 'is-complete' : '',
+                    room.id === activeRoom?.id ? 'is-current' : ''
+                  ].filter(Boolean).join(' ')}
+                  title={room.title}
+                >
+                  {room.number}
+                </span>
+              ))}
+            </div>
+            <p className="game-agent-mission__decision">{agentDecisionCopy}</p>
+            <div className="game-agent-mission__evidence" aria-label="当前证据">
+              {agentEvidenceBadges.length > 0 ? (
+                agentEvidenceBadges.map((badge) => (
+                  <Badge key={`agent-${activeRoom?.id}-${badge.label}`} tone={badge.tone ?? 'neutral'}>
+                    {badge.label}: {badge.value}
+                  </Badge>
+                ))
+              ) : (
+                <Badge tone="neutral">等待房间状态</Badge>
+              )}
+            </div>
+            <div className="game-agent-mission__actions">
+              {activeRoom ? (
+                <ButtonLink to={activeRoom.href} variant="primary" size="sm">
+                  {activeRoom.primaryActionLabel}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={activeRoomChatPath} variant="ghost" size="sm">
+                问 OpenClaw
+              </ButtonLink>
+            </div>
+            <ul className="game-agent-mission__notes" aria-label="Agent 观察">
+              {(activeRoom?.details ?? []).slice(1, 3).map((detail) => (
+                <li key={detail}>{detail}</li>
+              ))}
+              {(activeRoom?.details ?? []).length <= 1 ? (
+                <li>{activeRoom?.summary ?? '当前房间暂无补充观察。'}</li>
+              ) : null}
+            </ul>
+          </section>
+        </aside>
+
       </section>
+
+      <Drawer
+        open={Boolean(drawerRoom)}
+        side="right"
+        title={drawerRoom?.title ?? '房间详情'}
+        className="game-room-drawer"
+        onClose={() => setDrawerRoomId(null)}
+      >
+        {drawerRoom ? (
+          <section className="game-room-drawer__body">
+            <div className="game-room-drawer__header">
+              <span className="game-room__number" aria-hidden="true">
+                {drawerRoom.number}
+              </span>
+              <div>
+                <small>房间上下文</small>
+                <h2>{drawerRoom.title}</h2>
+                <p>{drawerRoom.subtitle}</p>
+              </div>
+            </div>
+            <div
+              className={`game-room__scene${drawerRoomAsset ? ' has-room-asset' : ''} persona-${drawerRoom.scene.persona} device-${drawerRoom.scene.device}`}
+              aria-hidden="true"
+            >
+              {drawerRoomAsset ? (
+                <img
+                  className="game-room__scene-asset"
+                  src={drawerRoomAsset}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                />
+              ) : null}
+              <div className="game-room__wall-sign">
+                <span />
+                <span />
+                <span />
+              </div>
+              <div className="game-room__device">
+                <span />
+                <span />
+                <span />
+              </div>
+              <div className="game-room__prop game-room__prop--left" />
+              <div className="game-room__prop game-room__prop--right" />
+              <div className="game-room__npc">
+                <span className="game-room__npc-head" />
+                <span className="game-room__npc-body" />
+                <span className="game-room__npc-shadow" />
+              </div>
+              <div className="game-room__meter">
+                <span>{drawerRoom.scene.meterLabel}</span>
+                <strong>{drawerRoom.scene.meterPercent}%</strong>
+                <em style={{ width: `${drawerRoom.scene.meterPercent}%` }} />
+              </div>
+            </div>
+            <p className="game-room-drawer__summary">{drawerRoom.summary}</p>
+            <div className="game-room__badges">
+              {drawerRoom.badges.map((badge) => (
+                <Badge key={`drawer-${drawerRoom.id}-${badge.label}`} tone={badge.tone ?? 'neutral'}>
+                  {badge.label}: {badge.value}
+                </Badge>
+              ))}
+            </div>
+            <ul className="game-room-drawer__details">
+              {drawerRoom.details.map((detail) => (
+                <li key={detail}>{detail}</li>
+              ))}
+            </ul>
+            <div className="game-room-drawer__actions">
+              <ButtonLink to={drawerRoom.href} variant="primary">
+                {drawerRoom.primaryActionLabel}
+              </ButtonLink>
+              <button type="button" className="game-room__focus" onClick={() => setDrawerRoomId(null)}>
+                关闭
+              </button>
+            </div>
+          </section>
+        ) : null}
+      </Drawer>
     </main>
   );
 }

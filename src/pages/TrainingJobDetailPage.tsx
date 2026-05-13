@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
   DatasetRecord,
+  LocalFolderFinalizeResult,
   ModelRecord,
   ModelVersionRecord,
   TrainingWorkerNodeView,
@@ -411,6 +412,8 @@ export default function TrainingJobDetailPage() {
     return 'overview';
   });
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'error'; text: string } | null>(null);
+  const [localFolderFinalizeResult, setLocalFolderFinalizeResult] =
+    useState<LocalFolderFinalizeResult | null>(null);
   const [linkedVisionTask, setLinkedVisionTask] = useState<VisionModelingTaskRecord | null>(null);
   const [linkedVisionTaskLoading, setLinkedVisionTaskLoading] = useState(false);
   const [linkedVisionTaskError, setLinkedVisionTaskError] = useState('');
@@ -1394,6 +1397,44 @@ export default function TrainingJobDetailPage() {
     anchor.click();
   };
 
+  const finalizeLocalFolderWorkflow = async () => {
+    if (!jobId || !job) {
+      return;
+    }
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const result = await api.finalizeLocalFolderTrainingJob(jobId, {
+        model_name: `${job.name} model`,
+        version_name: `${job.name}-v${Date.now().toString().slice(-6)}`,
+        run_manual_validation: true
+      });
+      setLocalFolderFinalizeResult(result);
+      await load('manual');
+      if (result.registration_status === 'registered') {
+        setFeedback({
+          variant: 'success',
+          text: t(
+            'Local folder workflow finalized. Model version {version} is ready and {count} manual validation inference runs were created.',
+            {
+              version: result.model_version?.version_name ?? result.model_version?.id ?? '-',
+              count: result.inference_runs.length
+            }
+          )
+        });
+        return;
+      }
+      setFeedback({
+        variant: 'error',
+        text: result.registration_error || t('Model version registration is blocked by execution evidence policy.')
+      });
+    } catch (error) {
+      setFeedback({ variant: 'error', text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const renderMetricTimelineRow = (metric: TrainingMetricRecord, as: 'div' | 'li' = 'div') => (
     <Panel
       as={as}
@@ -1496,6 +1537,12 @@ export default function TrainingJobDetailPage() {
     latestLinkedVersion?.id ?? undefined,
     launchContextForDetail
   );
+  const isLocalFolderWorkflow = job.config.source_workflow === 'local_annotated_folder';
+  const manualValidationItemIds = (job.config.manual_validation_item_ids ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 5);
   const scopedClosurePath = buildScopedClosurePath(scopedDatasetId, scopedVersionId, launchContextForDetail);
   const cockpitSearchParams = new URLSearchParams(searchParams);
   cockpitSearchParams.delete('created');
@@ -1622,7 +1669,12 @@ export default function TrainingJobDetailPage() {
     setAgentAdvancing(true);
     setFeedback(null);
     try {
-      const result = await api.autoAdvanceVisionTask(linkedVisionTask.id, { max_rounds: 3 });
+      const result = await api.autoAdvanceVisionTask(linkedVisionTask.id, {
+        max_rounds: 3,
+        deliver_model: true,
+        wait_timeout_ms: 15000,
+        wait_poll_ms: 250
+      });
       setLinkedVisionTask(result.task);
       if (result.action === 'training_started' && result.training_job_id && result.training_job_id !== job.id) {
         navigate(
@@ -1662,6 +1714,8 @@ export default function TrainingJobDetailPage() {
                   ? t('Agent updated feedback dataset {datasetId}.', {
                       datasetId: result.feedback_dataset_id ?? '-'
                     })
+                  : result.action === 'fix_runtime'
+                    ? t('Agent stopped because real training evidence is required.')
                   : result.action === 'requires_input'
                     ? t('Agent still needs more input before continuing.')
                     : t('Agent flow is already complete.')) + nextGuidance
@@ -1727,7 +1781,7 @@ export default function TrainingJobDetailPage() {
           ...(linkedVisionTask
             ? [
                 {
-                  label: agentAdvancing ? t('Agent continuing...') : t('Continue as agent'),
+                  label: agentAdvancing ? t('Agent delivering...') : t('Deliver model with agent'),
                   onClick: () => {
                     void handleContinueAsAgent();
                   },
@@ -1844,7 +1898,7 @@ export default function TrainingJobDetailPage() {
             : t('Another round suggested'),
         actions: [
           {
-            label: agentAdvancing ? t('Agent continuing...') : t('Continue as agent'),
+            label: agentAdvancing ? t('Agent delivering...') : t('Deliver model with agent'),
             onClick: () => {
               void handleContinueAsAgent();
             },
@@ -1988,6 +2042,67 @@ export default function TrainingJobDetailPage() {
               ) : null}
               <ButtonLink to={backToJobsActionPath} variant="ghost" size="sm">
                 {backToJobsActionLabel}
+              </ButtonLink>
+            </div>
+          }
+        />
+      ) : null}
+
+      {isLocalFolderWorkflow ? (
+        <InlineAlert
+          tone={job.status === 'completed' ? 'success' : 'info'}
+          title={t('Local annotated folder workflow')}
+          description={
+            job.status === 'completed'
+              ? t('Training is complete. Finalize to register a model version when evidence allows it, then run inference over the 5 held-out manual validation images.')
+              : t('This job came from a server-local annotated folder. Final model registration and holdout inference unlock after training completes.')
+          }
+          actions={
+            <div className="row gap wrap">
+              <Badge tone="info">{t('Manual validation')}: {manualValidationItemIds.length || 5}</Badge>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  void finalizeLocalFolderWorkflow();
+                }}
+                disabled={busy || job.status !== 'completed'}
+              >
+                {t('Finalize model and validation')}
+              </Button>
+              <ButtonLink to={scopedInferencePath} variant="ghost" size="sm">
+                {t('Open Inference Validation')}
+              </ButtonLink>
+            </div>
+          }
+        />
+      ) : null}
+
+      {localFolderFinalizeResult ? (
+        <InlineAlert
+          tone={localFolderFinalizeResult.registration_status === 'registered' ? 'success' : 'warning'}
+          title={
+            localFolderFinalizeResult.registration_status === 'registered'
+              ? t('Model and validation output ready')
+              : t('Finalize needs real execution evidence')
+          }
+          description={
+            localFolderFinalizeResult.registration_status === 'registered'
+              ? t('{count} held-out images were sent through inference. Metrics and model artifact stay attached to this run.', {
+                  count: localFolderFinalizeResult.inference_runs.length
+                })
+              : localFolderFinalizeResult.registration_error ?? t('Registration was blocked by evidence policy.')
+          }
+          actions={
+            <div className="row gap wrap">
+              {localFolderFinalizeResult.next_links.model_version ? (
+                <ButtonLink to={localFolderFinalizeResult.next_links.model_version} variant="secondary" size="sm">
+                  {t('Open Model Version')}
+                </ButtonLink>
+              ) : null}
+              <ButtonLink to={localFolderFinalizeResult.next_links.inference_validation} variant="ghost" size="sm">
+                {t('Review 5 Images')}
               </ButtonLink>
             </div>
           }
@@ -2703,7 +2818,7 @@ export default function TrainingJobDetailPage() {
                         }}
                         disabled={agentAdvancing}
                       >
-                        {agentAdvancing ? t('Agent continuing...') : t('Continue as agent')}
+                        {agentAdvancing ? t('Agent delivering...') : t('Deliver model with agent')}
                       </Button>
                       <ButtonLink to={linkedVisionTaskDetailPath} variant="ghost" size="sm">
                         {t('Open vision task')}

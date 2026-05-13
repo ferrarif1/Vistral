@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import type { ModelRecord, ModelVersionRecord, TrainingJobRecord, User } from '../../shared/domain';
 import ModelInventory from '../components/models/ModelInventory';
@@ -178,7 +178,7 @@ export default function ModelsExplorePage() {
     'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
   );
 
-  const load = useCallback(async (mode: LoadMode = 'initial'): Promise<boolean> => {
+  const load = async (mode: LoadMode = 'initial'): Promise<boolean> => {
     if (mode === 'initial') {
       setLoading(true);
     } else if (mode === 'manual') {
@@ -217,13 +217,13 @@ export default function ModelsExplorePage() {
         setRefreshing(false);
       }
     }
-  }, [backgroundSyncHint]);
+  };
 
   useEffect(() => {
     load('initial').catch(() => {
       // no-op
     });
-  }, [load]);
+  }, []);
 
   const relevantModelIdSet = useMemo(() => new Set(models.map((model) => model.id)), [models]);
   const relevantVersions = useMemo(

@@ -24,6 +24,7 @@ This document defines platform-level entities for Vistral's AI-native conversati
 - `detection`
 - `classification`
 - `segmentation`
+- `obb`
 - `unknown`
 
 ### 3.2 Framework
@@ -117,6 +118,32 @@ Rules:
 - admin deletion is only allowed when no `ModelVersion` or `Conversation` still references the target model
 - successful admin deletion also removes model-scoped `FileAttachment` records and related `ApprovalRequest` records, with audit logging
 
+### 4.2A LocalAnnotatedFolderImportPlan
+This is a backend-generated planning object for intranet/local deployments where the API server can read an already annotated asset folder from the server filesystem.
+
+Attributes:
+- `folder_path` (absolute server-local path requested by the operator)
+- `detected_format` (`yolo` | `voc` | `ocr` | `unknown`)
+- `task_type` (`detection` | `ocr` for the first supported implementation)
+- `recommended_framework` (`yolo` for detection, `paddleocr` for OCR by default)
+- `image_count`
+- `annotation_file_count`
+- `paired_count`
+- `unmatched_image_count`
+- `unmatched_annotation_count`
+- `class_names`
+- `warnings[]`
+- `manual_validation_count` (default `5`)
+
+Rules:
+- The browser never reads arbitrary local paths directly. This flow is only for paths visible to the backend process.
+- The plan is advisory; backend import still revalidates files before writing records.
+- LLM may summarize or explain the plan, but cannot bypass backend validation.
+- Local filesystem import must copy images into configured local attachment storage and persist `mime_type`, `byte_size`, and `storage_path`.
+- Detection import supports YOLO text pairs and Pascal VOC XML pairs (`Annotations/*.xml` + `JPEGImages/*`) in the local-folder workflow.
+- Five samples are reserved for manual verification by assigning them to `split=test` and adding item metadata `manual_validation_holdout=true`.
+- `owner` remains a resource relationship. This flow does not introduce a new system role.
+
 ### 4.3 Conversation
 Attributes:
 - `id` (PK)
@@ -198,6 +225,7 @@ Rules:
   - `readiness_summary`
 - `agent_next_action` records the current operator-facing recommendation:
   - `action`
+    - allowed values include `requires_input`, `start_training`, `wait_training`, `collect_data`, `fix_runtime`, `register_model`, `mine_feedback`, `completed`
   - `title`
   - `summary`
   - `reason`
@@ -211,11 +239,15 @@ Rules:
   - `summary`
   - `reason`
   - `created_at`
+  - optional audit fields (clients must tolerate omission); see `docs/agent-training-orchestration.md` §7:
+    - `source_layer` (`deterministic_refresh` | `auto_advance` | `user_confirmed` | `llm_assist` | vendor-specific; unknown values should be ignored by UI)
+    - `evidence_refs` (string array: short correlation tokens such as `dataset_version:{id}` or `training_job:{id}`)
 - `evaluation_suite` records the currently active evaluation contract:
   - `suite_id`
   - `title`
   - `summary`
   - `primary_metric`
+  - `direction` (`higher_is_better` | `lower_is_better`)
   - `threshold_target`
   - `status`
   - `threshold_source`
@@ -233,6 +265,7 @@ Rules:
   - `best_value`
   - `best_training_job_id`
   - `created_at`
+- `promotion_gate.status=pass` means both the metric threshold and registration artifact evidence are acceptable; metric-only pass with template/fallback/non-real artifact evidence must remain `needs_review` until a real-evidence run or explicit compatibility policy is present.
 - `run_comparison` records the current comparison decision across linked rounds:
   - `evaluation_suite_id`
   - `decision`
@@ -529,7 +562,6 @@ Task-specific metric baseline:
 - OCR: primary metric defaults to `cer` (lower is better) or `accuracy` when CER is unavailable; secondary metrics include `wer`, `norm_edit_distance`, and charset coverage.
 - detection: primary metric defaults to `map`; secondary metrics include `precision`, `recall`, and per-class regression slices.
 - segmentation: primary metric defaults to `miou` when available, otherwise framework-specific mask/polygon mAP; secondary metrics include mask coverage and polygon quality warnings.
-- OBB: primary metric defaults to rotated-box mAP (`map_obb`); secondary metrics include precision, recall, angle error, and angle-bucket regression slices.
 
 ### 4.12 TrainingJob
 Attributes:
@@ -824,6 +856,26 @@ Attributes:
   - `python_bin` (optional default Python executable for bundled local runners)
   - `disable_simulated_train_fallback` (boolean; when true, train must fail instead of simulated fallback)
   - `disable_inference_fallback` (boolean; when true, inference must fail instead of template/fallback output)
+- Runtime readiness responses also compute `agent_delivery` for VisionTask automation:
+  - `status` (`ready` | `needs_review` | `blocked`)
+  - `summary`
+  - `recommended_action` (`ready` | `run_doctor` | `enable_real_runner` | `enable_strict_fallback_guard` | `fix_runtime_settings`)
+  - `evidence_policy` (`registerable_artifact_required`)
+  - `blockers` (copy-ready strings for the current operator)
+  - `commands` (copy-ready commands such as `npm run doctor:real-training-readiness`)
+  - `agent_delivery` is advisory for Runtime Settings UI, but VisionTask auto-delivery must stop at `fix_runtime` when artifact evidence is template/fallback/non-real.
+- Runtime readiness responses also expose `real_training_doctor`:
+  - `status` (`ready` | `not_ready`)
+  - `issues` (machine-readable strings aligned with `scripts/doctor-real-training-readiness.sh`, for example `missing_python_module_ultralytics` or `missing_real_yolo_model_path`)
+  - `notes` (resolved Python/module/model-path evidence)
+  - `commands` (copy-ready setup and re-check commands)
+  - `agent_delivery.blockers` should include unresolved doctor issues so the Studio can explain the concrete gap without requiring the operator to run a shell script first.
+- Runtime real-training prepare responses contain:
+  - `settings` (`RuntimeSettingsView` after safe mutation)
+  - `readiness` (`RuntimeReadinessReport` after mutation)
+  - `changed_fields` (field paths changed by the prepare action)
+  - `commands` (copy-ready remaining host-level commands)
+  - The prepare action may only mutate persisted Vistral runtime settings; host dependency installation, model download, and environment-variable export remain explicit operator actions.
 
 Rules:
 - runtime adapters should read effective config dynamically at execution time (not only on process boot).

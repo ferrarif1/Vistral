@@ -29,11 +29,10 @@ This is the shortest working path for a training engineer. Follow it in order.
 ## 4. Prepare Data (Direct Console Lane Or Missing-Requirements Fixes)
 1. Open `Datasets`.
 2. Create a dataset with the correct task type: `ocr` or `detection`.
-3. Upload image files from the dataset detail page, or use the bundle importer to select a local folder / `.zip` package that already contains images plus labels.
+3. Upload image files from the dataset detail page.
 4. Wait until all files show `ready`; delete failed files before continuing.
-5. If labels were included in the bundle, run or confirm annotation import before training preparation.
-6. Create a train/val/test split.
-7. Create a dataset version snapshot. Training must use this explicit version, not the live dataset.
+5. Create a train/val/test split.
+6. Create a dataset version snapshot. Training must use this explicit version, not the live dataset.
 
 Minimum launch gates:
 - dataset status is `ready`

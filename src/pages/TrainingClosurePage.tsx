@@ -1091,6 +1091,7 @@ export default function TrainingClosurePage() {
     latestRun,
     latestTrainableVersion,
     latestVersion,
+    hasRemoteOpsProof,
     datasetAttachments,
     readyAttachments.length,
     registrationEvidenceLabel,
@@ -1100,6 +1101,7 @@ export default function TrainingClosurePage() {
     scrollToDeviceAccess,
     scrollToUploader,
     selectedDataset,
+    preferredLaunchWorker,
     t,
     trainingCreatePath,
     trainingJobsPath

@@ -1,0 +1,1966 @@
+.workspace-pixel-skin {
+  --pixel-skin-ink: #fff1cb;
+  --pixel-skin-panel: rgba(33, 63, 62, 0.9);
+  --pixel-skin-panel-strong: rgba(30, 54, 58, 0.96);
+  --pixel-skin-border: rgba(115, 72, 38, 0.34);
+  --pixel-skin-blue: #168ff0;
+  --pixel-skin-gold: #f1bb57;
+  position: relative;
+  overflow: visible;
+  padding: 24px;
+  border-radius: 0;
+  color: var(--pixel-skin-ink);
+  background:
+    radial-gradient(circle at 88% 9%, rgba(255, 255, 255, 0.88) 0 38px, transparent 39px),
+    radial-gradient(circle at 12% 14%, rgba(255, 255, 255, 0.82) 0 52px, transparent 53px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.24) 1px, transparent 1px) 0 0 / 30px 30px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2) 1px, transparent 1px) 0 0 / 30px 30px,
+    linear-gradient(180deg, #23a6ee 0%, #8fd8ff 52%, #cfebad 76%, #7ab45d 100%);
+}
+
+.app-shell--pixel-game,
+.app-top-route-shell--pixel-game,
+.workspace-pixel-skin,
+.chat-workspace-page,
+.training-workshop-page {
+  font-family:
+    'Courier New',
+    'PingFang SC',
+    'Microsoft YaHei',
+    var(--font-family-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-pixel-route-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid rgba(115, 72, 38, 0.36);
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, rgba(35, 66, 65, 0.94), rgba(63, 78, 59, 0.82)),
+    linear-gradient(90deg, rgba(22, 143, 240, 0.14), transparent 42%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.12);
+}
+
+.app-shell--pixel-game ::selection,
+.app-top-route-shell--pixel-game ::selection,
+.workspace-pixel-skin ::selection,
+.chat-workspace-page ::selection {
+  background: rgba(22, 143, 240, 0.32);
+  color: #fff7df;
+}
+
+.workspace-pixel-route-strip__copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workspace-pixel-route-strip__copy span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-pixel-route-strip__copy strong {
+  color: #fff1bf;
+  font-size: 0.9rem;
+}
+
+.workspace-pixel-route-strip__copy small {
+  color: rgba(247, 239, 215, 0.66);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-pixel-route-strip__dot {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  border: 1px solid rgba(22, 143, 240, 0.5);
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.26), transparent 42%),
+    var(--workspace-pixel-companion-image) center / cover no-repeat,
+    rgba(22, 143, 240, 0.14);
+  box-shadow: 0 0 18px rgba(22, 143, 240, 0.28);
+}
+
+.workspace-pixel-route-strip__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.workspace-pixel-route-strip__actions a {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(239, 196, 115, 0.36);
+  background: rgba(22, 42, 42, 0.42);
+  color: #bfe1ff;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.workspace-pixel-route-strip__actions a:hover,
+.workspace-pixel-route-strip__actions a:focus-visible {
+  border-color: rgba(22, 143, 240, 0.58);
+  color: #eaf6ff;
+}
+
+.workspace-pixel-skin > * {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-pixel-skin .ui-card,
+.workspace-pixel-skin .ui-panel,
+.workspace-pixel-skin .card,
+.workspace-pixel-skin .console-page-header,
+.workspace-pixel-skin .console-section-card,
+.workspace-pixel-skin .console-filter-toolbar,
+.workspace-pixel-skin .console-health-summary,
+.workspace-pixel-skin .workspace-overview-hero,
+.workspace-pixel-skin .workspace-context-bar,
+.workspace-pixel-skin .workspace-toolbar-card,
+.workspace-pixel-skin .workspace-inspector-card,
+.workspace-pixel-skin .workspace-guide-popover,
+.workspace-pixel-skin .workspace-guide-highlight,
+.workspace-pixel-skin .settings-surface-nav,
+.workspace-pixel-skin .console-detail-drawer.ui-drawer,
+.workspace-pixel-skin .workspace-workbench-side > section,
+.workspace-pixel-skin .workspace-workbench-main > section {
+  border-color: var(--pixel-skin-border);
+  background:
+    linear-gradient(180deg, rgba(255, 236, 176, 0.08), rgba(255, 236, 176, 0.018)),
+    var(--pixel-skin-panel);
+  color: var(--pixel-skin-ink);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -5px 0 rgba(0, 0, 0, 0.14),
+    0 18px 42px rgba(3, 8, 16, 0.22);
+}
+
+.workspace-pixel-skin .console-page-header,
+.workspace-pixel-skin .workspace-overview-hero {
+  position: relative;
+  overflow: hidden;
+  border-width: 2px;
+  min-height: 172px;
+  padding-right: clamp(24px, 25vw, 340px);
+  background:
+    linear-gradient(90deg, rgba(36, 66, 65, 0.96), rgba(93, 84, 58, 0.82)),
+    repeating-linear-gradient(90deg, rgba(255, 218, 137, 0.12) 0 2px, transparent 2px 32px),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.035) 0 2px, transparent 2px 30px);
+}
+
+.workspace-pixel-skin .console-page-header::before,
+.workspace-pixel-skin .workspace-overview-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 54%;
+  width: 46%;
+  background:
+    linear-gradient(90deg, rgba(36, 66, 65, 0), rgba(36, 66, 65, 0.58)),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.04) 0 2px, transparent 2px 8px);
+  pointer-events: none;
+}
+
+.workspace-pixel-skin .console-page-header::after,
+.workspace-pixel-skin .workspace-overview-hero::after {
+  content: '';
+  position: absolute;
+  right: clamp(16px, 3vw, 34px);
+  top: 50%;
+  width: clamp(150px, 20vw, 276px);
+  aspect-ratio: 4 / 3;
+  transform: translateY(-50%);
+  border: 2px solid rgba(236, 200, 134, 0.32);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(5, 11, 20, 0.04), rgba(5, 11, 20, 0.34)),
+    var(--workspace-pixel-scene-image) center / contain no-repeat,
+    rgba(255, 233, 188, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -5px 0 rgba(0, 0, 0, 0.18),
+    0 18px 38px rgba(0, 0, 0, 0.26);
+  pointer-events: none;
+}
+
+.workspace-pixel-skin .console-page-header > *,
+.workspace-pixel-skin .workspace-overview-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-pixel-skin .console-page-header__title-block h1,
+.workspace-pixel-skin .workspace-overview-copy h1 {
+  color: #fff1bf;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.28);
+}
+
+.workspace-pixel-skin .muted,
+.workspace-pixel-skin .console-page-header__title-block p,
+.workspace-pixel-skin .workspace-overview-copy p,
+.workspace-pixel-skin .console-section-card__copy small,
+.workspace-pixel-skin .workspace-section-header small {
+  color: rgba(247, 239, 215, 0.74);
+}
+
+.workspace-pixel-skin .workspace-eyebrow {
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(243, 194, 103, 0.38);
+  background: rgba(7, 14, 25, 0.72);
+  color: #ffd986;
+}
+
+.workspace-pixel-skin .ui-state {
+  position: relative;
+  overflow: hidden;
+  min-height: 132px;
+  border-width: 2px;
+  border-color: var(--pixel-skin-border);
+  background:
+    linear-gradient(90deg, rgba(34, 63, 63, 0.92), rgba(57, 75, 59, 0.78)),
+    repeating-linear-gradient(90deg, rgba(22, 143, 240, 0.08) 0 2px, transparent 2px 28px);
+  color: var(--pixel-skin-ink);
+}
+
+.workspace-pixel-skin .ui-state::before {
+  content: '';
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.22), transparent 44%),
+    var(--workspace-pixel-companion-image) center / cover no-repeat;
+}
+
+.workspace-pixel-skin .ui-state-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-pixel-skin .ui-state-copy h4 {
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin .ui-state-copy p {
+  color: rgba(247, 239, 215, 0.76);
+}
+
+.workspace-pixel-skin .ui-button--primary {
+  border-color: rgba(37, 143, 240, 0.76);
+  background: linear-gradient(180deg, #49a8f4, #196fbf);
+  color: white;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.22);
+}
+
+.app-shell--pixel-game .ui-button,
+.app-top-route-shell--pixel-game .ui-button,
+.workspace-pixel-skin .ui-button,
+.training-workshop-page .ui-button {
+  border-radius: 8px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.2);
+}
+
+.app-shell--pixel-game .ui-button--primary,
+.app-top-route-shell--pixel-game .ui-button--primary,
+.workspace-pixel-skin .ui-button--primary,
+.training-workshop-page .ui-button--primary {
+  border-color: rgba(126, 197, 255, 0.72);
+  background: linear-gradient(180deg, #4e9eef, #256fbd);
+  color: #fff;
+}
+
+.app-shell--pixel-game .ui-button--secondary,
+.app-top-route-shell--pixel-game .ui-button--secondary,
+.workspace-pixel-skin .ui-button--secondary,
+.training-workshop-page .ui-button--secondary {
+  border-color: rgba(236, 200, 134, 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)),
+    rgba(9, 17, 29, 0.62);
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin .ui-button:hover:not(:disabled),
+.workspace-pixel-skin .ui-button:focus-visible,
+.app-shell--pixel-game .ui-button:hover:not(:disabled),
+.app-shell--pixel-game .ui-button:focus-visible,
+.app-top-route-shell--pixel-game .ui-button:hover:not(:disabled),
+.app-top-route-shell--pixel-game .ui-button:focus-visible {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
+.workspace-pixel-skin .ui-button--secondary {
+  border-color: rgba(236, 200, 134, 0.34);
+  background: rgba(9, 17, 29, 0.52);
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin .ui-button--ghost {
+  color: #bfe1ff;
+}
+
+.workspace-pixel-skin .ui-field,
+.workspace-pixel-skin input,
+.workspace-pixel-skin select,
+.workspace-pixel-skin textarea,
+.app-shell--pixel-game input,
+.app-shell--pixel-game select,
+.app-shell--pixel-game textarea,
+.app-top-route-shell--pixel-game input,
+.app-top-route-shell--pixel-game select,
+.app-top-route-shell--pixel-game textarea {
+  border-color: rgba(236, 200, 134, 0.26);
+  background: rgba(5, 11, 20, 0.58);
+  color: #fff7df;
+}
+
+.workspace-pixel-skin input:focus,
+.workspace-pixel-skin select:focus,
+.workspace-pixel-skin textarea:focus,
+.app-shell--pixel-game input:focus,
+.app-shell--pixel-game select:focus,
+.app-shell--pixel-game textarea:focus,
+.app-top-route-shell--pixel-game input:focus,
+.app-top-route-shell--pixel-game select:focus,
+.app-top-route-shell--pixel-game textarea:focus {
+  border-color: rgba(111, 184, 255, 0.7);
+  box-shadow:
+    0 0 0 3px rgba(111, 184, 255, 0.16),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.16);
+}
+
+.workspace-pixel-skin .ui-badge,
+.workspace-pixel-skin .ui-status-tag,
+.workspace-pixel-skin .workspace-guide-trigger,
+.workspace-pixel-skin .settings-surface-tab,
+.workspace-pixel-skin .workspace-checkbox-row {
+  border-color: rgba(236, 200, 134, 0.24);
+  background: rgba(5, 12, 22, 0.42);
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin .settings-surface-tab.active,
+.workspace-pixel-skin .workspace-guide-trigger:hover,
+.workspace-pixel-skin .workspace-guide-trigger:focus-visible {
+  border-color: rgba(111, 184, 255, 0.5);
+  background: rgba(64, 135, 214, 0.18);
+  color: #eaf6ff;
+}
+
+.workspace-pixel-skin .ui-badge--success,
+.workspace-pixel-skin .ui-status-tag--success,
+.app-top-route-shell--pixel-game .ui-badge--success,
+.app-top-route-shell--pixel-game .ui-status-tag--success {
+  border-color: rgba(117, 216, 167, 0.42);
+  background: rgba(34, 122, 77, 0.22);
+  color: #a7f3c8;
+}
+
+.workspace-pixel-skin .ui-badge--warning,
+.workspace-pixel-skin .ui-status-tag--warning,
+.app-top-route-shell--pixel-game .ui-badge--warning,
+.app-top-route-shell--pixel-game .ui-status-tag--warning {
+  border-color: rgba(243, 194, 103, 0.42);
+  background: rgba(142, 93, 27, 0.24);
+  color: #ffe0a0;
+}
+
+.workspace-pixel-skin .ui-badge--danger,
+.workspace-pixel-skin .ui-status-tag--danger,
+.app-top-route-shell--pixel-game .ui-badge--danger,
+.app-top-route-shell--pixel-game .ui-status-tag--danger {
+  border-color: rgba(255, 141, 141, 0.42);
+  background: rgba(126, 36, 36, 0.24);
+  color: #ffc2c2;
+}
+
+.workspace-pixel-skin .console-inline-alert--warning,
+.workspace-pixel-skin .console-inline-alert--danger {
+  border-width: 2px;
+}
+
+.workspace-pixel-skin .console-inline-alert--warning {
+  border-color: rgba(243, 194, 103, 0.42);
+  background:
+    linear-gradient(180deg, rgba(243, 194, 103, 0.12), rgba(243, 194, 103, 0.035)),
+    rgba(8, 16, 29, 0.82);
+}
+
+.workspace-pixel-skin .console-inline-alert--danger {
+  border-color: rgba(255, 141, 141, 0.42);
+  background:
+    linear-gradient(180deg, rgba(255, 141, 141, 0.12), rgba(255, 141, 141, 0.035)),
+    rgba(8, 16, 29, 0.82);
+}
+
+.workspace-pixel-skin .ui-stepper,
+.workspace-pixel-skin .advanced-panel,
+.workspace-pixel-skin .attachment-uploader-item,
+.workspace-pixel-skin .workspace-record-item,
+.workspace-pixel-skin .console-inline-alert {
+  border-color: rgba(236, 200, 134, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012)),
+    rgba(6, 14, 25, 0.52);
+  color: var(--pixel-skin-ink);
+}
+
+.workspace-pixel-skin .ui-stepper-dot,
+.workspace-pixel-skin .ui-stepper-step.is-active .ui-stepper-dot,
+.workspace-pixel-skin .ui-stepper-step.is-complete .ui-stepper-dot {
+  border-color: rgba(111, 184, 255, 0.72);
+  background: #2c80d0;
+  color: #fff;
+}
+
+.workspace-pixel-skin .ui-overlay .ui-modal,
+.workspace-pixel-skin .ui-overlay .ui-drawer,
+.ui-modal,
+.ui-drawer {
+  border-color: rgba(236, 200, 134, 0.28);
+}
+
+.workspace-pixel-skin .ui-modal,
+.workspace-pixel-skin .ui-drawer {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(8, 16, 29, 0.96);
+  color: var(--pixel-skin-ink);
+}
+
+.workspace-pixel-skin .console-status-table-wrap,
+.workspace-pixel-skin .console-status-table {
+  border-color: rgba(236, 200, 134, 0.24);
+  background: rgba(6, 14, 25, 0.52);
+  color: var(--pixel-skin-ink);
+}
+
+.workspace-pixel-skin .console-status-table-wrap {
+  border-width: 2px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -5px 0 rgba(0, 0, 0, 0.12);
+}
+
+.workspace-pixel-skin .console-status-table th {
+  background:
+    linear-gradient(180deg, rgba(236, 200, 134, 0.08), rgba(236, 200, 134, 0.03)),
+    rgba(5, 12, 22, 0.74);
+  color: #ffe0a0;
+}
+
+.workspace-pixel-skin .console-status-table td {
+  border-color: rgba(236, 200, 134, 0.12);
+}
+
+.workspace-pixel-skin .console-status-table tbody tr.is-clickable:hover,
+.workspace-pixel-skin .console-status-table tbody tr.selected td,
+.workspace-pixel-skin .workspace-record-item:hover {
+  border-color: rgba(111, 184, 255, 0.42);
+  background: rgba(64, 135, 214, 0.12);
+}
+
+.workspace-pixel-skin .console-detail-list__item,
+.workspace-pixel-skin .workspace-record-list .ui-panel,
+.workspace-pixel-skin .prediction-candidate-list .ui-panel {
+  border-color: rgba(236, 200, 134, 0.2);
+  background: rgba(5, 12, 22, 0.38);
+}
+
+.workspace-pixel-skin .workspace-record-summary > strong,
+.workspace-pixel-skin .console-detail-list__item strong {
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin .console-section-card__header,
+.workspace-pixel-skin .console-filter-toolbar__row,
+.workspace-pixel-skin .workspace-section-header {
+  border-bottom: 1px solid rgba(236, 200, 134, 0.12);
+  padding-bottom: 10px;
+}
+
+.workspace-pixel-skin .console-section-card__body {
+  padding-top: 2px;
+}
+
+.workspace-pixel-skin .settings-surface-tabs {
+  padding: 4px;
+  border: 1px solid rgba(236, 200, 134, 0.16);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)),
+    rgba(5, 12, 22, 0.36);
+}
+
+.workspace-pixel-skin .settings-surface-tab {
+  border-radius: 8px;
+  color: rgba(247, 239, 215, 0.7);
+}
+
+.workspace-pixel-skin .settings-surface-tab.active {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.18);
+}
+
+.app-shell--pixel-game *::-webkit-scrollbar,
+.app-top-route-shell--pixel-game *::-webkit-scrollbar,
+.workspace-pixel-skin *::-webkit-scrollbar,
+.chat-workspace-page *::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.app-shell--pixel-game *::-webkit-scrollbar-track,
+.app-top-route-shell--pixel-game *::-webkit-scrollbar-track,
+.workspace-pixel-skin *::-webkit-scrollbar-track,
+.chat-workspace-page *::-webkit-scrollbar-track {
+  background: rgba(5, 11, 20, 0.55);
+}
+
+.app-shell--pixel-game *::-webkit-scrollbar-thumb,
+.app-top-route-shell--pixel-game *::-webkit-scrollbar-thumb,
+.workspace-pixel-skin *::-webkit-scrollbar-thumb,
+.chat-workspace-page *::-webkit-scrollbar-thumb {
+  border: 3px solid rgba(5, 11, 20, 0.55);
+  border-radius: 999px;
+  background: rgba(111, 184, 255, 0.42);
+}
+
+.workspace-pixel-skin .workspace-workbench {
+  min-height: clamp(560px, 74vh, 920px);
+}
+
+.workspace-pixel-skin .workspace-workbench-toolbar {
+  top: 8px;
+}
+
+.workspace-pixel-skin .workspace-overview-badge,
+.workspace-pixel-skin .console-kpi-card,
+.workspace-pixel-skin .console-health-summary__stat {
+  border-color: rgba(236, 200, 134, 0.24);
+  background: rgba(5, 12, 22, 0.46);
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-focus-header,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-focus-header,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-context-bar,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-context-bar,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-canvas-shell,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-canvas-shell,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-studio-queue,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-studio-queue,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-studio-workbench .workspace-workbench-main,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-studio-workbench .workspace-workbench-main,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-studio-workbench .workspace-workbench-side,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-studio-workbench .workspace-workbench-side {
+  border-color: rgba(236, 200, 134, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012)),
+    rgba(8, 16, 29, 0.82);
+  color: var(--pixel-skin-ink);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.12);
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-focus-header,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-focus-header {
+  position: relative;
+  overflow: hidden;
+  border: 2px solid rgba(236, 200, 134, 0.26);
+  padding-right: clamp(24px, 20vw, 280px);
+  background:
+    linear-gradient(90deg, rgba(7, 14, 25, 0.92), rgba(7, 14, 25, 0.62)),
+    repeating-linear-gradient(90deg, rgba(236, 200, 134, 0.055) 0 2px, transparent 2px 30px);
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-focus-header::before,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-focus-header::before {
+  content: '';
+  position: absolute;
+  right: 82px;
+  top: 50%;
+  width: clamp(130px, 16vw, 220px);
+  aspect-ratio: 4 / 3;
+  transform: translateY(-50%);
+  border: 2px solid rgba(236, 200, 134, 0.24);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(5, 11, 20, 0.04), rgba(5, 11, 20, 0.32)),
+    var(--workspace-pixel-scene-image) center / contain no-repeat,
+    rgba(5, 11, 20, 0.32);
+  pointer-events: none;
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-focus-header::after,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-focus-header::after {
+  content: '';
+  position: absolute;
+  right: 18px;
+  bottom: -12px;
+  width: 82px;
+  height: 82px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.24), transparent 44%),
+    url('/assets/vistral-workshop/scientist.png') center / cover no-repeat;
+  opacity: 0.82;
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-focus-header > *,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-focus-header > * {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-focus-header__title,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-focus-header__title,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-canvas-shell h3,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-canvas-shell h3,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-canvas-shell strong,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-canvas-shell strong {
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-canvas-shell,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-canvas-shell {
+  background:
+    linear-gradient(180deg, rgba(12, 27, 43, 0.92), rgba(8, 16, 29, 0.88)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 22px);
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-canvas-surface,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-canvas-surface,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .polygon-canvas-stage,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .polygon-canvas-stage,
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-canvas-stage,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-canvas-stage {
+  border-color: rgba(111, 184, 255, 0.22);
+  background-color: rgba(4, 10, 18, 0.54);
+}
+
+.workspace-pixel-skin[data-pixel-scene='dataset'] .annotation-workspace-action-bar,
+.workspace-pixel-skin[data-pixel-scene='cleaning'] .annotation-workspace-action-bar {
+  border-color: rgba(236, 200, 134, 0.24);
+  background: rgba(7, 14, 25, 0.9);
+  color: #f7efd7;
+}
+
+.workspace-pixel-skin .training-cockpit-shell {
+  --tc-bg: rgba(6, 14, 25, 0.82);
+  --tc-panel: rgba(8, 16, 29, 0.86);
+  --tc-panel-strong: rgba(12, 27, 43, 0.9);
+  --tc-border: rgba(236, 200, 134, 0.22);
+  --tc-border-strong: rgba(111, 184, 255, 0.42);
+  --tc-text: #f7efd7;
+  --tc-muted: rgba(247, 239, 215, 0.7);
+  --tc-dim: rgba(247, 239, 215, 0.56);
+  --tc-accent: #6fb8ff;
+  --tc-cyan: #9ed5ff;
+  --tc-green: #75d8a7;
+  --tc-warning: #f3c267;
+  --tc-danger: #ff8d8d;
+  border-color: rgba(236, 200, 134, 0.24);
+  background:
+    radial-gradient(circle at 12% 16%, rgba(111, 184, 255, 0.16), transparent 24%),
+    radial-gradient(circle at 84% 10%, rgba(243, 194, 103, 0.1), transparent 22%),
+    linear-gradient(180deg, rgba(8, 16, 29, 0.94), rgba(5, 11, 20, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 24px 58px rgba(3, 8, 16, 0.3);
+}
+
+.workspace-pixel-skin .training-cockpit-shell .workspace-context-bar,
+.workspace-pixel-skin .training-cockpit-context-summary.ui-panel,
+.workspace-pixel-skin .training-flux-scene,
+.workspace-pixel-skin .training-cockpit-overview-card,
+.workspace-pixel-skin .training-cockpit-panel,
+.workspace-pixel-skin .training-cockpit-resource-card,
+.workspace-pixel-skin .training-cockpit-trial-card,
+.workspace-pixel-skin .training-cockpit-chart-shell,
+.workspace-pixel-skin .training-cockpit-convergence,
+.workspace-pixel-skin .training-cockpit-event-row {
+  border-color: rgba(236, 200, 134, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
+    rgba(8, 16, 29, 0.78);
+  color: #f7efd7;
+}
+
+.workspace-pixel-skin .training-flux-scene {
+  border-width: 2px;
+  background:
+    linear-gradient(180deg, rgba(5, 11, 20, 0.46), rgba(5, 11, 20, 0.9)),
+    url('/assets/vistral-workshop/training.png') right 16px center / 240px auto no-repeat,
+    repeating-linear-gradient(90deg, rgba(111, 184, 255, 0.05) 0 2px, transparent 2px 30px);
+}
+
+.workspace-pixel-skin .training-flux-scene::after {
+  content: '';
+  position: absolute;
+  right: 22px;
+  top: 16px;
+  width: 72px;
+  height: 72px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.24), transparent 44%),
+    url('/assets/vistral-workshop/robot.png') center / cover no-repeat;
+  opacity: 0.72;
+}
+
+.workspace-pixel-skin .training-cockpit-overview-card strong,
+.workspace-pixel-skin .training-cockpit-panel h3,
+.workspace-pixel-skin .training-flux-scene h3,
+.workspace-pixel-skin .training-flux-scene strong {
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin .training-cockpit-chart-tooltip,
+.workspace-pixel-skin .training-cockpit-chart-legend__item,
+.workspace-pixel-skin .training-cockpit-param-pill,
+.workspace-pixel-skin .training-cockpit-chart-empty,
+.workspace-pixel-skin .training-cockpit-sparkline-empty,
+.workspace-pixel-skin .training-cockpit-current-params {
+  border-color: rgba(236, 200, 134, 0.2);
+  background: rgba(5, 12, 22, 0.5);
+  color: #f7efd7;
+}
+
+.workspace-pixel-skin .training-cockpit-stage__node {
+  border-color: rgba(236, 200, 134, 0.28);
+  background: rgba(5, 12, 22, 0.78);
+  color: #fff1bf;
+}
+
+.workspace-pixel-skin .training-cockpit-stage.active .training-cockpit-stage__node {
+  border-color: rgba(111, 184, 255, 0.64);
+  background: rgba(64, 135, 214, 0.24);
+  box-shadow: 0 0 0 8px rgba(111, 184, 255, 0.08);
+}
+
+.workspace-pixel-skin .training-cockpit-resource-card__track,
+.workspace-pixel-skin .training-cockpit-trial-score__bar,
+.workspace-pixel-skin .training-cockpit-trial-progress,
+.workspace-pixel-skin .training-cockpit-convergence__lane {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workspace-pixel-skin .training-cockpit-resource-card__progress,
+.workspace-pixel-skin .training-cockpit-trial-score__bar span,
+.workspace-pixel-skin .training-cockpit-trial-progress span {
+  stroke: #6fb8ff;
+  background: linear-gradient(90deg, #4e9eef, #9ed5ff);
+}
+
+@media (max-width: 760px) {
+  .workspace-pixel-skin {
+    padding: 14px;
+  }
+
+  .workspace-pixel-skin .console-page-header,
+  .workspace-pixel-skin .workspace-overview-hero {
+    min-height: 0;
+    padding-right: 14px;
+    background:
+      linear-gradient(180deg, rgba(6, 13, 24, 0.92), rgba(8, 17, 30, 0.78)),
+      repeating-linear-gradient(90deg, rgba(236, 200, 134, 0.055) 0 2px, transparent 2px 30px);
+  }
+
+  .workspace-pixel-skin .console-page-header::after,
+  .workspace-pixel-skin .workspace-overview-hero::after {
+    display: none;
+  }
+}
+
+.app-shell {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.22) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, #25a9f0 0%, #85d5ff 58%, #cde9a1 100%);
+}
+
+.app-shell--pixel-game {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--layout-topbar-height) minmax(0, 1fr) auto;
+  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 100lvh;
+  height: 100lvh;
+  min-height: 100vh;
+  height: 100vh;
+  background-color: #5aa24a;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(255, 255, 255, 0.82) 0 46px, transparent 47px),
+    radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.74) 0 64px, transparent 65px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.22) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, #24a9f0 0%, #87d7ff 58%, #cde9a1 100%);
+}
+
+.app-shell.app-shell--pixel-game,
+.app-shell.app-shell--pixel-game.sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-top-route-shell--pixel-game {
+  --app-game-bottom-nav-height: 94px;
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+  grid-template-rows: var(--layout-topbar-height) minmax(0, 1fr) auto;
+  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 100lvh;
+  height: 100lvh;
+  min-height: 100vh;
+  height: 100vh;
+  background-color: #5aa24a;
+  background:
+    radial-gradient(circle at 14% 10%, rgba(255, 255, 255, 0.72) 0 54px, transparent 55px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.2) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, #23a7ef 0%, #86d6ff 58%, #cde9a1 100%);
+  box-shadow: 0 100vmax 0 #5aa24a;
+}
+
+.app-top-route-shell--pixel-game::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(255, 255, 255, 0.88) 0 46px, transparent 47px),
+    radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.76) 0 64px, transparent 65px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.2) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, #23a7ef 0%, #86d6ff 58%, #cde9a1 78%, #5aa24a 100%);
+}
+
+.app-top-route-shell--pixel-game::after {
+  content: '';
+  position: absolute;
+  inset: 100% 0 auto;
+  z-index: 0;
+  height: 160px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14) 1px, transparent 1px) 0 0 / 28px 28px,
+    #5aa24a;
+}
+
+.app-top-route-shell--pixel-game > .app-platform-topbar,
+.app-top-route-shell--pixel-game > .chat-route-main,
+.app-top-route-shell--pixel-game > .pixel-route-main,
+.app-top-route-shell--pixel-game > .app-game-bottom-nav {
+  position: relative;
+  z-index: 1;
+}
+
+.app-top-route-shell--pixel-game .chat-route-main {
+  min-height: 0;
+  height: 100%;
+}
+
+.app-top-route-shell--pixel-game .pixel-route-main {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: transparent;
+}
+
+.app-top-route-shell--pixel-game .chat-workspace-page,
+.app-top-route-shell--pixel-game .chat-main-area,
+.app-top-route-shell--pixel-game .chat-workspace-sidebar {
+  height: 100%;
+  min-height: 0;
+}
+
+.app-top-route-shell--pixel-game .chat-message-stage {
+  padding-bottom: 108px;
+}
+
+.app-top-route-shell--pixel-game .chat-composer-wrap {
+  bottom: 84px;
+}
+
+.app-top-route-shell--pixel-game .chat-composer-wrap::before {
+  background:
+    linear-gradient(180deg, rgba(255, 245, 215, 0), rgba(72, 91, 67, 0.72) 68%),
+    repeating-linear-gradient(90deg, rgba(236, 200, 134, 0.045) 0 2px, transparent 2px 28px);
+}
+
+.app-shell--pixel-game .sidebar,
+.app-shell--pixel-game .sidebar-shell,
+.app-shell--pixel-game .sidebar-shell-content,
+.app-shell--pixel-game .sidebar-shell-rail,
+.app-shell--pixel-game .sidebar-collapsed-rail,
+.app-shell--pixel-game .app-sidebar-scrim,
+.app-shell--pixel-game .app-mobile-sidebar-trigger {
+  display: none !important;
+}
+
+.app-shell--pixel-game .main {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 100%;
+  min-height: 0;
+  padding: 18px 22px 132px;
+  background:
+    linear-gradient(180deg, rgba(255, 245, 215, 0.06), rgba(104, 142, 72, 0.2)),
+    transparent;
+}
+
+.app-shell--pixel-game .main::after {
+  content: '';
+  position: fixed;
+  inset: auto 0 0;
+  z-index: -1;
+  height: 160px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(120, 178, 83, 0), #5aa24a 72%);
+}
+
+.app-shell--pixel-game .main > .main-workbench {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.app-shell--pixel-game .main-workbench.with-chat-dock {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, clamp(320px, 19vw, 380px));
+  align-items: start;
+}
+
+.app-shell--pixel-game .main-workbench.with-chat-dock .app-chat-dock {
+  width: clamp(320px, 19vw, 380px);
+  min-width: 320px;
+  max-width: 380px;
+}
+
+.app-platform-topbar {
+  min-height: var(--layout-topbar-height);
+  border-bottom: 2px solid rgba(236, 200, 134, 0.28);
+  background:
+    linear-gradient(180deg, rgba(47, 70, 68, 0.98), rgba(31, 51, 50, 0.96)),
+    linear-gradient(90deg, rgba(244, 181, 86, 0.18), rgba(22, 143, 240, 0.12));
+  color: #f7efd7;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.22),
+    0 18px 42px rgba(2, 7, 13, 0.28);
+  backdrop-filter: blur(10px) saturate(1.2);
+}
+
+.app-platform-topbar.is-pixel-active {
+  background:
+    linear-gradient(180deg, rgba(49, 78, 73, 0.98), rgba(33, 56, 52, 0.96)),
+    linear-gradient(90deg, rgba(244, 181, 86, 0.22), rgba(117, 216, 167, 0.12));
+}
+
+.app-platform-brand,
+.app-platform-brand:hover {
+  color: #f7efd7;
+}
+
+.app-platform-brand__mark {
+  border-radius: 10px;
+  border-color: rgba(236, 200, 134, 0.38);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.14)),
+    rgba(7, 14, 25, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.2),
+    0 12px 24px rgba(0, 0, 0, 0.24);
+  font-size: 22px;
+}
+
+.app-platform-brand__copy strong {
+  color: #fff1bf;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.28);
+}
+
+.app-platform-brand__copy small {
+  color: rgba(247, 239, 215, 0.68);
+}
+
+.app-game-hud-status,
+.app-game-hud-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-game-hud-status {
+  margin-left: auto;
+  color: rgba(247, 239, 215, 0.78);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.app-game-hud-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(236, 200, 134, 0.24);
+  border-radius: 8px;
+  background: rgba(4, 10, 18, 0.42);
+}
+
+.app-game-hud-chip span {
+  color: #75d8a7;
+  text-shadow: 0 0 10px rgba(117, 216, 167, 0.48);
+}
+
+.app-game-room-badge {
+  min-width: 0;
+  max-width: min(320px, 30vw);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid rgba(236, 200, 134, 0.24);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)),
+    rgba(5, 12, 22, 0.54);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.16);
+}
+
+.app-game-room-badge__avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  border: 1px solid rgba(111, 184, 255, 0.42);
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.24), transparent 44%),
+    var(--workspace-pixel-companion-image) center / cover no-repeat,
+    rgba(111, 184, 255, 0.14);
+  box-shadow: 0 0 18px rgba(111, 184, 255, 0.2);
+}
+
+.app-game-room-badge__copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.app-game-room-badge__copy small {
+  color: rgba(247, 239, 215, 0.58);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.app-game-room-badge__copy strong {
+  overflow: hidden;
+  color: #fff1bf;
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-mode-switch,
+.app-game-login-link.ui-button,
+.session-menu-trigger.variant-pill {
+  border-radius: 10px;
+  border-color: rgba(236, 200, 134, 0.3);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(6, 14, 25, 0.64);
+  color: #fff1bf;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.18);
+}
+
+.app-mode-switch:hover,
+.app-game-login-link.ui-button:hover,
+.session-menu-trigger.variant-pill:hover {
+  border-color: rgba(111, 184, 255, 0.5);
+  color: #eaf6ff;
+}
+
+.app-mode-switch__copy small {
+  color: rgba(247, 239, 215, 0.62);
+}
+
+.app-mode-switch__copy strong {
+  color: #fff1bf;
+}
+
+.app-game-bottom-nav {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  position: sticky;
+  bottom: 0;
+  z-index: 58;
+  width: min(1160px, calc(100% - 32px));
+  margin: 0 auto 10px;
+  display: grid;
+  grid-template-columns: repeat(9, minmax(72px, 1fr));
+  gap: 7px;
+  padding: 9px;
+  border: 2px solid rgba(236, 200, 134, 0.28);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(17, 33, 52, 0.96), rgba(7, 15, 28, 0.96)),
+    rgba(8, 16, 29, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -5px 0 rgba(0, 0, 0, 0.18),
+    0 22px 52px rgba(2, 7, 13, 0.4);
+}
+
+.app-game-nav-item {
+  position: relative;
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    'icon label'
+    'icon room';
+  align-items: center;
+  column-gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid rgba(83, 110, 143, 0.5);
+  border-radius: 9px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015)),
+    rgba(10, 19, 32, 0.84);
+  color: rgba(247, 239, 215, 0.82);
+  text-decoration: none;
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.16);
+}
+
+.app-game-nav-item:hover,
+.app-game-nav-item:focus-visible {
+  border-color: rgba(111, 184, 255, 0.54);
+  color: #eaf6ff;
+  transform: translateY(-1px);
+}
+
+.app-game-nav-item.active {
+  border-color: rgba(111, 184, 255, 0.78);
+  background:
+    linear-gradient(180deg, rgba(92, 157, 229, 0.36), rgba(29, 89, 153, 0.28)),
+    rgba(10, 19, 32, 0.92);
+  color: #fff1bf;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.2),
+    0 0 0 2px rgba(111, 184, 255, 0.12);
+}
+
+.app-game-nav-item__icon {
+  grid-area: icon;
+  font-size: 24px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.28));
+}
+
+.app-game-nav-item__label {
+  grid-area: label;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.app-game-nav-item small {
+  grid-area: room;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(247, 239, 215, 0.58);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sidebar,
+.app-shell-context-bar,
+.app-chat-dock,
+.session-menu-panel {
+  border-color: rgba(236, 200, 134, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
+    rgba(35, 63, 62, 0.9);
+  color: #f7efd7;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.12);
+}
+
+.app-chat-dock {
+  border-width: 2px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.014)),
+    repeating-linear-gradient(0deg, rgba(236, 200, 134, 0.035) 0 2px, transparent 2px 28px),
+    rgba(35, 63, 62, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -5px 0 rgba(0, 0, 0, 0.16),
+    0 18px 42px rgba(3, 8, 16, 0.24);
+}
+
+.app-chat-dock.collapsed {
+  min-width: 64px;
+  max-width: 64px;
+  border-radius: 16px;
+}
+
+.app-chat-dock-header {
+  min-height: 54px;
+  border-bottom-color: rgba(236, 200, 134, 0.18);
+  background:
+    linear-gradient(90deg, rgba(96, 62, 92, 0.72), rgba(35, 63, 62, 0.54)),
+    rgba(5, 12, 22, 0.42);
+}
+
+.app-chat-dock-header::before {
+  content: '';
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 190, 106, 0.32);
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.24), transparent 44%),
+    url('/assets/vistral-workshop/robot.png') center / cover no-repeat,
+    rgba(255, 174, 76, 0.18);
+}
+
+.app-chat-dock.collapsed .app-chat-dock-header::before {
+  display: none;
+}
+
+.app-chat-dock-header strong {
+  color: #fff1bf;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.app-chat-dock-room-context {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(236, 200, 134, 0.2);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(111, 184, 255, 0.12), rgba(111, 184, 255, 0.035)),
+    rgba(5, 12, 22, 0.42);
+}
+
+.app-chat-dock-room-context small {
+  color: rgba(247, 239, 215, 0.58);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.app-chat-dock-room-context strong {
+  color: #fff1bf;
+  line-height: 1.25;
+}
+
+.app-chat-dock-room-context span {
+  color: rgba(247, 239, 215, 0.72);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sidebar-brand-mark,
+.chat-sidebar-brand-mark {
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.24), transparent 42%),
+    url('/assets/vistral-workshop/robot.png') center / cover no-repeat;
+  color: transparent;
+  image-rendering: auto;
+}
+
+.sidebar-nav-link.active,
+.sidebar-rail-btn.active,
+.app-shell-context-chip,
+.app-chat-dock-conversation-chip.active {
+  border-color: rgba(111, 184, 255, 0.54);
+  background: rgba(64, 135, 214, 0.18);
+  color: #eaf6ff;
+}
+
+.chat-workspace-page {
+  position: relative;
+  isolation: isolate;
+  color: #f7efd7;
+  background:
+    radial-gradient(circle at 88% 10%, rgba(255, 255, 255, 0.78) 0 46px, transparent 47px),
+    radial-gradient(circle at 14% 13%, rgba(255, 255, 255, 0.72) 0 62px, transparent 63px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.18) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, #24a8ef 0%, #8ed9ff 58%, #cfe9a7 100%);
+}
+
+.chat-workspace-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.28), transparent 26%),
+    radial-gradient(circle at 86% 8%, rgba(243, 194, 103, 0.16), transparent 24%),
+    linear-gradient(90deg, rgba(31, 54, 49, 0.16), rgba(255, 245, 215, 0.08));
+  opacity: 0.72;
+}
+
+.chat-workspace-page > * {
+  position: relative;
+  z-index: 1;
+}
+
+.chat-workspace-sidebar,
+.chat-sidebar-collapsed-rail,
+.chat-message-timeline,
+.chat-composer-shell,
+.app-chat-dock-action-card,
+.chat-model-panel,
+.chat-empty-state,
+.chat-attachment-tray {
+  border-color: rgba(236, 200, 134, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
+    rgba(35, 63, 62, 0.88);
+  color: #f7efd7;
+}
+
+.chat-workspace-sidebar {
+  border-right-width: 2px;
+  border-right-color: rgba(236, 200, 134, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    repeating-linear-gradient(0deg, rgba(236, 200, 134, 0.035) 0 2px, transparent 2px 28px),
+    rgba(35, 63, 62, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset -5px 0 0 rgba(0, 0, 0, 0.14);
+}
+
+.chat-sidebar-brand-pill strong {
+  color: #fff1bf;
+}
+
+.chat-sidebar-brand-mark {
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.24), transparent 42%),
+    url('/assets/vistral-workshop/scientist.png') center / cover no-repeat;
+  color: transparent;
+}
+
+.chat-history-item {
+  border-color: rgba(236, 200, 134, 0.08);
+}
+
+.chat-history-item:hover,
+.chat-history-item.active,
+.chat-history-item.menu-open {
+  border-color: rgba(111, 184, 255, 0.34);
+  background: rgba(64, 135, 214, 0.13);
+}
+
+.chat-workspace-page .muted,
+.chat-workspace-page small,
+.app-chat-dock .muted {
+  color: rgba(247, 239, 215, 0.68);
+}
+
+.chat-workspace-page input,
+.chat-workspace-page textarea,
+.chat-workspace-page select,
+.app-chat-dock input,
+.app-chat-dock textarea,
+.app-chat-dock select {
+  border-color: rgba(236, 200, 134, 0.26);
+  background: rgba(5, 11, 20, 0.62);
+  color: #fff7df;
+}
+
+.chat-workspace-page .ui-message-bubble,
+.app-chat-dock .ui-message-bubble {
+  border-color: rgba(236, 200, 134, 0.2);
+  background: rgba(6, 14, 25, 0.56);
+}
+
+.chat-workspace-page .ui-message-bubble--user,
+.app-chat-dock .ui-message-bubble--user {
+  border-color: rgba(111, 184, 255, 0.44);
+  background: rgba(39, 104, 172, 0.24);
+}
+
+.chat-workspace-page .chat-sidebar-new-chat-btn,
+.chat-workspace-page .chat-sidebar-toggle,
+.app-chat-dock-toggle,
+.app-chat-dock-inline-action {
+  border-color: rgba(236, 200, 134, 0.3);
+  background: rgba(9, 17, 29, 0.58);
+  color: #fff1bf;
+}
+
+.chat-workspace-page .chat-main-header,
+.chat-workspace-page .chat-composer-wrap {
+  border-color: rgba(236, 200, 134, 0.2);
+  background: rgba(7, 14, 25, 0.64);
+}
+
+.chat-workspace-page .ui-attachment-chip,
+.app-chat-dock .app-chat-dock-attachment-chip,
+.app-chat-dock .app-chat-dock-attachment-item {
+  border-color: rgba(236, 200, 134, 0.22);
+  background: rgba(5, 12, 22, 0.48);
+  color: #fff1bf;
+}
+
+.chat-pixel-room-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(236, 200, 134, 0.26);
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, rgba(8, 15, 27, 0.88), rgba(10, 21, 36, 0.68)),
+    linear-gradient(90deg, rgba(111, 184, 255, 0.12), transparent 42%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.12);
+}
+
+.chat-pixel-room-strip__copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.chat-pixel-room-strip__copy > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chat-pixel-room-strip__copy strong {
+  color: #fff1bf;
+}
+
+.chat-pixel-room-strip__copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pixel-room-strip__avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  border: 1px solid rgba(111, 184, 255, 0.42);
+  background:
+    radial-gradient(circle at 50% 72%, rgba(0, 0, 0, 0.24), transparent 44%),
+    url('/assets/vistral-workshop/scientist.png') center / cover no-repeat;
+  box-shadow: 0 0 18px rgba(111, 184, 255, 0.22);
+}
+
+.chat-pixel-room-strip__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.training-workshop-page {
+  position: relative;
+  isolation: isolate;
+  width: min(100%, 1520px);
+  color: #f7efd7;
+  background:
+    radial-gradient(circle at 84% 10%, rgba(255, 255, 255, 0.76) 0 48px, transparent 49px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.2) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, #24a8ef 0%, #8ed9ff 58%, #cfe9a7 100%);
+  border-radius: 18px;
+}
+
+.training-workshop-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(32, 58, 54, 0.78), rgba(32, 58, 54, 0.38)),
+    url('/assets/vistral-workshop/training.png') center / cover no-repeat;
+  opacity: 0.2;
+}
+
+.training-workshop-page > * {
+  position: relative;
+  z-index: 1;
+}
+
+.training-workshop-hero,
+.training-workshop-layout > *,
+.training-workshop-selectors > *,
+.workshop-status-panel,
+.workshop-selector-panel,
+.workshop-timeline,
+.training-workshop-footnote {
+  border-color: rgba(236, 200, 134, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
+    rgba(8, 16, 29, 0.88);
+  color: #f7efd7;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.12),
+    0 18px 42px rgba(3, 8, 16, 0.2);
+}
+
+.training-workshop-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  padding-right: clamp(24px, 22vw, 280px);
+  background:
+    linear-gradient(90deg, rgba(9, 17, 29, 0.88), rgba(11, 24, 40, 0.6)),
+    repeating-linear-gradient(90deg, rgba(236, 200, 134, 0.055) 0 2px, transparent 2px 30px);
+}
+
+.training-workshop-hero::after {
+  content: '';
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  width: clamp(150px, 18vw, 250px);
+  aspect-ratio: 4 / 3;
+  transform: translateY(-50%);
+  border: 2px solid rgba(236, 200, 134, 0.28);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(5, 11, 20, 0.04), rgba(5, 11, 20, 0.32)),
+    url('/assets/vistral-workshop/training.png') center / contain no-repeat,
+    rgba(5, 11, 20, 0.34);
+  pointer-events: none;
+}
+
+.training-workshop-hero h1,
+.workshop-status-panel h2,
+.workshop-status-panel h3,
+.workshop-selector-panel h2,
+.workshop-selector-panel h3 {
+  color: #fff1bf;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.22);
+}
+
+.training-workshop-hero p,
+.training-workshop-footnote,
+.training-workshop-hero small,
+.workshop-status-panel small,
+.workshop-selector-panel small {
+  color: rgba(247, 239, 215, 0.72);
+}
+
+.training-workshop-footnote {
+  padding: 12px 14px;
+  border: 1px solid rgba(236, 200, 134, 0.22);
+  border-radius: 12px;
+}
+
+.training-workshop-page .workshop-scene {
+  border-color: rgba(236, 200, 134, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 22px 48px rgba(4, 8, 15, 0.28);
+}
+
+.training-workshop-page .ui-button--secondary,
+.training-workshop-page .ui-button--ghost,
+.training-workshop-page select,
+.training-workshop-page input {
+  border-color: rgba(236, 200, 134, 0.3);
+  background: rgba(9, 17, 29, 0.58);
+  color: #fff1bf;
+}
+
+@media (max-width: 900px) {
+  .app-shell--pixel-game .main {
+    padding: 14px 12px 104px;
+  }
+
+  .app-shell--pixel-game.sidebar-compact .app-platform-brand {
+    margin-left: 0;
+  }
+
+  .app-game-hud-status {
+    display: none;
+  }
+
+  .app-game-room-badge {
+    max-width: min(260px, 34vw);
+  }
+
+  .app-game-bottom-nav {
+    width: calc(100% - 16px);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(82px, 1fr);
+    grid-template-columns: none;
+    overflow-x: auto;
+    padding: 8px;
+    scroll-snap-type: x proximity;
+  }
+
+  .app-game-nav-item {
+    scroll-snap-align: center;
+  }
+
+  .workspace-pixel-route-strip,
+  .chat-pixel-room-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-pixel-route-strip__actions,
+  .chat-pixel-room-strip__actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-platform-topbar {
+    min-height: auto;
+    flex-wrap: wrap;
+  }
+
+  .app-game-hud-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .app-game-room-badge {
+    order: 3;
+    width: 100%;
+    max-width: none;
+  }
+
+  .app-mode-switch {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .app-game-bottom-nav {
+    margin-bottom: 6px;
+  }
+
+  .app-game-nav-item {
+    min-height: 54px;
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'icon'
+      'label';
+    justify-items: center;
+    text-align: center;
+  }
+
+  .app-game-nav-item small {
+    display: none;
+  }
+
+  .training-workshop-hero {
+    padding-right: 14px;
+  }
+
+  .training-workshop-hero::after {
+    display: none;
+  }
+
+  .chat-pixel-room-strip {
+    margin: 10px 10px 0;
+  }
+
+  .chat-pixel-room-strip__copy small {
+    white-space: normal;
+  }
+}
+
+/* Bright daytime workshop skin: the business structure stays the same, only the pixel material palette changes. */
+.workspace-pixel-skin {
+  --pixel-skin-ink: #352719;
+  --pixel-skin-panel: rgba(255, 243, 214, 0.86);
+  --pixel-skin-panel-strong: rgba(255, 235, 188, 0.94);
+  --pixel-skin-border: rgba(111, 70, 38, 0.42);
+  --pixel-skin-blue: #168ff0;
+  --pixel-skin-gold: #c8842a;
+  color: var(--pixel-skin-ink);
+  background:
+    radial-gradient(circle at 88% 8%, rgba(255, 255, 255, 0.94) 0 32px, transparent 33px),
+    radial-gradient(circle at 82% 10%, rgba(255, 255, 255, 0.7) 0 58px, transparent 59px),
+    linear-gradient(180deg, #28a7ee 0%, #8dd7ff 50%, #f6ddb0 51%, #e8bd7d 100%);
+}
+
+.app-shell--pixel-game,
+.app-top-route-shell--pixel-game {
+  background:
+    radial-gradient(circle at 88% 8%, rgba(255, 255, 255, 0.92) 0 30px, transparent 31px),
+    radial-gradient(circle at 15% 14%, rgba(255, 255, 255, 0.82) 0 42px, transparent 43px),
+    linear-gradient(180deg, #28a7ee 0%, #90d9ff 52%, #bfe89a 75%, #5aa24a 100%);
+}
+
+html,
+body,
+#root {
+  background-color: #5aa24a !important;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(255, 255, 255, 0.9) 0 30px, transparent 31px),
+    radial-gradient(circle at 15% 14%, rgba(255, 255, 255, 0.78) 0 42px, transparent 43px),
+    linear-gradient(180deg, #28a7ee 0%, #90d9ff 52%, #bfe89a 75%, #5aa24a 100%) !important;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 0;
+  height: 180px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14) 1px, transparent 1px) 0 0 / 28px 28px,
+    #5aa24a;
+}
+
+.app-shell--pixel-game,
+.app-top-route-shell--pixel-game {
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell--pixel-game .main {
+  background:
+    linear-gradient(180deg, rgba(255, 246, 221, 0.26), rgba(98, 142, 76, 0.16)),
+    transparent;
+}
+
+.app-shell--pixel-game .main > .main-workbench {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.workspace-pixel-skin .ui-card,
+.workspace-pixel-skin .ui-panel,
+.workspace-pixel-skin .card,
+.workspace-pixel-skin .console-page-header,
+.workspace-pixel-skin .console-section-card,
+.workspace-pixel-skin .console-filter-toolbar,
+.workspace-pixel-skin .console-health-summary,
+.workspace-pixel-skin .workspace-overview-hero,
+.workspace-pixel-skin .workspace-context-bar,
+.workspace-pixel-skin .workspace-toolbar-card,
+.workspace-pixel-skin .workspace-inspector-card,
+.workspace-pixel-skin .workspace-guide-popover,
+.workspace-pixel-skin .workspace-guide-highlight,
+.workspace-pixel-skin .settings-surface-nav,
+.workspace-pixel-skin .console-detail-drawer.ui-drawer,
+.workspace-pixel-skin .workspace-workbench-side > section,
+.workspace-pixel-skin .workspace-workbench-main > section {
+  border-color: var(--pixel-skin-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 237, 196, 0.26)),
+    var(--pixel-skin-panel);
+  color: var(--pixel-skin-ink);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -5px 0 rgba(122, 78, 42, 0.14),
+    0 14px 30px rgba(111, 76, 43, 0.16);
+}
+
+.workspace-pixel-skin .console-page-header,
+.workspace-pixel-skin .workspace-overview-hero {
+  background:
+    linear-gradient(90deg, rgba(47, 73, 70, 0.94), rgba(102, 98, 72, 0.74)),
+    repeating-linear-gradient(90deg, rgba(255, 226, 157, 0.12) 0 2px, transparent 2px 30px);
+  color: #fff1cb;
+}
+
+.workspace-pixel-skin .console-page-header__title-block h1,
+.workspace-pixel-skin .workspace-overview-copy h1 {
+  color: #ffe7a7;
+  text-shadow: 0 3px 0 rgba(67, 36, 19, 0.35);
+}
+
+.workspace-pixel-skin .muted,
+.workspace-pixel-skin .console-page-header__title-block p,
+.workspace-pixel-skin .workspace-overview-copy p,
+.workspace-pixel-skin .console-section-card__copy small,
+.workspace-pixel-skin .workspace-section-header small {
+  color: rgba(62, 45, 30, 0.72);
+}
+
+.workspace-pixel-skin .console-page-header .muted,
+.workspace-pixel-skin .workspace-overview-hero .muted,
+.workspace-pixel-skin .console-page-header__title-block p,
+.workspace-pixel-skin .workspace-overview-copy p {
+  color: rgba(255, 245, 218, 0.82);
+}
+
+.workspace-pixel-skin .ui-button--primary,
+.app-shell--pixel-game .ui-button--primary,
+.app-top-route-shell--pixel-game .ui-button--primary,
+.training-workshop-page .ui-button--primary {
+  border-color: rgba(22, 143, 240, 0.78);
+  background: linear-gradient(180deg, #42a9f5, #1680d6);
+  color: #ffffff;
+}
+
+.workspace-pixel-skin .ui-button--secondary,
+.app-shell--pixel-game .ui-button--secondary,
+.app-top-route-shell--pixel-game .ui-button--secondary,
+.training-workshop-page .ui-button--secondary {
+  border-color: rgba(111, 70, 38, 0.36);
+  background:
+    linear-gradient(180deg, rgba(255, 252, 234, 0.78), rgba(239, 203, 143, 0.38)),
+    rgba(255, 243, 214, 0.82);
+  color: #4d2e1c;
+}
+
+.workspace-pixel-skin input,
+.workspace-pixel-skin select,
+.workspace-pixel-skin textarea,
+.app-shell--pixel-game input,
+.app-shell--pixel-game select,
+.app-shell--pixel-game textarea,
+.app-top-route-shell--pixel-game input,
+.app-top-route-shell--pixel-game select,
+.app-top-route-shell--pixel-game textarea {
+  border-color: rgba(111, 70, 38, 0.34);
+  background: rgba(255, 249, 230, 0.92);
+  color: #352719;
+}
+
+.app-platform-topbar,
+.app-platform-topbar.is-pixel-active {
+  border-bottom-color: rgba(94, 58, 34, 0.5);
+  background:
+    linear-gradient(180deg, rgba(43, 67, 66, 0.96), rgba(34, 55, 58, 0.94)),
+    linear-gradient(90deg, rgba(255, 226, 157, 0.16), rgba(43, 169, 238, 0.12));
+  color: #fff1cb;
+}
+
+.app-platform-brand,
+.app-platform-brand:hover,
+.app-platform-brand__copy strong,
+.app-mode-switch__copy strong,
+.app-game-room-badge__copy strong {
+  color: #ffe7a7;
+}
+
+.app-game-bottom-nav {
+  border-color: rgba(94, 58, 34, 0.54);
+  background:
+    linear-gradient(180deg, rgba(55, 81, 74, 0.96), rgba(36, 58, 58, 0.96)),
+    rgba(54, 78, 69, 0.94);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -5px 0 rgba(39, 22, 14, 0.2),
+    0 18px 42px rgba(85, 58, 35, 0.26);
+}
+
+.app-game-nav-item {
+  border-color: rgba(255, 226, 157, 0.2);
+  background: rgba(255, 243, 214, 0.09);
+  color: rgba(255, 241, 203, 0.86);
+}
+
+.app-game-nav-item.active {
+  border-color: rgba(22, 143, 240, 0.82);
+  background:
+    linear-gradient(180deg, rgba(66, 169, 245, 0.38), rgba(22, 128, 214, 0.24)),
+    rgba(255, 243, 214, 0.08);
+  color: #ffe7a7;
+}
+
+.training-workshop-page {
+  color: #352719;
+  background:
+    radial-gradient(circle at 84% 8%, rgba(255, 255, 255, 0.88) 0 38px, transparent 39px),
+    linear-gradient(180deg, #28a7ee 0%, #8dd7ff 48%, #f6ddb0 49%, #e5bd7c 100%);
+}
+
+.training-workshop-hero,
+.training-workshop-layout > *,
+.training-workshop-selectors > *,
+.workshop-status-panel,
+.workshop-selector-panel,
+.workshop-timeline,
+.training-workshop-footnote {
+  border-color: rgba(111, 70, 38, 0.4);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 237, 196, 0.3)),
+    rgba(255, 243, 214, 0.86);
+  color: #352719;
+}
+
+.training-workshop-hero h1,
+.workshop-status-panel h2,
+.workshop-status-panel h3,
+.workshop-selector-panel h2,
+.workshop-selector-panel h3 {
+  color: #4b2f1f;
+  text-shadow: none;
+}

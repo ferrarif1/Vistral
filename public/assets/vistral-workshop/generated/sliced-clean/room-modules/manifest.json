@@ -1,0 +1,316 @@
+{
+  "input": "public/assets/vistral-workshop/generated/raw-magenta-sheets/room-modules.png",
+  "rows": 2,
+  "cols": 4,
+  "threshold": 42,
+  "edge_threshold": 150,
+  "component_mode": "all",
+  "component_padding": 10,
+  "min_component_area": 500,
+  "edge_touch_margin": 2,
+  "accepted": [
+    {
+      "index": 0,
+      "label": "dataset-warehouse",
+      "grid": [
+        0,
+        0
+      ],
+      "source_box": [
+        0,
+        0,
+        384,
+        512
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        21,
+        86,
+        360,
+        465
+      ],
+      "padded_crop_bbox": [
+        11,
+        76,
+        360,
+        475
+      ],
+      "edge_touch": true,
+      "output_size": [
+        349,
+        399
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/dataset-warehouse/prop.png"
+    },
+    {
+      "index": 1,
+      "label": "data-processing-annotation",
+      "grid": [
+        0,
+        1
+      ],
+      "source_box": [
+        384,
+        0,
+        768,
+        512
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        11,
+        86,
+        356,
+        465
+      ],
+      "padded_crop_bbox": [
+        1,
+        76,
+        360,
+        475
+      ],
+      "edge_touch": false,
+      "output_size": [
+        359,
+        399
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/data-processing-annotation/prop.png"
+    },
+    {
+      "index": 2,
+      "label": "feature-recipe",
+      "grid": [
+        0,
+        2
+      ],
+      "source_box": [
+        768,
+        0,
+        1152,
+        512
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        5,
+        86,
+        350,
+        465
+      ],
+      "padded_crop_bbox": [
+        0,
+        76,
+        360,
+        475
+      ],
+      "edge_touch": false,
+      "output_size": [
+        360,
+        399
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/feature-recipe/prop.png"
+    },
+    {
+      "index": 3,
+      "label": "model-training",
+      "grid": [
+        0,
+        3
+      ],
+      "source_box": [
+        1152,
+        0,
+        1536,
+        512
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        87,
+        336,
+        466
+      ],
+      "padded_crop_bbox": [
+        0,
+        77,
+        346,
+        476
+      ],
+      "edge_touch": true,
+      "output_size": [
+        346,
+        399
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/model-training/prop.png"
+    },
+    {
+      "index": 4,
+      "label": "inference-validation",
+      "grid": [
+        1,
+        0
+      ],
+      "source_box": [
+        0,
+        512,
+        384,
+        1024
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        24,
+        26,
+        360,
+        374
+      ],
+      "padded_crop_bbox": [
+        14,
+        16,
+        360,
+        384
+      ],
+      "edge_touch": true,
+      "output_size": [
+        346,
+        368
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/inference-validation/prop.png"
+    },
+    {
+      "index": 5,
+      "label": "model-publishing",
+      "grid": [
+        1,
+        1
+      ],
+      "source_box": [
+        384,
+        512,
+        768,
+        1024
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        9,
+        7,
+        355,
+        369
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        360,
+        379
+      ],
+      "edge_touch": false,
+      "output_size": [
+        360,
+        379
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/model-publishing/prop.png"
+    },
+    {
+      "index": 6,
+      "label": "deployment-runtime",
+      "grid": [
+        1,
+        2
+      ],
+      "source_box": [
+        768,
+        512,
+        1152,
+        1024
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        4,
+        7,
+        346,
+        369
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        356,
+        379
+      ],
+      "edge_touch": false,
+      "output_size": [
+        356,
+        379
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/deployment-runtime/prop.png"
+    },
+    {
+      "index": 7,
+      "label": "feedback-repair",
+      "grid": [
+        1,
+        3
+      ],
+      "source_box": [
+        1152,
+        512,
+        1536,
+        1024
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        7,
+        335,
+        369
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        345,
+        379
+      ],
+      "edge_touch": true,
+      "output_size": [
+        345,
+        379
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/room-modules/feedback-repair/prop.png"
+    }
+  ],
+  "rejected": [],
+  "edge_touch_props": [
+    "dataset-warehouse",
+    "model-training",
+    "inference-validation",
+    "feedback-repair"
+  ]
+}

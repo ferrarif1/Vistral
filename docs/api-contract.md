@@ -78,6 +78,17 @@ Validation baseline:
 - `training_completed`
 - `failed`
 
+### 4.7 Local annotated folder workflow
+- `detected_format`: `yolo` | `voc` | `ocr` | `unknown`
+- `manual_validation_holdout`: dataset items reserved in `split=test` for human verification
+- First implementation scope: YOLO-style detection folders, Pascal VOC XML detection folders, and a minimal OCR text/JSON format
+
+Rules:
+- This workflow is backend-local. `folder_path` is resolved by the API server, not by the browser.
+- The server must re-scan and revalidate before import, even if the client already called scan.
+- LLM output may be used to explain or name the workflow, but deterministic backend validation owns import, split, and training launch.
+- Imported images become normal `FileAttachment` records with local storage metadata.
+
 ## 5. Authentication Endpoints
 
 ### POST /auth/register
@@ -258,6 +269,151 @@ Notes:
 - assistant can post-process latest OCR inference for extraction intents (plate/serial/number keywords) and return extracted candidate content
 - when required inputs are missing, assistant returns `metadata.conversation_action.status=requires_input`
 - `metadata.conversation_action` may include optional `action_links` (`[{label, href}]`) so clients can render direct navigation cards for complex follow-up input collection (for example annotation/training/inference workspaces)
+
+## 8.1 Local Annotated Folder Workflow Endpoints
+
+### POST /datasets/local-folder/scan
+Scan a backend-local asset folder and return an import/training plan preview.
+
+Request:
+```json
+{
+  "folder_path": "/Users/example/Downloads/梯级缺陷2020.07.15",
+  "task_type": "detection",
+  "framework": "yolo",
+  "manual_validation_count": 5
+}
+```
+
+Response:
+```json
+{
+  "folder_path": "/Users/example/Downloads/梯级缺陷2020.07.15",
+  "detected_format": "yolo",
+  "task_type": "detection",
+  "recommended_framework": "yolo",
+  "image_count": 120,
+  "annotation_file_count": 120,
+  "paired_count": 118,
+  "unmatched_image_count": 2,
+  "unmatched_annotation_count": 2,
+  "class_names": ["defect"],
+  "warnings": [],
+  "manual_validation_count": 5
+}
+```
+
+Rules:
+- authenticated users can scan server-local paths available to the API process
+- `folder_path` must point to an existing directory
+- supported first-pass layouts include YOLO `images/` + `labels/`, flat image + `.txt` pairs, Pascal VOC `Annotations/*.xml` + `JPEGImages/*`, and minimal OCR `.json` / tab-separated `.txt`
+- invalid payload returns `400 VALIDATION_ERROR`
+
+### POST /datasets/local-folder/import-and-train
+Create or reuse a dataset, import paired local images and annotations, split the dataset, reserve manual validation images, create a dataset version, and launch a training job.
+
+Request:
+```json
+{
+  "folder_path": "/Users/example/Downloads/梯级缺陷2020.07.15",
+  "dataset_name": "梯级缺陷 2020.07.15",
+  "task_type": "detection",
+  "framework": "yolo",
+  "base_model": "yolov8n",
+  "train_ratio": 0.8,
+  "val_ratio": 0.15,
+  "manual_validation_count": 5,
+  "seed": 42
+}
+```
+
+Response:
+```json
+{
+  "scan": {},
+  "dataset": {},
+  "dataset_version": {},
+  "training_job": {},
+  "manual_validation_items": [
+    {
+      "item_id": "di-1",
+      "filename": "sample.jpg",
+      "storage_path": ".data/uploads/dataset/..."
+    }
+  ],
+  "split_summary": {
+    "train": 95,
+    "val": 18,
+    "test": 5,
+    "unassigned": 0
+  },
+  "import_summary": {
+    "images_imported": 118,
+    "annotations_imported": 118,
+    "annotations_updated": 0,
+    "created_items": 118
+  },
+  "next_links": {
+    "dataset": "/datasets/d-1",
+    "training_job": "/training/jobs/tj-1",
+    "inference_validation": "/inference/validate?dataset=d-1&version=dv-1"
+  }
+}
+```
+
+Rules:
+- import writes normal dataset attachments, dataset items, annotations, and a dataset version
+- detection folders may be YOLO text pairs or Pascal VOC XML pairs; both normalize to the same `payload.boxes[]` annotation structure
+- five manual validation images are held out in `split=test`; if fewer than five paired samples exist, all available leftovers are held out
+- the training job starts through the existing training job lifecycle; logs, metrics, and artifacts remain visible on `TrainingJobDetailPage`
+- real/fallback execution markers from the trainer must remain explicit
+
+### POST /training/jobs/{id}/local-folder-finalize
+Finalize a completed local-folder training job by registering a model version when evidence allows it and running inference over the five held-out manual validation images.
+
+Request:
+```json
+{
+  "model_name": "梯级缺陷检测模型",
+  "version_name": "梯级缺陷-2020.07.15-v1",
+  "run_manual_validation": true
+}
+```
+
+Response:
+```json
+{
+  "training_job": {},
+  "model": {},
+  "model_version": {},
+  "registration_status": "registered",
+  "registration_error": null,
+  "manual_validation_items": [
+    {
+      "item_id": "di-1",
+      "attachment_id": "f-1",
+      "filename": "sample.jpg",
+      "storage_path": ".data/uploads/dataset/..."
+    }
+  ],
+  "inference_runs": [],
+  "metrics_summary": {
+    "map": 0.73,
+    "precision": 0.8
+  },
+  "next_links": {
+    "training_job": "/training/jobs/tj-1",
+    "model_version": "/models/versions?modelVersion=mv-1",
+    "inference_validation": "/inference/validate?dataset=d-1&version=dv-1&modelVersion=mv-1"
+  }
+}
+```
+
+Rules:
+- job must exist, be accessible, and be `completed`
+- endpoint only auto-runs inference after model version registration succeeds
+- if registration is blocked by evidence policy, response returns `registration_status=blocked`, includes `registration_error`, and does not fake inference results
+- five held-out items are resolved from `dataset_items.metadata.manual_validation_holdout=true`; if absent, the server falls back to the job config `manual_validation_item_ids`
 - when the same in-thread action materializes a `VisionTask`, assistant may also return `created_entity_type=VisionTask` with deep links into `/vision/tasks` or `/vision/tasks/{id}`
 - when a completed in-thread action returns a `VisionTask`, the assistant-facing summary should prefer human-readable orchestration evidence over raw action enums:
   - evaluation suite / metric contract
@@ -284,6 +440,9 @@ Notes:
       - `auto_configure_runtime_settings` params: optional `overwrite_endpoint` (boolean, default `false`)
     - orchestrated lane: `goal_orchestration`
       - can create/update a `VisionTask`, reuse current attachments as sample inputs, and optionally continue with `auto_advance_vision_task`
+      - natural-language requests that explicitly ask for automated / closed-loop / delivery-oriented training may be mapped to this lane without requiring BYO LLM planning
+      - accepted params include `prompt`, `task_id` / `vision_task_id`, `dataset_id`, `dataset_version_id`, `task_type`, `auto_advance`, `max_rounds`, optional `training_config` (`epochs`, `batch_size`, `learning_rate`, `warmup_ratio`, `weight_decay`), and optional `acceptance_target`
+      - numeric training overrides and metric thresholds mentioned in `prompt` / `acceptance_target` should be persisted into the resulting `VisionTask.training_plan` and evaluation gate so fast delivery smokes can use bounded settings such as `epochs:1` and `mAP50>=0.01`
       - when business requirements are still missing, it returns `requires_input`
       - when downstream mutating follow-up would start automatically, it still requires explicit in-thread confirmation first
       - completed summaries should include the linked `VisionTask` evidence snapshot (`evaluation_suite`, `promotion_gate`, `run_comparison`, `agent_next_action`) when available
@@ -720,6 +879,45 @@ Notes:
 - by default (`overwrite_endpoint=false`), only blank endpoint fields are probed/filled
 - when `overwrite_endpoint=true`, existing endpoint fields can be replaced by newly discovered reachable endpoints
 - response is the same masked settings view as `GET /settings/runtime`
+
+### POST /settings/runtime/prepare-real-training
+Safely prepare platform-owned runtime settings for agent model delivery.
+
+Request:
+```json
+{
+  "overwrite_endpoint": false
+}
+```
+
+Notes:
+- admin scope only
+- request payload must be a JSON object when provided
+- `overwrite_endpoint` must be boolean when provided
+- does **not** install Python packages, download model weights, run shell commands, or mutate host environment variables
+- persists only Vistral-owned runtime settings:
+  - bundled local runner command templates for all frameworks when blank
+  - discovered local model paths when available
+  - optional endpoint auto-match using the same candidate probing as `auto-configure`
+  - `disable_simulated_train_fallback=true`
+  - `disable_inference_fallback=true`
+- response returns the masked runtime settings view, fresh runtime readiness, changed field names, and copy-ready commands for remaining host-level work
+
+Response:
+```json
+{
+  "settings": { "...": "same shape as GET /settings/runtime" },
+  "readiness": { "...": "same shape as GET /runtime/readiness" },
+  "changed_fields": [
+    "controls.disable_simulated_train_fallback",
+    "frameworks.yolo.local_train_command"
+  ],
+  "commands": [
+    "npm run setup:real-training-env",
+    "npm run doctor:real-training-readiness"
+  ]
+}
+```
 
 ### POST /settings/runtime/generate-api-key
 Generate a runtime API key token for endpoint/model/model-version auth bindings.
@@ -1352,6 +1550,7 @@ Rules:
   - `can_start_training`
 - `task.status` is typically `requires_input` or `plan_ready`
 - `task.missing_requirements` must explain why training cannot start yet when `can_start_training=false`
+- `example_images` is only a hard missing requirement when neither a usable dataset snapshot nor image samples provide task-understanding context; when `dataset_id` / `dataset_version_id` already point to trainable data, sample images remain optional evidence
 
 ### GET /vision/tasks
 List vision-task records visible to the current owner/admin scope.
@@ -1359,12 +1558,14 @@ List vision-task records visible to the current owner/admin scope.
 Rules:
 - owner can only see their own tasks; `admin` can see all
 - backend may refresh `status`, `validation_report`, `model_id`, `model_version_id`, and `agent_next_action` from linked runtime state before returning the list
+- `promotion_gate.status=pass` must only be returned when both the metric threshold and the model-registration artifact evidence are acceptable; template/fallback/non-real local-command artifacts keep the gate at `needs_review` unless explicit compatibility registration is enabled
 - each row should already contain enough recommendation context for the operator inbox view:
   - `agent_next_action.action`
   - `agent_next_action.title`
   - `agent_next_action.summary`
   - `agent_next_action.reason`
   - `evaluation_suite.primary_metric`
+  - `evaluation_suite.direction`
   - `evaluation_suite.threshold_target`
   - `promotion_gate.status`
   - `run_comparison.decision`
@@ -1383,7 +1584,7 @@ Rules:
   - `validation_report`
   - `missing_requirements`
   - `agent_next_action`
-  - `agent_decision_log`
+  - `agent_decision_log` (each entry: required `action`, `outcome`, `summary`, `reason`, `created_at`; optional `source_layer`, `evidence_refs` per `docs/data-model.md` / `docs/agent-training-orchestration.md`)
   - `evaluation_suite`
   - `promotion_gate`
   - `run_comparison`
@@ -1398,7 +1599,11 @@ Request:
 ```json
 {
   "max_rounds": 3,
-  "force": false
+  "force": false,
+  "deliver_model": true,
+  "wait_for_training": true,
+  "wait_timeout_ms": 15000,
+  "wait_poll_ms": 250
 }
 ```
 
@@ -1433,9 +1638,13 @@ Rules:
 - request payload must be a JSON object; invalid shape returns `400 VALIDATION_ERROR`
 - `max_rounds` must be a finite number when provided
 - `force` must be boolean when provided
+- `deliver_model` must be boolean when provided; when true, backend may wait briefly for a launched training run and continue toward model registration instead of returning after the first mutation
+- `wait_for_training` must be boolean when provided; `deliver_model=true` implies waiting for the launched run up to the timeout
+- `wait_timeout_ms` and `wait_poll_ms` must be finite numbers when provided; backend clamps them to a bounded short-running request window
 - uses the same task visibility and readiness rules as `auto-continue`
 - backend should append one compact `agent_decision_log` entry describing the chosen branch (wait / train / register / feedback / completed) and refresh `task.agent_next_action`
 - assistant/bridge-facing completed summaries for this action should also explain the refreshed `evaluation_suite`, `promotion_gate`, and `run_comparison` in human-readable form
+- delivery mode must still respect promotion and artifact-evidence gates; it may register a model version only when `promotion_gate.status=pass`, otherwise it returns the refreshed blocker/recommendation for the operator
 - response includes:
   - `task`
   - `action`
@@ -1445,6 +1654,7 @@ Rules:
   - `feedback_dataset_id`
 - `action` values:
   - `requires_input`
+  - `fix_runtime`
   - `training_started`
   - `waiting_training`
   - `registered`
@@ -1631,7 +1841,6 @@ Rules:
 - OCR suites must expose CER/WER/accuracy semantics and threshold source.
 - detection suites must expose mAP/precision/recall plus per-class regression support.
 - segmentation suites must expose mIoU or framework-specific mask/polygon mAP plus mask/polygon coverage context.
-- OBB suites must expose rotated-box mAP, precision/recall, angle error, and angle-bucket regression support.
 - response shape follows the `EvaluationSuite` contract in `docs/data-model.md`.
 
 ## 13. Training Job Endpoints
@@ -1994,6 +2203,16 @@ Behavior:
 - readiness issues can include optional `remediation_command` for copy-ready shell commands
 - used by Runtime Settings UI to surface actionable blockers after deployment
 - response includes `bootstrap_assets` snapshots so UI can show local bootstrap artifact status (for example docTR preseed directory + missing files)
+- response includes `agent_delivery`, a purpose-built readiness summary for VisionTask agent model delivery:
+  - it does not replace generic runtime readiness
+  - it tells Studio whether the agent can keep going toward a registerable model artifact or must stop at `fix_runtime`
+  - it includes copy-ready commands such as `npm run doctor:real-training-readiness` and environment toggles
+- response includes `real_training_doctor`, a structured API mirror of the real-training doctor checks:
+  - Python executable resolution
+  - required local runner modules (`ultralytics`, `paddleocr`, `doctr`)
+  - numpy major-version compatibility for torch-backed branches
+  - local YOLO weight path availability from Runtime Settings/env/default discovery
+  - copy-ready setup/doctor commands
 - `bootstrap_assets[*].expected_files` item shape:
   - `name`: artifact filename
   - `present`: whether file exists with usable size
@@ -2034,6 +2253,35 @@ Response:
       "missing_files": ["db_resnet50-79bd7d70.pt"]
     }
   ],
+  "agent_delivery": {
+    "status": "needs_review",
+    "summary": "Agent delivery requires strict real training evidence before registration.",
+    "recommended_action": "run_doctor",
+    "evidence_policy": "registerable_artifact_required",
+    "blockers": [
+      "runtime has open readiness warnings",
+      "strict simulated-train fallback guard is disabled"
+    ],
+    "commands": [
+      "npm run doctor:real-training-readiness",
+      "export VISTRAL_RUNNER_ENABLE_REAL=1"
+    ]
+  },
+  "real_training_doctor": {
+    "status": "not_ready",
+    "issues": [
+      "missing_python_module_ultralytics",
+      "missing_real_yolo_model_path"
+    ],
+    "notes": [
+      "python_bin=python3",
+      "python_module_paddleocr=ok"
+    ],
+    "commands": [
+      "npm run setup:real-training-env",
+      "npm run doctor:real-training-readiness"
+    ]
+  },
   "issues": [
     {
       "code": "runtime_endpoint_unreachable_yolo",
@@ -2050,6 +2298,11 @@ Status semantics:
 - `ready`: no current readiness issues detected
 - `degraded`: non-blocking warnings detected
 - `not_ready`: blocking issues detected (for example no usable Python fallback + no endpoint path)
+
+`agent_delivery.status` semantics:
+- `ready`: generic runtime readiness has no blocking errors, real runner execution is not disabled, and strict simulated-train fallback guard is enabled.
+- `needs_review`: runtime can be configured further before agent delivery is trusted for registration, usually because warnings remain or strict fallback guard is not enabled.
+- `blocked`: runtime has blocking readiness errors or the real runner branch is explicitly disabled.
 
 ### GET /runtime/metrics-retention
 Get current training metrics retention usage summary (scoped to jobs visible to current user).

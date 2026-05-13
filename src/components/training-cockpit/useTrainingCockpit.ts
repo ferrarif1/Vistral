@@ -148,7 +148,7 @@ const buildDatasetPreviews = (
       }
       return Date.parse(right.created_at) - Date.parse(left.created_at);
     })
-    .map((item): TrainingCockpitDatasetPreview | null => {
+    .map((item) => {
       const attachment = attachmentById.get(item.attachment_id);
       if (!isImageAttachment(attachment)) {
         return null;

@@ -143,26 +143,15 @@ export default function AdminApprovalsPage() {
   const preferredFramework = (searchParams.get('framework') ?? searchParams.get('profile') ?? '').trim().toLowerCase();
   const preferredExecutionTarget = (searchParams.get('execution_target') ?? '').trim().toLowerCase();
   const preferredWorkerId = (searchParams.get('worker') ?? '').trim();
-  const launchContext: LaunchContext = useMemo(
-    () => ({
-      datasetId: preferredDatasetId || null,
-      versionId: preferredDatasetVersionId || null,
-      taskType: preferredTaskType || null,
-      framework: preferredFramework || null,
-      executionTarget: preferredExecutionTarget || null,
-      workerId: preferredWorkerId || null,
-      returnTo: outboundReturnTo
-    }),
-    [
-      outboundReturnTo,
-      preferredDatasetId,
-      preferredDatasetVersionId,
-      preferredExecutionTarget,
-      preferredFramework,
-      preferredTaskType,
-      preferredWorkerId
-    ]
-  );
+  const launchContext: LaunchContext = {
+    datasetId: preferredDatasetId || null,
+    versionId: preferredDatasetVersionId || null,
+    taskType: preferredTaskType || null,
+    framework: preferredFramework || null,
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null,
+    returnTo: outboundReturnTo
+  };
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [items, setItems] = useState<ApprovalRequest[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);

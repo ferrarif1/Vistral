@@ -37,7 +37,7 @@ export default function AuthLoginPage() {
     () => sanitizeReturnToPath(searchParams.get('return_to')),
     [searchParams]
   );
-  const postLoginPath = requestedReturnTo ?? '/workspace/console';
+  const postLoginPath = requestedReturnTo ?? '/workspace/chat';
   const [username, setUsername] = useState('alice');
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');

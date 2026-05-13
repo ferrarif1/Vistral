@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { VisionModelingTaskRecord } from '../../shared/domain';
-import AgentModePanel, {
-  type AgentModeEvidence,
-  type AgentModeStep
-} from '../components/agent/AgentModePanel';
 import StateBlock from '../components/StateBlock';
 import { Badge } from '../components/ui/Badge';
 import { Button, ButtonLink } from '../components/ui/Button';
@@ -26,12 +22,6 @@ type VisionTaskStatusFilter = 'all' | VisionModelingTaskRecord['status'];
 type VisionTaskInboxLane = 'blocked' | 'training' | 'ready' | 'other';
 
 const actionableAgentActions = new Set(['start_training', 'register_model', 'mine_feedback']);
-const inboxLanePriority: Record<VisionTaskInboxLane, number> = {
-  ready: 0,
-  blocked: 1,
-  training: 2,
-  other: 3
-};
 
 const formatTimestamp = (value: string): string => {
   const parsed = Date.parse(value);
@@ -49,7 +39,7 @@ const formatTimestamp = (value: string): string => {
 
 const getInboxLane = (task: VisionModelingTaskRecord): VisionTaskInboxLane => {
   const action = task.agent_next_action?.action ?? null;
-  if (action === 'requires_input' || task.missing_requirements.length > 0) {
+  if (action === 'requires_input' || action === 'fix_runtime' || task.missing_requirements.length > 0) {
     return 'blocked';
   }
   if (action === 'wait_training' || task.status === 'training_started') {
@@ -63,11 +53,6 @@ const getInboxLane = (task: VisionModelingTaskRecord): VisionTaskInboxLane => {
 
 const isRecommendationActionable = (task: VisionModelingTaskRecord): boolean =>
   actionableAgentActions.has(task.agent_next_action?.action ?? '');
-
-const getUpdatedTime = (task: VisionModelingTaskRecord): number => {
-  const parsed = Date.parse(task.updated_at);
-  return Number.isNaN(parsed) ? 0 : parsed;
-};
 
 export default function VisionModelingTasksPage() {
   const { t } = useI18n();
@@ -134,26 +119,18 @@ export default function VisionModelingTasksPage() {
     };
   }, [tasks]);
 
-  const featuredTask = useMemo(() => {
-    if (filteredTasks.length <= 0) {
-      return null;
-    }
-    return [...filteredTasks].sort((left, right) => {
-      const laneDelta = inboxLanePriority[getInboxLane(left)] - inboxLanePriority[getInboxLane(right)];
-      if (laneDelta !== 0) {
-        return laneDelta;
-      }
-      return getUpdatedTime(right) - getUpdatedTime(left);
-    })[0];
-  }, [filteredTasks]);
-
   const handleAutoAdvance = useCallback(
     async (task: VisionModelingTaskRecord) => {
       setAdvancingTaskId(task.id);
       setNotice('');
       setError('');
       try {
-        const result = await api.autoAdvanceVisionTask(task.id, { max_rounds: 3 });
+        const result = await api.autoAdvanceVisionTask(task.id, {
+          max_rounds: 3,
+          deliver_model: true,
+          wait_timeout_ms: 15000,
+          wait_poll_ms: 250
+        });
         setTasks((previous) =>
           previous.map((item) => (item.id === task.id ? result.task : item))
         );
@@ -279,7 +256,7 @@ export default function VisionModelingTasksPage() {
                 }}
                 disabled={advancingTaskId === task.id}
               >
-                {advancingTaskId === task.id ? t('Advancing...') : t('Continue as agent')}
+                {advancingTaskId === task.id ? t('Agent delivering...') : t('Deliver model with agent')}
               </Button>
             ) : (
               <ButtonLink
@@ -341,7 +318,7 @@ export default function VisionModelingTasksPage() {
                       onClick={() => void handleAutoAdvance(task)}
                       disabled={advancingTaskId === task.id}
                     >
-                      {advancingTaskId === task.id ? t('Advancing...') : t('Continue as agent')}
+                      {advancingTaskId === task.id ? t('Agent delivering...') : t('Deliver model with agent')}
                     </Button>
                   ) : null}
                 </div>
@@ -354,6 +331,7 @@ export default function VisionModelingTasksPage() {
     [advancingTaskId, handleAutoAdvance, t]
   );
 
+<<<<<<< HEAD
   const featuredAgentPanel = useMemo(() => {
     if (!featuredTask) {
       return null;
@@ -478,7 +456,7 @@ export default function VisionModelingTasksPage() {
         primaryAction={
           isActionable
             ? {
-                label: advancingTaskId === featuredTask.id ? t('Agent continuing...') : t('Continue as agent'),
+                label: advancingTaskId === featuredTask.id ? t('Agent delivering...') : t('Deliver model with agent'),
                 onClick: () => void handleAutoAdvance(featuredTask),
                 disabled: advancingTaskId === featuredTask.id,
                 busy: advancingTaskId === featuredTask.id
@@ -515,6 +493,8 @@ export default function VisionModelingTasksPage() {
     );
   }, [advancingTaskId, featuredTask, handleAutoAdvance, navigate, t]);
 
+=======
+>>>>>>> parent of 10605c8 (动画式交互)
   if (loading) {
     return (
       <WorkspacePage className="stack">
@@ -577,8 +557,6 @@ export default function VisionModelingTasksPage() {
           }
         ]}
       />
-
-      {featuredAgentPanel}
 
       <SectionCard
         title={t('Agent inbox')}

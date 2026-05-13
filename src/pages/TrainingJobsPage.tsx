@@ -726,7 +726,7 @@ export default function TrainingJobsPage() {
     [t]
   );
 
-  const load = useCallback(async (mode: LoadMode) => {
+  const load = async (mode: LoadMode) => {
     if (mode === 'initial') {
       setLoading(true);
     }
@@ -763,13 +763,13 @@ export default function TrainingJobsPage() {
         setRefreshing(false);
       }
     }
-  }, []);
+  };
 
   useEffect(() => {
     load('initial').catch(() => {
       // no-op
     });
-  }, [load]);
+  }, []);
 
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
@@ -968,15 +968,12 @@ export default function TrainingJobsPage() {
 
   const scopedDatasetId = (searchParams.get('dataset') ?? '').trim();
   const scopedVersionId = (searchParams.get('version') ?? '').trim();
-  const trainingLaunchContext: LaunchContext = useMemo(
-    () => ({
-      taskType: preferredTaskTypeContext || null,
-      framework: preferredFrameworkContext || null,
-      executionTarget: preferredExecutionTarget || null,
-      workerId: preferredWorkerId || null
-    }),
-    [preferredExecutionTarget, preferredFrameworkContext, preferredTaskTypeContext, preferredWorkerId]
-  );
+  const trainingLaunchContext: LaunchContext = {
+    taskType: preferredTaskTypeContext || null,
+    framework: preferredFrameworkContext || null,
+    executionTarget: preferredExecutionTarget || null,
+    workerId: preferredWorkerId || null
+  };
   const scopedJobs = useMemo(
     () =>
       sortedJobs.filter((job) => {
@@ -1320,7 +1317,7 @@ export default function TrainingJobsPage() {
     }
     setRetryDispatchPreference('worker');
     setRetryWorkerId(selectedJob.scheduled_worker_id ?? '');
-  }, [selectedJob, selectedJob?.execution_target, selectedJob?.id, selectedJob?.scheduled_worker_id, selectedJob?.status]);
+  }, [selectedJob?.execution_target, selectedJob?.id, selectedJob?.scheduled_worker_id, selectedJob?.status]);
 
   const cancelSelectedJob = useCallback(async () => {
     if (!selectedJob) {
@@ -2691,7 +2688,6 @@ export default function TrainingJobsPage() {
     load,
     openBestVisibleJob,
     openJobDrawer,
-    outboundReturnTo,
     clearScopePath,
     scopedCreatePath,
     selectedArtifactSummary,

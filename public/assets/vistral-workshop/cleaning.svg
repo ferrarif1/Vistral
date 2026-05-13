@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" role="img" aria-label="Pixel cleaning and annotation room">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#183b5f"/><stop offset="1" stop-color="#091522"/></linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#9a6232"/><stop offset="1" stop-color="#432718"/></linearGradient>
+  </defs>
+  <rect width="640" height="420" fill="url(#sky)"/>
+  <g shape-rendering="crispEdges">
+    <rect x="34" y="54" width="572" height="320" fill="#2a1a16" stroke="#e5b66a" stroke-width="8"/>
+    <rect x="54" y="80" width="532" height="258" fill="#5d3921"/>
+    <rect x="54" y="80" width="532" height="28" fill="#7d4d28"/>
+    <rect x="74" y="124" width="168" height="152" fill="#17283a" stroke="#d9aa60" stroke-width="6"/>
+    <rect x="88" y="142" width="140" height="22" fill="#72c7ff"/>
+    <rect x="88" y="176" width="76" height="14" fill="#f6d37c"/>
+    <rect x="88" y="204" width="120" height="14" fill="#78d49a"/>
+    <rect x="88" y="232" width="98" height="14" fill="#ff8b8b"/>
+    <rect x="286" y="132" width="94" height="132" fill="#253140" stroke="#7ad2ff" stroke-width="6"/>
+    <rect x="306" y="154" width="54" height="54" fill="#f7efd7"/>
+    <rect x="318" y="166" width="30" height="30" fill="#6fb8ff"/>
+    <rect x="398" y="122" width="144" height="164" fill="#10223a" stroke="#d9aa60" stroke-width="6"/>
+    <rect x="416" y="146" width="30" height="30" fill="#76d8a7"/>
+    <rect x="456" y="146" width="30" height="30" fill="#76d8a7"/>
+    <rect x="496" y="146" width="30" height="30" fill="#f3c267"/>
+    <rect x="416" y="196" width="110" height="14" fill="#6fb8ff"/>
+    <rect x="416" y="224" width="88" height="14" fill="#c487ff"/>
+    <rect x="64" y="310" width="512" height="34" fill="url(#wood)"/>
+    <rect x="272" y="286" width="122" height="32" fill="#1f2937"/>
+    <rect x="296" y="300" width="74" height="10" fill="#75d8a7"/>
+    <rect x="186" y="274" width="28" height="46" fill="#ff9ab9"/>
+    <rect x="176" y="240" width="48" height="42" fill="#ffb4ca"/>
+    <rect x="180" y="232" width="40" height="16" fill="#b85f86"/>
+    <rect x="446" y="286" width="34" height="34" fill="#6fb8ff"/>
+    <rect x="486" y="286" width="34" height="34" fill="#6fb8ff"/>
+  </g>
+</svg>

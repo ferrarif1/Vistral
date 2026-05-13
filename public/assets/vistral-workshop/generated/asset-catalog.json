@@ -1,0 +1,900 @@
+{
+  "generated_at": "2026-04-29T19:45:00+08:00",
+  "status": "raw_asset_pack_generated",
+  "preferred_source": "sliced for review; room-modules currently cleanest for immediate UI prototyping",
+  "root": "public/assets/vistral-workshop/generated",
+  "categories": [
+    {
+      "id": "buildings",
+      "rows": 2,
+      "cols": 5,
+      "source": "public/assets/vistral-workshop/generated/raw-magenta-sheets/buildings.png",
+      "manifest": "sliced/buildings/manifest.json",
+      "accepted_count": 10,
+      "clean_count": 2,
+      "edge_touch_count": 8,
+      "assets": [
+        {
+          "id": "training-house-facade",
+          "path": "sliced/buildings/training-house-facade/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            310,
+            310
+          ],
+          "grid": [
+            0,
+            0
+          ]
+        },
+        {
+          "id": "roof-ridge-cap",
+          "path": "sliced/buildings/roof-ridge-cap/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            230
+          ],
+          "grid": [
+            0,
+            1
+          ]
+        },
+        {
+          "id": "roof-tile-strip",
+          "path": "sliced/buildings/roof-tile-strip/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            119
+          ],
+          "grid": [
+            0,
+            2
+          ]
+        },
+        {
+          "id": "gable-roof",
+          "path": "sliced/buildings/gable-roof/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            213
+          ],
+          "grid": [
+            0,
+            3
+          ]
+        },
+        {
+          "id": "wall-window-module",
+          "path": "sliced/buildings/wall-window-module/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            241,
+            249
+          ],
+          "grid": [
+            0,
+            4
+          ]
+        },
+        {
+          "id": "wooden-support-set",
+          "path": "sliced/buildings/wooden-support-set/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            302,
+            254
+          ],
+          "grid": [
+            1,
+            0
+          ]
+        },
+        {
+          "id": "arched-door-porch",
+          "path": "sliced/buildings/arched-door-porch/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            292
+          ],
+          "grid": [
+            1,
+            1
+          ]
+        },
+        {
+          "id": "brick-chimney",
+          "path": "sliced/buildings/brick-chimney/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            262,
+            280
+          ],
+          "grid": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": "side-awning",
+          "path": "sliced/buildings/side-awning/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            274,
+            210
+          ],
+          "grid": [
+            1,
+            3
+          ]
+        },
+        {
+          "id": "balcony-planter",
+          "path": "sliced/buildings/balcony-planter/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            310,
+            267
+          ],
+          "grid": [
+            1,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "id": "room-modules",
+      "rows": 2,
+      "cols": 4,
+      "source": "public/assets/vistral-workshop/generated/raw-magenta-sheets/room-modules.png",
+      "manifest": "sliced/room-modules/manifest.json",
+      "accepted_count": 8,
+      "clean_count": 8,
+      "edge_touch_count": 0,
+      "assets": [
+        {
+          "id": "dataset-warehouse",
+          "path": "sliced/room-modules/dataset-warehouse/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            359,
+            399
+          ],
+          "grid": [
+            0,
+            0
+          ]
+        },
+        {
+          "id": "data-processing-annotation",
+          "path": "sliced/room-modules/data-processing-annotation/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            365,
+            399
+          ],
+          "grid": [
+            0,
+            1
+          ]
+        },
+        {
+          "id": "feature-recipe",
+          "path": "sliced/room-modules/feature-recipe/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            365,
+            399
+          ],
+          "grid": [
+            0,
+            2
+          ]
+        },
+        {
+          "id": "model-training",
+          "path": "sliced/room-modules/model-training/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            356,
+            399
+          ],
+          "grid": [
+            0,
+            3
+          ]
+        },
+        {
+          "id": "inference-validation",
+          "path": "sliced/room-modules/inference-validation/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            356,
+            368
+          ],
+          "grid": [
+            1,
+            0
+          ]
+        },
+        {
+          "id": "model-publishing",
+          "path": "sliced/room-modules/model-publishing/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            366,
+            382
+          ],
+          "grid": [
+            1,
+            1
+          ]
+        },
+        {
+          "id": "deployment-runtime",
+          "path": "sliced/room-modules/deployment-runtime/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            362,
+            382
+          ],
+          "grid": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": "feedback-repair",
+          "path": "sliced/room-modules/feedback-repair/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            355,
+            382
+          ],
+          "grid": [
+            1,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "id": "furniture-equipment",
+      "rows": 4,
+      "cols": 4,
+      "source": "public/assets/vistral-workshop/generated/raw-magenta-sheets/furniture-equipment.png",
+      "manifest": "sliced/furniture-equipment/manifest.json",
+      "accepted_count": 16,
+      "clean_count": 3,
+      "edge_touch_count": 13,
+      "assets": [
+        {
+          "id": "dataset-shelf",
+          "path": "sliced/furniture-equipment/dataset-shelf/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            255,
+            252
+          ],
+          "grid": [
+            0,
+            0
+          ]
+        },
+        {
+          "id": "data-crates",
+          "path": "sliced/furniture-equipment/data-crates/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            301,
+            246
+          ],
+          "grid": [
+            0,
+            1
+          ]
+        },
+        {
+          "id": "annotation-desk",
+          "path": "sliced/furniture-equipment/annotation-desk/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            224,
+            209
+          ],
+          "grid": [
+            0,
+            2
+          ]
+        },
+        {
+          "id": "checklist-board",
+          "path": "sliced/furniture-equipment/checklist-board/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            216,
+            213
+          ],
+          "grid": [
+            0,
+            3
+          ]
+        },
+        {
+          "id": "token-vector-blackboard",
+          "path": "sliced/furniture-equipment/token-vector-blackboard/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            292,
+            309
+          ],
+          "grid": [
+            1,
+            0
+          ]
+        },
+        {
+          "id": "gpu-server-rack",
+          "path": "sliced/furniture-equipment/gpu-server-rack/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            309,
+            309
+          ],
+          "grid": [
+            1,
+            1
+          ]
+        },
+        {
+          "id": "training-loss-monitor",
+          "path": "sliced/furniture-equipment/training-loss-monitor/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            274,
+            295
+          ],
+          "grid": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": "validation-desk",
+          "path": "sliced/furniture-equipment/validation-desk/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            241,
+            305
+          ],
+          "grid": [
+            1,
+            3
+          ]
+        },
+        {
+          "id": "package-version-table",
+          "path": "sliced/furniture-equipment/package-version-table/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            283,
+            270
+          ],
+          "grid": [
+            2,
+            0
+          ]
+        },
+        {
+          "id": "runtime-health-monitor",
+          "path": "sliced/furniture-equipment/runtime-health-monitor/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            259,
+            227
+          ],
+          "grid": [
+            2,
+            1
+          ]
+        },
+        {
+          "id": "worker-node-server",
+          "path": "sliced/furniture-equipment/worker-node-server/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            278,
+            225
+          ],
+          "grid": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": "hanging-lamp",
+          "path": "sliced/furniture-equipment/hanging-lamp/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            201,
+            225
+          ],
+          "grid": [
+            2,
+            3
+          ]
+        },
+        {
+          "id": "potted-plant",
+          "path": "sliced/furniture-equipment/potted-plant/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            292,
+            211
+          ],
+          "grid": [
+            3,
+            0
+          ]
+        },
+        {
+          "id": "toolbox-cables",
+          "path": "sliced/furniture-equipment/toolbox-cables/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            309,
+            213
+          ],
+          "grid": [
+            3,
+            1
+          ]
+        },
+        {
+          "id": "notification-board",
+          "path": "sliced/furniture-equipment/notification-board/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            309,
+            200
+          ],
+          "grid": [
+            3,
+            2
+          ]
+        },
+        {
+          "id": "active-glow-corners",
+          "path": "sliced/furniture-equipment/active-glow-corners/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            281,
+            207
+          ],
+          "grid": [
+            3,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "id": "characters",
+      "rows": 2,
+      "cols": 5,
+      "source": "public/assets/vistral-workshop/generated/raw-magenta-sheets/characters.png",
+      "manifest": "sliced/characters/manifest.json",
+      "accepted_count": 10,
+      "clean_count": 3,
+      "edge_touch_count": 7,
+      "assets": [
+        {
+          "id": "openclaw-crab",
+          "path": "sliced/characters/openclaw-crab/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            305,
+            247
+          ],
+          "grid": [
+            0,
+            0
+          ]
+        },
+        {
+          "id": "robot-model",
+          "path": "sliced/characters/robot-model/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            330,
+            333
+          ],
+          "grid": [
+            0,
+            1
+          ]
+        },
+        {
+          "id": "dataset-keeper",
+          "path": "sliced/characters/dataset-keeper/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            330,
+            342
+          ],
+          "grid": [
+            0,
+            2
+          ]
+        },
+        {
+          "id": "annotation-specialist",
+          "path": "sliced/characters/annotation-specialist/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            301,
+            322
+          ],
+          "grid": [
+            0,
+            3
+          ]
+        },
+        {
+          "id": "recipe-wizard",
+          "path": "sliced/characters/recipe-wizard/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            307,
+            342
+          ],
+          "grid": [
+            0,
+            4
+          ]
+        },
+        {
+          "id": "training-engineer",
+          "path": "sliced/characters/training-engineer/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            266,
+            349
+          ],
+          "grid": [
+            1,
+            0
+          ]
+        },
+        {
+          "id": "validation-examiner",
+          "path": "sliced/characters/validation-examiner/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            235,
+            349
+          ],
+          "grid": [
+            1,
+            1
+          ]
+        },
+        {
+          "id": "publishing-graduate",
+          "path": "sliced/characters/publishing-graduate/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            299,
+            349
+          ],
+          "grid": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": "runtime-operator",
+          "path": "sliced/characters/runtime-operator/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            311,
+            349
+          ],
+          "grid": [
+            1,
+            3
+          ]
+        },
+        {
+          "id": "worker-node-companion",
+          "path": "sliced/characters/worker-node-companion/prop.png",
+          "edge_touch": false,
+          "output_size": [
+            288,
+            309
+          ],
+          "grid": [
+            1,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ui-elements",
+      "rows": 4,
+      "cols": 5,
+      "source": "public/assets/vistral-workshop/generated/raw-magenta-sheets/ui-elements.png",
+      "manifest": "sliced/ui-elements/manifest.json",
+      "accepted_count": 20,
+      "clean_count": 0,
+      "edge_touch_count": 20,
+      "assets": [
+        {
+          "id": "hud-panel",
+          "path": "sliced/ui-elements/hud-panel/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            0,
+            0
+          ]
+        },
+        {
+          "id": "sidebar-card",
+          "path": "sliced/ui-elements/sidebar-card/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            0,
+            1
+          ]
+        },
+        {
+          "id": "vertical-rail-panel",
+          "path": "sliced/ui-elements/vertical-rail-panel/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            0,
+            2
+          ]
+        },
+        {
+          "id": "bottom-nav-button",
+          "path": "sliced/ui-elements/bottom-nav-button/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            0,
+            3
+          ]
+        },
+        {
+          "id": "bottom-nav-button-active",
+          "path": "sliced/ui-elements/bottom-nav-button-active/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            0,
+            4
+          ]
+        },
+        {
+          "id": "icon-button",
+          "path": "sliced/ui-elements/icon-button/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            1,
+            0
+          ]
+        },
+        {
+          "id": "primary-button",
+          "path": "sliced/ui-elements/primary-button/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            1,
+            1
+          ]
+        },
+        {
+          "id": "secondary-button",
+          "path": "sliced/ui-elements/secondary-button/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": "active-room-frame",
+          "path": "sliced/ui-elements/active-room-frame/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            1,
+            3
+          ]
+        },
+        {
+          "id": "success-badge",
+          "path": "sliced/ui-elements/success-badge/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            1,
+            4
+          ]
+        },
+        {
+          "id": "warning-badge",
+          "path": "sliced/ui-elements/warning-badge/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            2,
+            0
+          ]
+        },
+        {
+          "id": "error-badge",
+          "path": "sliced/ui-elements/error-badge/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            2,
+            1
+          ]
+        },
+        {
+          "id": "neutral-pill",
+          "path": "sliced/ui-elements/neutral-pill/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            2,
+            2
+          ]
+        },
+        {
+          "id": "progress-empty",
+          "path": "sliced/ui-elements/progress-empty/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            2,
+            3
+          ]
+        },
+        {
+          "id": "progress-filled",
+          "path": "sliced/ui-elements/progress-filled/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            2,
+            4
+          ]
+        },
+        {
+          "id": "notification-bubble",
+          "path": "sliced/ui-elements/notification-bubble/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            3,
+            0
+          ]
+        },
+        {
+          "id": "work-note-paper",
+          "path": "sliced/ui-elements/work-note-paper/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            3,
+            1
+          ]
+        },
+        {
+          "id": "assistant-chat-bubble",
+          "path": "sliced/ui-elements/assistant-chat-bubble/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            3,
+            2
+          ]
+        },
+        {
+          "id": "user-chat-bubble",
+          "path": "sliced/ui-elements/user-chat-bubble/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            3,
+            3
+          ]
+        },
+        {
+          "id": "icon-button-set",
+          "path": "sliced/ui-elements/icon-button-set/prop.png",
+          "edge_touch": true,
+          "output_size": [
+            319,
+            238
+          ],
+          "grid": [
+            3,
+            4
+          ]
+        }
+      ]
+    }
+  ]
+}

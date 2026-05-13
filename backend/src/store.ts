@@ -1222,6 +1222,7 @@ const normalizeVisionTaskAgentAction = (
     value === 'start_training' ||
     value === 'wait_training' ||
     value === 'collect_data' ||
+    value === 'fix_runtime' ||
     value === 'register_model' ||
     value === 'mine_feedback' ||
     value === 'completed'
@@ -1311,6 +1312,20 @@ const normalizeVisionTaskAgentDecisionLog = (
       if (!summary || !reason || !outcome) {
         return null;
       }
+      const sourceRaw = typeof raw.source_layer === 'string' ? raw.source_layer.trim() : '';
+      const source_layer: VisionTaskAgentDecisionLogEntry['source_layer'] =
+        sourceRaw === 'deterministic_refresh' ||
+        sourceRaw === 'auto_advance' ||
+        sourceRaw === 'user_confirmed' ||
+        sourceRaw === 'llm_assist'
+          ? sourceRaw
+          : undefined;
+      const evidence_refs = Array.isArray(raw.evidence_refs)
+        ? raw.evidence_refs
+            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            .map((item) => item.trim())
+            .slice(0, 24)
+        : undefined;
       return {
         action: normalizeVisionTaskAgentAction(raw.action),
         outcome,
@@ -1319,7 +1334,9 @@ const normalizeVisionTaskAgentDecisionLog = (
         created_at:
           typeof raw.created_at === 'string' && raw.created_at.trim().length > 0
             ? raw.created_at
-            : now()
+            : now(),
+        ...(source_layer ? { source_layer } : {}),
+        ...(evidence_refs && evidence_refs.length > 0 ? { evidence_refs } : {})
       } satisfies VisionTaskAgentDecisionLogEntry;
     })
     .filter((entry): entry is VisionTaskAgentDecisionLogEntry => Boolean(entry))
@@ -1346,6 +1363,7 @@ const normalizeVisionTaskEvaluationSuite = (
     title,
     summary,
     primary_metric: primaryMetric,
+    direction: entry.direction === 'lower_is_better' ? 'lower_is_better' : 'higher_is_better',
     threshold_target:
       typeof entry.threshold_target === 'number' && Number.isFinite(entry.threshold_target)
         ? entry.threshold_target
@@ -1557,7 +1575,8 @@ const normalizeDatasetProfile = (value: unknown): DatasetProfile | null => {
     entry.detected_task_type === 'ocr' ||
     entry.detected_task_type === 'detection' ||
     entry.detected_task_type === 'classification' ||
-    entry.detected_task_type === 'segmentation'
+    entry.detected_task_type === 'segmentation' ||
+    entry.detected_task_type === 'obb'
       ? entry.detected_task_type
       : 'unknown';
   if (!datasetId) {
@@ -1650,7 +1669,7 @@ const normalizeDatasetProfile = (value: unknown): DatasetProfile | null => {
                 : null,
             long_tail_labels: Array.isArray((entry.diagnostics as Record<string, unknown>).long_tail_labels)
               ? ((entry.diagnostics as Record<string, unknown>).long_tail_labels as unknown[])
-                  .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+                  .filter((item) => typeof item === 'string' && item.trim().length > 0)
                   .map((item) => item.trim())
                   .slice(0, 12)
               : [],
@@ -1663,7 +1682,7 @@ const normalizeDatasetProfile = (value: unknown): DatasetProfile | null => {
               (entry.diagnostics as Record<string, unknown>).recommended_data_actions
             )
               ? ((entry.diagnostics as Record<string, unknown>).recommended_data_actions as unknown[])
-                  .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+                  .filter((item) => typeof item === 'string' && item.trim().length > 0)
                   .map((item) => item.trim())
                   .slice(0, 12)
               : []

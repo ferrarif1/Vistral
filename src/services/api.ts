@@ -15,6 +15,9 @@ import type {
   DatasetVersionRecord,
   FileAttachment,
   InferenceRunRecord,
+  LocalFolderFinalizeResult,
+  LocalFolderImportAndTrainResult,
+  LocalFolderScanResult,
   LlmConfig,
   LlmConfigView,
   RuntimeSettingsRecord,
@@ -31,16 +34,13 @@ import type {
   RuntimeDeviceLifecycleSnapshot,
   RuntimeDeviceAccessRecord,
   RuntimeReadinessReport,
+  RuntimeRealTrainingPrepareResult,
   RuntimeMetricsRetentionSummary,
   SubmitApprovalInput,
-  EvaluateTrainingReadinessInput,
-  EvaluationSuiteRecord,
   TrainingArtifactSummary,
   TrainingJobRecord,
   TrainingMetricRecord,
   TrainingMetricsExport,
-  TrainingReadinessReport,
-  TrainingRecipeRecord,
   TrainingWorkerBootstrapSessionRecord,
   TrainingWorkerNodeView,
   UpsertAnnotationInput,
@@ -534,6 +534,39 @@ export const api = {
       body: JSON.stringify(input)
     }),
 
+  scanLocalAnnotatedFolder: (input: {
+    folder_path: string;
+    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
+    framework?: 'paddleocr' | 'doctr' | 'yolo';
+    manual_validation_count?: number;
+  }) =>
+    request<LocalFolderScanResult>('/api/datasets/local-folder/scan', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  importLocalFolderAndTrain: (input: {
+    folder_path: string;
+    dataset_id?: string;
+    dataset_name?: string;
+    dataset_description?: string;
+    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
+    framework?: 'paddleocr' | 'doctr' | 'yolo';
+    base_model?: string;
+    train_ratio?: number;
+    val_ratio?: number;
+    manual_validation_count?: number;
+    seed?: number;
+    recipe_id?: string;
+    recipe_version?: string;
+    execution_target?: 'control_plane' | 'worker';
+    worker_id?: string;
+  }) =>
+    request<LocalFolderImportAndTrainResult>('/api/datasets/local-folder/import-and-train', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
   getDatasetDetail: async (datasetId: string) => {
     const detail = await request<{
       dataset: DatasetRecord;
@@ -747,11 +780,22 @@ export const api = {
     input?: {
       max_rounds?: number;
       force?: boolean;
+      deliver_model?: boolean;
+      wait_for_training?: boolean;
+      wait_timeout_ms?: number;
+      wait_poll_ms?: number;
     }
   ) =>
     request<{
       task: VisionModelingTaskRecord;
-      action: 'requires_input' | 'training_started' | 'waiting_training' | 'registered' | 'feedback_mined' | 'completed';
+      action:
+        | 'requires_input'
+        | 'fix_runtime'
+        | 'training_started'
+        | 'waiting_training'
+        | 'registered'
+        | 'feedback_mined'
+        | 'completed';
       message: string;
       training_job_id: string | null;
       model_version_id: string | null;
@@ -781,48 +825,6 @@ export const api = {
   listTrainingJobs: async () =>
     filterVisibleTrainingJobs(await request<TrainingJobRecord[]>('/api/training/jobs')),
 
-  listTrainingRecipes: (filters?: {
-    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
-    framework?: 'paddleocr' | 'doctr' | 'yolo';
-  }) => {
-    const params = new URLSearchParams();
-    if (filters?.task_type) {
-      params.set('task_type', filters.task_type);
-    }
-    if (filters?.framework) {
-      params.set('framework', filters.framework);
-    }
-    const query = params.toString();
-    return request<TrainingRecipeRecord[]>(`/api/training/recipes${query ? `?${query}` : ''}`);
-  },
-
-  evaluateTrainingReadiness: (input: EvaluateTrainingReadinessInput) =>
-    request<TrainingReadinessReport>('/api/training/readiness/evaluate', {
-      method: 'POST',
-      body: JSON.stringify(input)
-    }),
-
-  listTrainingEvaluationSuites: (filters?: {
-    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
-    framework?: 'paddleocr' | 'doctr' | 'yolo';
-    recipe_id?: string;
-  }) => {
-    const params = new URLSearchParams();
-    if (filters?.task_type) {
-      params.set('task_type', filters.task_type);
-    }
-    if (filters?.framework) {
-      params.set('framework', filters.framework);
-    }
-    if (filters?.recipe_id) {
-      params.set('recipe_id', filters.recipe_id);
-    }
-    const query = params.toString();
-    return request<EvaluationSuiteRecord[]>(
-      `/api/training/evaluation-suites${query ? `?${query}` : ''}`
-    );
-  },
-
   createTrainingJob: (input: {
     name: string;
     task_type: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
@@ -830,8 +832,6 @@ export const api = {
     dataset_id: string;
     dataset_version_id: string;
     vision_task_id?: string;
-    recipe_id?: string;
-    recipe_version?: string;
     base_model: string;
     config: Record<string, string>;
     execution_target?: 'control_plane' | 'worker';
@@ -896,6 +896,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input ?? {})
     }),
+
+  finalizeLocalFolderTrainingJob: (
+    jobId: string,
+    input?: {
+      model_id?: string;
+      model_name?: string;
+      version_name?: string;
+      run_manual_validation?: boolean;
+      allow_compatibility_registration?: boolean;
+    }
+  ) =>
+    request<LocalFolderFinalizeResult>(
+      `/api/training/jobs/${encodeURIComponent(jobId)}/local-folder-finalize`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input ?? {})
+      }
+    ),
 
   listModelVersions: async () =>
     filterVisibleModelVersions(await request<ModelVersionRecord[]>('/api/model-versions')),
@@ -1045,6 +1063,14 @@ export const api = {
 
   autoConfigureRuntimeSettings: (overwriteEndpoint = false) =>
     request<RuntimeSettingsView>('/api/settings/runtime/auto-configure', {
+      method: 'POST',
+      body: JSON.stringify({
+        overwrite_endpoint: overwriteEndpoint
+      })
+    }),
+
+  prepareRealTrainingRuntimeSettings: (overwriteEndpoint = false) =>
+    request<RuntimeRealTrainingPrepareResult>('/api/settings/runtime/prepare-real-training', {
       method: 'POST',
       body: JSON.stringify({
         overwrite_endpoint: overwriteEndpoint

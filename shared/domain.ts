@@ -4,7 +4,7 @@ export type UserAccountStatus = 'active' | 'disabled';
 
 export type TaskType = 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
 export type ModelFramework = 'paddleocr' | 'doctr' | 'yolo';
-export type VisionTaskType = 'ocr' | 'detection' | 'classification' | 'segmentation' | 'unknown';
+export type VisionTaskType = 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb' | 'unknown';
 
 export type ModelVisibility = 'private' | 'workspace' | 'public';
 export type ModelStatus =
@@ -61,9 +61,6 @@ export type TrainingJobStatus =
   | 'cancelled';
 export type TrainingExecutionMode = 'simulated' | 'local_command' | 'unknown';
 export type TrainingExecutionTarget = 'control_plane' | 'worker';
-export type TrainingRecipeParamType = 'int' | 'float' | 'boolean' | 'string' | 'enum';
-export type TrainingRecipeParamUiControl = 'number' | 'slider' | 'select' | 'toggle' | 'text';
-export type TrainingReadinessStatus = 'pass' | 'warning' | 'blocked' | 'unknown';
 export type TrainingWorkerStatus = 'online' | 'offline' | 'draining';
 export type TrainingWorkerAuthMode = 'shared' | 'dedicated';
 export type TrainingWorkerBootstrapStatus =
@@ -107,113 +104,6 @@ export interface TrainingSchedulerDecision {
   fallback_reason: string | null;
   note: string;
   decided_at: string;
-}
-
-export interface TrainingRecipeParamContract {
-  key: string;
-  label: string;
-  type: TrainingRecipeParamType;
-  unit: string | null;
-  default: string;
-  min: number | null;
-  max: number | null;
-  options: string[] | null;
-  required: boolean;
-  ui_control: TrainingRecipeParamUiControl;
-  expert: boolean;
-  runner_arg: string;
-  description: string;
-  pass_through?: boolean;
-}
-
-export interface TrainingRecipeRecord {
-  recipe_id: string;
-  recipe_version: string;
-  title: string;
-  task_type: TaskType;
-  framework: ModelFramework;
-  default_base_model: string;
-  base_model_options: string[];
-  params: TrainingRecipeParamContract[];
-  evaluation_suite_id: string;
-  readiness_policy_id: string;
-  artifact_expectation: {
-    requires_real_execution: boolean;
-    required_fields: string[];
-    registration_blockers: string[];
-  };
-  created_at: string;
-  updated_at: string;
-}
-
-export interface TrainingReadinessCheck {
-  key: string;
-  title: string;
-  status: TrainingReadinessStatus;
-  message: string;
-  evidence: Record<string, unknown>;
-  remediation_action: string | null;
-  owner_surface: 'dataset' | 'annotation' | 'runtime' | 'workers' | 'training' | 'models';
-}
-
-export interface TrainingReadinessReport {
-  status: TrainingReadinessStatus;
-  summary: string;
-  dataset_version_id: string;
-  recipe_id: string;
-  framework: ModelFramework;
-  task_type: TaskType;
-  checks: TrainingReadinessCheck[];
-  dataset: {
-    ready_visual_sample_count: number;
-    total_item_count: number;
-    split_summary: DatasetVersionRecord['split_summary'];
-    annotation_coverage: number;
-    label_completeness: number;
-    class_balance_summary: string;
-    ocr_charset_summary: string | null;
-  };
-  runtime: {
-    dependencies_ready: boolean;
-    device_summary: string;
-    strict_real_enabled: boolean;
-    fallback_policy: 'strict_real' | 'allowed_with_warning';
-  };
-  worker: {
-    eligible_worker_count: number;
-    selected_worker_id: string | null;
-    worker_blockers: string[];
-  };
-  artifact_expectation: TrainingRecipeRecord['artifact_expectation'];
-  created_at: string;
-}
-
-export interface EvaluateTrainingReadinessInput {
-  task_type: TaskType;
-  framework: ModelFramework;
-  dataset_id: string;
-  dataset_version_id: string;
-  recipe_id: string;
-  base_model?: string;
-  config?: Record<string, string>;
-  execution_target?: TrainingExecutionTarget;
-  worker_id?: string;
-}
-
-export interface EvaluationSuiteRecord {
-  suite_id: string;
-  suite_version: string;
-  task_type: TaskType;
-  framework: ModelFramework;
-  primary_metric: string;
-  direction: 'higher_is_better' | 'lower_is_better';
-  threshold_target: number;
-  threshold_source: 'recipe_default' | 'dataset_baseline' | 'champion_margin' | 'manual_override';
-  notes?: string;
-  secondary_metrics: string[];
-  regression_slices: string[];
-  basis: string[];
-  created_at: string;
 }
 
 export type ModelVersionStatus = 'registered' | 'deprecated';
@@ -325,12 +215,21 @@ export interface DatasetProfile {
 
 export interface TrainingPlan {
   recipe_id: string;
+  recipe_version?: string;
+  recipe_title?: string;
+  selection_reason?: string;
   task_type: VisionTaskType;
   base_model: string;
   dataset_id: string;
   train_args: Record<string, string>;
   eval_args: Record<string, string>;
   export_args: Record<string, string>;
+  default_params?: Record<string, string>;
+  resolved_params?: Record<string, string>;
+  user_overrides?: Record<string, string>;
+  param_contract?: TrainingRecipeParamContract[];
+  runner_mapping?: Record<string, string>;
+  readiness_summary?: string;
   human_review_required: boolean;
 }
 
@@ -350,6 +249,7 @@ export type VisionTaskAgentAction =
   | 'start_training'
   | 'wait_training'
   | 'collect_data'
+  | 'fix_runtime'
   | 'register_model'
   | 'mine_feedback'
   | 'completed';
@@ -365,12 +265,22 @@ export interface VisionTaskAgentRecommendation {
   created_at: string;
 }
 
+export type VisionTaskAgentDecisionSourceLayer =
+  | 'deterministic_refresh'
+  | 'auto_advance'
+  | 'user_confirmed'
+  | 'llm_assist';
+
 export interface VisionTaskAgentDecisionLogEntry {
   action: VisionTaskAgentAction;
   outcome: 'recommended' | 'executed' | 'skipped';
   summary: string;
   reason: string;
   created_at: string;
+  /** Optional audit tag; clients must tolerate absence. */
+  source_layer?: VisionTaskAgentDecisionSourceLayer;
+  /** Optional correlation tokens (e.g. `training_job:tj-1`); clients must tolerate absence. */
+  evidence_refs?: string[];
 }
 
 export type VisionTaskGateStatus = 'pending' | 'pass' | 'needs_review' | 'fail';
@@ -387,6 +297,7 @@ export interface VisionTaskEvaluationSuite {
   title: string;
   summary: string;
   primary_metric: string;
+  direction: EvaluationSuiteRecord['direction'];
   threshold_target: number | null;
   status: VisionTaskEvaluationSuiteStatus;
   threshold_source: 'task_type_default' | 'training_plan';
@@ -900,6 +811,27 @@ export interface RuntimeReadinessFrameworkSnapshot {
   effective_mode: 'endpoint' | 'local_command' | 'bundled_local_runner';
 }
 
+export interface RuntimeAgentDeliveryReadiness {
+  status: 'ready' | 'needs_review' | 'blocked';
+  summary: string;
+  recommended_action:
+    | 'ready'
+    | 'run_doctor'
+    | 'enable_real_runner'
+    | 'enable_strict_fallback_guard'
+    | 'fix_runtime_settings';
+  evidence_policy: 'registerable_artifact_required';
+  blockers: string[];
+  commands: string[];
+}
+
+export interface RuntimeRealTrainingDoctorReport {
+  status: 'ready' | 'not_ready';
+  issues: string[];
+  notes: string[];
+  commands: string[];
+}
+
 export interface RuntimeBootstrapAssetExpectedFile {
   name: string;
   present: boolean;
@@ -921,7 +853,16 @@ export interface RuntimeReadinessReport {
   strict_controls: RuntimeControlSettings;
   frameworks: RuntimeReadinessFrameworkSnapshot[];
   bootstrap_assets: RuntimeBootstrapAssetSnapshot[];
+  agent_delivery: RuntimeAgentDeliveryReadiness;
+  real_training_doctor: RuntimeRealTrainingDoctorReport;
   issues: RuntimeReadinessIssue[];
+}
+
+export interface RuntimeRealTrainingPrepareResult {
+  settings: RuntimeSettingsView;
+  readiness: RuntimeReadinessReport;
+  changed_fields: string[];
+  commands: string[];
 }
 
 export interface RuntimeMetricsRetentionItem {
@@ -986,6 +927,96 @@ export interface CreateDatasetInput {
   };
 }
 
+export type LocalAnnotatedFolderFormat = 'yolo' | 'voc' | 'ocr' | 'unknown';
+
+export interface LocalFolderScanInput {
+  folder_path: string;
+  task_type?: TaskType;
+  framework?: ModelFramework;
+  manual_validation_count?: number;
+}
+
+export interface LocalFolderScanResult {
+  folder_path: string;
+  detected_format: LocalAnnotatedFolderFormat;
+  task_type: TaskType;
+  recommended_framework: ModelFramework;
+  image_count: number;
+  annotation_file_count: number;
+  paired_count: number;
+  unmatched_image_count: number;
+  unmatched_annotation_count: number;
+  class_names: string[];
+  warnings: string[];
+  manual_validation_count: number;
+}
+
+export interface LocalFolderImportAndTrainInput extends LocalFolderScanInput {
+  dataset_id?: string;
+  dataset_name?: string;
+  dataset_description?: string;
+  base_model?: string;
+  train_ratio?: number;
+  val_ratio?: number;
+  seed?: number;
+  recipe_id?: string;
+  recipe_version?: string;
+  execution_target?: TrainingExecutionTarget;
+  worker_id?: string;
+}
+
+export interface LocalFolderManualValidationItem {
+  item_id: string;
+  attachment_id: string;
+  filename: string;
+  storage_path: string | null;
+}
+
+export interface LocalFolderImportAndTrainResult {
+  scan: LocalFolderScanResult;
+  dataset: DatasetRecord;
+  dataset_version: DatasetVersionRecord;
+  training_job: TrainingJobRecord;
+  manual_validation_items: LocalFolderManualValidationItem[];
+  split_summary: DatasetVersionRecord['split_summary'];
+  import_summary: {
+    images_imported: number;
+    annotations_imported: number;
+    annotations_updated: number;
+    created_items: number;
+  };
+  next_links: {
+    dataset: string;
+    training_job: string;
+    inference_validation: string;
+  };
+}
+
+export interface LocalFolderFinalizeInput {
+  training_job_id: string;
+  model_id?: string;
+  model_name?: string;
+  version_name?: string;
+  run_manual_validation?: boolean;
+  allow_compatibility_registration?: boolean;
+}
+
+export interface LocalFolderFinalizeResult {
+  training_job: TrainingJobRecord;
+  model: ModelRecord | null;
+  model_version: ModelVersionRecord | null;
+  registration_status: 'registered' | 'blocked' | 'skipped';
+  registration_error: string | null;
+  manual_validation_items: LocalFolderManualValidationItem[];
+  inference_runs: InferenceRunRecord[];
+  metrics_summary: Record<string, number>;
+  next_links: {
+    training_job: string;
+    model_version: string | null;
+    inference_validation: string;
+  };
+}
+
 export interface CreateTrainingJobInput {
   name: string;
   task_type: TaskType;
@@ -993,8 +1024,6 @@ export interface CreateTrainingJobInput {
   dataset_id: string;
   dataset_version_id: string;
   vision_task_id?: string;
-  recipe_id?: string;
-  recipe_version?: string;
   base_model: string;
   config: Record<string, string>;
   execution_target?: TrainingExecutionTarget;

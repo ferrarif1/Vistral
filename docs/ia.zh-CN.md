@@ -17,10 +17,10 @@
   - 重定向到 `/auth/login`
   - 不再提供公开自助注册界面
 
-### 3.2 平台入口
+### 3.2 双入口
 - `/`
-  - 默认进入专业控制台
-  - `/workspace/chat` 继续保留为按需进入的对话路线，不再作为共享壳层默认入口
+  - AI-native 对话工作区入口
+  - 专业控制台入口
 
 ### 3.3 对话工作区
 - `/workspace/chat`
@@ -53,6 +53,8 @@
     - 其他任务域只能以摘要信息或跳转入口出现
     - 不能因为功能相关就把第二个完整工作流直接嵌进当前页
   - 控制台首页应聚焦“任务分流”：一个优先队列 + 各任务域跳转入口，不再内嵌多个完整流程模块
+  - 当 Agent 主动作是 `fix_runtime` 时，首页主工作区必须直接展示交付导向的就绪摘要：优先使用 `runtime.agent_delivery`，不可见时使用 `VisionTask.agent_next_action.blocking_items`，避免用户进入 Runtime 设置页前不知道 Agent 为什么停止
+  - 对管理员，`fix_runtime` 摘要可内联暴露受保护的 `prepare-real-training` 动作；普通用户只看到阻塞项与管理员交接提示，不展示会失败的 mutation 按钮
   - 专业工作页统一使用三段式工作台：
     - 顶部上下文工具栏（`WorkspaceContextBar`）承载搜索/筛选/批量操作
     - 中间主工作区承载资产列表、画布、任务表格等核心内容
@@ -119,11 +121,6 @@
   - 主工作区也应镜像当前第一个未完成的详情步骤，用一张明确的“下一步卡片”承接用户动作，避免反复通读整页
   - 顶部 stepper（导入/切分/版本）
   - 数据集附件始终可见/可删/有状态
-  - 详情页应提供一个数据包导入助手：
-    - 选择本地文件夹或 `.zip`
-    - 识别图片与支持的标注负载（`yolo` / `coco` / `labelme` / `ocr`）
-    - 导入前先展示紧凑摘要与风险提示
-    - 导入后可选自动执行切分与数据集版本快照准备，并直接继续到训练启动页
   - 样本浏览区支持网格/列表切换、快速筛选、批量样本操作
   - 筛选项至少覆盖：搜索、split、样本状态、标注队列状态、metadata/tag 提示
 - `/datasets/:datasetId/annotate`
@@ -442,11 +439,11 @@
   - recipe 摘要可见，参数覆盖折叠在专家控件中
   - launch 按钮位置不因 readiness 刷新而跳动
 - `/vision/tasks` 应像 agent inbox：
-  - 顶部优先展示最高优先级可见任务的 agent-mode panel，包含目标摘要、步骤 rail、证据 chips 和一个显式主下一步
   - blocked / training / next-action-ready 分组或等效视图
   - 每行展示推荐动作、理由、readiness/gate 状态与关联实体
 - `/vision/tasks/:taskId` 应把 recipe、readiness、evaluation gate、champion/challenger 放在同一证据链中，手动入口作为次级 escape hatch。
 - 全站 action card 统一结构：状态、摘要、证据、一个主下一步、必要时显示确认要求。
+<<<<<<< HEAD
 - 高意图工作台可把 agent-mode panel 作为顶部控制面：
   - 一个目标陈述、步骤 rail、决策摘要、证据 chips
   - 一个主动作 + 次级修复入口
@@ -454,7 +451,12 @@
   - 专家控件留在 panel 外并默认折叠
 - `/workspace/pixel-lab` 是独立游戏化视图：
   - 通过页面顶部共享平台栏中的模式切换进入；在 Pixel Lab 中同一入口返回专业控制台
-  - 使用一个像素房子承载数据集、模型、训练、推理考试、版本交付房间
+  - 交互结构参考 `src-img/方案效果总览.png` 的总控台骨架：顶部 HUD、中央工坊工作面、右侧 OpenClaw 助手、底部房间导航、下方模型/时间线/资源/小记面板
+  - 视觉氛围继续参考 `src-img/新工作台.png` 的白天亮色训练屋；不把较暗的总控台原型照搬为最终色彩
+  - 使用一个亮色像素房子承载 7 个中央核心房间：数据集仓库、数据处理/标注室、特征工程/配方室、模型训练室、推理验证/考试室、模型发布室、部署服务/运行监控室
+  - 对话接待、任务指挥、Bug 修复与反馈回流通过侧栏、通知/时间线、AI 助手建议和 canonical workflow 链接表达，不作为中央编号房间
+  - 页面布局固定为左侧项目/阶段/模型/任务/小记，中间七房间工坊，右侧任务通知/项目统计/指标，底部模型小队/训练流程总览，右下角常驻可折叠可拖拽 AI 助手
+  - 视觉基调采用白天蓝天、红屋顶、暖木梁柱、浅色墙面与清晰房间边界，不再使用暗夜蓝黑赛博监控室风格
   - 数据来自现有 datasets / training jobs / model versions / inference runs / vision tasks API
   - 主动作只跳转到 canonical workflow，不在该视图里静默执行高风险变更
 - `/training-workshop` 是聚焦训练流程的像素工坊入口：
@@ -464,4 +466,6 @@
   - 场景只显示一个当前活动模型角色；其他候选模型只作为选择卡片存在
   - mock 演示可独立运行，真实接入时通过 `mapVistralTaskToWorkshopStage(task)` 映射训练任务状态
   - 人工确认阶段必须等待用户显式决策，不能自动发布
+=======
+>>>>>>> parent of 10605c8 (动画式交互)
 - 现代视觉基线继续遵循 `notion/DESIGN.md`，并采用其中 Vistral AI-native interaction addendum。

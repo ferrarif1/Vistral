@@ -1,0 +1,153 @@
+{
+  "generated_by": "scripts/generate-house-room-backgrounds.py",
+  "style_reference": "src-img/新工作台.png",
+  "layout_reference": "src-img/方案效果总览.png",
+  "output_size": [
+    384,
+    256
+  ],
+  "rules": [
+    "same dimensions for all nine rooms",
+    "same wall/floor baseline and cutaway perspective",
+    "no individual outer room frame",
+    "no readable baked text",
+    "full-cell backgrounds for the unified Pixel Lab House grid"
+  ],
+  "rooms": [
+    {
+      "id": "reception",
+      "label": "reception-command",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/reception-command/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        0,
+        0
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "datasets",
+      "label": "dataset-warehouse",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/dataset-warehouse/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        0,
+        1
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "annotation",
+      "label": "data-processing-annotation",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/data-processing-annotation/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        0,
+        2
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "recipes",
+      "label": "feature-recipe",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/feature-recipe/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        1,
+        0
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "training",
+      "label": "model-training",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/model-training/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        1,
+        1
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "exam",
+      "label": "inference-validation",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/inference-validation/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        1,
+        2
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "publish",
+      "label": "model-publishing",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/model-publishing/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        2,
+        0
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "runtime",
+      "label": "deployment-runtime",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/deployment-runtime/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        2,
+        1
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    },
+    {
+      "id": "bugs",
+      "label": "feedback-repair",
+      "image": "public/assets/vistral-workshop/generated/house-room-backgrounds/feedback-repair/prop.png",
+      "size": [
+        384,
+        256
+      ],
+      "grid": [
+        2,
+        2
+      ],
+      "edge_touch": false,
+      "status": "accepted"
+    }
+  ]
+}

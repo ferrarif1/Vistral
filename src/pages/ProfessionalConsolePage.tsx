@@ -824,7 +824,7 @@ export default function ProfessionalConsolePage() {
     }
 
     void loadLatestVersionRuntimeVisibility(latestRegisteredVersion.id);
-  }, [latestRegisteredVersion, latestRegisteredVersion?.id, loadLatestVersionRuntimeVisibility]);
+  }, [latestRegisteredVersion?.id, loadLatestVersionRuntimeVisibility]);
 
   useBackgroundPolling(
     () => {

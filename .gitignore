@@ -14,3 +14,4 @@ runtime-assets/doctr-preseed/*
 !runtime-assets/doctr-preseed/.gitkeep
 /.codex
 /.codex
+/.agents/skills/agent-sprite-forge-main

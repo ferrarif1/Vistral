@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 60 1200 680" role="img" aria-label="Vistral nine room training house frame">
+  <defs>
+    <pattern id="roofTiles" width="40" height="24" patternUnits="userSpaceOnUse">
+      <rect width="40" height="24" fill="#d95f3c"/>
+      <path d="M0 11h40M0 22h40M20 0v24" stroke="#8e3a24" stroke-width="3"/>
+      <path d="M0 1h40" stroke="#f28a58" stroke-width="3"/>
+    </pattern>
+    <pattern id="floorTiles" width="28" height="18" patternUnits="userSpaceOnUse">
+      <rect width="28" height="18" fill="#d8a76b"/>
+      <path d="M0 17h28M27 0v18" stroke="#9d6335" stroke-width="2" opacity=".65"/>
+    </pattern>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="0" flood-color="#4f2f1f" flood-opacity=".55"/>
+      <feDropShadow dx="0" dy="20" stdDeviation="8" flood-color="#3a2418" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <rect x="45" y="135" width="1110" height="580" rx="12" fill="#f4d6a1" stroke="#4f2f1f" stroke-width="10" filter="url(#shadow)"/>
+  <rect x="78" y="182" width="1044" height="498" fill="#fae7bd" stroke="#704521" stroke-width="8"/>
+  <rect x="16" y="74" width="1168" height="116" rx="8" fill="url(#roofTiles)" stroke="#4f2f1f" stroke-width="8"/>
+  <path d="M128 190 260 74h70L197 190Z" fill="#704521"/>
+  <path d="M1003 74h70l112 116h-72Z" fill="#704521"/>
+  <rect x="80" y="348" width="1040" height="10" fill="#704521"/>
+  <rect x="80" y="516" width="1040" height="10" fill="#704521"/>
+  <rect x="422" y="182" width="10" height="498" fill="#704521"/>
+  <rect x="768" y="182" width="10" height="498" fill="#704521"/>
+  <rect x="78" y="680" width="1044" height="35" fill="url(#floorTiles)" stroke="#704521" stroke-width="6"/>
+  <g fill="#fff3d5" opacity=".38">
+    <circle cx="145" cy="248" r="30"/>
+    <circle cx="500" cy="248" r="30"/>
+    <circle cx="850" cy="248" r="30"/>
+    <circle cx="145" cy="420" r="26"/>
+    <circle cx="500" cy="420" r="26"/>
+    <circle cx="850" cy="420" r="26"/>
+    <circle cx="145" cy="588" r="24"/>
+    <circle cx="500" cy="588" r="24"/>
+    <circle cx="850" cy="588" r="24"/>
+  </g>
+  <g stroke="#8b5730" stroke-width="5" opacity=".42">
+    <path d="M80 258h1040M80 426h1040M80 594h1040"/>
+    <path d="M250 182v498M598 182v498M945 182v498"/>
+  </g>
+</svg>
