@@ -140,6 +140,26 @@
   - `controls.python_bin`（可选：内置本地 runner 默认 Python 可执行文件）
   - `controls.disable_simulated_train_fallback`（布尔：为 true 时训练不允许 simulated 回退）
   - `controls.disable_inference_fallback`（布尔：为 true 时推理不允许 template/fallback 输出）
+- Runtime 就绪度响应还会计算 `agent_delivery`，供 VisionTask Agent 判断是否能继续交付模型：
+  - `status`（`ready` | `needs_review` | `blocked`）
+  - `summary`
+  - `recommended_action`（`ready` | `run_doctor` | `enable_real_runner` | `enable_strict_fallback_guard` | `fix_runtime_settings`）
+  - `evidence_policy`（`registerable_artifact_required`）
+  - `blockers`（当前阻塞项）
+  - `commands`（可复制执行的命令，例如 `npm run doctor:real-training-readiness`）
+  - `agent_delivery` 是 Runtime 设置页的交付导向摘要；VisionTask 自动交付遇到 template/fallback/non-real artifact evidence 时仍必须停在 `fix_runtime`
+- Runtime 就绪度响应还会暴露 `real_training_doctor`：
+  - `status`（`ready` | `not_ready`）
+  - `issues`（与 `scripts/doctor-real-training-readiness.sh` 对齐的机器可读字符串，例如 `missing_python_module_ultralytics`）
+  - `notes`（已解析 Python、模块、模型路径等证据）
+  - `commands`（可复制的 setup 与复查命令）
+  - `agent_delivery.blockers` 应包含未解决的 doctor issues，让 Studio 不必要求操作人先跑 shell 脚本也能解释真实缺口
+- Runtime 真实训练 prepare 响应包含：
+  - `settings`（安全变更后的 `RuntimeSettingsView`）
+  - `readiness`（变更后的 `RuntimeReadinessReport`）
+  - `changed_fields`（本次 prepare 修改的字段路径）
+  - `commands`（剩余宿主级命令）
+  - prepare 动作只允许修改 Vistral 持久化 runtime 设置；依赖安装、模型下载与环境变量 export 仍必须是显式操作人动作
 - 规则：
   - runtime 适配器应在执行时动态读取配置，而不是只在进程启动时读取一次
   - 当不存在 UI 保存配置时，允许按环境变量做兜底
@@ -298,10 +318,12 @@
 - readiness 必须能区分数据问题、标注问题、runtime 问题、worker 问题与 artifact 证据问题。
 
 ### EvaluationSuite / PromotionGate / RunComparison
-- OCR 默认主指标：`cer`（越低越好），缺失时可用 `accuracy`
-- detection 默认主指标：`map`
-- segmentation 默认主指标：`miou`，不可用时使用框架可提供的 mask/polygon mAP
-- OBB 默认主指标：旋转框 mAP（`map_obb`），辅助指标包含 precision、recall、angle error 与 angle-bucket regression slice
+- `EvaluationSuite.direction` 必须显式记录指标方向：`higher_is_better` 或 `lower_is_better`
+- OCR 默认主指标：`cer`（`lower_is_better`），缺失时可用 `accuracy`
+- detection 默认主指标：`map`（`higher_is_better`）
+- segmentation 默认主指标：`miou`（`higher_is_better`），不可用时使用框架可提供的 mask/polygon mAP
+- OBB 默认主指标：旋转框 mAP（`map_obb`，`higher_is_better`），辅助指标包含 precision、recall、angle error 与 angle-bucket regression slice
 - `PromotionGate.status`：`pass | needs_review | fail | pending`
+- `PromotionGate.status=pass` 表示指标阈值与注册产物证据都可接受；若只是指标过线但产物为 template/fallback/non-real，必须保持 `needs_review`
 - `recommended_action`：`register_model | train_again | collect_data | clean_annotations | fix_runtime | observe | stop`
 - run comparison 必须携带 champion/challenger/latest run 语义，避免只看单次 raw metric。

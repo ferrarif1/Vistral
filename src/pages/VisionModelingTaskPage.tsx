@@ -185,7 +185,12 @@ export default function VisionModelingTaskPage() {
     setAutoAdvancing(true);
     setFeedbackMessage('');
     try {
-      const result = await api.autoAdvanceVisionTask(task.id, { max_rounds: 3 });
+      const result = await api.autoAdvanceVisionTask(task.id, {
+        max_rounds: 3,
+        deliver_model: true,
+        wait_timeout_ms: 15000,
+        wait_poll_ms: 250
+      });
       setTask(result.task);
       setFeedbackMessage(
         t('Auto advance: {{action}} - {{message}}', {
@@ -269,7 +274,7 @@ export default function VisionModelingTaskPage() {
           onClick={() => void handleAutoAdvance()}
           disabled={autoAdvancing}
         >
-          {autoAdvancing ? t('Agent continuing...') : t('Continue as agent')}
+          {autoAdvancing ? t('Agent delivering...') : t('Deliver model with agent')}
         </Button>
         {(task.model_version_id || task.training_job_id) ? (
           <Button

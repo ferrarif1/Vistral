@@ -258,6 +258,10 @@
       - 可先创建/更新 `VisionTask`
       - 可复用当前附件作为样例输入
       - 信息足够时可继续衔接 `auto_advance_vision_task`
+      - 明确要求自动化 / 闭环 / 交付导向训练的自然语言请求可在未启用 BYO LLM 规划时映射到该分支
+      - 当 `dataset_id` / `dataset_version_id` 已指向可训练数据时，样例图只是可选证据，不应再次阻塞交付路径
+      - 可接受参数包括 `prompt`、`task_id` / `vision_task_id`、`dataset_id`、`dataset_version_id`、`task_type`、`auto_advance`、`max_rounds`、可选 `training_config`（`epochs`、`batch_size`、`learning_rate`、`warmup_ratio`、`weight_decay`）与可选 `acceptance_target`
+      - `prompt` / `acceptance_target` 中提到的数值训练参数和指标阈值应写入生成的 `VisionTask.training_plan` 与评测 gate，便于交付验收使用 `epochs:1`、`mAP50>=0.01` 等有界设置
       - 若业务条件仍缺失，返回 `requires_input`
       - 若将自动触发后续变更动作，仍需在线程内显式确认
   - `run_dataset_pre_annotations` 的 bridge 参数语义为 `dataset_id + model_version_id`（兼容 legacy `source_model_version_id`，服务端会内部归一化）
@@ -755,6 +759,17 @@
   - `issues` 可选附带 `remediation` 字段，用于前端展示可复制的修复建议
   - `issues` 也可选附带 `remediation_command` 字段，用于前端展示可直接复制执行的命令
   - 返回会包含 `bootstrap_assets`，用于展示本地引导资源状态（例如 docTR 预置目录、期望文件与缺失文件清单）
+  - 返回会包含 `agent_delivery`，用于展示 VisionTask Agent 能否继续交付可注册模型：
+    - 不替代通用 Runtime readiness
+    - 告诉 Studio 当前是否必须停在 `fix_runtime`
+    - 可包含 `npm run doctor:real-training-readiness`、`export VISTRAL_RUNNER_ENABLE_REAL=1` 等可复制命令
+  - 返回会包含 `real_training_doctor`，作为真实训练 doctor 的结构化 API 镜像：
+    - Python 可执行解析
+    - 本地 runner 依赖（`ultralytics` / `paddleocr` / `doctr`）
+    - numpy 主版本兼容性
+    - Runtime 设置/env/默认发现中的 YOLO 本地权重路径
+    - 可复制的 setup/doctor 命令
+  - `POST /settings/runtime/prepare-real-training` 可安全准备平台内 runtime 设置：补齐内置本地 runner 模板、可发现模型路径、可选 endpoint auto-match，并开启训练/推理严格 fallback guard；该接口不安装依赖、不下载权重、不执行 shell、不修改宿主环境变量
   - `bootstrap_assets[*].expected_files` 结构：
     - `name`: 文件名
     - `present`: 文件是否存在且大小有效

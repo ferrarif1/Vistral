@@ -1,0 +1,106 @@
+{
+  "generated_at": "2026-04-29T19:16:00+08:00",
+  "skill_source": ".agents/skills/agent-sprite-forge-main",
+  "reference_palette": "src-img/新工作台.png",
+  "reference_content": "src-img/方案效果总览.png",
+  "output_dir": "public/assets/vistral-workshop/generated",
+  "notes": [
+    "First asset-generation pass only; these are raw sheets to review, slice, and alpha-clean before production use.",
+    "image_gen returned RGB PNG files, so alpha/transparent cleanup is still required before direct UI placement.",
+    "No full scenes should be used from this folder; assets are intended to be sliced into reusable modules.",
+    "Second pass generated solid #FF00FF raw sheets for deterministic chroma-key cleanup and slicing."
+  ],
+  "sheets": [
+    {
+      "id": "master-all-categories",
+      "category": "overview",
+      "path": "raw-sheets/master-all-categories.png",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1e5637b0c8191bb61677f272f4d71.png",
+      "expected_assets": 54,
+      "alpha_status": "needs_cleanup"
+    },
+    {
+      "id": "buildings",
+      "category": "buildings",
+      "path": "raw-sheets/buildings.png",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1e6560ee08191af8fab90455b7f07.png",
+      "expected_assets": 10,
+      "alpha_status": "needs_cleanup"
+    },
+    {
+      "id": "room-modules",
+      "category": "room_modules",
+      "path": "raw-sheets/room-modules.png",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1e6bfa5a88191b65e88e9b39e0091.png",
+      "expected_assets": 8,
+      "alpha_status": "needs_cleanup"
+    },
+    {
+      "id": "furniture-equipment",
+      "category": "furniture_equipment",
+      "path": "raw-sheets/furniture-equipment.png",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1e72e5e70819197271d37924f2260.png",
+      "expected_assets": 16,
+      "alpha_status": "needs_cleanup"
+    },
+    {
+      "id": "characters",
+      "category": "characters",
+      "path": "raw-sheets/characters.png",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1e7982d088191ae8b13f505171111.png",
+      "expected_assets": 10,
+      "alpha_status": "needs_cleanup"
+    },
+    {
+      "id": "ui-elements",
+      "category": "ui_elements",
+      "path": "raw-sheets/ui-elements.png",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1e7fcca588191a09c992c8982d61a.png",
+      "expected_assets": 20,
+      "alpha_status": "needs_cleanup"
+    }
+  ],
+  "updated_at": "2026-04-29T19:35:00+08:00",
+  "magenta_sheets": [
+    {
+      "id": "buildings-magenta",
+      "category": "buildings",
+      "path": "raw-magenta-sheets/buildings.png",
+      "expected_assets": 10,
+      "alpha_status": "source_magenta_ready_for_chroma_key",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1ea3a23ec819186f57b3f8553858b.png"
+    },
+    {
+      "id": "room-modules-magenta",
+      "category": "room_modules",
+      "path": "raw-magenta-sheets/room-modules.png",
+      "expected_assets": 8,
+      "alpha_status": "source_magenta_ready_for_chroma_key",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1ea9e3124819184b28c7cac1d6523.png"
+    },
+    {
+      "id": "furniture-equipment-magenta",
+      "category": "furniture_equipment",
+      "path": "raw-magenta-sheets/furniture-equipment.png",
+      "expected_assets": 16,
+      "alpha_status": "source_magenta_ready_for_chroma_key",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1eb2a16688191b5bea3e32e63ad06.png"
+    },
+    {
+      "id": "characters-magenta",
+      "category": "characters",
+      "path": "raw-magenta-sheets/characters.png",
+      "expected_assets": 10,
+      "alpha_status": "source_magenta_ready_for_chroma_key",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1ebbb2ab08191ba51e3bbdc50daa4.png"
+    },
+    {
+      "id": "ui-elements-magenta",
+      "category": "ui_elements",
+      "path": "raw-magenta-sheets/ui-elements.png",
+      "expected_assets": 20,
+      "alpha_status": "source_magenta_ready_for_chroma_key",
+      "source": "/Users/zhangyuanyi/.codex/generated_images/019d4d09-7ef5-7471-a494-4c94dfb27795/ig_08688f939e8616d70169f1ec2811908191aa232b617f4c4e2c.png"
+    }
+  ]
+}

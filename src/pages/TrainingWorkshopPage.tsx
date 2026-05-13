@@ -238,7 +238,7 @@ export default function TrainingWorkshopPage() {
     <main className="training-workshop-page">
       <section className="training-workshop-hero">
         <div>
-          <small>Model Training Workshop</small>
+          <small>模型训练流程</small>
           <h1>Vistral 像素训练工坊</h1>
           <p>
             用一个活动模型角色串起数据集选择、训练调参、推理考试和人工确认。
@@ -314,7 +314,7 @@ export default function TrainingWorkshopPage() {
       </section>
 
       <p className="training-workshop-footnote">
-        当前阶段：{stageConfig.label}。该页面使用 mock 数据独立演示，后续可通过 mapVistralTaskToWorkshopStage 接入真实训练任务状态。
+        当前阶段：{stageConfig.label}。该入口用于快速理解训练闭环；执行真实任务请进入训练创建和训练任务页。
       </p>
     </main>
   );

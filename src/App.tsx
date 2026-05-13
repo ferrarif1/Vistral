@@ -6,7 +6,7 @@ import StateBlock from './components/StateBlock';
 import { useI18n } from './i18n/I18nProvider';
 
 const ConversationPage = lazy(() => import('./pages/ConversationPage'));
-const ProfessionalConsolePage = lazy(() => import('./pages/ProfessionalConsolePage'));
+const AgentTrainingStudioPage = lazy(() => import('./pages/AgentTrainingStudioPage'));
 const PixelLabPage = lazy(() => import('./pages/PixelLabPage'));
 const ModelsExplorePage = lazy(() => import('./pages/ModelsExplorePage'));
 const MyModelsPage = lazy(() => import('./pages/MyModelsPage'));
@@ -61,7 +61,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<PreserveQueryRedirect to="/workspace/console" />} />
             <Route path="/workspace/chat" element={<ConversationPage />} />
-            <Route path="/workspace/console" element={<ProfessionalConsolePage />} />
+            <Route path="/workspace/console" element={<AgentTrainingStudioPage />} />
             <Route path="/workspace/pixel-lab" element={<PixelLabPage />} />
             <Route path="/settings" element={<PreserveQueryRedirect to="/settings/account" />} />
             <Route path="/settings/account" element={<AccountSettingsPage />} />

@@ -1,0 +1,394 @@
+{
+  "input": "public/assets/vistral-workshop/generated/raw-magenta-sheets/buildings.png",
+  "rows": 2,
+  "cols": 5,
+  "threshold": 42,
+  "edge_threshold": 150,
+  "component_mode": "all",
+  "component_padding": 10,
+  "min_component_area": 500,
+  "edge_touch_margin": 0,
+  "accepted": [
+    {
+      "index": 0,
+      "label": "training-house-facade",
+      "grid": [
+        0,
+        0
+      ],
+      "source_box": [
+        0,
+        0,
+        323,
+        485
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        19,
+        157,
+        319,
+        447
+      ],
+      "padded_crop_bbox": [
+        9,
+        147,
+        319,
+        457
+      ],
+      "edge_touch": true,
+      "output_size": [
+        310,
+        310
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/training-house-facade/prop.png"
+    },
+    {
+      "index": 1,
+      "label": "roof-ridge-cap",
+      "grid": [
+        0,
+        1
+      ],
+      "source_box": [
+        323,
+        0,
+        646,
+        485
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        237,
+        319,
+        447
+      ],
+      "padded_crop_bbox": [
+        0,
+        227,
+        319,
+        457
+      ],
+      "edge_touch": true,
+      "output_size": [
+        319,
+        230
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/roof-ridge-cap/prop.png"
+    },
+    {
+      "index": 2,
+      "label": "roof-tile-strip",
+      "grid": [
+        0,
+        2
+      ],
+      "source_box": [
+        646,
+        0,
+        969,
+        485
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        268,
+        319,
+        367
+      ],
+      "padded_crop_bbox": [
+        0,
+        258,
+        319,
+        377
+      ],
+      "edge_touch": true,
+      "output_size": [
+        319,
+        119
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/roof-tile-strip/prop.png"
+    },
+    {
+      "index": 3,
+      "label": "gable-roof",
+      "grid": [
+        0,
+        3
+      ],
+      "source_box": [
+        969,
+        0,
+        1292,
+        485
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        212,
+        318,
+        405
+      ],
+      "padded_crop_bbox": [
+        0,
+        202,
+        319,
+        415
+      ],
+      "edge_touch": true,
+      "output_size": [
+        319,
+        213
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/gable-roof/prop.png"
+    },
+    {
+      "index": 4,
+      "label": "wall-window-module",
+      "grid": [
+        0,
+        4
+      ],
+      "source_box": [
+        1292,
+        0,
+        1615,
+        485
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        60,
+        195,
+        281,
+        424
+      ],
+      "padded_crop_bbox": [
+        50,
+        185,
+        291,
+        434
+      ],
+      "edge_touch": false,
+      "output_size": [
+        241,
+        249
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/wall-window-module/prop.png"
+    },
+    {
+      "index": 5,
+      "label": "wooden-support-set",
+      "grid": [
+        1,
+        0
+      ],
+      "source_box": [
+        0,
+        485,
+        323,
+        970
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        27,
+        75,
+        319,
+        309
+      ],
+      "padded_crop_bbox": [
+        17,
+        65,
+        319,
+        319
+      ],
+      "edge_touch": true,
+      "output_size": [
+        302,
+        254
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/wooden-support-set/prop.png"
+    },
+    {
+      "index": 6,
+      "label": "arched-door-porch",
+      "grid": [
+        1,
+        1
+      ],
+      "source_box": [
+        323,
+        485,
+        646,
+        970
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        50,
+        319,
+        322
+      ],
+      "padded_crop_bbox": [
+        0,
+        40,
+        319,
+        332
+      ],
+      "edge_touch": true,
+      "output_size": [
+        319,
+        292
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/arched-door-porch/prop.png"
+    },
+    {
+      "index": 7,
+      "label": "brick-chimney",
+      "grid": [
+        1,
+        2
+      ],
+      "source_box": [
+        646,
+        485,
+        969,
+        970
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        62,
+        252,
+        322
+      ],
+      "padded_crop_bbox": [
+        0,
+        52,
+        262,
+        332
+      ],
+      "edge_touch": true,
+      "output_size": [
+        262,
+        280
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/brick-chimney/prop.png"
+    },
+    {
+      "index": 8,
+      "label": "side-awning",
+      "grid": [
+        1,
+        3
+      ],
+      "source_box": [
+        969,
+        485,
+        1292,
+        970
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        3,
+        107,
+        264,
+        297
+      ],
+      "padded_crop_bbox": [
+        0,
+        97,
+        274,
+        307
+      ],
+      "edge_touch": false,
+      "output_size": [
+        274,
+        210
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/side-awning/prop.png"
+    },
+    {
+      "index": 9,
+      "label": "balcony-planter",
+      "grid": [
+        1,
+        4
+      ],
+      "source_box": [
+        1292,
+        485,
+        1615,
+        970
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        68,
+        300,
+        315
+      ],
+      "padded_crop_bbox": [
+        0,
+        58,
+        310,
+        325
+      ],
+      "edge_touch": true,
+      "output_size": [
+        310,
+        267
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced/buildings/balcony-planter/prop.png"
+    }
+  ],
+  "rejected": [],
+  "edge_touch_props": [
+    "training-house-facade",
+    "roof-ridge-cap",
+    "roof-tile-strip",
+    "gable-roof",
+    "wooden-support-set",
+    "arched-door-porch",
+    "brick-chimney",
+    "balcony-planter"
+  ]
+}

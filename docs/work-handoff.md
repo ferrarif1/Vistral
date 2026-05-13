@@ -1754,3 +1754,417 @@ Rules:
   - pending after restoration:
     - `npm run typecheck`
     - `npx eslint src/pages/VisionModelingTasksPage.tsx`
+
+## 2026-04-29 18:10 (Asia/Shanghai)
+- context: User supplied a new bright pixel-workshop visual reference and clarified it should replace the prior dark/night/cyber visual mood, while preserving the previous business layout and Vistral logic.
+- done:
+  - Updated `/workspace/pixel-lab` structure in `src/pages/PixelLabPage.tsx`:
+    - central house now renders 7 core rooms instead of a 9-room grid
+    - left rail now carries current project, current stage, active model, today tasks, and work notes
+    - right rail now carries tasks/notifications, project statistics, and active-room metrics
+    - bottom workbench now carries model squad and training-flow overview
+  - Updated `src/styles/game-workshop.css` to the bright workshop palette:
+    - daytime blue-sky background
+    - red tiled roof
+    - warm wood beams
+    - light beige walls and floor
+    - blue active-room glow
+    - green/orange/red status bars
+  - Updated `src/styles/pixel-workshop-skin.css` so shared pixel-shell and training-workshop routes no longer inherit the dark night palette.
+  - Changed `GameWorkshopAssistant` to default collapsed while remaining fixed and draggable.
+  - Started local dev server for preview:
+    - frontend: `http://127.0.0.1:5173/workspace/pixel-lab`
+    - API health: `http://127.0.0.1:8787/api/health`
+- next:
+  1. Run a browser screenshot pass once Playwright/browser tooling is available, then tune exact roof/room proportions against `src-img/新工作台.png`.
+  2. Continue bright-skin polish for specialist pages that have dense custom layouts: annotation workspace, training cockpit, inference validation.
+  3. Replace any remaining dark-only SVG/CSS room accents in shared route headers with bright daytime equivalents.
+- risks:
+  - Local automated screenshot was skipped because `playwright` is not installed in this workspace and no new dependency was installed.
+  - Some specialist pages may still have structure-complete pixel skin but not final bright-room material detail.
+- verification:
+  - `npm run typecheck`
+  - `npm run lint`
+  - `npm run build`
+  - `npm run smoke:training-workshop-contract`
+  - `curl http://127.0.0.1:8787/api/health`
+  - `curl -I http://127.0.0.1:5173/workspace/pixel-lab`
+
+## 2026-04-29 10:25 (CST)
+- context: Continue Pixel Lab bright daytime workshop correction; user required inspecting related structure/docs first, recording plan in `PLANS.md`, then implementing.
+- plan_md:
+  - Updated Track H and P3 in `PLANS.md` to make the supplied bright daytime workshop reference the active visual direction.
+  - Recorded that Pixel Lab central house owns seven core workflow rooms, while conversation/reception and bug/feedback remain contextual rails/assistant/timeline concepts.
+- done:
+  - Audited Pixel Lab implementation, shared pixel skin, project docs, and smoke contract.
+  - Aligned `docs/prd.md`, `docs/ia.md`, `docs/flows.md`, plus Chinese PRD/IA/Flows notes, from older room descriptions to the seven-core-room bright workshop contract.
+  - Updated `PixelLabPage` copy and default focus so it no longer starts from the old reception/nine-room model.
+  - Updated `gameWorkshopSnapshot` numbering so central workflow rooms are 1-7 and contextual reception/bug rooms are not numbered central rooms.
+  - Brightened `game-workshop.css` room readability, red-roof/wood house treatment, and seven-room layout.
+  - Brightened shared `pixel-workshop-skin.css` app shell, chat workspace, training workshop, and route strip backgrounds away from dark night/cyber tones.
+- code_changes:
+  - `PLANS.md`
+  - `docs/prd.md`, `docs/ia.md`, `docs/flows.md`
+  - `docs/prd.zh-CN.md`, `docs/ia.zh-CN.md`, `docs/flows.zh-CN.md`
+  - `src/pages/PixelLabPage.tsx`
+  - `src/features/gameWorkshopSnapshot.ts`
+  - `src/styles/game-workshop.css`
+  - `src/styles/pixel-workshop-skin.css`
+- next:
+  1. Browser-check `/workspace/pixel-lab`, `/workspace/chat`, and `/training-workshop` for visual balance and Chinese text width against controls.
+  2. Add room-specific decorative details for the seven central rooms without creating static illustration-only UI.
+  3. Continue brightening remaining specialist surfaces that still intentionally use darker cockpit panels, keeping operational contrast.
+  4. Consider a focused smoke assertion that Pixel Lab copy and rendered room count stay seven.
+- risks:
+  - Some specialist surfaces such as training cockpit still keep darker panels for telemetry readability and need a separate careful pass.
+  - CSS changes are broad; visual validation in browser is still needed even though type/lint/build passed.
+  - The worktree contains pre-existing unrelated changes, including `.codex/config.toml` deletion; this entry does not claim ownership of those changes.
+- verification:
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - `npm run smoke:pixel-workshop-skin` passed.
+- doc_backfill:
+  - Contracts now state seven central rooms and bright daytime workshop visual direction.
+
+## 2026-04-29 11:05 (CST)
+- context: Continue until the bright Pixel Lab workshop conversion is complete enough to guard and demo.
+- plan_md:
+  - Added the P3 completion slice to `PLANS.md`: seven-room smoke guard, reusable room/device semantics, and Chinese label/control layout tuning.
+- done:
+  - Added reusable room semantic layers in `GameWorkshopRoom`: wall sign plus left/right props, reused by the room detail drawer.
+  - Tuned `game-workshop.css` so central rooms have stronger workshop semantics: dataset shelves, annotation checklist, recipe blackboard, GPU/servers, exam focus glow, publish package, and room plants/crates.
+  - Improved Chinese label width handling in room list/title/detail areas with grid structure and overflow wrapping.
+  - Extended `scripts/smoke-pixel-workshop-skin.sh` to guard the seven central room ids, prevent reception/bugs from becoming central rooms, reject old nine-room copy, reject old dark-night CSS tokens, and require room semantic CSS.
+  - Completed a temporary dev startup check: API health responded and `/workspace/pixel-lab` returned HTML.
+- code_changes:
+  - `PLANS.md`
+  - `src/components/game-workshop/GameWorkshopRoom.tsx`
+  - `src/pages/PixelLabPage.tsx`
+  - `src/styles/game-workshop.css`
+  - `scripts/smoke-pixel-workshop-skin.sh`
+  - `docs/work-handoff.md`
+- next:
+  1. Open `/workspace/pixel-lab` in a browser and screenshot-check exact visual balance against `src-img/新工作台.png`.
+  2. If needed, tune room grid/roof proportions after visual inspection, not by guessing in code.
+  3. Continue page-by-page bright-workshop alignment for cockpit/annotation/settings surfaces while preserving operational contrast.
+- risks:
+  - Automated checks now guard structure and tokens, but do not replace a real browser screenshot review.
+  - Some high-density specialist pages still intentionally use darker panels for readability and need separate treatment.
+  - Worktree still contains unrelated existing dirty files; this round did not revert them.
+- verification:
+  - `npm run smoke:pixel-workshop-skin` passed.
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - `npm run smoke:training-workshop-contract` passed.
+  - Temporary `npm run dev` startup check passed for `http://127.0.0.1:8787/api/health` and `http://127.0.0.1:5173/workspace/pixel-lab`.
+- doc_backfill:
+  - P3 now records the completion slice and guard expectations in `PLANS.md`.
+
+## 2026-04-29 18:37:18 CST - Pixel workshop copy/chat polish
+
+- date_time: 2026-04-29 18:37:18 CST
+- context: Continued the Pixel Workshop conversion after the user requested removing design-rationale UI copy and making OpenClaw behave like a simple social-chat conversation window.
+- done:
+  - Updated Pixel Lab visible copy so it stays product-facing and operational instead of explaining the visual design concept.
+  - Reworked `GameWorkshopAssistant` into a compact chat-thread layout with chronological bubbles, quick replies, and a composer-style input row.
+  - Replaced the remaining product-visible “visual presentation” phrasing in model publish details with artifact/approval/rollback business wording.
+  - Extended `scripts/smoke-pixel-workshop-skin.sh` to reject implementation/design commentary in Pixel Lab visible-copy sources and to require the OpenClaw chat-thread markup/styles.
+  - Added `html` background coverage for the bright pixel skin to reduce blank-page edge exposure in screenshots.
+- next:
+  1. Do one more browser-driven visual pass on `/workspace/pixel-lab` using the user's live browser viewport, especially lower-room spacing behind the fixed bottom room navigation.
+  2. Continue rolling the bright pixel-workshop material treatment across high-frequency professional pages through shared shell/components instead of per-page themes.
+  3. If OpenClaw becomes interactive beyond quick links, wire the composer through the existing confirmation-gated assistant/action flow.
+- risks:
+  - Headless Chrome screenshots still show a white strip below the rendered viewport even after `html/body` background coverage; this may be a headless viewport artifact, but it should be checked in the user's normal browser.
+  - Several broader pixel-skin files are still untracked/pre-existing from earlier rounds; avoid reverting unrelated dirty-worktree changes.
+- verification:
+  - `npm run smoke:pixel-workshop-skin` passed.
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Local API health responded at `http://127.0.0.1:8787/api/health`.
+  - Headless screenshot captured `/workspace/pixel-lab` at `/tmp/vistral-screens/pixel-lab-after.png` for visual review.
+
+### Follow-up in same round
+- Removed the remaining non-product platform subtitle `AI-native pixel workshop` from the authenticated topbar and replaced the default shared-room description with project-context wording.
+- Extended the pixel-workshop smoke guard to catch that subtitle class of visible design commentary.
+- Re-ran `npm run smoke:pixel-workshop-skin`, `npm run typecheck`, `npm run lint`, and `npm run build`; all passed.
+
+## 2026-04-29 18:53:55 CST - Pixel route shell bottom-nav stabilization
+
+- date_time: 2026-04-29 18:53:55 CST
+- context: Continued the Pixel Workshop conversion from the existing handoff; focused on the bottom room navigation, route shell viewport/background behavior, and screenshot-visible edge issues rather than adding new routes.
+- done:
+  - Added the bottom-navigation stabilization target to `PLANS.md` under Track H / P3 before implementation.
+  - Updated `src/styles/pixel-workshop-skin.css` so pixel route shells use `100dvh` with `100lvh` desktop/headless fallback, have a fixed bright-workshop background layer, keep route content/nav above that layer, and preserve mobile horizontal room navigation.
+  - Updated `src/styles/game-workshop.css` so `/workspace/pixel-lab` reserves bottom space based on `--app-game-bottom-nav-height`, reducing the risk that important room content sits under the bottom room bar.
+  - Extended `scripts/smoke-pixel-workshop-skin.sh` with guards for the route-shell background layer, viewport units, mobile horizontal room nav, and Pixel Lab bottom-nav spacing variable.
+  - Rechecked `/workspace/pixel-lab` with a headless screenshot at `/tmp/vistral-screens/pixel-lab-ground-extension.png`.
+- next:
+  1. Verify `/workspace/pixel-lab` in the user's normal browser viewport, because headless Chrome still captures a bottom white band outside the apparent CSS viewport.
+  2. Continue shared pixel-skin rollout on high-frequency professional routes, starting with pages that bypass `WorkspacePage` primitives or use dense route-local panels.
+  3. Keep OpenClaw interaction product-facing; if composer actions become active, route them through the existing confirmation-gated assistant/action flow.
+- risks:
+  - The headless screenshot still shows a lower white strip after CSS viewport/background fallbacks; this appears to be a screenshot canvas/CSS viewport mismatch, not visible business content. Avoid adding broad global hacks until checked in a real browser.
+  - The worktree remains dirty with many pre-existing changes; do not revert unrelated files such as `.codex/config.toml` or generated/untracked asset work.
+- verification:
+  - `npm run smoke:pixel-workshop-skin` passed.
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Local API health responded at `http://127.0.0.1:8787/api/health`.
+  - Headless screenshot captured `/workspace/pixel-lab` at `/tmp/vistral-screens/pixel-lab-ground-extension.png`.
+
+### Follow-up in same round
+- Audited special pages that do not use `WorkspacePage`: `ConversationPage`, `PixelLabPage`, and `TrainingWorkshopPage`.
+- Updated `TrainingWorkshopPage` visible copy to default Chinese product wording and removed the implementation roadmap sentence from the page footer.
+- Added smoke guards so `TrainingWorkshopPage` does not regress to the English eyebrow or visible "后续可通过..." implementation note.
+- Re-ran `npm run smoke:pixel-workshop-skin`, `npm run typecheck`, `npm run lint`, and `npm run build`; all passed.
+
+## 2026-04-29 19:48:00 CST - Pixel asset generation pass with Agent Sprite Forge
+
+- date_time: 2026-04-29 19:48:00 CST
+- context: User requested learning `.agents/skills/agent-sprite-forge-main` and using it to generate all assets needed for the model-training pixel game platform, with `新工作台.png` as palette/material reference and `方案效果总览.png` as content reference.
+- done:
+  - Read the Agent Sprite Forge README plus `generate2dsprite` and `generate2dmap` skill instructions.
+  - Viewed both local reference images before generation.
+  - Recorded the asset generation scope in `public/assets/vistral-workshop/generated/asset-pack-plan.md` and appended the slice to `PLANS.md`.
+  - Generated first-pass visual sheets for buildings, room modules, furniture/equipment, characters, UI elements, plus a master sheet. These are stored under `raw-sheets/`; they visually match the target better but have baked checkerboard backgrounds.
+  - Generated second-pass solid `#FF00FF` sheets under `raw-magenta-sheets/` for deterministic chroma-key cleanup.
+  - Produced RGBA alpha sheets under `alpha-sheets/`.
+  - Sliced 64 individual `prop.png` assets under `sliced/` and produced per-category manifests.
+  - Generated `asset-catalog.json`, `manifest.json`, `qc-report.md`, and `README.md` for the generated asset pack.
+- next:
+  1. Use clean `sliced/room-modules/*/prop.png` assets to rebuild `/workspace/pixel-lab` central rooms into a true pixel-house scene.
+  2. Regenerate buildings, characters, furniture, and UI in smaller 2x2 or one-by-one packs to reduce `edge_touch` and improve production quality.
+  3. After visual approval, wire selected assets through a typed frontend asset catalog instead of hardcoding raw paths.
+- risks:
+  - The first transparent-background generation returned RGB files with baked checkerboard; keep them only as visual references.
+  - Automatic slices outside `room-modules` have many `edge_touch` flags, likely because generated cells included borders or objects filled the cell too tightly.
+  - Some assets may contain abstract symbols or tiny icon-like marks; review before using in production UI.
+- verification:
+  - Confirmed generated PNG dimensions and alpha state with `file` and `sips`.
+  - Confirmed `alpha-sheets/` outputs are RGBA with `hasAlpha: yes`.
+  - Confirmed `sliced/` contains 64 `prop.png` files matching expected asset count.
+  - Reviewed `room-modules` and `openclaw-crab` visually with `view_image`.
+
+## 2026-04-29 20:40:14 CST - Pixel house cutaway continuation
+
+- date_time: 2026-04-29 20:40:14 CST
+- context: Continued after the generated asset integration pass. The current issue is that `/workspace/pixel-lab` still reads as room cards placed inside a house frame instead of one integrated bright pixel-game training house.
+- done:
+  - Re-read the active Pixel Lab implementation, generated asset catalog/QC report, smoke guard, and current plan/handoff notes.
+  - Confirmed clean room-module assets are available and already suitable for immediate central-room usage.
+  - Added the current visual rebuild slice to `PLANS.md` before implementation.
+- next:
+  1. Move generated room/assistant asset paths into a typed frontend asset catalog.
+  2. Refactor central house visuals so the seven rooms share one house cutaway surface with lighter HUD overlays and less independent card chrome.
+  3. Extend the pixel-workshop smoke guard for the asset catalog and cutaway classes.
+  4. Run `npm run smoke:pixel-workshop-skin`, `npm run typecheck`, `npm run lint`, `npm run build`, and capture a `/workspace/pixel-lab` screenshot.
+- risks:
+  - The generated `room-modules` pack is clean, but other asset categories still need review/regeneration before broad use.
+  - The page must remain a real product interface; visual changes must not remove room actions, status badges, or links to canonical workflows.
+- verification:
+  - Pending for this continuation slice.
+
+### Direction correction in same continuation
+- date_time: 2026-04-29 20:43:04 CST
+- context: User clarified the intended Pixel Lab is one large House game desktop like `方案效果总览.png`, with dataset, annotation, recipe, training, inference/exam, publish, runtime, reception/conversation, and bug repair as rooms inside the same building.
+- done:
+  - Updated `PLANS.md` so the active Pixel Lab contract is now a nine-room House, not a seven-room core layout.
+  - Stopped the seven-room-only implementation direction before completing the visual slice.
+- next:
+  1. Update PRD/IA/flows and smoke guard away from seven-room-only assertions.
+  2. Change `PixelLabPage` central room list to include all nine rooms.
+  3. Make the House CSS a 3x3 cutaway frame and keep side/bottom panels as supporting HUD surfaces.
+  4. Add model-role sprites/status chips inside rooms according to room state.
+- risks:
+  - Existing generated room-module assets cover eight room concepts cleanly; reception/conversation may need a CSS fallback or a new generated asset in the next asset pass.
+  - Some earlier guards intentionally rejected nine rooms and must be replaced rather than bypassed.
+
+### Prototype fidelity correction
+- date_time: 2026-04-29 20:57:16 CST
+- context: User corrected that development must restore the provided prototype design rather than improvising room/card layouts.
+- done:
+  - Re-read the active Pixel Lab page and CSS while treating `src-img/方案效果总览.png` as the structural source of truth.
+  - Updated `PLANS.md` to explicitly require prototype hierarchy fidelity before further visual polish.
+- next:
+  1. Tighten `/workspace/pixel-lab` toward the prototype hierarchy: central 3x3 House visible in one desktop viewport, left rail sections matching the prototype, right rail chat/member/status panels, lower panels, and bottom room navigation.
+  2. Reduce in-room body text on the House canvas; move details to drawer/right rail so rooms stay game-like and scannable.
+  3. Screenshot compare after each slice instead of inventing new layout ideas.
+- risks:
+  - Current room generated assets help, but a true single large House background/frame asset is still missing and should be generated in a dedicated pass.
+
+### Functional completion pass
+- date_time: 2026-04-29 21:08:32 CST
+- context: User requested continuing implementation so every visible feature is complete and unnecessary hints/prompts are removed.
+- done:
+  - Audited Pixel Lab controls and found incomplete UI: left rail showed only five rooms, the assistant composer was disabled, the right timeline was nested in duplicate cards, and the room canvas still contained some non-essential explanatory text.
+  - Updated `PLANS.md` to require every visible Pixel Lab control to focus, open a drawer, navigate to a canonical route, or be removed.
+- next:
+  1. Wire all nine room entries into the left rail and bottom flow controls.
+  2. Replace disabled assistant composer with a real route handoff to `/workspace/chat`.
+  3. Remove duplicate card wrappers and trim explanatory copy from the House canvas.
+  4. Re-run smoke/type/lint/build and capture a screenshot.
+- risks:
+  - Pixel Lab should not duplicate full professional workflows; it should deep-link into existing pages while preserving context.
+
+### Functional completion result
+- date_time: 2026-04-29 21:26:16 CST
+- done:
+  - Pixel Lab left rail now exposes all nine House rooms instead of only a partial room slice.
+  - Removed duplicate/hidden bottom workbench content that was not visible behind the fixed room navigation.
+  - Converted OpenClaw composer from a disabled fake input into a working handoff to `/workspace/chat` with focused room and typed prompt in query context.
+  - Removed duplicate timeline card wrapper so the right rail does not render nested cards.
+  - Room primary actions now deep-link more directly into canonical routes: active dataset/detail, annotation workspace, active training cockpit, failed job, inference validation, model versions, runtime settings, and chat.
+  - Central House hides dense badge/detail text while drawer and right-side metrics keep full status information.
+  - Strengthened `smoke:pixel-workshop-skin` to reject partial room lists and disabled assistant composers.
+- next:
+  1. Generate one full large House frame asset and wire it as the central backdrop, instead of relying on CSS roof/wall construction.
+  2. Generate room-specific furniture overlays and model-character state sprites for study/training/exam/graduation/fix states.
+  3. Replace remaining CSS placeholder characters with generated sprites after QC.
+- risks:
+  - Current visual is closer to the prototype structure, but still uses CSS for the big House shell; a production-quality single House asset is still needed.
+  - Some status strings still reflect backend enum/runtime messages and should be localized in a later i18n pass.
+- verification:
+  - `npm run smoke:pixel-workshop-skin` passed.
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Screenshot captured at `/tmp/vistral-screens/pixel-lab-functional-pass-3.png`.
+
+### Pixel House frame and role sprite completion
+- date_time: 2026-04-30 07:59:30 CST
+- context: Continued the unfinished Pixel Lab slice that had already wired `house-frame.svg` and role image markup but still lacked CSS, smoke coverage, and rendered-page verification.
+- done:
+  - Added the central full-House frame as both an absolute non-interactive layer and a CSS background layer for `/workspace/pixel-lab`.
+  - Cropped and sized `house-frame.svg` so the red roof, warm wooden frame, and nine-room cutaway are visible in the rendered desktop layout.
+  - Styled generated model-role PNG sprites inside rooms while keeping the CSS body as a fallback if a sprite fails to load.
+  - Extended `scripts/smoke-pixel-workshop-skin.sh` to require the full-House frame asset, centralized house/role asset catalog, frame markup, and role image styling.
+  - Captured a rendered Pixel Lab screenshot at `/tmp/vistral-screens/pixel-lab-house-frame-pass.png`; probe confirmed 9 slots, 9 rooms, absolute frame layer, 3 role images, and no visible design-commentary copy.
+- next:
+  1. Tune the central House proportions against `src-img/方案效果总览.png`: reduce remaining card-like chrome inside rooms and make furniture/device overlays feel more like room contents than thumbnail props.
+  2. Add explicit browser smoke assertions for frame image load completion and screenshot probe output if a reusable browser smoke script is introduced.
+  3. Continue route-by-route pixel skin rollout for pages that still feel like traditional admin pages wrapped in the skin.
+- risks:
+  - The full-House frame is now visible and functional, but it is still an SVG/CSS hybrid rather than a final hand-authored production pixel asset.
+  - The generated character and room sprites are useful but some categories still carry QC warnings, so wider use should stay guarded by smoke checks and visual review.
+- verification:
+  - `npm run smoke:pixel-workshop-skin` passed.
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Browser probe and screenshot passed at `/workspace/pixel-lab` with `alice / mock-pass`.
+
+### Follow-up in same frame slice
+- Reduced central-room card chrome by enlarging the room-module art area, softening the in-room header/summary panels, and keeping dense details in drawer/right rail rather than inside the House canvas.
+- Strengthened the smoke guard so `house-frame.svg` must keep explicit dimensions and the central House CSS must keep the frame asset wired as a background layer.
+- Re-ran `npm run smoke:pixel-workshop-skin`, `npm run typecheck`, `npm run lint`, and `npm run build`; all passed.
+- Re-captured `/workspace/pixel-lab` at `/tmp/vistral-screens/pixel-lab-house-frame-pass.png`; the frame asset completed loading with natural size `1200x680`.
+
+### Pixel Lab prototype hierarchy alignment
+- date_time: 2026-04-30 08:28:00 CST
+- context: User explicitly prioritized making `/workspace/pixel-lab` match `src-img/方案效果总览.png` before further broad visual polish.
+- done:
+  - Recorded the prototype-alignment slice in `PLANS.md` before implementation.
+  - Restored prototype-like bottom panels under the central House: model role dynamics, workshop timeline, resource monitoring, and work notes.
+  - Added the right-side member/model-role panel below the assistant/stat cards.
+  - Rebalanced the Pixel Lab layout so the central House starts near the top, dominates the viewport, and the bottom panels appear above the fixed bottom navigation.
+  - Fixed main-grid placement so the hero, House, and bottom panels stack in one column instead of drifting into implicit CSS grid columns.
+  - Prevented left/right rails from stretching cards into large empty blocks by aligning content to the top.
+  - Extended `smoke:pixel-workshop-skin` with guards for prototype bottom panels, member grid, and alignment CSS.
+- next:
+  1. Continue visual matching against `src-img/方案效果总览.png`: add a sky/callout strip above the House and reduce the remaining standalone header feel.
+  2. Replace the SVG/CSS hybrid House with a higher fidelity full-scene cutaway asset only after confirming the current structure is accepted.
+  3. Tune individual rooms so status boards look embedded in the room art, not like generic cards.
+- risks:
+  - The page structure is now much closer to the prototype, but the visual palette remains the previously requested bright warm workshop style rather than the darker original prototype palette.
+  - Some lower-panel content is clipped intentionally to avoid being hidden behind the fixed bottom nav; later passes can add internal scrolling if needed.
+- verification:
+  - `npm run smoke:pixel-workshop-skin` passed.
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Browser screenshot/probe updated at `/tmp/vistral-screens/pixel-lab-house-frame-pass.png`.
+
+## 2026-04-30 09:24 Asia/Shanghai
+
+- date_time: 2026-04-30 09:24 Asia/Shanghai
+- context: Continued Pixel Lab prototype alignment after user clarified that `/workspace/pixel-lab` should be assembled from `public/assets/vistral-workshop/generated/sliced-clean/`, not mainly CSS approximations or old `generated/sliced` assets.
+- done: Updated `PLANS.md` with the sliced-clean asset composition slice. Switched `src/features/pixelWorkshopAssets.ts` to `generated/sliced-clean` and added building, room, character, furniture, and UI asset exports. Updated `GameWorkshopRoom` to layer room modules, furniture, persona sprites, active room frame, lamps, and task-specific props. Updated `PixelLabPage` to layer generated building assets around the central House. Rewrote `scripts/smoke-pixel-workshop-skin.sh` so the Pixel Lab primary composition requires sliced-clean assets and rejects old `generated/sliced/` references. Tuned CSS for generated building/room/character layers and root background coverage.
+- next: Continue visual calibration against `src-img/方案效果总览.png`: tune exact room proportions, reduce text overlay collision inside rooms, improve right/left rail density, and decide whether to generate cleaner stretchable HUD panel assets if side panels should also become image-backed.
+- risks: The current clean UI panel slices are not suitable as stretch backgrounds; a trial caused visible vertical/magenta artifacts, so they were not used for side cards. Headless Chrome screenshots may require manual process cleanup because Chrome updater/background helpers can keep running beyond screenshot completion.
+- verification: `npm run smoke:pixel-workshop-skin`; `npm run typecheck`; `npm run lint`; `npm run build`; visual screenshot captured at `/tmp/vistral-pixel-lab-loaded.png` and `/tmp/vistral-pixel-lab-clean-assets.png` during calibration.
+
+## 2026-04-30 09:58 Asia/Shanghai
+
+- date_time: 2026-04-30 09:58 Asia/Shanghai
+- context: Continued `/workspace/pixel-lab` visual calibration using `sliced-clean` assets after the first clean-asset composition pass.
+- done: Reduced room-internal text clutter by hiding central House room summaries, enlarged room scene areas, enlarged room-module sprites, and moved room meter/status into a lighter bottom HUD strip. Added bottom workbench spacing so the fixed game nav does not visually eat as much of the lower panels. Kept warm deep-green bottom navigation and preserved all room focus/drawer/navigation interactions. Tried multiple approaches for the headless screenshot bottom white strip; reverted the one that pushed bottom navigation out of view.
+- next: Continue prototype parity by fine-tuning exact House and rail proportions against `src-img/方案效果总览.png`, then decide whether to generate new stretch-safe HUD/card assets instead of using the current `ui-elements` slices as backgrounds. Also manually check in a normal browser because headless Chrome screenshots keep showing a bottom white band that may be capture/viewport-specific.
+- risks: Current `ui-elements/sidebar-card` and related clean slices are not stretch-safe and produced visible artifacts when used as side-card backgrounds. Headless Chrome screenshot capture often times out after writing the file because Google updater/helper processes continue running.
+- verification: `npm run smoke:pixel-workshop-skin`; `npm run typecheck`; `npm run lint`; `npm run build`; screenshots captured at `/tmp/vistral-pixel-lab-room-readability.png`, `/tmp/vistral-pixel-lab-no-white-strip.png`, and `/tmp/vistral-pixel-lab-final-check.png` during calibration.
+
+## 2026-04-30 10:38 Asia/Shanghai
+
+- date_time: 2026-04-30 10:38 Asia/Shanghai
+- context: Continued Pixel Lab visual parity work after the clean-asset composition pass; focus shifted to HUD/readability polish while preserving existing interactions.
+- done: Added `vh` fallback sizing to the pixel route shell for safer viewport coverage. Improved side and bottom HUD panels with CSS-based pixel corner lines, warm wood title plates, subtle rail highlights, and active room list glow instead of stretching unsuitable PNG UI slices. Kept central room summary hidden in the House to keep generated room assets readable.
+- next: Continue exact prototype alignment by measuring against `src-img/方案效果总览.png`: tune left/right rail widths, assistant dock height, bottom workbench crop, and central House vertical position. If full parity requires image-backed side panels, generate new stretch-safe HUD/card assets instead of reusing current sliced-clean UI elements.
+- risks: Headless Chrome screenshots still include a bottom white capture band even after CSS background fallback attempts; normal browser verification is needed before spending more time on that artifact. The current UI element PNG slices are still not safe as resizable panel backgrounds.
+- verification: `npm run smoke:pixel-workshop-skin`; `npm run typecheck`; `npm run lint`; `npm run build`; screenshot captured at `/tmp/vistral-pixel-lab-hud-panels.png`.
+
+## 2026-04-30 10:45 Asia/Shanghai
+
+- date_time: 2026-04-30 10:45 Asia/Shanghai
+- context: New task interrupts Pixel Lab visual parity work. User now wants a real workflow where selecting an annotated local asset folder such as `/Users/zhangyuanyi/Downloads/梯级缺陷2020.07.15` lets LLM organize dataset split, start model training, run inference validation, output model artifacts and validation metrics, and reserve 5 images for manual validation.
+- done: Previous Pixel Lab pass wired `sliced-clean` assets into the central House, improved room readability, added CSS HUD panel polish, and validated smoke/typecheck/lint/build.
+- next: Resume Pixel Lab by tuning exact prototype proportions, side rail widths, assistant height, bottom workbench crop, and potentially generating stretch-safe HUD/card assets.
+- risks: Pixel Lab headless screenshots still show a bottom white capture band that may be headless-specific. Existing `ui-elements` clean PNGs are not stretch-safe as side-card backgrounds.
+- verification: Pixel work last passed `npm run smoke:pixel-workshop-skin`, `npm run typecheck`, `npm run lint`, and `npm run build`; latest screenshot path `/tmp/vistral-pixel-lab-hud-panels.png`.
+
+## 2026-05-05 17:54 Asia/Shanghai
+
+- date_time: 2026-05-05 17:54:41 CST
+- context: User interrupted the Pixel Lab continuation slice and redirected the work to abandon the old frontend surfaces and design/implement a new frontend system, with documentation first.
+- done:
+  - Added a Pixel Lab `Agent 下一步` panel that derives current room objective, evidence badges, canonical primary action, and OpenClaw chat handoff from the existing game workshop snapshot.
+  - Added a compact top `ProgressStepper` for the nine-room agent training flow and wired it into `/workspace/pixel-lab`.
+  - Extended `scripts/smoke-pixel-workshop-skin.sh` to guard the Agent panel, OpenClaw handoff, shared `ProgressStepper`, and top stepper skin hooks.
+  - Ran `npm run typecheck`, `npm run lint`, and `npm run smoke:pixel-workshop-skin`; all passed before interruption.
+- next:
+  1. For the new frontend reset, update the product/design contracts first before broad implementation.
+  2. Decide the first rebuild slice and keep it shared-shell-first so old page-specific UI does not keep leaking into the new interface.
+  3. If resuming Pixel Lab later, finish the interrupted browser layout probe for the new top stepper.
+- risks:
+  - The browser layout verification command for the top stepper was interrupted before completion, so visual overlap/no-overflow evidence for that specific addition is not recorded yet.
+  - The worktree contains many unrelated dirty and untracked files from prior slices; avoid reverting them unless explicitly requested.
+  - `.codex/config.toml` is currently deleted in the worktree, so the AGENTS-required config read is unavailable until restored.
+- verification:
+  - `npm run typecheck` passed.
+  - `npm run lint` passed.
+  - `npm run smoke:pixel-workshop-skin` passed.
+  - Browser verification for the top stepper was started but aborted by the user before completion.
+
+## 2026-05-08 16:13 Asia/Shanghai
+
+- date_time: 2026-05-08 16:13:34 CST
+- context: New presentation-generation task interrupts the ongoing model-training agent delivery work. User asked to turn a ransomware incident narrative into a PPT with optional desktop/screenshot-style imagery.
+- done:
+  - Before interruption, the training-agent lane had a running local demo and verified real YOLO delivery smoke path: natural-language goal orchestration -> confirmation -> real training -> standard-evidence model version registration -> feedback-mining next step.
+  - This PPT slice generated `deliverables/ransomware-incident-response-brief.pptx` as a 10-slide incident briefing deck with editable timelines, isolation workflow, impact matrix, forensic chain, evidence-confidence matrix, recovery strategy, reporting map, and remediation roadmap.
+- next:
+  1. Resume training-agent core work with durable background continuation after long training jobs complete, so delivery does not depend on a bounded foreground wait.
+  2. Add separate real-delivery smoke scripts beyond YOLO detection for OCR/classification/segmentation/OBB as runtime support allows.
+  3. Add browser verification for Agent Training Studio and runtime readiness surfaces.
+- risks:
+  - `.codex/config.toml` remains absent in this worktree, so the AGENTS-required config read is still unavailable.
+  - The PPT uses only the user-provided narrative; exact server IDs, patch name/version/hash, and vendor confirmation are not invented.
+  - Layout quality check has no errors but still reports several non-blocking bottom-padding warnings on small node boxes.
+- verification:
+  - PPT export succeeded to `deliverables/ransomware-incident-response-brief.pptx`.
+  - Artifact build generated 10 slide previews and a contact sheet.
+  - `check_layout_quality.mjs --warn-only` reported 0 errors and 8 warnings.
+  - `unzip -l deliverables/ransomware-incident-response-brief.pptx` confirmed a non-empty 10-slide PPTX package.

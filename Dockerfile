@@ -8,6 +8,7 @@ COPY package*.json ./
 RUN npm ci
 
 COPY index.html ./
+COPY public ./public
 COPY src ./src
 COPY shared ./shared
 COPY tsconfig*.json ./

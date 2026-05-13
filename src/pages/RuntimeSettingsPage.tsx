@@ -431,6 +431,7 @@ export default function RuntimeSettingsPage() {
   const [runtimeSettingsSaving, setRuntimeSettingsSaving] = useState(false);
   const [runtimeSettingsClearing, setRuntimeSettingsClearing] = useState(false);
   const [runtimeSettingsAutoConfiguring, setRuntimeSettingsAutoConfiguring] = useState(false);
+  const [runtimeSettingsPreparingReal, setRuntimeSettingsPreparingReal] = useState(false);
   const [runtimeSettingsAutoBootstrapAttempted, setRuntimeSettingsAutoBootstrapAttempted] =
     useState(false);
   const [runtimeSettingsError, setRuntimeSettingsError] = useState('');
@@ -473,6 +474,9 @@ export default function RuntimeSettingsPage() {
   const launchTaskType = (searchParams.get('task_type') ?? '').trim();
   const launchExecutionTarget = (searchParams.get('execution_target') ?? '').trim();
   const launchWorkerId = (searchParams.get('worker') ?? '').trim();
+  const agentAction = (searchParams.get('agent_action') ?? '').trim();
+  const agentVisionTaskId = (searchParams.get('vision_task') ?? '').trim();
+  const isAgentRuntimeHandoff = agentAction === 'fix_runtime' || Boolean(agentVisionTaskId);
   const requestedReturnTo = sanitizeReturnToPath(searchParams.get('return_to'));
   const hasTrainingLaunchContext = Boolean(
     launchDatasetId ||
@@ -1311,6 +1315,30 @@ export default function RuntimeSettingsPage() {
     }
   };
 
+  const prepareRealTrainingRuntimeSettings = async () => {
+    setRuntimeSettingsPreparingReal(true);
+    setRuntimeSettingsError('');
+    setRuntimeSettingsMessage('');
+    try {
+      const prepared = await api.prepareRealTrainingRuntimeSettings(false);
+      applyRuntimeSettingsView(prepared.settings);
+      setRuntimeReadiness(prepared.readiness);
+      setRuntimeReadinessError('');
+      setRuntimeSettingsMessage(
+        prepared.changed_fields.length > 0
+          ? t('Prepared real training runtime settings ({count} changes).', {
+              count: prepared.changed_fields.length
+            })
+          : t('Real training runtime settings already matched the safe baseline.')
+      );
+      void refresh();
+    } catch (runtimePrepareError) {
+      setRuntimeSettingsError((runtimePrepareError as Error).message);
+    } finally {
+      setRuntimeSettingsPreparingReal(false);
+    }
+  };
+
   // Run one-time bootstrap pulls for runtime configuration and readiness.
   useEffect(() => {
     void refresh();
@@ -1372,6 +1400,14 @@ export default function RuntimeSettingsPage() {
     runtimeReadiness?.issues.filter((item) => item.level === 'error').length ?? 0;
   const runtimeReadinessWarningCount =
     runtimeReadiness?.issues.filter((item) => item.level === 'warning').length ?? 0;
+  const runtimeAgentDelivery = runtimeReadiness?.agent_delivery ?? null;
+  const runtimeRealTrainingDoctor = runtimeReadiness?.real_training_doctor ?? null;
+  const runtimeAgentDeliveryBadgeTone =
+    runtimeAgentDelivery?.status === 'ready'
+      ? 'success'
+      : runtimeAgentDelivery?.status === 'needs_review'
+        ? 'warning'
+        : 'danger';
   const runtimeReadinessBadgeTone =
     runtimeReadiness?.status === 'ready'
       ? 'success'
@@ -1384,6 +1420,18 @@ export default function RuntimeSettingsPage() {
     }
 
     const uniqueCommands = new Set<string>();
+    for (const command of runtimeReadiness.agent_delivery.commands) {
+      const trimmed = command.trim();
+      if (trimmed) {
+        uniqueCommands.add(trimmed);
+      }
+    }
+    for (const command of runtimeReadiness.real_training_doctor.commands) {
+      const trimmed = command.trim();
+      if (trimmed) {
+        uniqueCommands.add(trimmed);
+      }
+    }
     for (const issue of runtimeReadiness.issues) {
       const command = issue.remediation_command?.trim();
       if (command) {
@@ -1442,10 +1490,23 @@ export default function RuntimeSettingsPage() {
 
     const lines: string[] = [
       `${t('Runtime readiness')} (${runtimeReadiness.status})`,
+      `${t('Agent delivery')}: ${runtimeReadiness.agent_delivery.status}`,
+      `${t('Agent delivery summary')}: ${runtimeReadiness.agent_delivery.summary}`,
+      `${t('Real training doctor')}: ${runtimeReadiness.real_training_doctor.status}`,
       `${t('checked at')}: ${runtimeReadiness.checked_at}`,
       `${t('Configured Python executable')}: ${runtimeReadiness.python_bin_requested || t('platform default')}`,
       `${t('Detected Python executable')}: ${runtimeReadiness.python_bin_resolved || t('unavailable')}`,
       `${t('Issues')}: ${runtimeReadinessIssueCount} (${t('error')} ${runtimeReadinessErrorCount} / ${t('warning')} ${runtimeReadinessWarningCount})`,
+      '',
+      `${t('Agent delivery blockers')}:`,
+      ...(runtimeReadiness.agent_delivery.blockers.length > 0
+        ? runtimeReadiness.agent_delivery.blockers.map((blocker) => `- ${blocker}`)
+        : [`- ${t('No agent delivery blockers detected.')}`]),
+      '',
+      `${t('Real training doctor issues')}:`,
+      ...(runtimeReadiness.real_training_doctor.issues.length > 0
+        ? runtimeReadiness.real_training_doctor.issues.map((issue) => `- ${issue}`)
+        : [`- ${t('No real training doctor issues detected.')}`]),
       '',
       `${t('Issue details')}:`
     ];
@@ -2343,6 +2404,151 @@ export default function RuntimeSettingsPage() {
                       </div>
                     </div>
                   </SectionCard>
+                  {runtimeAgentDelivery ? (
+                    <SectionCard
+                      title={t('Agent delivery readiness')}
+                      description={
+                        isAgentRuntimeHandoff
+                          ? t('The training agent stopped here because a publishable model needs real evidence.')
+                          : t('Checks whether the training agent can continue toward a registerable model artifact.')
+                      }
+                      actions={
+                        <div className="row gap wrap align-center">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => void prepareRealTrainingRuntimeSettings()}
+                            disabled={
+                              runtimeSettingsLoading ||
+                              runtimeSettingsSaving ||
+                              runtimeSettingsClearing ||
+                              runtimeSettingsAutoConfiguring ||
+                              runtimeSettingsPreparingReal
+                            }
+                          >
+                            {runtimeSettingsPreparingReal
+                              ? t('Preparing...')
+                              : t('Prepare real runtime')}
+                          </Button>
+                          {runtimeAgentDelivery.commands.length > 0 ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() =>
+                                void copyText(
+                                  t('Agent delivery commands'),
+                                  runtimeAgentDelivery.commands.join('\n')
+                                )
+                              }
+                            >
+                              {t('Copy agent commands')}
+                            </Button>
+                          ) : null}
+                        </div>
+                      }
+                    >
+                      <div className="stack tight">
+                        <div className="row gap wrap align-center">
+                          <Badge tone={runtimeAgentDeliveryBadgeTone}>
+                            {runtimeAgentDelivery.status === 'ready'
+                              ? t('Ready')
+                              : runtimeAgentDelivery.status === 'needs_review'
+                                ? t('Needs review')
+                                : t('Blocked')}
+                          </Badge>
+                          <Badge tone="neutral">
+                            {t('Policy')}: {runtimeAgentDelivery.evidence_policy}
+                          </Badge>
+                          <Badge tone="neutral">
+                            {t('Next')}: {runtimeAgentDelivery.recommended_action}
+                          </Badge>
+                        </div>
+                        <small className="muted">{t(runtimeAgentDelivery.summary)}</small>
+                        {runtimeAgentDelivery.blockers.length > 0 ? (
+                          <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
+                            {runtimeAgentDelivery.blockers.map((blocker) => (
+                              <li key={blocker} className="muted">
+                                {t(blocker)}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <small className="muted">{t('No agent delivery blockers detected.')}</small>
+                        )}
+                        {runtimeAgentDelivery.commands.length > 0 ? (
+                          <div className="row gap wrap">
+                            {runtimeAgentDelivery.commands.slice(0, 3).map((command) => (
+                              <code key={command}>{command}</code>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </SectionCard>
+                  ) : null}
+                  {runtimeRealTrainingDoctor ? (
+                    <SectionCard
+                      title={t('Real training doctor')}
+                      description={t('Structured checks for local training dependencies and model assets.')}
+                      actions={
+                        runtimeRealTrainingDoctor.commands.length > 0 ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              void copyText(
+                                t('Real training doctor commands'),
+                                runtimeRealTrainingDoctor.commands.join('\n')
+                              )
+                            }
+                          >
+                            {t('Copy doctor commands')}
+                          </Button>
+                        ) : undefined
+                      }
+                    >
+                      <div className="stack tight">
+                        <div className="row gap wrap align-center">
+                          <Badge
+                            tone={runtimeRealTrainingDoctor.status === 'ready' ? 'success' : 'danger'}
+                          >
+                            {runtimeRealTrainingDoctor.status === 'ready'
+                              ? t('Ready')
+                              : t('Not ready')}
+                          </Badge>
+                          <Badge
+                            tone={
+                              runtimeRealTrainingDoctor.issues.length > 0 ? 'warning' : 'success'
+                            }
+                          >
+                            {t('Issues')}: {runtimeRealTrainingDoctor.issues.length}
+                          </Badge>
+                        </div>
+                        {runtimeRealTrainingDoctor.issues.length > 0 ? (
+                          <ul className="stack tight" style={{ margin: 0, paddingLeft: '1rem' }}>
+                            {runtimeRealTrainingDoctor.issues.map((issue) => (
+                              <li key={issue} className="muted">
+                                {issue}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <small className="muted">
+                            {t('No real training doctor issues detected.')}
+                          </small>
+                        )}
+                        {runtimeRealTrainingDoctor.notes.length > 0 ? (
+                          <div className="row gap wrap">
+                            {runtimeRealTrainingDoctor.notes.slice(0, 4).map((note) => (
+                              <code key={note}>{note}</code>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </SectionCard>
+                  ) : null}
                   {runtimeReadinessFixCommands.length > 0 || runtimeReadiness.issues.length > 0 ? (
                     <details className="workspace-details">
                       <summary>{t('Diagnostics and fix commands')}</summary>

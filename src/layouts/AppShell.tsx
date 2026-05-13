@@ -19,6 +19,7 @@ import type {
 import Sidebar from '../components/layout/Sidebar';
 import SessionMenu from '../components/SessionMenu';
 import { ButtonLink } from '../components/ui/Button';
+import { createPixelRoomStyle, resolvePixelRoomContext } from '../components/ui/pixelRoomContextModel';
 import useCompactViewport from '../hooks/useCompactViewport';
 import { useI18n } from '../i18n/I18nProvider';
 import {
@@ -35,6 +36,11 @@ interface AppNavItem {
   shortLabel: string;
   matchPrefixes: string[];
   end?: boolean;
+}
+
+interface AppGameNavItem extends AppNavItem {
+  icon: string;
+  room: string;
 }
 
 type AppNavGroupKey = 'workspaces' | 'model_build' | 'data_run' | 'governance' | 'settings';
@@ -221,6 +227,8 @@ interface WorkbenchChatDockProps {
   currentUser: User | null;
   loginPath: string;
   openWorkspacePath: string;
+  roomLabel: ReactNode;
+  roomDescription: ReactNode;
   pageContextPrompt: string;
   onToggleCollapsed: () => void;
   t: (key: string, replacements?: Record<string, string | number>) => string;
@@ -231,6 +239,8 @@ function WorkbenchChatDock({
   currentUser,
   loginPath,
   openWorkspacePath,
+  roomLabel,
+  roomDescription,
   pageContextPrompt,
   onToggleCollapsed,
   t
@@ -955,13 +965,13 @@ function WorkbenchChatDock({
   );
 
   return (
-    <aside className={`app-chat-dock${collapsed ? ' collapsed' : ''}`} aria-label={t('Conversation Workspace')}>
+    <aside className={`app-chat-dock${collapsed ? ' collapsed' : ''}`} aria-label="OpenClaw 工坊助手">
       <header className="app-chat-dock-header">
-        <strong>{collapsed ? 'AI' : t('Conversation Workspace')}</strong>
+        <strong>{collapsed ? '🦀' : 'OpenClaw 工坊助手'}</strong>
         <div className="app-chat-dock-header-actions">
           {!collapsed ? (
             <ButtonLink to={openWorkspacePath} variant="ghost" size="sm" className="app-chat-dock-link">
-              {t('Open Conversation Workspace')}
+              打开对话室
             </ButtonLink>
           ) : null}
           <button
@@ -979,7 +989,7 @@ function WorkbenchChatDock({
       {collapsed ? (
         <div className="app-chat-dock-collapsed-body">
           <ButtonLink to={openWorkspacePath} variant="ghost" size="icon" className="app-chat-dock-collapsed-link">
-            AI
+            🦀
           </ButtonLink>
         </div>
       ) : authRequired ? (
@@ -1000,6 +1010,11 @@ function WorkbenchChatDock({
       ) : (
         <div className="app-chat-dock-body">
           <div className="app-chat-dock-controls">
+            <section className="app-chat-dock-room-context" aria-label="当前工坊房间">
+              <small>当前房间</small>
+              <strong>{roomLabel}</strong>
+              <span>{roomDescription}</span>
+            </section>
             <label className="app-chat-dock-model-select">
               <small className="muted">{t('Model Name')}</small>
               <select
@@ -1587,6 +1602,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
       currentPathname: location.pathname
     });
   }, [currentTaskPath, location.pathname]);
+  const currentPixelRoom = useMemo(
+    () => resolvePixelRoomContext(location.pathname),
+    [location.pathname]
+  );
+  const currentPixelRoomStyle = useMemo(
+    () => createPixelRoomStyle(currentPixelRoom),
+    [currentPixelRoom]
+  );
   const modeSwitchPath = useMemo(
     () => (isPixelLabRoute ? scopedNavTo('/workspace/console') : scopedNavTo('/workspace/pixel-lab')),
     [isPixelLabRoute, scopedNavTo]
@@ -1607,17 +1630,50 @@ export default function AppShell({ children }: { children: ReactNode }) {
     </Link>
   );
   const platformTopbar = isAuthRoute ? null : (
-    <header className={`app-platform-topbar${isPixelLabRoute ? ' is-pixel-active' : ''}`}>
+    <header className={`app-platform-topbar${isPixelLabRoute ? ' is-pixel-active' : ''}`} style={currentPixelRoomStyle}>
       <Link to={scopedNavTo('/workspace/console')} className="app-platform-brand">
         <span className="app-platform-brand__mark" aria-hidden="true">
-          V
+          🦀
         </span>
         <span className="app-platform-brand__copy">
-          <strong>{t('Vistral Platform')}</strong>
-          <small>{isPixelLabRoute ? t('Pixel Lab') : t('AI-native workspace')}</small>
+          <strong>Vistral 模型训练工坊</strong>
+          <small>{isPixelLabRoute ? t('Pixel Lab') : t('Vistral Platform')}</small>
         </span>
       </Link>
-      {modeSwitch}
+      <div className="app-game-room-badge" aria-label="Current pixel workshop room">
+        <span className="app-game-room-badge__avatar" aria-hidden="true" />
+        <span className="app-game-room-badge__copy">
+          <small>当前房间</small>
+          <strong>{currentPixelRoom.label}</strong>
+        </span>
+      </div>
+      <div className="app-game-hud-status" aria-label={t('Current context')}>
+        <span className="app-game-hud-chip">
+          <span aria-hidden="true">●</span>
+          服务：正常
+        </span>
+        <span className="app-game-hud-chip">v0.1.0</span>
+      </div>
+      <div className="app-game-hud-actions">
+        {modeSwitch}
+        {currentUser ? (
+          <SessionMenu
+            currentUser={currentUser}
+            items={sessionMenuItems}
+            align="end"
+            direction="down"
+            variant="pill"
+            languageControl={{
+              value: language,
+              onChange: (nextLanguage) => setLanguage(nextLanguage)
+            }}
+          />
+        ) : (
+          <ButtonLink to={loginPath} variant="ghost" size="sm" className="app-game-login-link">
+            {t('Login')}
+          </ButtonLink>
+        )}
+      </div>
     </header>
   );
 
@@ -1813,6 +1869,103 @@ export default function AppShell({ children }: { children: ReactNode }) {
     [scopedNavTo, t]
   );
 
+  const gameNavItems = useMemo<AppGameNavItem[]>(
+    () => [
+      {
+        to: scopedNavTo('/workspace/console'),
+        label: '总览',
+        shortLabel: '总',
+        icon: '🏠',
+        room: '指挥室',
+        matchPrefixes: ['/workspace/console', '/workspace/chat', '/vision/tasks']
+      },
+      {
+        to: scopedNavTo('/models/explore'),
+        label: '模型',
+        shortLabel: '模',
+        icon: '🐱',
+        room: '模型角色',
+        matchPrefixes: ['/models/explore', '/models/my-models', '/models/create']
+      },
+      {
+        to: scopedNavTo('/datasets'),
+        label: '数据集',
+        shortLabel: '数',
+        icon: '🗃️',
+        room: '仓库',
+        matchPrefixes: ['/datasets']
+      },
+      {
+        to: scopedNavTo('/training/jobs'),
+        label: '训练',
+        shortLabel: '训',
+        icon: '🏋️',
+        room: '训练室',
+        matchPrefixes: ['/training/jobs', '/training-workshop', '/workflow/closure']
+      },
+      {
+        to: scopedNavTo('/inference/validate'),
+        label: '考试',
+        shortLabel: '考',
+        icon: '🔎',
+        room: '验证室',
+        matchPrefixes: ['/inference']
+      },
+      {
+        to: scopedNavTo('/models/versions'),
+        label: '发布',
+        shortLabel: '发',
+        icon: '🎓',
+        room: '毕业室',
+        matchPrefixes: ['/models/versions', '/admin/models/pending']
+      },
+      {
+        to: scopedNavTo('/settings/runtime'),
+        label: '运行',
+        shortLabel: '运',
+        icon: '🖥️',
+        room: '运行室',
+        matchPrefixes: ['/settings/runtime', '/settings/workers']
+      },
+      {
+        to: scopedNavTo('/admin/audit'),
+        label: '修复区',
+        shortLabel: '修',
+        icon: '🔧',
+        room: '回流',
+        matchPrefixes: ['/admin/audit', '/admin/verification-reports']
+      },
+      {
+        to: scopedNavTo('/settings/account'),
+        label: '设置',
+        shortLabel: '设',
+        icon: '⚙️',
+        room: '系统',
+        matchPrefixes: ['/settings/account', '/settings/llm']
+      }
+    ],
+    [scopedNavTo]
+  );
+  const gameBottomNav = (
+    <nav className="app-game-bottom-nav" aria-label="Pixel workshop room navigation">
+      {gameNavItems.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          className={matchesRailItem(location.pathname, item) ? 'app-game-nav-item active' : 'app-game-nav-item'}
+          aria-label={`${item.label} - ${item.room}`}
+        >
+          <span className="app-game-nav-item__icon" aria-hidden="true">
+            {item.icon}
+          </span>
+          <span className="app-game-nav-item__label">{item.label}</span>
+          <small>{item.room}</small>
+        </NavLink>
+      ))}
+    </nav>
+  );
+
   const toggleNavGroup = useCallback((groupKey: AppNavGroupKey) => {
     setCollapsedNavGroups((previous) =>
       previous.includes(groupKey)
@@ -1822,9 +1975,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
-  const showWorkbenchChatDock = false;
+  const showWorkbenchChatDock = Boolean(currentUser) && !isCompactViewport && !isAnnotationFocusRoute;
   const shellClassName = [
     'app-shell',
+    'app-shell--pixel-game',
     isDesktopSidebarCollapsed ? 'sidebar-collapsed' : '',
     isCompactViewport ? 'sidebar-compact' : '',
     mobileSidebarOpen ? 'mobile-sidebar-open' : ''
@@ -1840,11 +1994,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
       : t('Collapse sidebar');
   const sidebarToggleToken = isCompactViewport ? (mobileSidebarOpen ? 'X' : '=') : isDesktopSidebarCollapsed ? '>' : '<';
 
+  const isAgentStudioRoute = location.pathname === '/workspace/console';
+
+  if (isAgentStudioRoute) {
+    return (
+      <div className="agent-studio-route-shell">
+        <main className="agent-studio-route-main">{children}</main>
+      </div>
+    );
+  }
+
   if (isImmersiveWorkspace || isPixelLabRoute) {
     return (
-      <div className="app-top-route-shell">
+      <div className={`app-top-route-shell${isImmersiveWorkspace || isPixelLabRoute ? ' app-top-route-shell--pixel-game' : ''}`}>
         {platformTopbar}
         <main className={isPixelLabRoute ? 'pixel-route-main' : 'chat-route-main'}>{children}</main>
+        {isImmersiveWorkspace || isPixelLabRoute ? gameBottomNav : null}
       </div>
     );
   }
@@ -2100,6 +2265,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
               currentUser={currentUser}
               loginPath={loginPath}
               openWorkspacePath={scopedNavTo('/workspace/chat')}
+              roomLabel={currentPixelRoom.label}
+              roomDescription={currentPixelRoom.description}
               pageContextPrompt={dockPageContextPrompt}
               onToggleCollapsed={() => setChatDockCollapsed((previous) => !previous)}
               t={t}
@@ -2107,6 +2274,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           ) : null}
         </div>
       </main>
+      {gameBottomNav}
     </div>
   );
 }

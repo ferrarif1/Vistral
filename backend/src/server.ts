@@ -7,6 +7,9 @@ import type {
   CreateTrainingJobInput,
   EvaluateTrainingReadinessInput,
   InferenceFeedbackInput,
+  LocalFolderFinalizeInput,
+  LocalFolderImportAndTrainInput,
+  LocalFolderScanInput,
   LlmConfig,
   ModelFramework,
   PublicEncryptedModelPackageInput,
@@ -727,6 +730,210 @@ const parseTaskDraftBody = (raw: unknown): ParseResult<{ description: string }> 
   };
 };
 
+const parseManualValidationCount = (value: unknown): number | undefined => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return Number.NaN;
+  }
+  return Math.max(0, Math.min(50, Math.floor(value)));
+};
+
+const parseLocalFolderScanBody = (raw: unknown): ParseResult<LocalFolderScanInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Local folder scan payload must be a JSON object.'
+    };
+  }
+  const folderPath = toNonEmptyString(raw.folder_path);
+  if (!folderPath) {
+    return {
+      ok: false,
+      message: 'folder_path is required.'
+    };
+  }
+  let taskType: LocalFolderScanInput['task_type'];
+  if (raw.task_type !== undefined && raw.task_type !== null) {
+    if (!isTaskType(raw.task_type)) {
+      return {
+        ok: false,
+        message: 'task_type is invalid.'
+      };
+    }
+    taskType = raw.task_type;
+  }
+  let framework: LocalFolderScanInput['framework'];
+  if (raw.framework !== undefined && raw.framework !== null) {
+    if (!isFramework(raw.framework)) {
+      return {
+        ok: false,
+        message: 'framework is invalid.'
+      };
+    }
+    framework = raw.framework;
+  }
+  const manualValidationCount = parseManualValidationCount(raw.manual_validation_count);
+  if (Number.isNaN(manualValidationCount)) {
+    return {
+      ok: false,
+      message: 'manual_validation_count must be a finite number when provided.'
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      folder_path: folderPath,
+      ...(taskType ? { task_type: taskType } : {}),
+      ...(framework ? { framework } : {}),
+      ...(manualValidationCount !== undefined ? { manual_validation_count: manualValidationCount } : {})
+    }
+  };
+};
+
+const parseOptionalRatio = (value: unknown, fieldName: string): ParseResult<number | undefined> => {
+  if (value === undefined || value === null || value === '') {
+    return { ok: true, value: undefined };
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    return {
+      ok: false,
+      message: `${fieldName} must be a number between 0 and 1 when provided.`
+    };
+  }
+  return { ok: true, value };
+};
+
+const parseLocalFolderImportAndTrainBody = (
+  raw: unknown
+): ParseResult<LocalFolderImportAndTrainInput> => {
+  const scan = parseLocalFolderScanBody(raw);
+  if (!scan.ok) {
+    return {
+      ok: false,
+      message: scan.message
+    };
+  }
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Local folder import payload must be a JSON object.'
+    };
+  }
+  const trainRatio = parseOptionalRatio(raw.train_ratio, 'train_ratio');
+  if (!trainRatio.ok) {
+    return {
+      ok: false,
+      message: trainRatio.message
+    };
+  }
+  const valRatio = parseOptionalRatio(raw.val_ratio, 'val_ratio');
+  if (!valRatio.ok) {
+    return {
+      ok: false,
+      message: valRatio.message
+    };
+  }
+  const seed =
+    raw.seed === undefined || raw.seed === null
+      ? undefined
+      : typeof raw.seed === 'number' && Number.isFinite(raw.seed)
+        ? Math.floor(raw.seed)
+        : Number.NaN;
+  if (Number.isNaN(seed)) {
+    return {
+      ok: false,
+      message: 'seed must be a finite number when provided.'
+    };
+  }
+
+  let executionTarget: LocalFolderImportAndTrainInput['execution_target'];
+  if (raw.execution_target !== undefined && raw.execution_target !== null) {
+    const normalized = toOptionalTrimmedString(raw.execution_target)?.toLowerCase() ?? '';
+    if (normalized && normalized !== 'auto') {
+      if (normalized !== 'control_plane' && normalized !== 'worker') {
+        return {
+          ok: false,
+          message: 'execution_target must be auto|control_plane|worker when provided.'
+        };
+      }
+      executionTarget = normalized;
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...scan.value,
+      ...(toOptionalTrimmedString(raw.dataset_id) ? { dataset_id: toOptionalTrimmedString(raw.dataset_id)! } : {}),
+      ...(toOptionalTrimmedString(raw.dataset_name) ? { dataset_name: toOptionalTrimmedString(raw.dataset_name)! } : {}),
+      ...(toOptionalTrimmedString(raw.dataset_description)
+        ? { dataset_description: toOptionalTrimmedString(raw.dataset_description)! }
+        : {}),
+      ...(toOptionalTrimmedString(raw.base_model) ? { base_model: toOptionalTrimmedString(raw.base_model)! } : {}),
+      ...(trainRatio.value !== undefined ? { train_ratio: trainRatio.value } : {}),
+      ...(valRatio.value !== undefined ? { val_ratio: valRatio.value } : {}),
+      ...(seed !== undefined ? { seed } : {}),
+      ...(toOptionalTrimmedString(raw.recipe_id) ? { recipe_id: toOptionalTrimmedString(raw.recipe_id)! } : {}),
+      ...(toOptionalTrimmedString(raw.recipe_version)
+        ? { recipe_version: toOptionalTrimmedString(raw.recipe_version)! }
+        : {}),
+      ...(executionTarget ? { execution_target: executionTarget } : {}),
+      ...(toOptionalTrimmedString(raw.worker_id) ? { worker_id: toOptionalTrimmedString(raw.worker_id)! } : {})
+    }
+  };
+};
+
+const parseLocalFolderFinalizeBody = (
+  trainingJobId: string,
+  raw: unknown
+): ParseResult<LocalFolderFinalizeInput> => {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      message: 'Local folder finalize payload must be a JSON object.'
+    };
+  }
+  const normalizedTrainingJobId = trainingJobId.trim();
+  if (!normalizedTrainingJobId) {
+    return {
+      ok: false,
+      message: 'training_job_id is required.'
+    };
+  }
+  if (raw.run_manual_validation !== undefined && typeof raw.run_manual_validation !== 'boolean') {
+    return {
+      ok: false,
+      message: 'run_manual_validation must be boolean when provided.'
+    };
+  }
+  if (
+    raw.allow_compatibility_registration !== undefined &&
+    typeof raw.allow_compatibility_registration !== 'boolean'
+  ) {
+    return {
+      ok: false,
+      message: 'allow_compatibility_registration must be boolean when provided.'
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      training_job_id: normalizedTrainingJobId,
+      ...(toOptionalTrimmedString(raw.model_id) ? { model_id: toOptionalTrimmedString(raw.model_id)! } : {}),
+      ...(toOptionalTrimmedString(raw.model_name) ? { model_name: toOptionalTrimmedString(raw.model_name)! } : {}),
+      ...(toOptionalTrimmedString(raw.version_name) ? { version_name: toOptionalTrimmedString(raw.version_name)! } : {}),
+      ...(typeof raw.run_manual_validation === 'boolean'
+        ? { run_manual_validation: raw.run_manual_validation }
+        : {}),
+      ...(typeof raw.allow_compatibility_registration === 'boolean'
+        ? { allow_compatibility_registration: raw.allow_compatibility_registration }
+        : {})
+    }
+  };
+};
+
 const parseVisionTaskUnderstandBody = (
   raw: unknown
 ): ParseResult<{
@@ -791,7 +998,14 @@ const parseVisionTaskFeedbackDatasetBody = (
 
 const parseVisionTaskAutoContinueBody = (
   raw: unknown
-): ParseResult<{ max_rounds?: number; force?: boolean }> => {
+): ParseResult<{
+  max_rounds?: number;
+  force?: boolean;
+  deliver_model?: boolean;
+  wait_for_training?: boolean;
+  wait_timeout_ms?: number;
+  wait_poll_ms?: number;
+}> => {
   if (!isPlainObject(raw)) {
     return {
       ok: false,
@@ -812,11 +1026,43 @@ const parseVisionTaskAutoContinueBody = (
       message: 'force must be boolean when provided.'
     };
   }
+  if (raw.deliver_model !== undefined && typeof raw.deliver_model !== 'boolean') {
+    return {
+      ok: false,
+      message: 'deliver_model must be boolean when provided.'
+    };
+  }
+  if (raw.wait_for_training !== undefined && typeof raw.wait_for_training !== 'boolean') {
+    return {
+      ok: false,
+      message: 'wait_for_training must be boolean when provided.'
+    };
+  }
+  if (raw.wait_timeout_ms !== undefined) {
+    if (typeof raw.wait_timeout_ms !== 'number' || !Number.isFinite(raw.wait_timeout_ms)) {
+      return {
+        ok: false,
+        message: 'wait_timeout_ms must be a finite number when provided.'
+      };
+    }
+  }
+  if (raw.wait_poll_ms !== undefined) {
+    if (typeof raw.wait_poll_ms !== 'number' || !Number.isFinite(raw.wait_poll_ms)) {
+      return {
+        ok: false,
+        message: 'wait_poll_ms must be a finite number when provided.'
+      };
+    }
+  }
   return {
     ok: true,
     value: {
       ...(typeof raw.max_rounds === 'number' ? { max_rounds: raw.max_rounds } : {}),
-      ...(typeof raw.force === 'boolean' ? { force: raw.force } : {})
+      ...(typeof raw.force === 'boolean' ? { force: raw.force } : {}),
+      ...(typeof raw.deliver_model === 'boolean' ? { deliver_model: raw.deliver_model } : {}),
+      ...(typeof raw.wait_for_training === 'boolean' ? { wait_for_training: raw.wait_for_training } : {}),
+      ...(typeof raw.wait_timeout_ms === 'number' ? { wait_timeout_ms: raw.wait_timeout_ms } : {}),
+      ...(typeof raw.wait_poll_ms === 'number' ? { wait_poll_ms: raw.wait_poll_ms } : {})
     }
   };
 };
@@ -3277,6 +3523,30 @@ const server = createServer(async (req, res) => {
       return withUserMutation(req, res, () => handlers.createDataset(parsed.value));
     }
 
+    if (path === '/api/datasets/local-folder/scan') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const parsed = parseLocalFolderScanBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUser(req, res, () => handlers.scanLocalAnnotatedFolder(parsed.value));
+    }
+
+    if (path === '/api/datasets/local-folder/import-and-train') {
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const parsed = parseLocalFolderImportAndTrainBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () =>
+        handlers.importLocalFolderAndCreateTrainingJob(parsed.value)
+      );
+    }
+
     const datasetDetailMatch = path.match(/^\/api\/datasets\/([^/]+)$/);
     if (datasetDetailMatch) {
       const datasetId = decodeURIComponent(datasetDetailMatch[1]);
@@ -3942,6 +4212,19 @@ const server = createServer(async (req, res) => {
       return withUserMutation(req, res, () => handlers.retryTrainingJob(jobId, parsed.value));
     }
 
+    const localFolderFinalizeMatch = path.match(/^\/api\/training\/jobs\/([^/]+)\/local-folder-finalize$/);
+    if (localFolderFinalizeMatch) {
+      const jobId = decodeURIComponent(localFolderFinalizeMatch[1]);
+      if (req.method !== 'POST') {
+        return methodNotAllowed(res);
+      }
+      const parsed = parseLocalFolderFinalizeBody(jobId, await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () => handlers.finalizeLocalFolderTrainingJob(parsed.value));
+    }
+
     if (path === '/api/model-versions' && req.method === 'GET') {
       return withUser(req, res, () => handlers.listModelVersions());
     }
@@ -4279,6 +4562,16 @@ const server = createServer(async (req, res) => {
         return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
       }
       return withUserMutation(req, res, () => handlers.autoConfigureRuntimeSettings(parsed.value));
+    }
+
+    if (path === '/api/settings/runtime/prepare-real-training' && req.method === 'POST') {
+      const parsed = parseAutoConfigureRuntimeSettingsBody(await readBody(req));
+      if (!parsed.ok) {
+        return sendJson(res, 400, errorJson(parsed.message, 'VALIDATION_ERROR'));
+      }
+      return withUserMutation(req, res, () =>
+        handlers.prepareRealTrainingRuntimeSettings(parsed.value)
+      );
     }
 
     if (path === '/api/settings/runtime/generate-api-key' && req.method === 'POST') {

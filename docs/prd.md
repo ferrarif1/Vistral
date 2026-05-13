@@ -63,6 +63,7 @@ Vistral must provide one closed-loop platform where engineers can:
 - attachment-driven message flow
 - for operational requests (for example dataset creation, model draft creation, training job creation), the conversation layer can call backend APIs and return real execution results
 - when BYO LLM is enabled, the conversation layer should first infer the user's actual operational goal, choose the least-user-operation execution lane, and may chain multiple backend actions in one guided turn (for example understand a `VisionTask` first, then auto-advance the next safe step)
+- without BYO LLM planning, explicit automated / closed-loop / delivery-oriented training requests should still route through the structured `VisionTask` orchestration lane instead of falling back to a job-first form
 - when required fields are missing, assistant must explicitly ask for the missing inputs instead of silently guessing critical parameters
 - assistant execution results should stay readable in the timeline as compact action cards with status, missing inputs, and created-entity summary
 - conversation actions may create or update a `VisionTask` so users can continue the same requirement from a dedicated detail page instead of repeating the prompt
@@ -105,11 +106,23 @@ Vistral must provide one closed-loop platform where engineers can:
 ### FR-005B Pixel Lab View
 - the product may provide a separate playful visualization mode for the same engineering loop, reachable from a persistent top platform switch in the shared page header.
 - the Pixel Lab view must be a real workflow mirror, not a decorative landing page:
-  - dataset room reflects real dataset readiness and task types
-  - model character room reflects available base/foundation models and model versions
-  - training room reflects active queued/preparing/running/evaluating jobs
-  - exam room reflects inference validation readiness and recent inference runs
-  - delivery room reflects registered model versions and promotion/evidence state
+  - the main experience should render a bright daytime "model training house" with nine central workflow rooms:
+    - reception / conversation command room
+    - dataset warehouse
+    - data processing / cleaning + annotation room
+    - feature engineering / recipe room
+    - training room
+    - inference validation / exam room
+    - model graduation / publish room
+    - deployment service / runtime monitoring room
+    - bug / feedback repair room
+  - reception / conversation command and bug / feedback repair are first-class rooms in the central house; side rails, timeline/notification entries, assistant suggestions, and canonical links remain supporting surfaces.
+  - visual mood should follow the supplied bright pixel workshop reference: blue-sky daytime background, warm wood beams, red roof, light beige walls, clear room boundaries, and readable interior controls; avoid dark blue-black cyber/night monitoring-room styling.
+  - each room must reflect real API-backed state and keep one canonical follow-up path into the existing professional workflow page
+  - a persistent OpenClaw assistant should stay available inside the view, understand the currently focused room context, and surface recent assistant/task interactions plus next-step actions
+  - the left rail should show current project, current stage, active model, today tasks, and work notes
+  - the right rail should show tasks/notifications, project statistics, and focused metric information
+  - the lower workbench strip should summarize model squad status and the end-to-end training flow derived from real product records
 - the view should preserve explicit operator action boundaries. It may deep-link to training, annotation, model-version, and inference pages, but must not perform high-risk mutations silently.
 - when inference validation is the current phase, the view should let users choose or accept an auto-selected dataset/model-version pair and jump into the validation lane as a visible "exam" action.
 
@@ -124,6 +137,35 @@ Vistral must provide one closed-loop platform where engineers can:
 - the workshop may run fully on mock state for presentation, but must expose an adapter that maps real Vistral training task statuses into the same stage model.
 - `human_review_required` remains a governance boundary: demo playback may pause there, but publish requires an explicit operator action.
 - when assets are absent, the page may use local CSS fallback visuals; production asset replacement must stay centralized under `public/assets/vistral-workshop/`.
+
+### FR-005D Pixel Workshop Visual System
+- the shared authenticated workspace may adopt the Pixel Workshop visual system across professional pages, not only `/workspace/pixel-lab`.
+- this is a presentation layer over the existing product routes. It must not fork page responsibilities, data ownership, state machines, or API contracts.
+- the product-level interaction blueprint should use the supplied `src-img/方案效果总览.png` console prototype for structure:
+  - a game HUD top bar for brand, service status, version, mode switch, settings/help, and session controls.
+  - a central model-training-house room map for the core workflow.
+  - a persistent right-side OpenClaw assistant/chat dock that can use the current route and focused room context.
+  - lower operational panels for model roles, timeline/events, resource health, and work notes.
+  - a bottom pixel room navigation bar as the primary cross-route movement model.
+- the final visual mood should continue to follow `src-img/新工作台.png`: bright daytime sky, red roof, warm wood, light beige walls, readable pixel panels, and friendly training-workshop energy. The darker console prototype is structural guidance only, not the color/lighting target.
+- the central house follows the nine-room product desktop structure from the overview reference while using the newer bright daytime material palette.
+- shared page primitives should carry the visual language first:
+  - the authenticated AppShell uses a pixel-game HUD and bottom room navigation instead of duplicating the room map in a traditional left sidebar.
+  - `WorkspacePage` chooses route-aware room context from the centralized workshop asset pack; assets may appear as room cards, headers, characters, or state panels, but must not be used as a full-screen wallpaper substitute for real UI.
+  - `WorkspacePage` also exposes a compact room-context strip with the current room name, purpose, and canonical follow-up links.
+  - `PageHeader`, shared cards, workbench panels, forms, tables, and unified state feedback inherit the same pixel-workshop treatment.
+  - domain-specific pages can add room-specific details, but should avoid page-local decorative systems.
+  - custom-layout routes that do not use `WorkspacePage` (for example the chat workspace and focused training workshop) must still render the same room-context and asset language.
+  - specialist workspaces such as annotation full-screen mode and training cockpit should keep their operational layout, but their headers, panels, action bars, and telemetry cards must remain visually connected to the Pixel Workshop shell.
+- route-to-room visual mapping should stay aligned with the workflow:
+  - datasets and annotation use data warehouse / cleaning-room assets.
+  - training launch, job list, detail, cockpit, and workshop use training-room assets.
+  - inference validation uses exam-room assets.
+  - model versions and governance use graduation / publish-room assets.
+  - runtime, workers, and settings use monitoring-room assets.
+  - conversation and vision-task pages use command-room assets.
+- missing room assets should be generated or added into `public/assets/vistral-workshop/`, with source intent documented. Pages must retain CSS/SVG fallback visuals if a raster asset is absent.
+- all AI-native hard requirements remain unchanged: visible/deletable/status-aware attachments, top steppers for multi-step flows, collapsed expert controls, consistent empty/error/loading/success states, and explicit confirmation for high-risk mutations.
 
 ### FR-006 Dataset Management
 - create/manage datasets
@@ -166,6 +208,10 @@ Vistral must provide one closed-loop platform where engineers can:
 - prediction comparison, low-confidence triage, pre-annotation actions, and extra sample metadata must be secondary surfaces and cannot displace the annotation canvas from first-screen focus
 - review actions should only take primary space when the current sample is actually in `in_review`; otherwise the annotation workspace stays focused on labeling
 
+### FR-009A Agent training orchestration (architecture)
+- the model-training agent is defined as **perception + policy + execution separation**: deterministic refresh of `VisionModelingTask` recommendations, guarded mutations via existing APIs, and conversational explanation without bypassing validation; see `docs/agent-training-orchestration.md`
+- Agent Training Studio (`/workspace/console`) must align its primary CTA with `agent_next_action` when global training blockers do not override, as specified in `docs/flows.md` Flow J §12.2
+
 ### FR-009 Training Jobs
 - create training job
 - the primary training entry should feel agentic: user provides a natural-language goal plus a dataset (or dataset-version scope), and the system infers task type / framework / base model / recommended core params by default
@@ -189,8 +235,8 @@ Vistral must provide one closed-loop platform where engineers can:
 - training launch may also be initiated from a structured `VisionTask`, but the actual submitted job must still persist the explicit dataset + dataset-version snapshot + framework + base model choices
 - base model choices exposed in normal workspace flows must come from a curated foundation catalog suitable for future fine-tuning
 - internal smoke/verification/demo fixtures must not remain visible in the default workspace catalog; when sample records are needed, keep at most 1-2 curated examples
-- the product-wide visual system should follow a Notion-inspired language as documented in `notion/DESIGN.md`: warm neutral surfaces, whisper borders, restrained shadows, compressed headings, and one consistent accent blue across all primary interactions
-- shared layout, chat workspace, workbench pages, and training cockpit should all inherit that same system rather than keeping page-specific visual dialects; cockpit may remain cinematic, but not as an isolated dark sci-fi theme
+- the product-wide visual system may use the Pixel Workshop skin as the shared authenticated workspace language: pixel-house atmosphere, room-backed surfaces, restrained motion, and one consistent blue primary interaction accent
+- shared layout, chat workspace, workbench pages, Pixel Lab, and training cockpit should inherit one coherent workshop system rather than keeping page-specific visual dialects; cockpit may remain cinematic, but not as an isolated dark sci-fi theme
 - configure parameters and submit, but the default path should minimize visible form work and let the system auto-fill a launchable plan whenever possible
 - when Smart Launch includes a natural-language goal (or comes from a structured `VisionTask`), it should create or reuse that `VisionTask` as the durable orchestration anchor so training detail can keep a direct "continue as agent" handoff toward model output
 - support start/cancel/retry lifecycle
@@ -357,6 +403,7 @@ Framework integrations must follow unified trainer interface:
   - if metrics passed, it may register the model version and auto-create the missing model draft when needed
   - if metrics did not pass, it may schedule the next round from the same task context
 - auto-advance is allowed to choose the current best next step, but it must still respect the same training launch and model-registration safety gates as the manual path
+- user-facing `Continue as agent` controls should call delivery mode by default so the agent attempts to produce the model version within bounded waits, instead of stopping after each intermediate mutation
 - whenever runtime state changes, the linked `VisionTask` should refresh one explicit agent recommendation with:
   - recommended action
   - short summary
@@ -389,6 +436,25 @@ Framework integrations must follow unified trainer interface:
 
 Reference planning document:
 - `docs/visual-data-loop-evolution.md`
+
+### FR-018 Frontend Reset: Agent Training Studio
+- the authenticated frontend target is reset to the Agent Training Studio contract in `docs/frontend-reset.md`
+- the Studio replaces the previous target direction of page-specific dashboards, global Pixel Workshop skinning, and Pixel Lab as a competing primary mode
+- the first authenticated screen must be a usable agent workbench, not a landing page
+- the Studio home must show:
+  - one active objective
+  - one current stage in the training loop
+  - top stepper with current step, total steps, and completion hints
+  - one recommended primary next action
+  - evidence tied to real datasets, jobs, model versions, inference runs, runtime, workers, or governance records
+  - OpenClaw/contextual assistant access without hiding the primary workflow
+- all migrated routes must keep the AI-native hard requirements unchanged:
+  - visible/deletable/status-aware attachments
+  - top stepper for multi-step flows
+  - advanced parameters collapsed by default
+  - shared empty/loading/error/success semantics
+  - explicit confirmation for high-risk mutations
+- implementation must keep existing API, data, role, and ownership contracts unless `docs/data-model.md` and `docs/api-contract.md` are updated first
 
 ## 8. Non-Functional Requirements
 

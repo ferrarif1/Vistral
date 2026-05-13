@@ -6,7 +6,9 @@ import type {
   DatasetItemRecord,
   DatasetRecord,
   DatasetVersionRecord,
-  FileAttachment
+  FileAttachment,
+  LocalFolderImportAndTrainResult,
+  LocalFolderScanResult
 } from '../../shared/domain';
 import AdvancedSection from '../components/AdvancedSection';
 import AttachmentUploader from '../components/AttachmentUploader';
@@ -27,6 +29,7 @@ import {
 } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
 import ProgressStepper from '../components/ui/ProgressStepper';
+import { Panel } from '../components/ui/Surface';
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import {
   filterItemsByAnnotationQueue,
@@ -315,6 +318,12 @@ export default function DatasetDetailPage() {
   const [bundlePreparedVersionId, setBundlePreparedVersionId] = useState('');
   const [bundlePreparedVersionName, setBundlePreparedVersionName] = useState('');
   const [bundleActiveStep, setBundleActiveStep] = useState(0);
+  const [serverFolderPath, setServerFolderPath] = useState('');
+  const [serverFolderScan, setServerFolderScan] = useState<LocalFolderScanResult | null>(null);
+  const [serverFolderResult, setServerFolderResult] = useState<LocalFolderImportAndTrainResult | null>(null);
+  const [serverFolderBusy, setServerFolderBusy] = useState(false);
+  const [serverFolderError, setServerFolderError] = useState('');
+  const [serverFolderActiveStep, setServerFolderActiveStep] = useState(0);
   const [referenceFilename, setReferenceFilename] = useState('');
   const [referenceSplit, setReferenceSplit] = useState<'train' | 'val' | 'test' | 'unassigned'>('unassigned');
   const [referenceStatus, setReferenceStatus] = useState<'uploading' | 'processing' | 'ready' | 'error'>('ready');
@@ -1198,6 +1207,89 @@ export default function DatasetDetailPage() {
     waitForDatasetAttachmentReady
   ]);
 
+  const scanServerLocalFolder = useCallback(async () => {
+    if (!serverFolderPath.trim()) {
+      setServerFolderError(t('Enter a server-local folder path first.'));
+      return;
+    }
+    setServerFolderBusy(true);
+    setServerFolderError('');
+    setServerFolderResult(null);
+    setServerFolderActiveStep(1);
+    try {
+      const result = await api.scanLocalAnnotatedFolder({
+        folder_path: serverFolderPath.trim(),
+        task_type: dataset?.task_type ?? 'detection',
+        framework: dataset?.task_type === 'ocr' ? 'paddleocr' : 'yolo',
+        manual_validation_count: 5
+      });
+      setServerFolderScan(result);
+      setServerFolderActiveStep(1);
+    } catch (error) {
+      setServerFolderScan(null);
+      setServerFolderActiveStep(0);
+      setServerFolderError(t((error as Error).message));
+    } finally {
+      setServerFolderBusy(false);
+    }
+  }, [dataset?.task_type, serverFolderPath, t]);
+
+  const importServerLocalFolderAndTrain = useCallback(async () => {
+    if (!datasetId || !dataset || !serverFolderPath.trim()) {
+      setServerFolderError(t('Open a dataset and enter a server-local folder path first.'));
+      return;
+    }
+    setServerFolderBusy(true);
+    setServerFolderError('');
+    setServerFolderActiveStep(2);
+    try {
+      const result = await api.importLocalFolderAndTrain({
+        folder_path: serverFolderPath.trim(),
+        dataset_id: dataset.id,
+        dataset_name: dataset.name,
+        dataset_description: dataset.description,
+        task_type: dataset.task_type,
+        framework: dataset.task_type === 'ocr' ? 'paddleocr' : 'yolo',
+        train_ratio: Number(splitTrain),
+        val_ratio: Number(splitVal),
+        manual_validation_count: 5,
+        seed: 42,
+        execution_target: 'control_plane'
+      });
+      setServerFolderScan(result.scan);
+      setServerFolderResult(result);
+      setSelectedVersionId(result.dataset_version.id);
+      setServerFolderActiveStep(3);
+      await loadDetail('manual');
+      setFeedback({
+        variant: 'success',
+        text: t(
+          'Local folder imported. {images} images and {annotations} annotations were written, {holdout} images were reserved for manual validation, and training job {job} started.',
+          {
+            images: result.import_summary.images_imported,
+            annotations: result.import_summary.annotations_imported + result.import_summary.annotations_updated,
+            holdout: result.manual_validation_items.length,
+            job: result.training_job.id
+          }
+        )
+      });
+    } catch (error) {
+      setServerFolderActiveStep(serverFolderScan ? 1 : 0);
+      setServerFolderError(t((error as Error).message));
+    } finally {
+      setServerFolderBusy(false);
+    }
+  }, [
+    dataset,
+    datasetId,
+    loadDetail,
+    serverFolderPath,
+    serverFolderScan,
+    splitTrain,
+    splitVal,
+    t
+  ]);
+
   const deleteAttachment = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
@@ -1830,9 +1922,19 @@ export default function DatasetDetailPage() {
     t('Import labels'),
     t('Prepare training')
   ];
+  const serverFolderStepperSteps = [
+    t('Enter folder'),
+    t('Scan labels'),
+    t('Import and split'),
+    t('Start training')
+  ];
   const bundleTrainingPath = bundlePreparedVersionId
     ? buildTrainingJobCreatePath(dataset.id, bundlePreparedVersionId, launchContextForDatasetFlow)
     : '';
+  const serverFolderTrainingPath = serverFolderResult?.training_job.id
+    ? `/training/jobs/${serverFolderResult.training_job.id}`
+    : '';
+  const serverFolderInferencePath = serverFolderResult?.next_links.inference_validation ?? '';
   const fallbackAnnotationWorkspacePath = buildAnnotationWorkspacePath(dataset.id, 'all', undefined, {
     versionId: selectedVersionId || undefined,
     launchContext: launchContextForDatasetFlow
@@ -2233,6 +2335,123 @@ export default function DatasetDetailPage() {
                   <small className="muted">
                     {t('Folder import reads image files plus supported labels (YOLO / COCO / LabelMe / OCR). ZIP import is unpacked locally in the browser before upload.')}
                   </small>
+
+                  <Panel tone="soft" className="stack tight">
+                    <div className="stack">
+                      <div>
+                        <strong>{t('Server-local annotated folder')}</strong>
+                        <p className="muted">
+                          {t('For intranet deployments: enter a folder path that the API server can read, then import labels, reserve 5 manual validation images, and start training.')}
+                        </p>
+                      </div>
+                      <ProgressStepper
+                        steps={serverFolderStepperSteps}
+                        current={serverFolderActiveStep}
+                        title={t('Local folder workflow')}
+                        caption={serverFolderBusy ? t('Working...') : t('Scan first, then import and train.')}
+                      />
+                      <label>
+                        {t('Server folder path')}
+                        <Input
+                          value={serverFolderPath}
+                          onChange={(event) => {
+                            setServerFolderPath(event.target.value);
+                            setServerFolderError('');
+                          }}
+                          placeholder="/Users/zhangyuanyi/Downloads/梯级缺陷2020.07.15"
+                          disabled={busy || bundleImporting || serverFolderBusy}
+                        />
+                      </label>
+                      <div className="row gap wrap">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => {
+                            void scanServerLocalFolder();
+                          }}
+                          disabled={busy || bundleImporting || serverFolderBusy || !serverFolderPath.trim()}
+                        >
+                          {serverFolderBusy && serverFolderActiveStep <= 1 ? t('Scanning...') : t('Scan Folder')}
+                        </Button>
+                        <Button
+                          type="button"
+                          onClick={() => {
+                            void importServerLocalFolderAndTrain();
+                          }}
+                          disabled={
+                            busy ||
+                            bundleImporting ||
+                            serverFolderBusy ||
+                            !serverFolderPath.trim() ||
+                            (serverFolderScan !== null && serverFolderScan.paired_count === 0)
+                          }
+                        >
+                          {serverFolderBusy && serverFolderActiveStep >= 2
+                            ? t('Starting...')
+                            : t('Import, Split, and Train')}
+                        </Button>
+                      </div>
+
+                      {serverFolderError ? (
+                        <StateBlock
+                          variant="error"
+                          title={t('Local folder workflow failed')}
+                          description={serverFolderError}
+                        />
+                      ) : null}
+
+                      {serverFolderScan ? (
+                        <div className="stack">
+                          <div className="row gap wrap align-center">
+                            <Badge tone={serverFolderScan.detected_format === 'yolo' ? 'success' : 'warning'}>
+                              {t('Format')}: {t(serverFolderScan.detected_format)}
+                            </Badge>
+                            <Badge tone="neutral">{t('Images')}: {serverFolderScan.image_count}</Badge>
+                            <Badge tone="neutral">{t('Annotation files')}: {serverFolderScan.annotation_file_count}</Badge>
+                            <Badge tone="neutral">{t('Paired samples')}: {serverFolderScan.paired_count}</Badge>
+                            <Badge tone="info">{t('Manual validation')}: {serverFolderScan.manual_validation_count}</Badge>
+                          </div>
+                          {serverFolderScan.class_names.length > 0 ? (
+                            <small className="muted">
+                              {t('Labels')}: {serverFolderScan.class_names.slice(0, 12).join(', ')}
+                              {serverFolderScan.class_names.length > 12 ? '...' : ''}
+                            </small>
+                          ) : null}
+                          {serverFolderScan.warnings.length > 0 ? (
+                            <InlineAlert
+                              tone="warning"
+                              title={t('Scan warnings')}
+                              description={serverFolderScan.warnings.join(' ')}
+                            />
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {serverFolderResult ? (
+                        <InlineAlert
+                          tone="success"
+                          title={t('Training started from local folder')}
+                          description={t('{count} images are reserved in test split for manual validation. Training logs and metrics are available on the job detail page.', {
+                            count: serverFolderResult.manual_validation_items.length
+                          })}
+                          actions={
+                            <div className="row gap wrap">
+                              {serverFolderTrainingPath ? (
+                                <ButtonLink to={serverFolderTrainingPath} variant="secondary" size="sm">
+                                  {t('Open Training Job')}
+                                </ButtonLink>
+                              ) : null}
+                              {serverFolderInferencePath ? (
+                                <ButtonLink to={serverFolderInferencePath} variant="ghost" size="sm">
+                                  {t('Open Inference Validation')}
+                                </ButtonLink>
+                              ) : null}
+                            </div>
+                          }
+                        />
+                      ) : null}
+                    </div>
+                  </Panel>
 
                   {bundleImportError ? (
                     <StateBlock

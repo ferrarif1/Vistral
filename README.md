@@ -41,6 +41,8 @@ Unlike traditional dashboard-based interfaces, Vistral follows a conversational 
    - `docs/annotation-workflow.md`
    - `docs/model-runtime-architecture.md`
    - `docs/training-engineer-quickstart.md`
+   - `docs/frontend-reset.md`
+   - `docs/agent-training-orchestration.md`
    - `docs/agent-development-guidelines.md`
 4. Review active execution docs before continuing in-progress work:
    - `PLANS.md`

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
-import { existsSync, promises as fs, statSync } from 'node:fs';
+import { existsSync, promises as fs, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   isCuratedFoundationModelName,
@@ -46,6 +46,12 @@ import {
 } from './runtimeAdapters';
 import { applyBundledLocalCommandDefaults, resolveBundledLocalModelPath } from './runtimeDefaults';
 import { inspectDoctrPreseedAssets, readLocalRuntimeBootstrapStatus } from './runtimeBootstrap';
+import {
+  appendVisionTaskDecisionLog,
+  buildVisionTaskAgentRecommendation,
+  recordVisionTaskAgentOutcome,
+  sameVisionTaskRecommendationMeaning
+} from './visionTaskAgent';
 import type {
   ActivateTrainingWorkerResult,
   AnnotationRecord,
@@ -74,6 +80,13 @@ import type {
   FileAttachmentStatus,
   InferenceFeedbackInput,
   InferenceRunRecord,
+  LocalFolderImportAndTrainInput,
+  LocalFolderImportAndTrainResult,
+  LocalFolderFinalizeInput,
+  LocalFolderFinalizeResult,
+  LocalFolderManualValidationItem,
+  LocalFolderScanInput,
+  LocalFolderScanResult,
   LlmConfig,
   LlmConfigView,
   RuntimeApiKeyMetaView,
@@ -107,9 +120,12 @@ import type {
   RuntimeDeviceAccessSnippetBundle,
   RuntimePublicInferenceInvocationRecord,
   RuntimePublicModelPackageDeliveryRecord,
+  RuntimeAgentDeliveryReadiness,
   RuntimeReadinessFrameworkSnapshot,
   RuntimeReadinessIssue,
   RuntimeReadinessReport,
+  RuntimeRealTrainingDoctorReport,
+  RuntimeRealTrainingPrepareResult,
   RuntimeMetricsRetentionSummary,
   RunInferenceInput,
   PublicEncryptedModelPackageInput,
@@ -151,7 +167,6 @@ import type {
   VisionTaskComparisonDecision,
   VisionTaskEvaluationSuite,
   VisionTaskGateStatus,
-  VisionTaskAgentRecommendation,
   VisionModelingTaskRecord,
   VisionTaskPromotionGate,
   VisionTaskRunComparison,
@@ -190,6 +205,12 @@ const toEnvFlagBoolean = (value: string | undefined, fallback: boolean): boolean
     return false;
   }
   return fallback;
+};
+const isEnvFlagExplicitlyDisabled = (value: string | undefined): boolean => {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  return ['0', 'false', 'no', 'off', 'disabled'].includes(value.trim().toLowerCase());
 };
 const allowNonRealLocalCommandModelVersionRegistration = toEnvFlagBoolean(
   process.env.MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND,
@@ -2390,7 +2411,7 @@ const buildLlmGoalPlannerPayload = async (input: {
       '如果是更大的建模/闭环目标，优先返回 {"mode":"goal_orchestration", ...}，而不是直接 create_training_job。',
       'goal_orchestration 适用于：根据需求+样例图理解任务、尽量复用现有数据集/版本、创建或更新 VisionTask，并在信息足够时自动推进下一步。',
       '只能使用上下文中已经存在的 id；不确定就留空，不要编造。',
-      'goal_orchestration 可选字段：prompt, dataset_id, dataset_version_id, task_type, auto_advance, max_rounds, intent_summary, reason。',
+      'goal_orchestration 可选字段：prompt, dataset_id, dataset_version_id, task_type, auto_advance, max_rounds, training_config, acceptance_target, intent_summary, reason。',
       `WORKSPACE_CONTEXT_JSON=${JSON.stringify(workspaceContext)}`,
       `USER_MESSAGE=${input.content}`
     ].join('\n'),
@@ -2651,6 +2672,33 @@ const probePythonModule = (pythonBin: string, moduleName: string): { ok: boolean
   };
 };
 
+const probePythonStdout = (pythonBin: string, script: string): { ok: boolean; output: string; reason: string } => {
+  const probe = spawnSync(pythonBin, ['-c', script], {
+    encoding: 'utf8',
+    timeout: 3000,
+    windowsHide: true
+  });
+  if (probe.error) {
+    return {
+      ok: false,
+      output: '',
+      reason: probe.error.message
+    };
+  }
+  if (probe.status !== 0) {
+    return {
+      ok: false,
+      output: '',
+      reason: `exit ${probe.status ?? 'unknown'}`
+    };
+  }
+  return {
+    ok: true,
+    output: (probe.stdout ?? '').trim(),
+    reason: ''
+  };
+};
+
 const buildPipInstallCommand = (pythonBin: string, moduleName: string): string =>
   `${pythonBin} -m pip install ${moduleName}`;
 
@@ -2857,6 +2905,13 @@ const detectOcrExtractionFollowUpCue = (content: string): boolean =>
 const detectTrainingFullPipelineIntent = (text: string): boolean =>
   /(全流程|闭环|编排|一键|自动(?:化)?|pipeline|orchestr(?:ate|ation))/i.test(text) &&
   /(训练|train|training|微调|fine[- ]?tune)/i.test(text);
+
+const detectTrainingDeliveryGoalIntent = (text: string): boolean =>
+  /(训练|train|training|微调|fine[- ]?tune)/i.test(text) &&
+  /(模型|model|视觉|检测|识别|分类|分割|OCR|obb|detection|classification|segmentation|vision)/i.test(text) &&
+  /(全流程|闭环|编排|一键|自动(?:化)?|尽量少|少让我|全部做完|交付|产出|发布|注册|可用模型|模型成果|deliver|ship|produce|end[- ]to[- ]end|least[- ]click|minimal steps|complete the loop|ready model)/i.test(
+    text
+  );
 
 const detectConversationGoalPlanningCandidate = (
   content: string,
@@ -3531,17 +3586,26 @@ const inferAcceptanceTargetFromText = (text: string): string =>
   ]);
 
 const toVisionTaskTypeFromTaskType = (value: TaskType | null): VisionTaskType => {
-  if (value === 'ocr' || value === 'detection' || value === 'classification' || value === 'segmentation') {
+  if (
+    value === 'ocr' ||
+    value === 'detection' ||
+    value === 'classification' ||
+    value === 'segmentation' ||
+    value === 'obb'
+  ) {
     return value;
-  }
-  if (value === 'obb') {
-    return 'detection';
   }
   return 'unknown';
 };
 
 const toTaskTypeFromVisionTaskType = (value: VisionTaskType): TaskType | null => {
-  if (value === 'ocr' || value === 'detection' || value === 'classification' || value === 'segmentation') {
+  if (
+    value === 'ocr' ||
+    value === 'detection' ||
+    value === 'classification' ||
+    value === 'segmentation' ||
+    value === 'obb'
+  ) {
     return value;
   }
   return null;
@@ -3552,6 +3616,7 @@ const defaultRecommendedMetricsByTaskType: Record<VisionTaskType, string[]> = {
   detection: ['mAP50', 'recall'],
   classification: ['top1_accuracy', 'f1'],
   segmentation: ['mIoU', 'mAP'],
+  obb: ['mAP-OBB', 'angle_error'],
   unknown: []
 };
 
@@ -3560,6 +3625,7 @@ const expectedOutputByTaskType: Record<VisionTaskType, VisionTaskSpec['expected_
   detection: 'bbox',
   classification: 'class',
   segmentation: 'mask',
+  obb: 'bbox',
   unknown: 'bbox'
 };
 
@@ -3568,6 +3634,7 @@ const annotationTypeByTaskType: Record<VisionTaskType, VisionTaskSpec['annotatio
   detection: 'bbox',
   classification: 'class_label',
   segmentation: 'polygon',
+  obb: 'bbox',
   unknown: 'bbox'
 };
 
@@ -3602,6 +3669,9 @@ const buildRuleBasedVisionTaskSpec = (
   if (has('ocr', '文字', '文本', '车号', '编号', 'serial', 'read text')) {
     taskType = 'ocr';
     confidence = 0.86;
+  } else if (has('obb', 'rotated box', 'rotated bbox', 'oriented', '旋转框', '方向框')) {
+    taskType = 'obb';
+    confidence = 0.82;
   } else if (has('分类', 'classification', 'classify', '是否', '状态判断')) {
     taskType = 'classification';
     confidence = 0.82;
@@ -3674,6 +3744,7 @@ const normalizeVisionTaskSpec = (
       value === 'detection' ||
       value === 'classification' ||
       value === 'segmentation' ||
+      value === 'obb' ||
       value === 'unknown'
     ) {
       return value;
@@ -3773,7 +3844,7 @@ const generateVisionTaskSpec = async (input: {
       [
         '你是 Vistral 视觉任务理解器。请严格返回 JSON，不要输出额外文字。',
         '字段: task_type,target_description,expected_output,annotation_type,recommended_metrics,deployment_hint,constraints,confidence。',
-        'task_type 只能是 ocr|detection|classification|segmentation|unknown。',
+        'task_type 只能是 ocr|detection|classification|segmentation|obb|unknown。',
         'expected_output 只能是 text|bbox|class|mask。',
         'annotation_type 只能是 transcription|bbox|class_label|polygon|mask。',
         'deployment_hint 只能是 edge|server|both。',
@@ -4091,28 +4162,63 @@ const buildTrainingPlanFromRecipe = (
   if (taskSpec.task_type === 'unknown' || !datasetProfile) {
     return null;
   }
-  const recipeIdByTaskType: Record<Exclude<VisionTaskType, 'unknown'>, string> = {
-    ocr: 'paddleocr_recipe',
-    detection: 'ultralytics_detect_recipe',
-    classification: 'ultralytics_classify_recipe',
-    segmentation: 'ultralytics_segment_recipe' // TODO: enable full segmentation execution path.
-  };
-  const recipeId = recipeIdByTaskType[taskSpec.task_type];
-  if (!recipeId) {
+  const taskType = toTaskTypeFromVisionTaskType(taskSpec.task_type);
+  if (!taskType) {
     return null;
   }
+  const framework: ModelFramework = taskType === 'ocr' ? 'paddleocr' : 'yolo';
+  const recipe =
+    trainingRecipeCatalog.find(
+      (item) => item.task_type === taskType && item.framework === framework
+    ) ?? null;
+  if (!recipe) {
+    return null;
+  }
+  const defaultParams = Object.fromEntries(
+    recipe.params.map((param) => [param.key, param.default])
+  );
+  const userOverrides = Object.fromEntries(
+    Object.entries(defaults.trainConfig).filter(
+      ([key, value]) => defaultParams[key] !== undefined && value !== defaultParams[key]
+    )
+  );
+  const resolvedParams = {
+    ...defaultParams,
+    ...defaults.trainConfig
+  };
+  const runnerMapping = Object.fromEntries(
+    recipe.params.map((param) => [param.key, param.runner_arg || param.key])
+  );
+  const evaluationSuite = findEvaluationSuiteById(recipe.evaluation_suite_id);
+  const readinessSummary = datasetProfile.is_trainable
+    ? `Dataset ${datasetProfile.dataset_id} is trainable for ${recipe.title}.`
+    : `Dataset ${datasetProfile.dataset_id} is blocked: ${datasetProfile.issues.join(', ')}.`;
+
   return {
-    recipe_id: recipeId,
+    recipe_id: recipe.recipe_id,
+    recipe_version: recipe.recipe_version,
+    recipe_title: recipe.title,
+    selection_reason: `Selected ${recipe.title} because task_type=${taskType} and framework=${framework}.`,
     task_type: taskSpec.task_type,
-    base_model: defaults.baseModel,
+    base_model:
+      defaults.baseModel && recipe.base_model_options.includes(defaults.baseModel)
+        ? defaults.baseModel
+        : recipe.default_base_model,
     dataset_id: datasetProfile.dataset_id,
-    train_args: { ...defaults.trainConfig },
+    train_args: resolvedParams,
     eval_args: {
-      primary_metric: taskSpec.recommended_metrics[0] ?? ''
+      evaluation_suite_id: recipe.evaluation_suite_id,
+      primary_metric: evaluationSuite?.primary_metric ?? taskSpec.recommended_metrics[0] ?? ''
     },
     export_args: {
       format: 'onnx'
     },
+    default_params: defaultParams,
+    resolved_params: resolvedParams,
+    user_overrides: userOverrides,
+    param_contract: recipe.params,
+    runner_mapping: runnerMapping,
+    readiness_summary: readinessSummary,
     human_review_required: true
   };
 };
@@ -4127,6 +4233,7 @@ type ThresholdRule = {
   primary_metric: string;
   aliases: string[];
   threshold: number;
+  direction: EvaluationSuiteRecord['direction'];
 };
 
 type AutoTuneHistoryEntry = {
@@ -4142,30 +4249,91 @@ type AutoTuneHistoryEntry = {
 
 const metricAliasesByTaskType: Record<TaskType, ThresholdRule> = {
   ocr: {
-    primary_metric: 'accuracy',
-    aliases: ['accuracy', 'acc', 'f1'],
-    threshold: 0.8
+    primary_metric: 'cer',
+    aliases: ['cer', 'character_error_rate'],
+    threshold: 0.08,
+    direction: 'lower_is_better'
   },
   detection: {
-    primary_metric: 'map50',
-    aliases: ['map50', 'map', 'mAP50', 'mAP'],
-    threshold: 0.5
+    primary_metric: 'map',
+    aliases: ['map', 'map50', 'mAP', 'mAP50'],
+    threshold: 0.5,
+    direction: 'higher_is_better'
   },
   classification: {
-    primary_metric: 'top1_accuracy',
-    aliases: ['top1_accuracy', 'accuracy', 'f1'],
-    threshold: 0.75
+    primary_metric: 'accuracy',
+    aliases: ['accuracy', 'top1_accuracy', 'f1'],
+    threshold: 0.85,
+    direction: 'higher_is_better'
   },
   segmentation: {
     primary_metric: 'miou',
     aliases: ['miou', 'mIoU', 'map'],
-    threshold: 0.5
+    threshold: 0.45,
+    direction: 'higher_is_better'
   },
   obb: {
-    primary_metric: 'map50',
-    aliases: ['map50', 'map', 'mAP50', 'mAP'],
-    threshold: 0.5
+    primary_metric: 'map_obb',
+    aliases: ['map_obb', 'obb_map', 'map', 'map50', 'mAP', 'mAP50'],
+    threshold: 0.45,
+    direction: 'higher_is_better'
   }
+};
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeMetricThresholdValue = (value: number): number => {
+  if (!Number.isFinite(value)) {
+    return value;
+  }
+  if (value > 1 && value <= 100) {
+    return value / 100;
+  }
+  return value;
+};
+
+const inferThresholdRuleFromText = (
+  text: string,
+  taskType: TaskType | null
+): ThresholdRule | null => {
+  if (!taskType) {
+    return null;
+  }
+  const baseRule = metricAliasesByTaskType[taskType] ?? null;
+  if (!baseRule) {
+    return null;
+  }
+  const normalized = compactWhitespace(text);
+  if (!normalized) {
+    return null;
+  }
+  const aliases = uniqueStrings([baseRule.primary_metric, ...baseRule.aliases]);
+  for (const alias of aliases) {
+    const pattern = new RegExp(
+      `${escapeRegExp(alias)}\\s*(>=|>|=|≤|<=|<|≥)\\s*([0-9]+(?:\\.[0-9]+)?)`,
+      'i'
+    );
+    const match = normalized.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const parsedThreshold = Number(match[2]);
+    if (!Number.isFinite(parsedThreshold)) {
+      continue;
+    }
+    const operator = match[1] ?? '';
+    const direction =
+      operator === '<' || operator === '<=' || operator === '≤'
+        ? 'lower_is_better'
+        : baseRule.direction;
+    return {
+      primary_metric: baseRule.primary_metric,
+      aliases: baseRule.aliases,
+      threshold: normalizeMetricThresholdValue(parsedThreshold),
+      direction
+    };
+  }
+  return null;
 };
 
 const parseNumericString = (value: string | undefined, fallback: number): number => {
@@ -4245,6 +4413,216 @@ const resolveMetricValue = (
     }
   }
   return 0;
+};
+
+const metricAliasesForPrimaryMetric = (primaryMetric: string): string[] => {
+  const normalized = primaryMetric.trim();
+  if (!normalized) {
+    return [];
+  }
+  const directAliases = Object.values(metricAliasesByTaskType).find(
+    (rule) => rule.primary_metric.toLowerCase() === normalized.toLowerCase()
+  )?.aliases;
+  return directAliases ?? [normalized];
+};
+
+const findEvaluationSuiteById = (suiteId: string): EvaluationSuiteRecord | null => {
+  const normalized = suiteId.trim();
+  if (!normalized) {
+    return null;
+  }
+  return evaluationSuiteCatalog.find((suite) => suite.suite_id === normalized) ?? null;
+};
+
+const resolveEvaluationSuiteForTrainingJob = (
+  job: TrainingJobRecord
+): EvaluationSuiteRecord | null => {
+  const recipeId = (job.config.recipe_id ?? '').trim();
+  const recipe = recipeId
+    ? trainingRecipeCatalog.find((item) => item.recipe_id === recipeId) ?? null
+    : null;
+  if (recipe) {
+    const suite = findEvaluationSuiteById(recipe.evaluation_suite_id);
+    if (suite) {
+      return suite;
+    }
+  }
+  return (
+    evaluationSuiteCatalog.find(
+      (suite) => suite.task_type === job.task_type && suite.framework === job.framework
+    ) ?? null
+  );
+};
+
+const resolveEvaluationSuiteForVisionTask = (
+  task: VisionModelingTaskRecord
+): EvaluationSuiteRecord | null => {
+  const configuredSuiteId = task.training_plan?.eval_args.evaluation_suite_id?.trim() ?? '';
+  if (configuredSuiteId) {
+    const configured = findEvaluationSuiteById(configuredSuiteId);
+    if (configured) {
+      return configured;
+    }
+  }
+  const recipeId = task.training_plan?.recipe_id?.trim() ?? '';
+  const recipe = recipeId
+    ? trainingRecipeCatalog.find((item) => item.recipe_id === recipeId) ?? null
+    : null;
+  if (recipe) {
+    const suite = findEvaluationSuiteById(recipe.evaluation_suite_id);
+    if (suite) {
+      return suite;
+    }
+  }
+  const taskType = toTaskTypeFromVisionTaskType(task.spec.task_type);
+  if (!taskType) {
+    return null;
+  }
+  const framework = resolveFrameworkForVisionTask(task);
+  return (
+    evaluationSuiteCatalog.find(
+      (suite) => suite.task_type === taskType && suite.framework === framework
+    ) ?? null
+  );
+};
+
+const compareMetricValues = (
+  left: number,
+  right: number,
+  direction: EvaluationSuiteRecord['direction']
+): number => (direction === 'lower_is_better' ? left - right : right - left);
+
+const metricImprovement = (
+  bestValue: number,
+  baselineValue: number,
+  direction: EvaluationSuiteRecord['direction']
+): number =>
+  direction === 'lower_is_better' ? baselineValue - bestValue : bestValue - baselineValue;
+
+const resolveMetricPassStatus = (
+  value: number,
+  threshold: number,
+  direction: EvaluationSuiteRecord['direction']
+): ValidationReport['summary']['pass_status'] => {
+  if (direction === 'lower_is_better') {
+    if (value <= threshold) {
+      return 'pass';
+    }
+    return value <= threshold * 1.15 ? 'needs_review' : 'fail';
+  }
+  if (value >= threshold) {
+    return 'pass';
+  }
+  return value >= threshold * 0.85 ? 'needs_review' : 'fail';
+};
+
+type TrainingArtifactRegistrationGate = {
+  status: 'pass' | 'needs_review' | 'fail' | 'pending';
+  summary: string;
+  reason: string;
+  artifact_mode: string | null;
+  fallback_reason: string | null;
+  training_performed: boolean | null;
+};
+
+const buildTrainingArtifactRegistrationGate = (
+  job: TrainingJobRecord | null
+): TrainingArtifactRegistrationGate | null => {
+  if (!job) {
+    return null;
+  }
+  if (job.status !== 'completed') {
+    return {
+      status: 'pending',
+      summary: 'Artifact evidence is pending until training completes.',
+      reason: `The linked training job is currently ${job.status}.`,
+      artifact_mode: null,
+      fallback_reason: null,
+      training_performed: null
+    };
+  }
+  if (job.execution_mode !== 'local_command') {
+    return {
+      status: 'fail',
+      summary: 'Registration requires local-command execution evidence.',
+      reason: `Model registration requires execution_mode=local_command; this run reports ${job.execution_mode}.`,
+      artifact_mode: null,
+      fallback_reason: null,
+      training_performed: null
+    };
+  }
+
+  const artifactAttachmentId = findArtifactAttachmentIdByJob(job.id);
+  const artifactAttachment = artifactAttachmentId
+    ? attachments.find((item) => item.id === artifactAttachmentId) ?? null
+    : null;
+  const artifactSummary = artifactAttachment
+    ? readTrainingArtifactSummarySync(artifactAttachment)
+    : null;
+  if (!artifactSummary) {
+    return {
+      status: 'pending',
+      summary: 'Artifact evidence is not readable yet.',
+      reason: 'The agent cannot verify artifact authenticity until the training artifact summary is available.',
+      artifact_mode: null,
+      fallback_reason: null,
+      training_performed: null
+    };
+  }
+
+  const artifactMode = toOptionalTrimmedString(artifactSummary.mode)?.toLowerCase() ?? null;
+  const artifactFallbackReason = toOptionalTrimmedString(artifactSummary.fallback_reason);
+  const artifactTrainingPerformed = artifactSummary.training_performed ?? null;
+  const artifactSampledItems =
+    typeof artifactSummary.sampled_items === 'number' && Number.isFinite(artifactSummary.sampled_items)
+      ? artifactSummary.sampled_items
+      : null;
+  const calibratedModeObserved = artifactMode === 'real_probe';
+  const calibratedEvidenceHasSignal =
+    calibratedModeObserved && !artifactFallbackReason && (artifactSampledItems ?? 0) > 0;
+  const calibratedEvidencePromotedToStandard =
+    calibratedEvidenceHasSignal && requirePureRealModelVersionRegistration && job.task_type === 'ocr';
+  const calibratedEvidenceAccepted =
+    calibratedEvidenceHasSignal && !requirePureRealModelVersionRegistration;
+  const explicitRealEvidence =
+    artifactMode === 'real' && !artifactFallbackReason && artifactTrainingPerformed !== false;
+  const localExecutionLooksNonReal =
+    artifactMode === 'template' ||
+    Boolean(artifactFallbackReason) ||
+    (!explicitRealEvidence && !calibratedEvidenceAccepted && !calibratedEvidencePromotedToStandard);
+
+  if (!localExecutionLooksNonReal) {
+    return {
+      status: 'pass',
+      summary: 'Artifact evidence is acceptable for model registration.',
+      reason: 'The artifact summary indicates real or accepted calibrated local-command training evidence.',
+      artifact_mode: artifactMode,
+      fallback_reason: artifactFallbackReason,
+      training_performed: artifactTrainingPerformed
+    };
+  }
+
+  if (allowNonRealLocalCommandModelVersionRegistration) {
+    return {
+      status: 'needs_review',
+      summary: 'Artifact evidence is non-real but explicitly allowed by compatibility policy.',
+      reason:
+        'The artifact summary is template/fallback/non-real, but MODEL_VERSION_REGISTER_ALLOW_NON_REAL_LOCAL_COMMAND=1 allows compatibility registration.',
+      artifact_mode: artifactMode,
+      fallback_reason: artifactFallbackReason,
+      training_performed: artifactTrainingPerformed
+    };
+  }
+
+  return {
+    status: 'needs_review',
+    summary: 'Metrics passed, but registration needs real artifact evidence.',
+    reason:
+      `The artifact summary is not production-registerable (mode=${artifactMode ?? 'unknown'}, fallback_reason=${artifactFallbackReason ?? 'none'}, training_performed=${artifactTrainingPerformed === null ? 'unknown' : artifactTrainingPerformed ? 'true' : 'false'}).`,
+    artifact_mode: artifactMode,
+    fallback_reason: artifactFallbackReason,
+    training_performed: artifactTrainingPerformed
+  };
 };
 
 const parseTaskMetadataJson = <T>(raw: string | undefined, fallback: T): T => {
@@ -4446,12 +4824,24 @@ const readThresholdRuleFromTask = (task: VisionModelingTaskRecord): ThresholdRul
     typeof parsed.threshold === 'number' &&
     Number.isFinite(parsed.threshold)
   ) {
+    const direction =
+      parsed.direction === 'lower_is_better' ? 'lower_is_better' : 'higher_is_better';
     return {
       primary_metric: parsed.primary_metric.trim() || 'metric',
       aliases: parsed.aliases
         .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
         .map((item) => item.trim()),
-      threshold: parsed.threshold
+      threshold: parsed.threshold,
+      direction
+    };
+  }
+  const suite = resolveEvaluationSuiteForVisionTask(task);
+  if (suite) {
+    return {
+      primary_metric: suite.primary_metric,
+      aliases: metricAliasesForPrimaryMetric(suite.primary_metric),
+      threshold: suite.threshold_target,
+      direction: suite.direction
     };
   }
   const taskType = toTaskTypeFromVisionTaskType(task.spec.task_type) ?? 'detection';
@@ -4461,8 +4851,10 @@ const readThresholdRuleFromTask = (task: VisionModelingTaskRecord): ThresholdRul
 const buildVisionTaskEvaluationSuite = (
   task: VisionModelingTaskRecord
 ): VisionTaskEvaluationSuite => {
+  const configuredSuite = resolveEvaluationSuiteForVisionTask(task);
   const thresholdRule = readThresholdRuleFromTask(task);
-  const configuredPrimaryMetric = task.training_plan?.eval_args.primary_metric?.trim() ?? '';
+  const configuredPrimaryMetric =
+    configuredSuite?.primary_metric ?? task.training_plan?.eval_args.primary_metric?.trim() ?? '';
   const thresholdSource: VisionTaskEvaluationSuite['threshold_source'] = configuredPrimaryMetric
     ? 'training_plan'
     : 'task_type_default';
@@ -4483,6 +4875,7 @@ const buildVisionTaskEvaluationSuite = (
     summary:
       'This suite defines the current metric contract the agent uses when deciding promote, retrain, or collect-data actions.',
     primary_metric: configuredPrimaryMetric || thresholdRule.primary_metric,
+    direction: configuredSuite?.direction ?? thresholdRule.direction,
     threshold_target: thresholdRule.threshold,
     status:
       task.dataset_version_id && (configuredPrimaryMetric || thresholdRule.primary_metric)
@@ -4514,7 +4907,7 @@ const buildVisionTaskRunComparison = (
       .filter((item) => typeof item.primary_value === 'number')
       .sort(
         (left, right) =>
-          (right.primary_value ?? Number.NEGATIVE_INFINITY) - (left.primary_value ?? Number.NEGATIVE_INFINITY) ||
+          compareMetricValues(left.primary_value ?? 0, right.primary_value ?? 0, suite.direction) ||
           right.round - left.round
       );
   const bestCandidate = rankedCandidates[0] ?? null;
@@ -4612,13 +5005,13 @@ const buildVisionTaskRunComparison = (
     challenger_value: challengerCandidate?.primary_value ?? null,
     champion_margin:
       typeof bestCandidate?.primary_value === 'number' && typeof challengerCandidate?.primary_value === 'number'
-        ? bestCandidate.primary_value - challengerCandidate.primary_value
+        ? metricImprovement(bestCandidate.primary_value, challengerCandidate.primary_value, suite.direction)
         : null,
     best_value: bestCandidate?.primary_value ?? null,
     latest_value: latestCandidate?.primary_value ?? null,
     improvement:
       typeof bestCandidate?.primary_value === 'number' && typeof firstCandidate?.primary_value === 'number'
-        ? bestCandidate.primary_value - firstCandidate.primary_value
+        ? metricImprovement(bestCandidate.primary_value, firstCandidate.primary_value, suite.direction)
         : null,
     candidates,
     created_at: now()
@@ -4634,6 +5027,10 @@ const buildVisionTaskPromotionGate = (
   const bestValue = comparison.best_value ?? currentValue;
   const passStatus = task.validation_report?.summary.pass_status ?? 'pending';
   const gateStatus = toVisionTaskGateStatus(passStatus);
+  const currentJob = task.training_job_id
+    ? trainingJobs.find((item) => item.id === task.training_job_id) ?? null
+    : null;
+  const artifactGate = buildTrainingArtifactRegistrationGate(currentJob);
 
   if (!task.training_job_id && comparison.candidates.length <= 0) {
     return {
@@ -4668,6 +5065,21 @@ const buildVisionTaskPromotionGate = (
   }
 
   if (gateStatus === 'pass') {
+    if (artifactGate && artifactGate.status !== 'pass') {
+      return {
+        evaluation_suite_id: suite.suite_id,
+        status: artifactGate.status === 'fail' ? 'fail' : 'needs_review',
+        title: artifactGate.status === 'fail' ? 'Gate blocked by artifact evidence' : 'Gate needs artifact review',
+        summary: artifactGate.summary,
+        reason: artifactGate.reason,
+        threshold_metric: suite.primary_metric,
+        threshold_target: suite.threshold_target,
+        current_value: currentValue,
+        best_value: bestValue,
+        best_training_job_id: comparison.best_training_job_id,
+        created_at: now()
+      };
+    }
     return {
       evaluation_suite_id: suite.suite_id,
       status: 'pass',
@@ -4741,6 +5153,9 @@ const buildVisionTaskEvidence = (
       `suite ${task.evaluation_suite.primary_metric} target ${task.evaluation_suite.threshold_target ?? '-'}`
     );
   }
+  if (task.promotion_gate?.reason.includes('artifact summary')) {
+    evidence.push('artifact evidence needs review');
+  }
   if (task.dataset_profile?.diagnostics.recommended_data_actions.length) {
     evidence.push(
       `data actions ${task.dataset_profile.diagnostics.recommended_data_actions.slice(0, 2).join('/')}`
@@ -4785,6 +5200,8 @@ const labelVisionTaskConversationAction = (
         return '等待训练完成';
       case 'collect_data':
         return '先补数据';
+      case 'fix_runtime':
+        return '修复真实训练环境';
       case 'register_model':
         return '注册模型版本';
       case 'mine_feedback':
@@ -4802,6 +5219,8 @@ const labelVisionTaskConversationAction = (
       return 'wait for training';
     case 'collect_data':
       return 'collect more data';
+    case 'fix_runtime':
+      return 'fix real training runtime';
     case 'register_model':
       return 'register the model version';
     case 'mine_feedback':
@@ -5007,166 +5426,6 @@ const buildVisionTaskConversationEvidenceSummary = (input: {
   return parts.join(chinese ? ' ' : ' ').trim();
 };
 
-const sameVisionTaskRecommendationMeaning = (
-  left: VisionTaskAgentRecommendation | null,
-  right: VisionTaskAgentRecommendation
-): boolean => {
-  if (!left) {
-    return false;
-  }
-  return (
-    left.action === right.action &&
-    left.title === right.title &&
-    left.summary === right.summary &&
-    left.reason === right.reason &&
-    left.requires_confirmation === right.requires_confirmation &&
-    JSON.stringify(left.blocking_items) === JSON.stringify(right.blocking_items) &&
-    JSON.stringify(left.evidence) === JSON.stringify(right.evidence)
-  );
-};
-
-const appendVisionTaskDecisionLog = (
-  task: VisionModelingTaskRecord,
-  entry: VisionTaskAgentDecisionLogEntry
-): boolean => {
-  const head = task.agent_decision_log[0] ?? null;
-  if (
-    head &&
-    head.action === entry.action &&
-    head.outcome === entry.outcome &&
-    head.summary === entry.summary &&
-    head.reason === entry.reason
-  ) {
-    return false;
-  }
-  task.agent_decision_log = [entry, ...task.agent_decision_log].slice(0, 24);
-  return true;
-};
-
-const buildVisionTaskAgentRecommendation = (
-  task: VisionModelingTaskRecord
-): VisionTaskAgentRecommendation => {
-  const currentJob = task.training_job_id
-    ? trainingJobs.find((item) => item.id === task.training_job_id) ?? null
-    : null;
-  const passStatus = task.validation_report?.summary.pass_status ?? 'needs_review';
-  const feedbackDatasetId = (task.metadata.feedback_dataset_id ?? '').trim();
-  const evidence = buildVisionTaskEvidence(task, currentJob);
-  const gate = task.promotion_gate;
-  const comparison = task.run_comparison;
-  const base = {
-    blocking_items: [] as string[],
-    evidence,
-    created_at: now()
-  };
-
-  if (task.missing_requirements.length > 0) {
-    return {
-      action: 'requires_input',
-      title: 'Missing requirements',
-      summary: 'Provide the missing requirements before the agent can continue.',
-      reason: 'The task is still blocked by missing inputs or unresolved dataset readiness requirements.',
-      blocking_items: [...task.missing_requirements],
-      requires_confirmation: false,
-      evidence: evidence.length > 0 ? evidence : ['task understanding is still incomplete'],
-      created_at: base.created_at
-    };
-  }
-
-  if (
-    currentJob &&
-    currentJob.status !== 'completed' &&
-    currentJob.status !== 'failed' &&
-    currentJob.status !== 'cancelled'
-  ) {
-    return {
-      action: 'wait_training',
-      title: 'Training is in progress',
-      summary: 'Wait for the active training run to finish before choosing the next mutation.',
-      reason: 'A linked training run is still active, so the next safe step is to observe rather than mutate.',
-      ...base,
-      requires_confirmation: false
-    };
-  }
-
-  if (!task.training_job_id) {
-    return {
-      action: 'start_training',
-      title: 'Ready to launch training',
-      summary: 'The task has enough structure to start the first training round.',
-      reason: 'Dataset context and task understanding are present, so the next productive step is to launch training.',
-      ...base,
-      requires_confirmation: true
-    };
-  }
-
-  if (!task.model_version_id && passStatus === 'pass') {
-    return {
-      action: 'register_model',
-      title: 'Register the model version',
-      summary:
-        comparison?.summary ??
-        'Metrics passed the current gate; the next step is to register the resulting model version.',
-      reason:
-        gate?.reason ??
-        'The linked training job already meets the current validation threshold, so promotion is safer than launching another round.',
-      ...base,
-      requires_confirmation: true
-    };
-  }
-
-  if (!task.model_version_id) {
-    if (comparison?.decision === 'collect_data') {
-      return {
-        action: 'collect_data',
-        title: comparison.title,
-        summary: comparison.summary,
-        reason: comparison.reason,
-        ...base,
-        requires_confirmation: false
-      };
-    }
-    const currentJobStatus = currentJob?.status ?? 'completed';
-    return {
-      action: 'start_training',
-      title: 'Run the next training round',
-      summary:
-        comparison?.summary ??
-        'The current metrics are still below the target gate, so the agent recommends another round.',
-      reason:
-        comparison?.reason ??
-        `The latest linked run ended with ${currentJobStatus} and the validation result is ${passStatus}.`,
-      ...base,
-      requires_confirmation: true
-    };
-  }
-
-  if (!feedbackDatasetId) {
-    return {
-      action: 'mine_feedback',
-      title: 'Mine a feedback dataset',
-      summary:
-        task.active_learning_pool?.summary ??
-        'The model version is registered. Next, collect low-confidence runs into a feedback dataset.',
-      reason:
-        task.active_learning_pool && task.active_learning_pool.total_candidates > 0
-          ? 'A clustered active-learning pool is already available, so feedback mining is the highest-leverage next step.'
-          : 'Closing the data loop is the highest-value next step once a model version already exists.',
-      ...base,
-      requires_confirmation: true
-    };
-  }
-
-  return {
-    action: 'completed',
-    title: 'Closed loop is ready',
-    summary: 'Training, registration, and feedback dataset creation are already linked on this task.',
-    reason: 'The task has a linked model version and feedback dataset, so the workflow is ready for iterative reuse rather than a forced next mutation.',
-    ...base,
-    requires_confirmation: false
-  };
-};
-
 const refreshVisionTaskAgentState = (task: VisionModelingTaskRecord): boolean => {
   let changed = false;
   const suite = buildVisionTaskEvaluationSuite(task);
@@ -5189,7 +5448,15 @@ const refreshVisionTaskAgentState = (task: VisionModelingTaskRecord): boolean =>
     task.promotion_gate = gate;
     changed = true;
   }
-  const recommendation = buildVisionTaskAgentRecommendation(task);
+  const currentJob = task.training_job_id
+    ? trainingJobs.find((item) => item.id === task.training_job_id) ?? null
+    : null;
+  const recommendation = buildVisionTaskAgentRecommendation({
+    task,
+    currentJob,
+    evidence: buildVisionTaskEvidence(task, currentJob),
+    createdAt: now()
+  });
   if (sameVisionTaskRecommendationMeaning(task.agent_next_action, recommendation)) {
     return changed;
   }
@@ -5199,25 +5466,15 @@ const refreshVisionTaskAgentState = (task: VisionModelingTaskRecord): boolean =>
     outcome: 'recommended',
     summary: recommendation.summary,
     reason: recommendation.reason,
-    created_at: recommendation.created_at
+    created_at: recommendation.created_at,
+    source_layer: 'deterministic_refresh',
+    evidence_refs: [
+      task.dataset_version_id ? `dataset_version:${task.dataset_version_id}` : '',
+      task.training_job_id ? `training_job:${task.training_job_id}` : ''
+    ].filter((ref) => ref.length > 0)
   });
   return true;
 };
-
-const recordVisionTaskAgentOutcome = (
-  task: VisionModelingTaskRecord,
-  action: VisionTaskAgentDecisionLogEntry['action'],
-  outcome: VisionTaskAgentDecisionLogEntry['outcome'],
-  summary: string,
-  reason: string
-): boolean =>
-  appendVisionTaskDecisionLog(task, {
-    action,
-    outcome,
-    summary,
-    reason,
-    created_at: now()
-  });
 
 const persistVisionTaskStateIfChanged = (
   task: VisionModelingTaskRecord,
@@ -5235,7 +5492,7 @@ const syncVisionTaskWithRuntimeState = (task: VisionModelingTaskRecord): boolean
   if (task.training_job_id) {
     const job = trainingJobs.find((item) => item.id === task.training_job_id) ?? null;
     if (job) {
-      const report = buildValidationReportFromTrainingJob(job);
+      const report = buildValidationReportFromTrainingJob(job, task);
       if (JSON.stringify(task.validation_report) !== JSON.stringify(report)) {
         task.validation_report = report;
         changed = true;
@@ -5285,7 +5542,10 @@ const syncVisionTaskWithRuntimeState = (task: VisionModelingTaskRecord): boolean
   return changed;
 };
 
-const buildValidationReportFromTrainingJob = (job: TrainingJobRecord): ValidationReport => {
+const buildValidationReportFromTrainingJob = (
+  job: TrainingJobRecord,
+  task?: VisionModelingTaskRecord | null
+): ValidationReport => {
   const metricRows = trainingMetrics
     .filter((metric) => metric.training_job_id === job.id)
     .sort((left, right) => left.step - right.step);
@@ -5294,16 +5554,24 @@ const buildValidationReportFromTrainingJob = (job: TrainingJobRecord): Validatio
     metricMap.set(row.metric_name, row.metric_value);
   }
   const metrics: Record<string, number | string> = Object.fromEntries(metricMap.entries());
-  const thresholdRule = metricAliasesByTaskType[job.task_type] ?? metricAliasesByTaskType.detection;
+  const taskThresholdRule = task ? readThresholdRuleFromTask(task) : null;
+  const suite = taskThresholdRule ? null : resolveEvaluationSuiteForTrainingJob(job);
+  const thresholdRule = taskThresholdRule ?? (suite
+    ? {
+        primary_metric: suite.primary_metric,
+        aliases: metricAliasesForPrimaryMetric(suite.primary_metric),
+        threshold: suite.threshold_target,
+        direction: suite.direction
+      }
+    : metricAliasesByTaskType[job.task_type] ?? metricAliasesByTaskType.detection);
   const metricValues = Object.fromEntries(metricMap.entries());
   const primaryValue = resolveMetricValue(metricValues, thresholdRule.aliases);
   const primaryMetric = thresholdRule.primary_metric;
-  const passStatus: ValidationReport['summary']['pass_status'] =
-    primaryValue >= thresholdRule.threshold
-      ? 'pass'
-      : primaryValue >= thresholdRule.threshold * 0.85
-        ? 'needs_review'
-        : 'fail';
+  const passStatus = resolveMetricPassStatus(
+    primaryValue,
+    thresholdRule.threshold,
+    thresholdRule.direction
+  );
   return {
     summary: {
       primary_metric: primaryMetric,
@@ -5313,7 +5581,8 @@ const buildValidationReportFromTrainingJob = (job: TrainingJobRecord): Validatio
     metrics: {
       ...metrics,
       threshold_metric: thresholdRule.primary_metric,
-      threshold_target: thresholdRule.threshold.toString()
+      threshold_target: thresholdRule.threshold.toString(),
+      threshold_direction: thresholdRule.direction
     },
     badcases: [],
     recommendations:
@@ -5723,9 +5992,6 @@ const resolveCreateTrainingJobAction = async (
     trainConfig: preliminaryConfig
   });
   const visionMissingRequirements: string[] = [];
-  if (sampleImageAttachmentIds.length <= 0) {
-    visionMissingRequirements.push('example_images');
-  }
   if (effectiveVisionTaskSpec.task_type === 'unknown') {
     visionMissingRequirements.push('task_type');
   }
@@ -7035,6 +7301,19 @@ const buildNaturalConsoleOpsPayload = (
       }
     };
   }
+  if (detectTrainingDeliveryGoalIntent(content)) {
+    return {
+      api: 'goal_orchestration',
+      params: {
+        prompt: compactWhitespace(content),
+        ...(visionTaskId ? { task_id: visionTaskId } : {}),
+        ...(datasetId ? { dataset_id: datasetId } : {}),
+        ...(taskType ? { task_type: taskType } : {}),
+        auto_advance: true,
+        max_rounds: 3
+      }
+    };
+  }
   if (
     (/(自动推进|一键推进|auto[-_ ]?advance).*(视觉建模任务|视觉任务|vision task)/i.test(content) ||
       (/(自动推进|一键推进|auto[-_ ]?advance)/i.test(content) && Boolean(visionTaskId))) &&
@@ -8107,6 +8386,21 @@ const normalizeGoalOrchestrationStringArray = (value: unknown): string[] =>
         .slice(0, 10)
     : [];
 
+const normalizeGoalTrainingConfigOverrides = (
+  value: unknown
+): Record<string, string> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  const allowedKeys = new Set(['epochs', 'batch_size', 'learning_rate', 'warmup_ratio', 'weight_decay']);
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key, item]) => allowedKeys.has(key) && (typeof item === 'string' || typeof item === 'number'))
+      .map(([key, item]) => [key, String(item).trim()])
+      .filter(([, item]) => item.length > 0)
+  );
+};
+
 const buildGoalOrchestrationActionLinks = (input: {
   chinese: boolean;
   taskId: string;
@@ -8191,6 +8485,13 @@ const executeGoalOrchestration = async (input: {
       ...normalizeAttachmentIds(input.currentAttachmentIds)
     ])
   ).slice(0, 10);
+  const trainingConfigOverrides = {
+    ...normalizeGoalTrainingConfigOverrides(input.params.training_config),
+    ...inferNumericConfigFromText(prompt)
+  };
+  const acceptanceTarget =
+    (typeof input.params.acceptance_target === 'string' ? input.params.acceptance_target.trim() : '') ||
+    inferAcceptanceTargetFromText(prompt);
 
   const understanding = await understandVisionTaskForContext({
     prompt,
@@ -8199,6 +8500,8 @@ const executeGoalOrchestration = async (input: {
     dataset_version_id: datasetVersionId,
     task_id: taskId || null,
     conversation_id: input.conversationId,
+    training_config_overrides: trainingConfigOverrides,
+    acceptance_target: acceptanceTarget,
     currentUser: input.currentUser
   });
 
@@ -8212,6 +8515,8 @@ const executeGoalOrchestration = async (input: {
     task_type: effectiveTaskType,
     auto_advance: autoAdvance,
     max_rounds: maxRounds,
+    training_config: trainingConfigOverrides,
+    acceptance_target: acceptanceTarget,
     sample_attachment_ids: sampleAttachmentIds,
     goal_summary: goalSummary,
     plan_reason: planReason
@@ -8226,6 +8531,8 @@ const executeGoalOrchestration = async (input: {
     task_type: effectiveTaskType,
     auto_advance: autoAdvance ? 'true' : 'false',
     max_rounds: String(maxRounds),
+    training_config_json: JSON.stringify(trainingConfigOverrides),
+    acceptance_target: acceptanceTarget,
     goal_summary: goalSummary,
     plan_reason: planReason,
     sample_attachment_ids: sampleAttachmentIds.join(',')
@@ -8353,7 +8660,13 @@ const executeGoalOrchestration = async (input: {
 
   const advanced = await autoAdvanceVisionTask({
     task_id: task.id,
-    max_rounds: maxRounds
+    max_rounds: maxRounds,
+    deliver_model: true,
+    wait_timeout_ms:
+      typeof input.params.wait_timeout_ms === 'number' && Number.isFinite(input.params.wait_timeout_ms)
+        ? Math.max(1000, Math.min(120000, Math.round(input.params.wait_timeout_ms)))
+        : 120000,
+    wait_poll_ms: 250
   });
   const evidenceSummary = buildVisionTaskConversationEvidenceSummary({
     task: advanced.task,
@@ -8753,16 +9066,28 @@ const resolveConsoleApiAction = async (
       const taskId = String(params.task_id ?? params.vision_task_id ?? '');
       const maxRoundsRaw = Number(params.max_rounds);
       const forceRaw = params.force;
-      const force =
-        typeof forceRaw === 'boolean'
-          ? forceRaw
-          : typeof forceRaw === 'string'
-            ? /^(true|1|yes|y)$/i.test(forceRaw)
+      const deliverModelRaw = params.deliver_model ?? params.deliver;
+      const waitForTrainingRaw = params.wait_for_training;
+      const waitTimeoutRaw = Number(params.wait_timeout_ms);
+      const waitPollRaw = Number(params.wait_poll_ms);
+      const toOptionalBool = (value: unknown): boolean | undefined =>
+        typeof value === 'boolean'
+          ? value
+          : typeof value === 'string'
+            ? /^(true|1|yes|y)$/i.test(value)
             : undefined;
+      const force =
+        toOptionalBool(forceRaw);
+      const deliverModel = toOptionalBool(deliverModelRaw);
+      const waitForTraining = toOptionalBool(waitForTrainingRaw);
       const result = await autoAdvanceVisionTask({
         task_id: taskId,
         ...(Number.isFinite(maxRoundsRaw) ? { max_rounds: maxRoundsRaw } : {}),
-        ...(typeof force === 'boolean' ? { force } : {})
+        ...(typeof force === 'boolean' ? { force } : {}),
+        ...(typeof deliverModel === 'boolean' ? { deliver_model: deliverModel } : { deliver_model: true }),
+        ...(typeof waitForTraining === 'boolean' ? { wait_for_training: waitForTraining } : {}),
+        ...(Number.isFinite(waitTimeoutRaw) ? { wait_timeout_ms: waitTimeoutRaw } : {}),
+        ...(Number.isFinite(waitPollRaw) ? { wait_poll_ms: waitPollRaw } : {})
       });
       const evidenceSummary = buildVisionTaskConversationEvidenceSummary({
         task: result.task,
@@ -14190,6 +14515,50 @@ const readTrainingArtifactSummary = async (
   }
 };
 
+const readTrainingArtifactSummarySync = (
+  attachment: FileAttachment
+): TrainingArtifactSummary | null => {
+  if (attachment.status !== 'ready') {
+    return null;
+  }
+  const known = storedAttachmentBinaryById.get(attachment.id);
+  const candidatePath =
+    known && existsSync(known.file_path)
+      ? known.file_path
+      : attachment.storage_path && existsSync(attachment.storage_path)
+        ? attachment.storage_path
+        : null;
+  if (!candidatePath) {
+    return null;
+  }
+
+  try {
+    const raw = readFileSync(candidatePath, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const payload = parsed as Record<string, unknown>;
+    const primaryModelPath =
+      toOptionalTrimmedString(payload.primary_model_path) ??
+      toOptionalTrimmedString(payload.model_path) ??
+      null;
+
+    return {
+      runner: toOptionalTrimmedString(payload.runner),
+      mode: toOptionalTrimmedString(payload.mode),
+      fallback_reason: toOptionalTrimmedString(payload.fallback_reason),
+      training_performed: toOptionalBoolean(payload.training_performed),
+      primary_model_path: primaryModelPath,
+      generated_at: toOptionalTrimmedString(payload.generated_at),
+      sampled_items: toOptionalInteger(payload.sampled_items),
+      metrics_keys: extractArtifactMetricsKeys(payload)
+    };
+  } catch {
+    return null;
+  }
+};
+
 const ensureTrainingArtifactAttachment = async (
   job: TrainingJobRecord,
   metrics: Record<string, number>
@@ -15199,6 +15568,833 @@ export async function createDataset(input: CreateDatasetInput): Promise<DatasetR
   });
 
   return created;
+}
+
+type LocalAnnotatedFolderPair = {
+  image_path: string;
+  image_filename: string;
+  annotation_path: string;
+  annotation_filename: string;
+  format: 'yolo' | 'voc';
+  boxes: DetectionImportEntry['boxes'];
+};
+
+type LocalAnnotatedFolderInspection = {
+  result: LocalFolderScanResult;
+  pairs: LocalAnnotatedFolderPair[];
+};
+
+const localFolderAnnotationIgnoreNames = new Set([
+  'classes.txt',
+  'obj.names',
+  'data.yaml',
+  'data.yml',
+  'labels.txt'
+]);
+
+const normalizeManualValidationCount = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 5;
+  }
+  return Math.max(0, Math.min(50, Math.floor(value)));
+};
+
+const resolveLocalFolderTrainingDefaultEpochs = (): string => {
+  const parsed = Number.parseInt(process.env.LOCAL_FOLDER_TRAINING_DEFAULT_EPOCHS ?? '3', 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return '3';
+  }
+  return String(Math.min(parsed, 300));
+};
+
+const resolveLocalFolderFramework = (
+  taskType: TaskType,
+  requested?: ModelFramework
+): ModelFramework => {
+  if (requested === 'paddleocr' || requested === 'doctr' || requested === 'yolo') {
+    return requested;
+  }
+  return taskType === 'ocr' ? 'paddleocr' : 'yolo';
+};
+
+const resolveLocalFolderBaseModel = (
+  framework: ModelFramework,
+  taskType: TaskType,
+  requested?: string
+): string => {
+  const normalized = requested?.trim();
+  if (normalized) {
+    return normalized;
+  }
+  const recipe = trainingRecipeCatalog.find(
+    (item) => item.framework === framework && item.task_type === taskType
+  );
+  if (recipe) {
+    return recipe.default_base_model;
+  }
+  if (framework === 'paddleocr') {
+    return 'paddleocr-mobile';
+  }
+  if (framework === 'doctr') {
+    return 'doctr-crnn';
+  }
+  return 'yolo11n';
+};
+
+const assertReadableLocalDirectory = async (folderPath: string): Promise<string> => {
+  const normalized = folderPath.trim();
+  if (!normalized) {
+    throw new Error('folder_path is required.');
+  }
+  const resolved = path.resolve(normalized);
+  const stats = await fs.stat(resolved).catch(() => null);
+  if (!stats?.isDirectory()) {
+    throw new Error('folder_path must point to an existing server-local directory.');
+  }
+  return resolved;
+};
+
+const listLocalFolderFiles = async (rootDir: string): Promise<string[]> => {
+  const files: string[] = [];
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) {
+        continue;
+      }
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile()) {
+        files.push(fullPath);
+      }
+    }
+  }
+  return files.sort((left, right) => left.localeCompare(right));
+};
+
+const readLocalFolderClassNames = async (files: string[]): Promise<string[]> => {
+  const candidate = files.find((filePath) =>
+    ['classes.txt', 'obj.names'].includes(path.basename(filePath).toLowerCase())
+  );
+  if (candidate) {
+    const content = await fs.readFile(candidate, 'utf8');
+    return content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'));
+  }
+
+  const yaml = files.find((filePath) =>
+    ['data.yaml', 'data.yml'].includes(path.basename(filePath).toLowerCase())
+  );
+  if (!yaml) {
+    return [];
+  }
+  const content = await fs.readFile(yaml, 'utf8');
+  const inlineNames = content.match(/names:\s*\[([^\]]+)\]/i);
+  if (inlineNames?.[1]) {
+    return inlineNames[1]
+      .split(',')
+      .map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean);
+  }
+  return content
+    .split(/\r?\n/)
+    .map((line) => {
+      const matched = line.match(/^\s*\d+\s*:\s*['"]?([^'"]+)['"]?\s*$/);
+      return matched?.[1]?.trim() ?? '';
+    })
+    .filter(Boolean);
+};
+
+const parseYoloLocalLabelContent = (
+  content: string,
+  classNames: string[]
+): DetectionImportEntry['boxes'] => {
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const parts = line.split(/\s+/);
+      if (parts.length < 5) {
+        return null;
+      }
+      const classIndex = Number.parseInt(parts[0] ?? '', 10);
+      const xCenter = toNumberOrNull(parts[1]);
+      const yCenter = toNumberOrNull(parts[2]);
+      const width = toNumberOrNull(parts[3]);
+      const height = toNumberOrNull(parts[4]);
+      if (
+        xCenter === null ||
+        yCenter === null ||
+        width === null ||
+        height === null ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        return null;
+      }
+      const label =
+        Number.isFinite(classIndex) && classNames[classIndex]?.trim()
+          ? classNames[classIndex].trim()
+          : Number.isFinite(classIndex)
+            ? `class_${classIndex}`
+            : 'object';
+      return {
+        x: Number((xCenter - width / 2).toFixed(6)),
+        y: Number((yCenter - height / 2).toFixed(6)),
+        width: Number(width.toFixed(6)),
+        height: Number(height.toFixed(6)),
+        label,
+        score: toNumberOrNull(parts[5]) ?? 1
+      };
+    })
+    .filter((box): box is DetectionImportEntry['boxes'][number] => box !== null);
+};
+
+const decodeXmlEntities = (value: string): string =>
+  value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+
+const readXmlTag = (content: string, tagName: string): string => {
+  const match = content.match(new RegExp(`<${tagName}>\\s*([\\s\\S]*?)\\s*</${tagName}>`, 'i'));
+  return match?.[1] ? decodeXmlEntities(match[1].trim()) : '';
+};
+
+const parseVocLocalAnnotationContent = (content: string): DetectionImportEntry['boxes'] => {
+  const objectMatches = content.match(/<object>[\s\S]*?<\/object>/gi) ?? [];
+  return objectMatches
+    .map((objectXml) => {
+      const label = readXmlTag(objectXml, 'name') || 'object';
+      const xmin = toNumberOrNull(readXmlTag(objectXml, 'xmin'));
+      const ymin = toNumberOrNull(readXmlTag(objectXml, 'ymin'));
+      const xmax = toNumberOrNull(readXmlTag(objectXml, 'xmax'));
+      const ymax = toNumberOrNull(readXmlTag(objectXml, 'ymax'));
+      if (xmin === null || ymin === null || xmax === null || ymax === null) {
+        return null;
+      }
+      const width = xmax - xmin;
+      const height = ymax - ymin;
+      if (width <= 0 || height <= 0) {
+        return null;
+      }
+      return {
+        x: xmin,
+        y: ymin,
+        width,
+        height,
+        label,
+        score: 1
+      };
+    })
+    .filter((box): box is DetectionImportEntry['boxes'][number] => box !== null);
+};
+
+const inspectLocalAnnotatedFolder = async (
+  input: LocalFolderScanInput
+): Promise<LocalAnnotatedFolderInspection> => {
+  const rootDir = await assertReadableLocalDirectory(input.folder_path);
+  const manualValidationCount = normalizeManualValidationCount(input.manual_validation_count);
+  const requestedTaskType = input.task_type === 'ocr' ? 'ocr' : 'detection';
+  const recommendedFramework = resolveLocalFolderFramework(requestedTaskType, input.framework);
+  const files = await listLocalFolderFiles(rootDir);
+  const imageFiles = files.filter((filePath) =>
+    imageAttachmentExtensionSet.has(path.extname(filePath).toLowerCase())
+  );
+  const classNamesFromFile = await readLocalFolderClassNames(files);
+  const yoloLabelCandidates = files.filter((filePath) => {
+    if (path.extname(filePath).toLowerCase() !== '.txt') {
+      return false;
+    }
+    if (localFolderAnnotationIgnoreNames.has(path.basename(filePath).toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
+  const vocLabelCandidates = files.filter((filePath) => path.extname(filePath).toLowerCase() === '.xml');
+
+  const imageByBase = new Map<string, string>();
+  imageFiles.forEach((filePath) => {
+    imageByBase.set(path.basename(filePath, path.extname(filePath)).toLowerCase(), filePath);
+  });
+
+  const yoloLabelsByBase = new Map<string, string>();
+  yoloLabelCandidates.forEach((filePath) => {
+    yoloLabelsByBase.set(path.basename(filePath, path.extname(filePath)).toLowerCase(), filePath);
+  });
+  const vocLabelsByBase = new Map<string, string>();
+  vocLabelCandidates.forEach((filePath) => {
+    vocLabelsByBase.set(path.basename(filePath, path.extname(filePath)).toLowerCase(), filePath);
+  });
+
+  const observedLabels = new Set<string>();
+  const pairs: LocalAnnotatedFolderPair[] = [];
+  for (const [base, imagePath] of imageByBase.entries()) {
+    const annotationPath = yoloLabelsByBase.get(base);
+    if (!annotationPath) {
+      continue;
+    }
+    const content = await fs.readFile(annotationPath, 'utf8');
+    const boxes = parseYoloLocalLabelContent(content, classNamesFromFile);
+    boxes.forEach((box) => observedLabels.add(box.label));
+    if (boxes.length === 0) {
+      continue;
+    }
+    pairs.push({
+      image_path: imagePath,
+      image_filename: path.basename(imagePath),
+      annotation_path: annotationPath,
+      annotation_filename: path.basename(annotationPath),
+      format: 'yolo',
+      boxes
+    });
+  }
+
+  for (const [base, imagePath] of imageByBase.entries()) {
+    if (pairs.some((pair) => path.basename(pair.image_path, path.extname(pair.image_path)).toLowerCase() === base)) {
+      continue;
+    }
+    const annotationPath = vocLabelsByBase.get(base);
+    if (!annotationPath) {
+      continue;
+    }
+    const content = await fs.readFile(annotationPath, 'utf8');
+    const boxes = parseVocLocalAnnotationContent(content);
+    boxes.forEach((box) => observedLabels.add(box.label));
+    if (boxes.length === 0) {
+      continue;
+    }
+    pairs.push({
+      image_path: imagePath,
+      image_filename: path.basename(imagePath),
+      annotation_path: annotationPath,
+      annotation_filename: path.basename(annotationPath),
+      format: 'voc',
+      boxes
+    });
+  }
+
+  const unmatchedImageCount = imageFiles.filter((filePath) => {
+    const base = path.basename(filePath, path.extname(filePath)).toLowerCase();
+    return !yoloLabelsByBase.has(base) && !vocLabelsByBase.has(base);
+  }).length;
+  const unmatchedYoloAnnotationCount = yoloLabelCandidates.filter((filePath) => {
+    const base = path.basename(filePath, path.extname(filePath)).toLowerCase();
+    return !imageByBase.has(base);
+  }).length;
+  const unmatchedVocAnnotationCount = vocLabelCandidates.filter((filePath) => {
+    const base = path.basename(filePath, path.extname(filePath)).toLowerCase();
+    return !imageByBase.has(base);
+  }).length;
+  const unmatchedAnnotationCount = unmatchedYoloAnnotationCount + unmatchedVocAnnotationCount;
+  const warnings: string[] = [];
+  if (imageFiles.length === 0) {
+    warnings.push('No image files were found.');
+  }
+  if (yoloLabelCandidates.length === 0 && vocLabelCandidates.length === 0) {
+    warnings.push('No YOLO .txt or Pascal VOC .xml annotation files were found.');
+  }
+  if (pairs.length === 0 && imageFiles.length > 0 && yoloLabelCandidates.length + vocLabelCandidates.length > 0) {
+    warnings.push('Images and label files were found, but no valid basename pairs with boxes were parsed.');
+  }
+  if (unmatchedImageCount > 0) {
+    warnings.push(`${unmatchedImageCount} image files have no matching label file.`);
+  }
+  if (unmatchedAnnotationCount > 0) {
+    warnings.push(`${unmatchedAnnotationCount} label files have no matching image file.`);
+  }
+
+  const classNames = classNamesFromFile.length > 0
+    ? classNamesFromFile
+    : Array.from(observedLabels).sort((left, right) => left.localeCompare(right));
+
+  return {
+    result: {
+      folder_path: rootDir,
+      detected_format:
+        pairs.some((pair) => pair.format === 'voc')
+          ? 'voc'
+          : pairs.some((pair) => pair.format === 'yolo')
+            ? 'yolo'
+            : 'unknown',
+      task_type: requestedTaskType,
+      recommended_framework: recommendedFramework,
+      image_count: imageFiles.length,
+      annotation_file_count: yoloLabelCandidates.length + vocLabelCandidates.length,
+      paired_count: pairs.length,
+      unmatched_image_count: unmatchedImageCount,
+      unmatched_annotation_count: unmatchedAnnotationCount,
+      class_names: classNames.length > 0 ? classNames : ['object'],
+      warnings,
+      manual_validation_count: Math.min(manualValidationCount, pairs.length)
+    },
+    pairs
+  };
+};
+
+const copyLocalImageIntoDataset = async (
+  dataset: DatasetRecord,
+  currentUser: User,
+  pair: LocalAnnotatedFolderPair
+): Promise<{ attachment: FileAttachment; item: DatasetItemRecord; created: boolean }> => {
+  const content = await fs.readFile(pair.image_path);
+  const attachment: FileAttachment = {
+    id: nextId('f'),
+    filename: pair.image_filename,
+    status: 'ready',
+    owner_user_id: currentUser.id,
+    attached_to_type: 'Dataset',
+    attached_to_id: dataset.id,
+    mime_type: guessMimeType(pair.image_filename),
+    byte_size: content.byteLength,
+    storage_backend: 'local',
+    storage_path: null,
+    upload_error: null,
+    created_at: now(),
+    updated_at: now()
+  };
+  attachments.unshift(attachment);
+  const stored = await storeAttachmentBinary(
+    attachment,
+    pair.image_filename,
+    content,
+    attachment.mime_type ?? undefined
+  );
+  attachment.storage_path = stored.file_path;
+  attachment.byte_size = stored.byte_size;
+  attachment.mime_type = stored.mime_type;
+
+  const upserted = upsertDatasetItemForAttachment(dataset, attachment, {
+    split: 'unassigned',
+    status: 'ready',
+    metadata: {
+      source: 'local_annotated_folder',
+      source_folder_path: path.dirname(pair.image_path),
+      original_path: pair.image_path,
+      annotation_path: pair.annotation_path,
+      import_format: pair.format
+    }
+  });
+  return { attachment, item: upserted.item, created: upserted.created };
+};
+
+const upsertImportedLocalAnnotation = (
+  dataset: DatasetRecord,
+  currentUser: User,
+  item: DatasetItemRecord,
+  pair: LocalAnnotatedFolderPair
+): 'imported' | 'updated' | 'skipped' => {
+  const existing = annotations.find((annotation) => annotation.dataset_item_id === item.id);
+  const payload = {
+    boxes: pair.boxes,
+    source: {
+      format: pair.format,
+      annotation_filename: pair.annotation_filename
+    }
+  };
+
+  if (!existing) {
+    annotations.unshift({
+      id: nextId('ann'),
+      dataset_item_id: item.id,
+      task_type: dataset.task_type,
+      source: 'import',
+      status: 'annotated',
+      payload,
+      annotated_by: currentUser.id,
+      created_at: now(),
+      updated_at: now()
+    });
+    return 'imported';
+  }
+  if (existing.status === 'approved') {
+    return 'skipped';
+  }
+  existing.payload = payload;
+  existing.source = 'import';
+  existing.status = 'annotated';
+  existing.annotated_by = currentUser.id;
+  existing.updated_at = now();
+  return 'updated';
+};
+
+const splitImportedLocalFolderItems = (
+  items: DatasetItemRecord[],
+  input: {
+    train_ratio?: number;
+    val_ratio?: number;
+    seed?: number;
+    manual_validation_count?: number;
+  }
+): LocalFolderManualValidationItem[] => {
+  const seed = typeof input.seed === 'number' && Number.isFinite(input.seed) ? input.seed : 42;
+  const ordered = sortItemsBySeed(items, seed);
+  const manualCount = Math.min(normalizeManualValidationCount(input.manual_validation_count), ordered.length);
+  const manualItems = ordered.slice(-manualCount);
+  const trainingItems = ordered.slice(0, ordered.length - manualCount);
+  const trainRatio =
+    typeof input.train_ratio === 'number' && Number.isFinite(input.train_ratio)
+      ? Math.max(0, Math.min(1, input.train_ratio))
+      : 0.8;
+  const valRatio =
+    typeof input.val_ratio === 'number' && Number.isFinite(input.val_ratio)
+      ? Math.max(0, Math.min(1, input.val_ratio))
+      : 0.15;
+  const ratioTotal = trainRatio + valRatio;
+  const normalizedTrainRatio = ratioTotal > 0 ? trainRatio / ratioTotal : 0.85;
+  const trainLimit = Math.max(0, Math.min(trainingItems.length, Math.floor(trainingItems.length * normalizedTrainRatio)));
+
+  trainingItems.forEach((item, index) => {
+    item.split = index < trainLimit ? 'train' : 'val';
+    item.metadata = {
+      ...item.metadata,
+      manual_validation_holdout: 'false'
+    };
+    item.updated_at = now();
+  });
+  manualItems.forEach((item) => {
+    item.split = 'test';
+    item.metadata = {
+      ...item.metadata,
+      manual_validation_holdout: 'true'
+    };
+    item.updated_at = now();
+  });
+
+  return manualItems.map((item) => {
+    const attachment = attachments.find((entry) => entry.id === item.attachment_id) ?? null;
+    return {
+      item_id: item.id,
+      attachment_id: item.attachment_id,
+      filename: attachment?.filename ?? item.id,
+      storage_path: attachment?.storage_path ?? null
+    };
+  });
+};
+
+const listManualValidationItemsForJob = (job: TrainingJobRecord): LocalFolderManualValidationItem[] => {
+  const configuredIds = new Set(
+    (job.config.manual_validation_item_ids ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
+  const items = datasetItems
+    .filter(
+      (item) =>
+        item.dataset_id === job.dataset_id &&
+        (item.metadata.manual_validation_holdout === 'true' || configuredIds.has(item.id))
+    )
+    .slice(0, 5);
+  return items.map((item) => {
+    const attachment = attachments.find((entry) => entry.id === item.attachment_id) ?? null;
+    return {
+      item_id: item.id,
+      attachment_id: item.attachment_id,
+      filename: attachment?.filename ?? item.id,
+      storage_path: attachment?.storage_path ?? null
+    };
+  });
+};
+
+const cloneDatasetAttachmentToInferenceInput = async (
+  sourceAttachment: FileAttachment,
+  currentUser: User
+): Promise<FileAttachment> => {
+  const stored = await findStoredAttachmentBinary(sourceAttachment);
+  if (!stored) {
+    throw new Error(`Manual validation file ${sourceAttachment.filename} is missing stored content.`);
+  }
+  const content = await fs.readFile(stored.file_path);
+  const cloned: FileAttachment = {
+    id: nextId('f'),
+    filename: sourceAttachment.filename,
+    status: 'ready',
+    owner_user_id: currentUser.id,
+    attached_to_type: 'InferenceRun',
+    attached_to_id: null,
+    mime_type: sourceAttachment.mime_type ?? stored.mime_type ?? guessMimeType(sourceAttachment.filename),
+    byte_size: content.byteLength,
+    storage_backend: 'local',
+    storage_path: null,
+    upload_error: null,
+    created_at: now(),
+    updated_at: now()
+  };
+  attachments.unshift(cloned);
+  const clonedStored = await storeAttachmentBinary(
+    cloned,
+    sourceAttachment.filename,
+    content,
+    cloned.mime_type ?? undefined
+  );
+  cloned.storage_path = clonedStored.file_path;
+  cloned.byte_size = clonedStored.byte_size;
+  cloned.mime_type = clonedStored.mime_type;
+  return cloned;
+};
+
+const resolveOrCreateLocalFolderModel = async (
+  job: TrainingJobRecord,
+  currentUser: User,
+  input: LocalFolderFinalizeInput
+): Promise<ModelRecord> => {
+  const requestedModelId = input.model_id?.trim() ?? '';
+  if (requestedModelId) {
+    return assertModelAccess(requestedModelId, currentUser);
+  }
+
+  const modelName = input.model_name?.trim() || `${job.name} model`;
+  const existing = models.find(
+    (item) =>
+      (currentUser.role === 'admin' || item.owner_user_id === currentUser.id) &&
+      item.model_type === job.task_type &&
+      item.name === modelName
+  );
+  if (existing) {
+    return existing;
+  }
+
+  return createModelDraft({
+    name: modelName,
+    description: `Auto-created model draft for local annotated folder training job ${job.id}.`,
+    model_type: job.task_type,
+    visibility: 'workspace'
+  });
+};
+
+export async function finalizeLocalFolderTrainingJob(
+  input: LocalFolderFinalizeInput
+): Promise<LocalFolderFinalizeResult> {
+  await delay(100);
+  const currentUser = findCurrentUser();
+  const job = trainingJobs.find((item) => item.id === input.training_job_id.trim());
+  if (!job) {
+    throw new Error('Training job not found.');
+  }
+  const dataset = assertDatasetAccess(job.dataset_id, currentUser);
+  assertOwnershipOrAdmin(dataset.owner_user_id, currentUser, 'No permission to finalize this training job.');
+  if (job.status !== 'completed') {
+    throw new Error(`Training job must be completed before finalize; current status=${job.status}.`);
+  }
+
+  const metricsSummary = pickLatestMetrics(trainingMetrics.filter((metric) => metric.training_job_id === job.id));
+  const manualValidationItems = listManualValidationItemsForJob(job);
+  let model: ModelRecord | null = null;
+  let version: ModelVersionRecord | null = modelVersions.find((item) => item.training_job_id === job.id) ?? null;
+  let registrationStatus: LocalFolderFinalizeResult['registration_status'] = version ? 'registered' : 'skipped';
+  let registrationError: string | null = null;
+
+  if (!version) {
+    try {
+      model = await resolveOrCreateLocalFolderModel(job, currentUser, input);
+      version = await registerModelVersion({
+        model_id: model.id,
+        training_job_id: job.id,
+        version_name: input.version_name?.trim() || `${job.name}-v${Date.now().toString().slice(-6)}`,
+        ...(input.allow_compatibility_registration ? { allow_ocr_calibrated_registration: true } : {})
+      });
+      registrationStatus = 'registered';
+    } catch (error) {
+      registrationStatus = 'blocked';
+      registrationError = (error as Error).message;
+    }
+  }
+  if (version && !model) {
+    model = models.find((item) => item.id === version!.model_id) ?? null;
+  }
+
+  const inferenceRunsForHoldout: InferenceRunRecord[] = [];
+  if (version && input.run_manual_validation !== false) {
+    for (const manualItem of manualValidationItems) {
+      const sourceAttachment = attachments.find((item) => item.id === manualItem.attachment_id) ?? null;
+      if (!sourceAttachment) {
+        continue;
+      }
+      const inferenceAttachment = await cloneDatasetAttachmentToInferenceInput(sourceAttachment, currentUser);
+      const run = await runInference({
+        model_version_id: version.id,
+        input_attachment_id: inferenceAttachment.id,
+        task_type: version.task_type
+      });
+      inferenceRunsForHoldout.push(run);
+    }
+  }
+
+  const modelVersionLink = version ? `/models/versions?modelVersion=${encodeURIComponent(version.id)}` : null;
+  const inferenceParams = new URLSearchParams();
+  inferenceParams.set('dataset', dataset.id);
+  if (job.dataset_version_id) {
+    inferenceParams.set('version', job.dataset_version_id);
+  }
+  if (version) {
+    inferenceParams.set('modelVersion', version.id);
+  }
+
+  logAudit('local_folder_training_finalized', 'TrainingJob', job.id, {
+    dataset_id: dataset.id,
+    model_id: model?.id ?? '',
+    model_version_id: version?.id ?? '',
+    registration_status: registrationStatus,
+    inference_run_count: String(inferenceRunsForHoldout.length)
+  });
+
+  return {
+    training_job: job,
+    model,
+    model_version: version,
+    registration_status: registrationStatus,
+    registration_error: registrationError,
+    manual_validation_items: manualValidationItems,
+    inference_runs: inferenceRunsForHoldout,
+    metrics_summary: metricsSummary,
+    next_links: {
+      training_job: `/training/jobs/${job.id}`,
+      model_version: modelVersionLink,
+      inference_validation: `/inference/validate?${inferenceParams.toString()}`
+    }
+  };
+}
+
+export async function scanLocalAnnotatedFolder(
+  input: LocalFolderScanInput
+): Promise<LocalFolderScanResult> {
+  await delay(80);
+  findCurrentUser();
+  const inspection = await inspectLocalAnnotatedFolder(input);
+  return inspection.result;
+}
+
+export async function importLocalFolderAndCreateTrainingJob(
+  input: LocalFolderImportAndTrainInput
+): Promise<LocalFolderImportAndTrainResult> {
+  await delay(120);
+  const currentUser = findCurrentUser();
+  const inspection = await inspectLocalAnnotatedFolder(input);
+  if (inspection.result.detected_format !== 'yolo' && inspection.result.detected_format !== 'voc') {
+    throw new Error('Local folder import currently requires a YOLO or Pascal VOC detection folder.');
+  }
+  if (inspection.pairs.length === 0) {
+    throw new Error('No valid paired image + detection annotation files were found.');
+  }
+
+  let dataset: DatasetRecord;
+  const requestedDatasetId = input.dataset_id?.trim() ?? '';
+  if (requestedDatasetId) {
+    dataset = assertDatasetAccess(requestedDatasetId, currentUser);
+    if (dataset.task_type !== inspection.result.task_type) {
+      throw new Error('Selected dataset task_type does not match scanned folder task_type.');
+    }
+    const mergedClasses = Array.from(new Set([...dataset.label_schema.classes, ...inspection.result.class_names]));
+    dataset.label_schema = { classes: mergedClasses };
+    dataset.updated_at = now();
+  } else {
+    dataset = await createDataset({
+      name: input.dataset_name?.trim() || path.basename(inspection.result.folder_path) || 'Local annotated dataset',
+      description:
+        input.dataset_description?.trim() ||
+        `Imported from server-local annotated folder: ${inspection.result.folder_path}`,
+      task_type: inspection.result.task_type,
+      label_schema: {
+        classes: inspection.result.class_names
+      }
+    });
+  }
+
+  let imagesImported = 0;
+  let annotationsImported = 0;
+  let annotationsUpdated = 0;
+  let createdItems = 0;
+  const importedItems: DatasetItemRecord[] = [];
+  for (const pair of inspection.pairs) {
+    const copied = await copyLocalImageIntoDataset(dataset, currentUser, pair);
+    imagesImported += 1;
+    if (copied.created) {
+      createdItems += 1;
+    }
+    importedItems.push(copied.item);
+    const annotationResult = upsertImportedLocalAnnotation(dataset, currentUser, copied.item, pair);
+    if (annotationResult === 'imported') {
+      annotationsImported += 1;
+    } else if (annotationResult === 'updated') {
+      annotationsUpdated += 1;
+    }
+  }
+
+  const manualValidationItems = splitImportedLocalFolderItems(importedItems, input);
+  dataset.status = 'ready';
+  dataset.metadata = {
+    ...dataset.metadata,
+    latest_local_folder_import_path: inspection.result.folder_path,
+    latest_local_folder_import_format: inspection.result.detected_format,
+    latest_local_folder_manual_validation_count: String(manualValidationItems.length)
+  };
+  dataset.updated_at = now();
+
+  const version = await createDatasetVersion({
+    dataset_id: dataset.id,
+    version_name: `local-folder-${Date.now().toString().slice(-6)}`
+  });
+  const framework = resolveLocalFolderFramework(inspection.result.task_type, input.framework);
+  const baseModel = resolveLocalFolderBaseModel(framework, inspection.result.task_type, input.base_model);
+  const job = await createTrainingJob({
+    name: `${dataset.name} local folder training`,
+    task_type: inspection.result.task_type,
+    framework,
+    dataset_id: dataset.id,
+    dataset_version_id: version.id,
+    ...(input.recipe_id?.trim() ? { recipe_id: input.recipe_id.trim() } : {}),
+    ...(input.recipe_version?.trim() ? { recipe_version: input.recipe_version.trim() } : {}),
+    base_model: baseModel,
+    config: {
+      epochs: resolveLocalFolderTrainingDefaultEpochs(),
+      batch_size: '8',
+      learning_rate: '0.001',
+      source_workflow: 'local_annotated_folder',
+      source_folder_path: inspection.result.folder_path,
+      manual_validation_item_ids: manualValidationItems.map((item) => item.item_id).join(',')
+    },
+    ...(input.execution_target ? { execution_target: input.execution_target } : {}),
+    ...(input.worker_id?.trim() ? { worker_id: input.worker_id.trim() } : {})
+  });
+
+  logAudit('local_annotated_folder_import_training_started', 'Dataset', dataset.id, {
+    folder_path: inspection.result.folder_path,
+    dataset_version_id: version.id,
+    training_job_id: job.id,
+    manual_validation_count: String(manualValidationItems.length)
+  });
+
+  return {
+    scan: inspection.result,
+    dataset,
+    dataset_version: version,
+    training_job: job,
+    manual_validation_items: manualValidationItems,
+    split_summary: version.split_summary,
+    import_summary: {
+      images_imported: imagesImported,
+      annotations_imported: annotationsImported,
+      annotations_updated: annotationsUpdated,
+      created_items: createdItems
+    },
+    next_links: {
+      dataset: `/datasets/${dataset.id}`,
+      training_job: `/training/jobs/${job.id}`,
+      inference_validation: `/inference/validate?dataset=${encodeURIComponent(dataset.id)}&version=${encodeURIComponent(version.id)}`
+    }
+  };
 }
 
 export async function getDatasetDetail(datasetId: string): Promise<{
@@ -17563,6 +18759,8 @@ const understandVisionTaskForContext = async (input: {
   dataset_version_id?: string;
   task_id?: string | null;
   conversation_id?: string | null;
+  training_config_overrides?: Record<string, string>;
+  acceptance_target?: string;
   currentUser: User;
 }): Promise<{
   task: VisionModelingTaskRecord;
@@ -17603,31 +18801,30 @@ const understandVisionTaskForContext = async (input: {
     (typeof input.dataset_id === 'string' ? input.dataset_id.trim() : '') || existingTask?.dataset_id || '';
   const dataset = datasetId ? assertDatasetAccess(datasetId, input.currentUser) : null;
   const profile = dataset ? buildDatasetProfileForVisionTask(dataset, spec) : null;
+  const trainingConfig = {
+    epochs: '20',
+    batch_size: '16',
+    learning_rate: '0.001',
+    warmup_ratio: '0.1',
+    weight_decay: '0.0001',
+    ...(input.training_config_overrides ?? {})
+  };
   const plan = profile
     ? buildTrainingPlanFromRecipe(spec, profile, {
         baseModel: spec.task_type === 'ocr' ? 'paddleocr-base' : 'yolo-base',
-        trainConfig: {
-          epochs: '20',
-          batch_size: '16',
-          learning_rate: '0.001'
-        }
+        trainConfig: trainingConfig
       })
     : null;
   const taskTypeForRounds = toTaskTypeFromVisionTaskType(spec.task_type);
   const thresholdRule =
+    inferThresholdRuleFromText(input.acceptance_target || prompt, taskTypeForRounds) ??
     metricAliasesByTaskType[taskTypeForRounds ?? 'detection'] ?? metricAliasesByTaskType.detection;
   const autoTuneRounds = taskTypeForRounds
-    ? buildAutoTuneRoundConfigs(taskTypeForRounds, {
-        epochs: '20',
-        batch_size: '16',
-        learning_rate: '0.001',
-        warmup_ratio: '0.1',
-        weight_decay: '0.0001'
-      })
+    ? buildAutoTuneRoundConfigs(taskTypeForRounds, plan?.train_args ?? trainingConfig)
     : [];
 
   const missingRequirements: string[] = [];
-  if (sampleAttachmentIds.length <= 0) {
+  if (sampleAttachmentIds.length <= 0 && !dataset) {
     missingRequirements.push('example_images');
   }
   if (spec.task_type === 'unknown') {
@@ -17762,13 +18959,22 @@ export async function autoContinueVisionTask(input: {
   const latestHistory = readAutoTuneHistoryFromTask(task).filter((item) => item.round <= maxRounds);
   const latestRound = latestHistory[latestHistory.length - 1] ?? null;
   const force = input.force === true;
-  if (latestRound && latestRound.pass_status === 'pass' && !force) {
+  if (
+    latestRound &&
+    latestRound.pass_status === 'pass' &&
+    (task.promotion_gate?.status ?? 'pending') === 'pass' &&
+    !force
+  ) {
     let changed = recordVisionTaskAgentOutcome(
       task,
       'start_training',
       'skipped',
       'Skipped launching another round.',
-      'The current linked training evidence already reached the threshold.'
+      'The current linked training evidence already reached the threshold.',
+      {
+        source_layer: 'auto_advance',
+        evidence_refs: latestRound.training_job_id ? [`training_job:${latestRound.training_job_id}`] : []
+      }
     );
     if (refreshVisionTaskAgentState(task)) {
       changed = true;
@@ -17788,7 +18994,11 @@ export async function autoContinueVisionTask(input: {
       'wait_training',
       'skipped',
       'Skipped launch because a round is still running.',
-      'The previous linked round is still active.'
+      'The previous linked round is still active.',
+      {
+        source_layer: 'auto_advance',
+        evidence_refs: latestRound.training_job_id ? [`training_job:${latestRound.training_job_id}`] : []
+      }
     );
     if (refreshVisionTaskAgentState(task)) {
       changed = true;
@@ -17810,7 +19020,11 @@ export async function autoContinueVisionTask(input: {
       'start_training',
       'skipped',
       'No unused round remained inside the current limit.',
-      'The current round budget is exhausted.'
+      'The current round budget is exhausted.',
+      {
+        source_layer: 'auto_advance',
+        evidence_refs: [`dataset_version:${datasetVersionId}`]
+      }
     );
     if (refreshVisionTaskAgentState(task)) {
       changed = true;
@@ -17825,13 +19039,28 @@ export async function autoContinueVisionTask(input: {
     };
   }
 
-  const trainingPlanBaseModel = task.training_plan?.base_model || `${resolveFrameworkForVisionTask(task)}-base`;
+  const framework = resolveFrameworkForVisionTask(task);
+  const recipe = findTrainingRecipeForInput({
+    task_type: taskType,
+    framework,
+    recipe_id: task.training_plan?.recipe_id,
+    recipe_version: task.training_plan?.recipe_version
+  });
+  if (!recipe) {
+    throw new Error('No training recipe is available for this vision task.');
+  }
+  const trainingPlanBaseModel =
+    task.training_plan?.base_model ||
+    recipe.default_base_model ||
+    `${framework}-base`;
   const created = await createTrainingJob({
     name: `${task.id}-r${nextRoundConfig.round}`,
     task_type: taskType,
-    framework: resolveFrameworkForVisionTask(task),
+    framework,
     dataset_id: dataset.id,
     dataset_version_id: datasetVersionId,
+    recipe_id: recipe.recipe_id,
+    recipe_version: recipe.recipe_version,
     base_model: trainingPlanBaseModel,
     config: nextRoundConfig.train_args
   });
@@ -17852,14 +19081,24 @@ export async function autoContinueVisionTask(input: {
     auto_tune_rounds_json: JSON.stringify(rounds),
     auto_tune_history_json: JSON.stringify(mergedHistory),
     auto_tune_active_round: String(nextRoundConfig.round),
-    auto_tune_last_launch_at: now()
+    auto_tune_last_launch_at: now(),
+    training_readiness_report_json:
+      created.config.readiness_snapshot ?? task.metadata.training_readiness_report_json ?? ''
   };
   recordVisionTaskAgentOutcome(
     task,
     'start_training',
     'executed',
     'Started the next training round.',
-    'Launched a linked training job from this vision task context.'
+    'Launched a linked training job from this vision task context.',
+    {
+      source_layer: 'auto_advance',
+      evidence_refs: [
+        `dataset:${dataset.id}`,
+        `dataset_version:${datasetVersionId}`,
+        `training_job:${created.id}`
+      ]
+    }
   );
   refreshVisionTaskAgentState(task);
   task.updated_at = now();
@@ -18218,6 +19457,7 @@ const findOrCreateFeedbackDatasetForVisionTask = (
 export async function generateVisionTaskFeedbackDataset(input: {
   task_id: string;
   max_samples?: number;
+  source_layer?: VisionTaskAgentDecisionLogEntry['source_layer'];
 }): Promise<{
   task: VisionModelingTaskRecord;
   dataset_id: string;
@@ -18299,7 +19539,14 @@ export async function generateVisionTaskFeedbackDataset(input: {
     'mine_feedback',
     'executed',
     'Collected low-confidence samples into the feedback dataset.',
-    'The linked feedback dataset now stores mined badcases for this task.'
+    'The linked feedback dataset now stores mined badcases for this task.',
+    {
+      source_layer: input.source_layer ?? 'user_confirmed',
+      evidence_refs: [
+        `dataset:${feedbackDataset.id}`,
+        ...selectedRunIds.map((runId) => `inference_run:${runId}`)
+      ]
+    }
   );
   refreshVisionTaskAgentState(task);
   markAppStateDirty();
@@ -18324,6 +19571,7 @@ export async function registerVisionTaskModelVersion(input: {
   model_id?: string;
   allow_ocr_calibrated_registration?: boolean;
   require_pure_real_evidence?: boolean;
+  source_layer?: VisionTaskAgentDecisionLogEntry['source_layer'];
 }): Promise<{
   task: VisionModelingTaskRecord;
   model_version: ModelVersionRecord;
@@ -18392,7 +19640,15 @@ export async function registerVisionTaskModelVersion(input: {
     'register_model',
     'executed',
     'Registered the linked model version.',
-    'The linked training evidence satisfied the current registration path.'
+    'The linked training evidence satisfied the current registration path.',
+    {
+      source_layer: input.source_layer ?? 'user_confirmed',
+      evidence_refs: [
+        `training_job:${trainingJob.id}`,
+        `model:${version.model_id}`,
+        `model_version:${version.id}`
+      ]
+    }
   );
   refreshVisionTaskAgentState(task);
   task.updated_at = now();
@@ -18409,13 +19665,51 @@ export async function registerVisionTaskModelVersion(input: {
   };
 }
 
+const isTrainingJobTerminal = (job: TrainingJobRecord): boolean =>
+  job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
+
+const waitForTrainingJobTerminal = async (
+  jobId: string,
+  options: {
+    timeout_ms?: number;
+    poll_ms?: number;
+  } = {}
+): Promise<TrainingJobRecord | null> => {
+  const timeoutMs =
+    typeof options.timeout_ms === 'number' && Number.isFinite(options.timeout_ms)
+      ? Math.max(500, Math.min(120000, Math.round(options.timeout_ms)))
+      : 15000;
+  const pollMs =
+    typeof options.poll_ms === 'number' && Number.isFinite(options.poll_ms)
+      ? Math.max(100, Math.min(2000, Math.round(options.poll_ms)))
+      : 250;
+  const deadline = Date.now() + timeoutMs;
+  let latest = trainingJobs.find((item) => item.id === jobId) ?? null;
+  while (latest && !isTrainingJobTerminal(latest) && Date.now() < deadline) {
+    await delay(pollMs);
+    latest = trainingJobs.find((item) => item.id === jobId) ?? null;
+  }
+  return latest;
+};
+
 export async function autoAdvanceVisionTask(input: {
   task_id: string;
   max_rounds?: number;
   force?: boolean;
+  deliver_model?: boolean;
+  wait_for_training?: boolean;
+  wait_timeout_ms?: number;
+  wait_poll_ms?: number;
 }): Promise<{
   task: VisionModelingTaskRecord;
-  action: 'requires_input' | 'training_started' | 'waiting_training' | 'registered' | 'feedback_mined' | 'completed';
+  action:
+    | 'requires_input'
+    | 'fix_runtime'
+    | 'training_started'
+    | 'waiting_training'
+    | 'registered'
+    | 'feedback_mined'
+    | 'completed';
   message: string;
   training_job_id: string | null;
   model_version_id: string | null;
@@ -18431,6 +19725,11 @@ export async function autoAdvanceVisionTask(input: {
     throw new Error('No permission to auto-advance this vision modeling task.');
   }
   syncVisionTaskWithRuntimeState(task);
+  const shouldWaitForTraining = input.deliver_model === true || input.wait_for_training === true;
+  const waitOptions = {
+    timeout_ms: input.wait_timeout_ms,
+    poll_ms: input.wait_poll_ms
+  };
 
   if (task.missing_requirements.length > 0) {
     let changed = recordVisionTaskAgentOutcome(
@@ -18438,7 +19737,11 @@ export async function autoAdvanceVisionTask(input: {
       'requires_input',
       'executed',
       'Auto-advance stopped for missing requirements.',
-      'The task still needs more user input before the next safe mutation.'
+      'The task still needs more user input before the next safe mutation.',
+      {
+        source_layer: 'auto_advance',
+        evidence_refs: task.missing_requirements.map((item) => `missing_requirement:${item}`)
+      }
     );
     if (refreshVisionTaskAgentState(task)) {
       changed = true;
@@ -18458,12 +19761,26 @@ export async function autoAdvanceVisionTask(input: {
     ? trainingJobs.find((item) => item.id === task.training_job_id) ?? null
     : null;
   if (currentJob && currentJob.status !== 'completed' && currentJob.status !== 'failed' && currentJob.status !== 'cancelled') {
+    if (shouldWaitForTraining) {
+      const waitedJob = await waitForTrainingJobTerminal(currentJob.id, waitOptions);
+      if (waitedJob && isTrainingJobTerminal(waitedJob)) {
+        syncVisionTaskWithRuntimeState(task);
+        return autoAdvanceVisionTask({
+          ...input,
+          task_id: task.id
+        });
+      }
+    }
     let changed = recordVisionTaskAgentOutcome(
       task,
       'wait_training',
       'executed',
       'Auto-advance kept the task in waiting state.',
-      'A linked training job is still active.'
+      'A linked training job is still active.',
+      {
+        source_layer: 'auto_advance',
+        evidence_refs: [`training_job:${currentJob.id}`]
+      }
     );
     if (refreshVisionTaskAgentState(task)) {
       changed = true;
@@ -18485,6 +19802,25 @@ export async function autoAdvanceVisionTask(input: {
       max_rounds: input.max_rounds,
       force: input.force
     });
+    if (continued.launched && continued.training_job_id && shouldWaitForTraining) {
+      const waitedJob = await waitForTrainingJobTerminal(continued.training_job_id, waitOptions);
+      if (waitedJob && isTrainingJobTerminal(waitedJob)) {
+        syncVisionTaskWithRuntimeState(continued.task);
+        return autoAdvanceVisionTask({
+          ...input,
+          task_id: continued.task.id
+        });
+      }
+      syncVisionTaskWithRuntimeState(continued.task);
+      return {
+        task: continued.task,
+        action: 'waiting_training',
+        message: `training job ${continued.training_job_id} is still running after the delivery wait window`,
+        training_job_id: continued.training_job_id,
+        model_version_id: continued.task.model_version_id,
+        feedback_dataset_id: (continued.task.metadata.feedback_dataset_id ?? '').trim() || null
+      };
+    }
     return {
       task: continued.task,
       action: continued.launched ? 'training_started' : 'completed',
@@ -18495,10 +19831,11 @@ export async function autoAdvanceVisionTask(input: {
     };
   }
 
-  const passStatus = task.validation_report?.summary.pass_status ?? 'needs_review';
+  const passStatus = task.promotion_gate?.status ?? task.validation_report?.summary.pass_status ?? 'needs_review';
   if (!task.model_version_id && passStatus === 'pass') {
     const registered = await registerVisionTaskModelVersion({
-      task_id: task.id
+      task_id: task.id,
+      source_layer: 'auto_advance'
     });
     return {
       task: registered.task,
@@ -18511,11 +19848,56 @@ export async function autoAdvanceVisionTask(input: {
   }
 
   if (!task.model_version_id) {
+    const gateReason = task.promotion_gate?.reason.toLowerCase() ?? '';
+    if (task.promotion_gate?.status === 'needs_review' && gateReason.includes('artifact')) {
+      let changed = recordVisionTaskAgentOutcome(
+        task,
+        'fix_runtime',
+        'skipped',
+        'Delivery stopped for non-registerable artifact evidence.',
+        task.promotion_gate.reason,
+        {
+          source_layer: 'auto_advance',
+          evidence_refs: task.training_job_id ? [`training_job:${task.training_job_id}`] : []
+        }
+      );
+      if (refreshVisionTaskAgentState(task)) {
+        changed = true;
+      }
+      persistVisionTaskStateIfChanged(task, changed);
+      return {
+        task,
+        action: 'fix_runtime',
+        message: task.promotion_gate.summary,
+        training_job_id: task.training_job_id,
+        model_version_id: task.model_version_id,
+        feedback_dataset_id: (task.metadata.feedback_dataset_id ?? '').trim() || null
+      };
+    }
     const continued = await autoContinueVisionTask({
       task_id: task.id,
       max_rounds: input.max_rounds,
       force: input.force
     });
+    if (continued.launched && continued.training_job_id && shouldWaitForTraining) {
+      const waitedJob = await waitForTrainingJobTerminal(continued.training_job_id, waitOptions);
+      if (waitedJob && isTrainingJobTerminal(waitedJob)) {
+        syncVisionTaskWithRuntimeState(continued.task);
+        return autoAdvanceVisionTask({
+          ...input,
+          task_id: continued.task.id
+        });
+      }
+      syncVisionTaskWithRuntimeState(continued.task);
+      return {
+        task: continued.task,
+        action: 'waiting_training',
+        message: `training job ${continued.training_job_id} is still running after the delivery wait window`,
+        training_job_id: continued.training_job_id,
+        model_version_id: continued.task.model_version_id,
+        feedback_dataset_id: (continued.task.metadata.feedback_dataset_id ?? '').trim() || null
+      };
+    }
     return {
       task: continued.task,
       action: continued.launched ? 'training_started' : 'completed',
@@ -18531,7 +19913,8 @@ export async function autoAdvanceVisionTask(input: {
     try {
       const feedback = await generateVisionTaskFeedbackDataset({
         task_id: task.id,
-        max_samples: 12
+        max_samples: 12,
+        source_layer: 'auto_advance'
       });
       return {
         task: feedback.task,
@@ -18547,7 +19930,11 @@ export async function autoAdvanceVisionTask(input: {
         'completed',
         'skipped',
         'Feedback mining was skipped.',
-        `Model is ready, but feedback dataset generation failed: ${(error as Error).message}`
+        `Model is ready, but feedback dataset generation failed: ${(error as Error).message}`,
+        {
+          source_layer: 'auto_advance',
+          evidence_refs: task.model_version_id ? [`model_version:${task.model_version_id}`] : []
+        }
       );
       if (refreshVisionTaskAgentState(task)) {
         changed = true;
@@ -18569,7 +19956,11 @@ export async function autoAdvanceVisionTask(input: {
     'completed',
     'executed',
     'Auto-advance found no additional required mutation.',
-    'The task already has linked training evidence, model version, and feedback dataset.'
+    'The task already has linked training evidence, model version, and feedback dataset.',
+    {
+      source_layer: 'auto_advance',
+      evidence_refs: [`dataset:${feedbackDatasetId}`]
+    }
   );
   if (refreshVisionTaskAgentState(task)) {
     changed = true;
@@ -18626,6 +20017,21 @@ const linkTrainingJobToVisionTask = (input: {
     linked_dataset_version_id: datasetVersion.id,
     auto_tune_last_launch_at: now()
   };
+  recordVisionTaskAgentOutcome(
+    task,
+    'start_training',
+    'executed',
+    'Linked a user-confirmed training job.',
+    'A manual training launch attached this job to the vision task context.',
+    {
+      source_layer: 'user_confirmed',
+      evidence_refs: [
+        `dataset:${dataset.id}`,
+        `dataset_version:${datasetVersion.id}`,
+        `training_job:${job.id}`
+      ]
+    }
+  );
   task.updated_at = now();
   markAppStateDirty();
 
@@ -19916,6 +21322,187 @@ export async function getRuntimeSettings(): Promise<RuntimeSettingsView> {
   return getCurrentRuntimeSettingsView();
 }
 
+const buildRealTrainingDoctorReport = (params: {
+  pythonSnapshot: ReturnType<typeof resolveRuntimeReadinessPython>;
+  runtimeRecord: RuntimeSettingsRecord;
+}): RuntimeRealTrainingDoctorReport => {
+  const issues: string[] = [];
+  const notes: string[] = [];
+  const commands = new Set<string>([
+    'npm run setup:real-training-env',
+    'npm run doctor:real-training-readiness'
+  ]);
+  const pythonBin = params.pythonSnapshot.resolved;
+
+  if (!pythonBin) {
+    issues.push('python_not_found');
+  } else {
+    notes.push(`python_bin=${pythonBin}`);
+    const versionProbe = probePythonStdout(
+      pythonBin,
+      'import sys; print(sys.version.split()[0])'
+    );
+    if (versionProbe.ok && versionProbe.output) {
+      notes.push(`python_version=${versionProbe.output}`);
+    }
+
+    for (const [framework, moduleName] of Object.entries(runtimeFrameworkModuleRequirement)) {
+      const moduleProbe = probePythonModule(pythonBin, moduleName);
+      if (moduleProbe.ok) {
+        notes.push(`python_module_${moduleName}=ok`);
+      } else {
+        issues.push(`missing_python_module_${moduleName}`);
+      }
+      if (framework === 'yolo') {
+        commands.add(`${pythonBin} -m pip install "numpy<2" ultralytics`);
+      } else {
+        commands.add(buildPipInstallCommand(pythonBin, moduleName));
+      }
+    }
+
+    const numpyProbe = probePythonStdout(
+      pythonBin,
+      [
+        'import importlib.util',
+        'spec=importlib.util.find_spec("numpy")',
+        'print("") if spec is None else None',
+        'import sys',
+        'sys.exit(0) if spec is None else None',
+        'import numpy as np',
+        'print(getattr(np, "__version__", ""))'
+      ].join(';')
+    );
+    if (numpyProbe.ok && numpyProbe.output) {
+      notes.push(`numpy_version=${numpyProbe.output}`);
+      const major = Number.parseInt(numpyProbe.output.split('.')[0] ?? '', 10);
+      if (Number.isFinite(major) && major >= 2) {
+        issues.push('numpy_major_gte_2_may_break_torch_real_branch');
+        commands.add(`${pythonBin} -m pip install "numpy<2"`);
+      }
+    }
+  }
+
+  const yoloRuntimePath =
+    params.runtimeRecord.frameworks.yolo.local_model_path.trim() || resolveBundledLocalModelPath('yolo');
+  if (!yoloRuntimePath) {
+    issues.push('missing_real_yolo_model_path');
+    commands.add('export YOLO_LOCAL_MODEL_PATH=/absolute/path/to/yolo11n.pt');
+  } else {
+    const resolvedYoloPath = path.resolve(yoloRuntimePath);
+    if (!existsSync(resolvedYoloPath)) {
+      issues.push(`real_yolo_model_path_not_found:${resolvedYoloPath}`);
+      commands.add('export YOLO_LOCAL_MODEL_PATH=/absolute/path/to/yolo11n.pt');
+    } else {
+      notes.push(`real_yolo_model_path=${resolvedYoloPath}`);
+    }
+  }
+
+  return {
+    status: issues.length > 0 ? 'not_ready' : 'ready',
+    issues,
+    notes,
+    commands: Array.from(commands)
+  };
+};
+
+const buildRuntimeAgentDeliveryReadiness = (params: {
+  issues: RuntimeReadinessIssue[];
+  controls: RuntimeSettingsRecord['controls'];
+  doctor: RuntimeRealTrainingDoctorReport;
+}): RuntimeAgentDeliveryReadiness => {
+  const blockers: string[] = [];
+  const commands = new Set<string>(params.doctor.commands);
+  const hasRuntimeErrors = params.issues.some((issue) => issue.level === 'error');
+  const hasRuntimeWarnings = params.issues.some((issue) => issue.level === 'warning');
+  const realRunnerDisabled = isEnvFlagExplicitlyDisabled(process.env.VISTRAL_RUNNER_ENABLE_REAL);
+
+  if (hasRuntimeErrors) {
+    blockers.push('runtime has blocking readiness errors');
+  } else if (hasRuntimeWarnings) {
+    blockers.push('runtime has open readiness warnings');
+  }
+
+  if (realRunnerDisabled) {
+    blockers.push('VISTRAL_RUNNER_ENABLE_REAL is explicitly disabled');
+    commands.add('export VISTRAL_RUNNER_ENABLE_REAL=1');
+  } else {
+    commands.add('export VISTRAL_RUNNER_ENABLE_REAL=1');
+  }
+
+  if (!params.controls.disable_simulated_train_fallback) {
+    blockers.push('strict simulated-train fallback guard is disabled');
+    commands.add('export VISTRAL_DISABLE_SIMULATED_TRAIN_FALLBACK=1');
+  }
+  if (params.doctor.status === 'not_ready') {
+    blockers.push(...params.doctor.issues.map((issue) => `doctor:${issue}`));
+  }
+
+  for (const issue of params.issues) {
+    const command = issue.remediation_command?.trim();
+    if (command) {
+      commands.add(command);
+    }
+  }
+
+  if (realRunnerDisabled) {
+    return {
+      status: 'blocked',
+      summary:
+        'Agent delivery is blocked because real local runner execution is explicitly disabled.',
+      recommended_action: 'enable_real_runner',
+      evidence_policy: 'registerable_artifact_required',
+      blockers,
+      commands: Array.from(commands)
+    };
+  }
+
+  if (hasRuntimeErrors || params.doctor.status === 'not_ready') {
+    return {
+      status: 'blocked',
+      summary:
+        params.doctor.status === 'not_ready'
+          ? 'Agent delivery is blocked until real-training doctor checks pass.'
+          : 'Agent delivery is blocked until runtime readiness errors are fixed.',
+      recommended_action: params.doctor.status === 'not_ready' ? 'run_doctor' : 'fix_runtime_settings',
+      evidence_policy: 'registerable_artifact_required',
+      blockers,
+      commands: Array.from(commands)
+    };
+  }
+
+  if (!params.controls.disable_simulated_train_fallback) {
+    return {
+      status: 'needs_review',
+      summary:
+        'Agent delivery needs strict real training evidence before model registration.',
+      recommended_action: 'enable_strict_fallback_guard',
+      evidence_policy: 'registerable_artifact_required',
+      blockers,
+      commands: Array.from(commands)
+    };
+  }
+
+  if (hasRuntimeWarnings) {
+    return {
+      status: 'needs_review',
+      summary: 'Agent delivery can continue after the remaining runtime warnings are reviewed.',
+      recommended_action: 'run_doctor',
+      evidence_policy: 'registerable_artifact_required',
+      blockers,
+      commands: Array.from(commands)
+    };
+  }
+
+  return {
+    status: 'ready',
+    summary: 'Runtime is ready for VisionTask agent model delivery.',
+    recommended_action: 'ready',
+    evidence_policy: 'registerable_artifact_required',
+    blockers,
+    commands: Array.from(commands)
+  };
+};
+
 export async function getRuntimeReadiness(): Promise<RuntimeReadinessReport> {
   await delay(80);
   const currentUser = findCurrentUser();
@@ -20128,6 +21715,10 @@ export async function getRuntimeReadiness(): Promise<RuntimeReadinessReport> {
 
   const hasError = issues.some((issue) => issue.level === 'error');
   const hasWarning = issues.some((issue) => issue.level === 'warning');
+  const realTrainingDoctor = buildRealTrainingDoctorReport({
+    pythonSnapshot,
+    runtimeRecord: record
+  });
   return {
     checked_at: now(),
     status: hasError ? 'not_ready' : hasWarning ? 'degraded' : 'ready',
@@ -20136,6 +21727,12 @@ export async function getRuntimeReadiness(): Promise<RuntimeReadinessReport> {
     strict_controls: controls,
     frameworks: connectivityChecks,
     bootstrap_assets: bootstrapAssets,
+    agent_delivery: buildRuntimeAgentDeliveryReadiness({
+      issues,
+      controls,
+      doctor: realTrainingDoctor
+    }),
+    real_training_doctor: realTrainingDoctor,
     issues
   };
 }
@@ -20369,6 +21966,108 @@ export async function autoConfigureRuntimeSettings(input?: {
   });
 
   return getCurrentRuntimeSettingsView();
+}
+
+export async function prepareRealTrainingRuntimeSettings(input?: {
+  overwrite_endpoint?: boolean;
+}): Promise<RuntimeRealTrainingPrepareResult> {
+  await delay(80);
+  const currentUser = findCurrentUser();
+  assertAdmin(currentUser, 'Only admin can prepare real training runtime settings.');
+
+  const overwriteEndpoint = input?.overwrite_endpoint === true;
+  const before = getCurrentRuntimeSettingsRecord();
+  const matchedEndpoints: Partial<Record<ModelFramework, string>> = {};
+  const changedFields = new Set<string>();
+
+  for (const framework of runtimeFrameworks) {
+    const currentConfig = before.frameworks[framework];
+    let endpoint = currentConfig.endpoint.trim();
+
+    if (!endpoint || overwriteEndpoint) {
+      const candidates = resolveRuntimeAutoEndpointCandidates(framework);
+      for (const candidate of candidates) {
+        const probe = await probeRuntimeEndpointConnectivity(framework, candidate, currentConfig.api_key);
+        if (probe.reachable) {
+          endpoint = candidate;
+          matchedEndpoints[framework] = candidate;
+          break;
+        }
+      }
+    }
+
+    const nextConfig = normalizeRuntimeFrameworkConfig(
+      framework,
+      {
+        endpoint,
+        api_key: currentConfig.api_key,
+        default_model_id: currentConfig.default_model_id,
+        default_model_version_id: currentConfig.default_model_version_id,
+        model_api_keys: currentConfig.model_api_keys,
+        model_api_key_policies: currentConfig.model_api_key_policies,
+        local_model_path: currentConfig.local_model_path || resolveBundledLocalModelPath(framework),
+        local_train_command: currentConfig.local_train_command,
+        local_predict_command: currentConfig.local_predict_command
+      },
+      emptyRuntimeFrameworkConfig
+    );
+
+    for (const field of [
+      'endpoint',
+      'local_model_path',
+      'local_train_command',
+      'local_predict_command'
+    ] as const) {
+      if (currentConfig[field] !== nextConfig[field]) {
+        changedFields.add(`frameworks.${framework}.${field}`);
+      }
+    }
+
+    runtimeSettings.frameworks[framework] = nextConfig;
+  }
+
+  const nextControls = normalizeRuntimeControlConfig(
+    {
+      ...before.controls,
+      disable_simulated_train_fallback: true,
+      disable_inference_fallback: true
+    },
+    getEnvRuntimeControlConfig()
+  );
+  if (before.controls.python_bin !== nextControls.python_bin) {
+    changedFields.add('controls.python_bin');
+  }
+  if (before.controls.disable_simulated_train_fallback !== nextControls.disable_simulated_train_fallback) {
+    changedFields.add('controls.disable_simulated_train_fallback');
+  }
+  if (before.controls.disable_inference_fallback !== nextControls.disable_inference_fallback) {
+    changedFields.add('controls.disable_inference_fallback');
+  }
+
+  runtimeSettings.controls = nextControls;
+  runtimeSettings.active_profile_id = 'saved';
+  runtimeSettings.updated_at = now();
+  await persistRuntimeSettings();
+
+  logAudit('runtime_settings_real_training_prepared', 'System', 'runtime-settings', {
+    updated_by: currentUser.id,
+    overwrite_endpoint: overwriteEndpoint ? 'true' : 'false',
+    matched_endpoints: JSON.stringify(matchedEndpoints),
+    changed_fields: JSON.stringify(Array.from(changedFields))
+  });
+
+  const readiness = await getRuntimeReadiness();
+  const commands = new Set<string>([
+    ...readiness.agent_delivery.commands,
+    ...readiness.real_training_doctor.commands
+  ]);
+
+  return {
+    settings: getCurrentRuntimeSettingsView(),
+    readiness,
+    changed_fields: Array.from(changedFields),
+    commands: Array.from(commands)
+  };
 }
 
 export async function generateRuntimeApiKey(): Promise<{ api_key: string }> {

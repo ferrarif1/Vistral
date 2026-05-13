@@ -1503,6 +1503,48 @@ const zhCNBase: Record<string, string> = {
   'Runtime controls': 'Runtime 控制区',
   'Runtime strict controls': 'Runtime 严格控制',
   'Runtime readiness': 'Runtime 就绪度',
+  'Agent delivery readiness': 'Agent 交付就绪度',
+  'Agent delivery': 'Agent 交付',
+  'Agent delivery summary': 'Agent 交付摘要',
+  'Agent delivery blockers': 'Agent 交付阻塞项',
+  'Agent delivery commands': 'Agent 交付命令',
+  'Copy agent commands': '复制 Agent 命令',
+  'The training agent stopped here because a publishable model needs real evidence.':
+    '训练 Agent 已在这里停下，因为可发布模型需要真实证据。',
+  'Checks whether the training agent can continue toward a registerable model artifact.':
+    '检查训练 Agent 是否可以继续推进到可注册的模型产物。',
+  'No agent delivery blockers detected.': '未检测到 Agent 交付阻塞项。',
+  'Policy': '策略',
+  Blocked: '已阻塞',
+  'Runtime is ready for VisionTask agent model delivery.':
+    'Runtime 已准备好支持 VisionTask Agent 交付模型。',
+  'Agent delivery is blocked because real local runner execution is explicitly disabled.':
+    'Agent 交付已阻塞，因为真实本地 runner 执行被显式禁用。',
+  'Agent delivery is blocked until runtime readiness errors are fixed.':
+    'Agent 交付已阻塞，需要先修复 Runtime 就绪错误。',
+  'Agent delivery is blocked until real-training doctor checks pass.':
+    'Agent 交付已阻塞，需要先通过真实训练 doctor 检查。',
+  'Agent delivery needs strict real training evidence before model registration.':
+    'Agent 交付在注册模型前需要严格的真实训练证据。',
+  'Agent delivery can continue after the remaining runtime warnings are reviewed.':
+    '复核剩余 Runtime 告警后，Agent 交付即可继续。',
+  'runtime has blocking readiness errors': 'Runtime 存在阻塞性就绪错误',
+  'runtime has open readiness warnings': 'Runtime 仍有未处理就绪告警',
+  'VISTRAL_RUNNER_ENABLE_REAL is explicitly disabled': 'VISTRAL_RUNNER_ENABLE_REAL 被显式禁用',
+  'strict simulated-train fallback guard is disabled': '严格训练 fallback 保护未开启',
+  'Real training doctor': '真实训练 doctor',
+  'Real training doctor issues': '真实训练 doctor 问题',
+  'Real training doctor commands': '真实训练 doctor 命令',
+  'Copy doctor commands': '复制 doctor 命令',
+  'Prepare real runtime': '准备真实 Runtime',
+  'Preparing...': '准备中...',
+  'Prepared real training runtime settings ({count} changes).':
+    '已准备真实训练 Runtime 设置（{count} 项变更）。',
+  'Real training runtime settings already matched the safe baseline.':
+    '真实训练 Runtime 设置已经符合安全基线。',
+  'Structured checks for local training dependencies and model assets.':
+    '结构化检查本地训练依赖与模型资产。',
+  'No real training doctor issues detected.': '未检测到真实训练 doctor 问题。',
   'Runtime readiness check failed': 'Runtime 就绪度检查失败',
   'Checking runtime readiness': '检查 Runtime 就绪度中',
   'Checking local runtime environment and framework availability.':
@@ -2411,6 +2453,8 @@ const zhCNBase: Record<string, string> = {
   'Preparing agent...': '准备 Agent 中...',
   'Continue as agent': '继续交给 Agent',
   'Agent continuing...': 'Agent 正在继续...',
+  'Deliver model with agent': '让 Agent 交付模型',
+  'Agent delivering...': 'Agent 正在交付模型...',
   'Agent is still watching this run': 'Agent 仍在持续跟进这次运行',
   'Review logs, then continue as agent': '先查看日志，再交给 Agent 继续',
   'Agent already produced the linked model version': 'Agent 已经产出了关联模型版本',
@@ -2429,6 +2473,7 @@ const zhCNBase: Record<string, string> = {
   'Agent started the next training round: {jobId}.': 'Agent 已启动下一轮训练：{jobId}。',
   'Agent is waiting on training job {jobId}.': 'Agent 正在等待训练任务 {jobId} 完成。',
   'Agent updated feedback dataset {datasetId}.': 'Agent 已更新反馈数据集 {datasetId}。',
+  'Agent stopped because real training evidence is required.': 'Agent 已停止：需要真实训练证据后才能交付模型。',
   'Agent still needs more input before continuing.': 'Agent 在继续之前仍需要更多输入。',
   'Agent flow is already complete.': 'Agent 流程已经完成。',
   'Metrics passed threshold. Agent can register the model version now.':
@@ -2527,6 +2572,7 @@ const zhCNBase: Record<string, string> = {
   skipped: '已跳过',
   start_training: '启动训练',
   wait_training: '等待训练',
+  fix_runtime: '修复真实训练环境',
   register_model: '注册模型',
   mine_feedback: '回流反馈数据',
   completed: '已完成',

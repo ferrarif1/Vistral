@@ -46,6 +46,8 @@
 8a. 当 `/ops {json}` 或自然语言 bridge 参数不完整时，必须返回 `requires_input`，并支持后续仅补缺失字段继续执行（含确认门禁续跑）
 8b. Runtime 配置动作也可通过 bridge 执行（`activate_runtime_profile`、`auto_configure_runtime_settings`），两者同样必须经过显式高风险确认
 8c. bridge 还可走“目标编排”分支：先创建/更新 `VisionTask`，再在信息足够时自动调用诸如 `auto_advance_vision_task` 的后续动作；缺失业务条件与变更确认仍必须留在同一线程内完成
+8d. 当用户自然语言明确要求自动化 / 闭环 / 交付导向的模型训练时，即使未配置 BYO LLM 规划，也应走同一 `goal_orchestration` 分支；该兜底仍必须在启动训练或注册模型前要求显式确认
+8e. 目标编排应把用户话语中的有界训练参数与验收阈值写入结构化 `VisionTask` 计划，再启动训练；这样 agent 能执行快速可验证的交付闭环，而不是要求用户打开专家表单
 
 附件状态：
 - `uploading`
@@ -72,13 +74,15 @@ Pixel Lab 分支：
 1. 用户从任意已登录工作面点击页面顶部共享平台栏中的常驻模式开关
 2. 系统打开 `/workspace/pixel-lab`
 3. 系统从现有 API 读取 datasets、model versions、training jobs、inference runs 与 vision tasks
-4. 像素房间按当前工作流阶段展示动画：
-   - 数据集或标注是瓶颈时展示数据整理
-   - 任务排队或运行时展示模型学习 / 训练
-   - 推理验证是最佳下一步时展示考试模式
-   - 已有注册版本或发布证据时展示交付模式
-5. 考试模式激活时，用户可保留自动选择的数据集 / 模型版本组合，或改选后带上下文跳转到 `/inference/validate`
-6. 用户可从同一个顶部平台开关返回专业控制台
+4. 页面结构采用 `src-img/方案效果总览.png` 的总控台骨架：顶部 HUD、中央信息/房间工作面、右侧 OpenClaw 助手、底部房间导航、下方模型/时间线/资源/小记面板
+5. 视觉氛围采用 `src-img/新工作台.png` 的白天亮色像素训练屋，不照搬较暗的总控台原型色彩
+6. 中央亮色像素房屋渲染 7 个编号核心房间：数据集仓库、数据处理/标注室、特征工程/配方室、模型训练室、推理验证/考试室、模型发布室、部署服务/运行监控室
+7. 对话接待、任务指挥、Bug 修复与反馈回流通过左/右信息栏、时间线/通知、AI 助手建议和 canonical workflow 链接表达，不作为中央房间
+8. 用户可点击房间聚焦，查看真实状态，并打开对应 workflow 页面或详情抽屉
+9. 右侧或右下角 OpenClaw 助手读取当前房间上下文，展示近期交互/任务摘要和下一步建议
+10. 左栏展示项目/阶段/模型/任务/工作小记，右栏展示任务通知/项目统计/指标，底部展示模型小队和训练流程总览
+11. 考试模式激活时，用户可保留自动选择的数据集 / 模型版本组合，或改选后带上下文跳转到 `/inference/validate`
+12. 用户可从同一个顶部平台开关返回专业控制台
 
 ## 2.2 Flow A2：统一设置页（已实现）
 执行者：`user` / `admin`
@@ -123,6 +127,7 @@ Pixel Lab 分支：
 4b. 固定帮助入口应展示当前“建议下一步”（第一个未完成步骤）及其直达动作，这样新手不需要自己从整份清单里判断下一次点击
 4c. 用户首次进入带引导的页面时，固定帮助入口可自动轻量展开一次；用户关闭后，后续访问应保持安静，除非手动重新打开
 4d. 在 `/workspace/console` 首页，主工作区还应同步用独立卡片展示这条“首任务”，确保即使其他仪表内容还很稀疏，用户也始终能看到一个明确的下一步动作
+4e. 当首页首任务来自 `VisionTask.agent_next_action=fix_runtime` 时，主工作区必须展示紧凑的 Agent 交付就绪卡：当前角色可见 Runtime readiness 时使用 `agent_delivery`，否则使用任务推荐的 `blocking_items` 和标准 doctor 命令；管理员可在卡片内触发受保护的 `prepare-real-training` 动作并用返回的 readiness 刷新卡片，普通用户只看到阻塞项与管理员交接提示；详细编辑仍跳转 `/settings/runtime`
 5. 当某一步还没有真实记录时，引导卡片与空态需要明确说明“为什么要做”和“下一步点哪里”
 5a. 页面级引导卡也应支持在当前页直接隐藏/重新显示，且“步骤未完成”不能让隐藏操作失效
 5b. 当内联引导处于显示状态时，默认应保持紧凑摘要（`这页做什么` + `建议下一步`），完整步骤清单仅在用户主动展开或打开固定帮助弹层时展示
@@ -275,6 +280,7 @@ Pixel Lab 分支：
 7. 从范围任务列表进入任务详情时，应持续保留 `dataset`、`version` 查询上下文
 8. 当已完成任务准备进入版本注册时，直接打开 `/models/versions` 并预填该任务，让版本注册从这次训练结果开始
 9. 版本注册仍需要选择一个自有模型，但已完成任务和建议版本名应当默认填好
+10. 当调用方显式请求交付模式（`deliver_model=true`）时，后端可在有界请求窗口内等待新启动的训练任务完成，并继续尝试注册模型成果；但仍必须在缺条件、长时间运行、readiness 失败、非可注册产物证据或轮次耗尽时停下并返回清晰 blocker。
 
 ## 7. Flow F：模型版本注册
 执行者：`user`
@@ -375,9 +381,11 @@ Pixel Lab 分支：
   - artifact evidence 预期
   - `blocked` 阻止 launch，`warning` 可在明确提示/确认后继续
   - 每个 blocker 都应给出直达修复入口：数据集详情、标注工作台、Runtime 设置、Workers 或训练参数区
+  - 当 Agent 自动交付停在 `fix_runtime` 时，Runtime 设置页必须展示 `agent_delivery` 摘要，说明真实 runner、严格 fallback 保护、通用 runtime issues 与下一条 doctor/setup 命令
 - 训练完成后执行 `EvaluationSuite` / `PromotionGate`：
   - 读取 metrics、artifact summary、dataset-version context、real-execution evidence
   - 按任务选择 suite：OCR 使用 CER/WER/accuracy，detection 使用 mAP/precision/recall，segmentation 使用 mIoU 或 mask/polygon mAP，OBB 使用 rotated-box mAP + angle-error/angle-bucket regression
-  - 计算 primary metric 与阈值结果
+  - suite 必须携带指标方向（`higher_is_better` / `lower_is_better`），OCR 错误率与 mAP/accuracy 类指标按各自方向排序和判门禁
+  - 计算 primary metric、阈值结果与 artifact 真实性门禁；指标过线但产物为 template/fallback/non-real 时，`PromotionGate` 只能进入 `needs_review`，不得直接推荐注册
   - 与 champion/challenger 比较
   - 输出 promote / train_again / collect_data / clean_annotations / fix_runtime / observe / stop

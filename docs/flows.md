@@ -52,6 +52,8 @@ Operational branch inside the same flow:
 8b. runtime setup operations can also run from bridge (`activate_runtime_profile`, `auto_configure_runtime_settings`); both remain behind explicit high-risk confirmation
 8c. conversation action cards may surface a derived "suggested next step" for training-job failures or incomplete operations; clicking an executable suggestion sends the equivalent bridge action in-thread, and mutating actions such as `retry_training_job` still pause at the same explicit confirmation gate before execution
 8d. the bridge may also use a goal-orchestration lane that creates/updates a `VisionTask` first and then auto-calls follow-up actions such as `auto_advance_vision_task` when enough information is available; missing business requirements and mutating follow-up confirmation still remain in-thread
+8d.1 natural-language requests that explicitly ask for automated / closed-loop / delivery-oriented model training should map to the same `goal_orchestration` lane even when BYO LLM planning is not configured; this fallback must still require confirmation before starting training or registration mutations
+8d.2 goal-orchestration should carry bounded training overrides and acceptance thresholds from the user's wording into the structured `VisionTask` plan before training starts, so the agent can execute quick validated delivery loops without asking the user to open an expert form
 8e. `goal_orchestration` / `auto_advance_vision_task` replies should reuse `VisionTask` evidence instead of only returning raw action codes:
    - evaluation suite
    - gate result
@@ -68,25 +70,38 @@ Attachment states:
 Actor: `user` / `admin`
 
 1. open any shared-shell route (for example `/datasets`, `/training/jobs`, `/models/explore`)
-2. use the grouped left sidebar to jump between workspaces, build/run flows, governance pages, and the single top-level settings entry
-3. desktop left sidebars keep a fixed viewport height, while nav/content blocks scroll internally instead of stretching the page shell
-4. optionally collapse lower-priority desktop navigation groups to keep the left panel focused on the current work lane
-5. optionally collapse the desktop sidebar into a compact rail when the page needs more horizontal room
-6. on mobile, open the navigation drawer from the header and dismiss it by tapping the overlay or close action
-7. on desktop, open the shared account menu from the sidebar footer or compact rail avatar to reach settings or logout without leaving the current work lane; compact/mobile layouts may still use the header as fallback
+2. use the bottom pixel room navigation to jump between workspaces, build/run flows, governance pages, runtime pages, and settings
+3. desktop shared-shell pages keep a fixed viewport height; the bottom room bar stays visible while the main work surface scrolls internally
+4. the top HUD owns brand, service status, workspace mode switch, language, account settings, and logout
+5. on mobile, the bottom room bar scrolls horizontally instead of opening a duplicate left navigation drawer
 8. continue the current task without losing active route context or footer controls such as language/session status
 
 Pixel Lab branch:
 1. user clicks the persistent top platform switch in the shared page header from any authenticated work surface
 2. system opens `/workspace/pixel-lab`
-3. system loads datasets, model versions, training jobs, inference runs, and vision tasks from existing APIs
-4. house rooms animate the current workflow phase:
-   - data sorting when datasets or annotations are the bottleneck
-   - character study/training when jobs are queued or running
-   - exam mode when inference validation is the best next step
-   - delivery mode when registered versions are available
-5. when exam mode is active, user can keep the auto-selected dataset/model-version pair or choose another pair, then jump to `/inference/validate` with context preserved
-6. user can return to the professional console from the same top platform switch
+3. system builds one aggregated workshop snapshot from existing APIs (`datasets`, `models`, `model versions`, `training jobs`, `inference runs`, `vision tasks`, `runtime readiness`, and worker inventory when visible)
+4. the bright daytime house renders nine numbered rooms and binds each room to one canonical workflow page or contextual action: reception / conversation command, dataset warehouse, data processing / annotation, feature engineering / recipe, model training, inference validation / exam, model publish / graduation, deployment / runtime monitoring, and bug / feedback repair
+5. reception / conversation and bug / feedback are central House rooms; the left/right rails, timeline/notification entries, assistant suggestions, and canonical links summarize and route those same states
+6. user can click a room to focus it, inspect real status, and open the corresponding workflow page or detail drawer
+7. the draggable OpenClaw assistant reads the focused room context, shows recent interaction/task summaries, and offers contextual next-step actions
+8. the left rail summarizes project/stage/model/tasks/notes, the right rail summarizes tasks/statistics/metrics, and the lower strip summarizes model squad state plus the full training flow from real records
+9. when exam mode is active, user can keep the auto-selected dataset/model-version pair or choose another pair, then jump to `/inference/validate` with context preserved
+10. user can return to the professional console from the same top platform switch
+
+Pixel Workshop skin branch:
+1. user opens any authenticated shared workspace page
+2. AppShell renders the pixel-game HUD and bottom room navigation; the old left sidebar is not shown because the room bar owns primary navigation
+3. the shell follows the structural prototype in `src-img/方案效果总览.png`: top HUD, room/work surface, right OpenClaw assistant dock, lower status/timeline/model/resource panels where appropriate, and bottom room movement
+4. the visual palette and material treatment follow the bright `src-img/新工作台.png` workshop direction, not the darker console prototype
+5. `WorkspacePage` maps the route to the closest model-training-house room and applies centralized workshop assets inside context strips, panels, headers, characters, or state cards, not as a full-screen replacement background
+6. the compact room-context strip shows the current room name, purpose, and canonical follow-up links without replacing the page's primary action
+7. shared headers, panels, workbench sections, tables, forms, and state blocks inherit the same pixel-workshop skin while preserving the page's original primary task
+8. the right OpenClaw assistant can read route/query context and focused room context, surface recent assistant/task interactions, keep attachments visible/deletable/status-aware where chat actions are exposed, and send mutating operations through the existing confirmation gates
+9. reception/conversation and bug/feedback appear both as central House rooms and as assistant/notification/timeline/feedback links when they are relevant to the active workflow
+10. if an image asset is missing, the page falls back to CSS/SVG pixel surfaces; new generated assets are added under `public/assets/vistral-workshop/`
+11. custom-layout routes such as chat and focused training workshop render matching room-context elements even when they do not use the shared `WorkspacePage` wrapper
+12. specialist operator workspaces such as annotation and cockpit keep their purpose-built layout while inheriting the shared workshop frame, action-bar treatment, and state language
+13. user continues the canonical workflow from the same route, with the same API calls, confirmations, steppers, attachment controls, and advanced-parameter disclosure rules
 
 Note:
 - `/workspace/console` now stays in the shared app shell and uses a professional workbench layout (`context toolbar + main work area + right inspector`) with partitioned scrolling.
@@ -378,9 +393,12 @@ Actor: `user`
    - `requires_input` -> return missing requirements only
    - no training job yet -> start next round
    - job still running -> wait
-   - metrics passed and no model version -> register model
+   - metrics passed, artifact evidence is registerable, and no model version -> register model
+   - metrics passed but artifact evidence is template/fallback/non-real -> run another real-evidence training round or fix runtime before registration
    - model version exists but no feedback dataset -> mine badcases
    - otherwise -> closed-loop state, no further mutation
+7a. when the caller explicitly requests delivery mode (`deliver_model=true`), backend may wait within a bounded request window for the launched training run to finish and continue toward model registration; it must still stop on missing requirements, active long-running jobs, failed readiness, non-registerable artifact evidence, or exhausted rounds.
+7b. when auto-delivery stops at `fix_runtime`, Runtime Settings must show the `agent_delivery` readiness summary, including whether the real runner branch is disabled, strict simulated-train fallback is off, generic runtime issues remain, and which doctor/setup command to run next.
 8. task detail keeps deep links to dataset, training job, model version, and feedback dataset so the engineer can move into the owning page for deeper work
 9. when mining a feedback dataset, backend should diversify selected samples across active-learning clusters when possible instead of filling the set with only one repeated failure mode
 10. when opening inference validation from a task's active-learning pool, the page should keep task context (`vision_task`, selected run, return path) so engineers can inspect one candidate, route it to feedback, and jump back without rebuilding context
@@ -396,10 +414,11 @@ Actor: `user` / `VisionTask agent`
    - detection: mAP/precision/recall plus per-class regression context
    - segmentation: mIoU or mAP-style quality summary plus mask/polygon coverage context
    - OBB: rotated-box mAP plus angle-error and angle-bucket regression context
+   - each suite carries metric direction (`higher_is_better` or `lower_is_better`) so OCR error metrics and score metrics are ranked by the correct polarity
 4. backend compares the latest run against the current champion/challenger set for the linked `VisionTask`
 5. backend computes one `promotion_gate`:
-   - `pass`: safe to register
-   - `needs_review`: metrics pass but evidence or regression context needs human review
+   - `pass`: metrics pass and artifact evidence is registerable
+   - `needs_review`: metrics pass but artifact evidence, fallback/template mode, or regression context needs human review
    - `fail`: do not register
    - `pending`: metrics/artifacts still unavailable
 6. backend chooses a recommendation when the gate does not pass:
@@ -527,12 +546,51 @@ Actor: `admin` (control plane operator), `worker operator`
 14. worker enters normal heartbeat and training-accept mode
 15. for an already-registered worker, admin can trigger `POST /admin/training-workers/{id}/reconfigure-session` to start a guided upgrade/reconfigure pass without deleting the existing worker record
 
+## 12.2 Flow J: Agent Training Studio Home
+Actor: authenticated `user` or `admin`
+
+1. user logs in or opens `/workspace/console`
+2. frontend loads the Studio home using existing API records; no new frontend-only workflow state is introduced
+3. Studio shows Mission Bar, Agent Flow Rail, top training-loop stepper, evidence board, OpenClaw context panel, and one primary next action
+4. Studio determines the primary next action from the highest-priority real blocker or opportunity:
+   - auth/session missing
+   - no usable dataset or dataset version
+   - annotation/data quality issue
+   - trainable dataset ready
+   - active/failed/completed training job
+   - validation or promotion opportunity
+   - runtime/worker issue
+   - governance approval/audit issue
+4a. when no **failed** training job and no **active** training job (`queued`/`preparing`/`running`/`evaluating`) applies, Studio should prefer the **most recently updated** visible `VisionModelingTask` that has a non-null `agent_next_action` whose `action` is not `requires_input`, skip tasks with non-empty `missing_requirements`, and map that recommendation to the primary CTA and stepper stage so the home surface matches backend deterministic guidance (`docs/agent-training-orchestration.md` §6)
+4b. when that mapped recommendation is `fix_runtime`, Studio must show a compact Agent delivery readiness card beside the primary CTA:
+   - use `runtime.agent_delivery` when visible to the current role
+   - fall back to `VisionTask.agent_next_action.blocking_items` plus the standard doctor command when runtime readiness is admin-restricted
+   - allow admins to call the guarded `POST /settings/runtime/prepare-real-training` action inline, then refresh the card from the returned readiness
+   - show non-admin users the same blockers plus the Runtime/admin handoff instead of rendering a failing mutation button
+   - keep diagnostics compact and leave detailed runtime editing on `/settings/runtime`
+5. user may take the primary action, open a secondary repair/diagnostic action, or hand off context to OpenClaw
+6. canonical actions still navigate to existing workflow routes during migration; those routes must preserve query/context parameters
+7. mutating operations continue to use the existing guarded route/API confirmation boundaries
+8. loading, error, empty, and success states use shared state blocks and do not silently fall back to decorative placeholders
+9. background refresh must not reset selected context, scroll, typed input, or expanded disclosures
+10. as routes migrate, each route adopts the same Studio contract before adding new visual features
+
+## 12.3 Flow J2: Agent orchestration layers (conceptual)
+Actor: platform (backend + Studio + chat)
+
+1. **Refresh** — On vision-task list/detail and related GET paths, backend recomputes `agent_next_action`, `evaluation_suite`, `promotion_gate`, `run_comparison`, and optional pools from persisted links and job state.
+2. **Mutate** — Confirmed user actions and approved bridge calls perform creates/updates (training job, registration, feedback mining); each append to `agent_decision_log` when the recommendation meaningfully changes or a mutating branch runs.
+3. **Explain** — Chat/OpenClaw turns structured task evidence into natural language; LLM text never overrides API validation or ownership checks.
+
+Cross-reference: `docs/agent-training-orchestration.md`.
+
 ## 13. Unified UX Constraints
 - multi-step flows must have top stepper
 - advanced params default to collapsed
 - upload files must remain visible + deletable + status-aware
-- desktop left sidebars keep fixed viewport height and use internal scrolling
-- secondary sidebar blocks should collapse when density becomes distracting
+- authenticated shared-shell navigation now targets the Agent Training Studio contract in `docs/frontend-reset.md`; Pixel HUD/bottom room bar are no longer the primary product shell
+- `/workspace/console` is the first migration target and must show one objective, one stage, real evidence, and one primary next action
+- secondary side panels should collapse when density becomes distracting
 - all pages use consistent empty/loading/error/success state blocks
 - style and interaction semantics stay consistent across modules
 - chat, task, training, model-version, inference, and feedback surfaces should share compact action-card semantics

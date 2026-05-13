@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" role="img" aria-label="Pixel model dormitory">
+  <rect width="640" height="420" fill="#071a2d"/>
+  <g shape-rendering="crispEdges">
+    <rect x="36" y="54" width="568" height="320" fill="#18324b" stroke="#7ad2ff" stroke-width="8"/>
+    <rect x="62" y="82" width="516" height="252" fill="#254766"/>
+    <rect x="82" y="118" width="110" height="126" fill="#102238" stroke="#e5b66a" stroke-width="6"/>
+    <rect x="222" y="118" width="110" height="126" fill="#102238" stroke="#e5b66a" stroke-width="6"/>
+    <rect x="362" y="118" width="110" height="126" fill="#102238" stroke="#e5b66a" stroke-width="6"/>
+    <rect x="104" y="150" width="54" height="54" fill="#ffb4ca"/>
+    <rect x="244" y="150" width="54" height="54" fill="#f5c36e"/>
+    <rect x="384" y="150" width="54" height="54" fill="#8d5cff"/>
+    <rect x="92" y="266" width="392" height="36" fill="#0d2034"/>
+    <rect x="112" y="278" width="78" height="12" fill="#75d8a7"/>
+    <rect x="226" y="278" width="98" height="12" fill="#6fb8ff"/>
+    <rect x="360" y="278" width="76" height="12" fill="#f3c267"/>
+  </g>
+</svg>

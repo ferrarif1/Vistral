@@ -4722,6 +4722,26 @@ export default function ConversationPage() {
       </aside>
 
       <div className="chat-main-area">
+        <nav className="chat-pixel-room-strip" aria-label={t('Pixel workshop room context')}>
+          <div className="chat-pixel-room-strip__copy">
+            <span className="chat-pixel-room-strip__avatar" aria-hidden="true" />
+            <span>
+              <strong>{t('Command Room')}</strong>
+              <small className="muted">
+                {t('OpenClaw can read this conversation context and send you to datasets, training, validation, or model versions.')}
+              </small>
+            </span>
+          </div>
+          <div className="chat-pixel-room-strip__actions">
+            <ButtonLink to={scopedConsolePath} variant="ghost" size="sm">
+              {t('Professional Console')}
+            </ButtonLink>
+            <ButtonLink to="/workspace/pixel-lab" variant="secondary" size="sm">
+              {t('Training House')}
+            </ButtonLink>
+          </div>
+        </nav>
+
         <header className="chat-main-header">
           <div className="chat-main-header-row">
             <div className="chat-main-header-leading">

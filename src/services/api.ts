@@ -15,6 +15,9 @@ import type {
   DatasetVersionRecord,
   FileAttachment,
   InferenceRunRecord,
+  LocalFolderFinalizeResult,
+  LocalFolderImportAndTrainResult,
+  LocalFolderScanResult,
   LlmConfig,
   LlmConfigView,
   RuntimeSettingsRecord,
@@ -31,6 +34,7 @@ import type {
   RuntimeDeviceLifecycleSnapshot,
   RuntimeDeviceAccessRecord,
   RuntimeReadinessReport,
+  RuntimeRealTrainingPrepareResult,
   RuntimeMetricsRetentionSummary,
   SubmitApprovalInput,
   EvaluateTrainingReadinessInput,
@@ -534,6 +538,39 @@ export const api = {
       body: JSON.stringify(input)
     }),
 
+  scanLocalAnnotatedFolder: (input: {
+    folder_path: string;
+    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
+    framework?: 'paddleocr' | 'doctr' | 'yolo';
+    manual_validation_count?: number;
+  }) =>
+    request<LocalFolderScanResult>('/api/datasets/local-folder/scan', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  importLocalFolderAndTrain: (input: {
+    folder_path: string;
+    dataset_id?: string;
+    dataset_name?: string;
+    dataset_description?: string;
+    task_type?: 'ocr' | 'detection' | 'classification' | 'segmentation' | 'obb';
+    framework?: 'paddleocr' | 'doctr' | 'yolo';
+    base_model?: string;
+    train_ratio?: number;
+    val_ratio?: number;
+    manual_validation_count?: number;
+    seed?: number;
+    recipe_id?: string;
+    recipe_version?: string;
+    execution_target?: 'control_plane' | 'worker';
+    worker_id?: string;
+  }) =>
+    request<LocalFolderImportAndTrainResult>('/api/datasets/local-folder/import-and-train', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
   getDatasetDetail: async (datasetId: string) => {
     const detail = await request<{
       dataset: DatasetRecord;
@@ -747,11 +784,22 @@ export const api = {
     input?: {
       max_rounds?: number;
       force?: boolean;
+      deliver_model?: boolean;
+      wait_for_training?: boolean;
+      wait_timeout_ms?: number;
+      wait_poll_ms?: number;
     }
   ) =>
     request<{
       task: VisionModelingTaskRecord;
-      action: 'requires_input' | 'training_started' | 'waiting_training' | 'registered' | 'feedback_mined' | 'completed';
+      action:
+        | 'requires_input'
+        | 'fix_runtime'
+        | 'training_started'
+        | 'waiting_training'
+        | 'registered'
+        | 'feedback_mined'
+        | 'completed';
       message: string;
       training_job_id: string | null;
       model_version_id: string | null;
@@ -896,6 +944,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input ?? {})
     }),
+
+  finalizeLocalFolderTrainingJob: (
+    jobId: string,
+    input?: {
+      model_id?: string;
+      model_name?: string;
+      version_name?: string;
+      run_manual_validation?: boolean;
+      allow_compatibility_registration?: boolean;
+    }
+  ) =>
+    request<LocalFolderFinalizeResult>(
+      `/api/training/jobs/${encodeURIComponent(jobId)}/local-folder-finalize`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input ?? {})
+      }
+    ),
 
   listModelVersions: async () =>
     filterVisibleModelVersions(await request<ModelVersionRecord[]>('/api/model-versions')),
@@ -1045,6 +1111,14 @@ export const api = {
 
   autoConfigureRuntimeSettings: (overwriteEndpoint = false) =>
     request<RuntimeSettingsView>('/api/settings/runtime/auto-configure', {
+      method: 'POST',
+      body: JSON.stringify({
+        overwrite_endpoint: overwriteEndpoint
+      })
+    }),
+
+  prepareRealTrainingRuntimeSettings: (overwriteEndpoint = false) =>
+    request<RuntimeRealTrainingPrepareResult>('/api/settings/runtime/prepare-real-training', {
       method: 'POST',
       body: JSON.stringify({
         overwrite_endpoint: overwriteEndpoint

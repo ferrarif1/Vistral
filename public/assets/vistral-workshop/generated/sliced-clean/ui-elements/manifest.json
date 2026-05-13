@@ -1,0 +1,775 @@
+{
+  "input": "public/assets/vistral-workshop/generated/raw-magenta-sheets/ui-elements.png",
+  "rows": 4,
+  "cols": 5,
+  "threshold": 42,
+  "edge_threshold": 150,
+  "component_mode": "all",
+  "component_padding": 10,
+  "min_component_area": 150,
+  "edge_touch_margin": 2,
+  "accepted": [
+    {
+      "index": 0,
+      "label": "hud-panel",
+      "grid": [
+        0,
+        0
+      ],
+      "source_box": [
+        0,
+        0,
+        323,
+        242
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        20,
+        51,
+        299,
+        210
+      ],
+      "padded_crop_bbox": [
+        10,
+        41,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        289,
+        177
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/hud-panel/prop.png"
+    },
+    {
+      "index": 1,
+      "label": "sidebar-card",
+      "grid": [
+        0,
+        1
+      ],
+      "source_box": [
+        323,
+        0,
+        646,
+        242
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/sidebar-card/prop.png"
+    },
+    {
+      "index": 2,
+      "label": "vertical-rail-panel",
+      "grid": [
+        0,
+        2
+      ],
+      "source_box": [
+        646,
+        0,
+        969,
+        242
+      ],
+      "component_mode": "all",
+      "component_count": 4,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/vertical-rail-panel/prop.png"
+    },
+    {
+      "index": 3,
+      "label": "bottom-nav-button",
+      "grid": [
+        0,
+        3
+      ],
+      "source_box": [
+        969,
+        0,
+        1292,
+        242
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        15,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        5,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        294,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/bottom-nav-button/prop.png"
+    },
+    {
+      "index": 4,
+      "label": "bottom-nav-button-active",
+      "grid": [
+        0,
+        4
+      ],
+      "source_box": [
+        1292,
+        0,
+        1615,
+        242
+      ],
+      "component_mode": "all",
+      "component_count": 1,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        14,
+        81,
+        266,
+        178
+      ],
+      "padded_crop_bbox": [
+        4,
+        71,
+        276,
+        188
+      ],
+      "edge_touch": false,
+      "output_size": [
+        272,
+        117
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/bottom-nav-button-active/prop.png"
+    },
+    {
+      "index": 5,
+      "label": "icon-button",
+      "grid": [
+        1,
+        0
+      ],
+      "source_box": [
+        0,
+        242,
+        323,
+        484
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        23,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        13,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        205
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/icon-button/prop.png"
+    },
+    {
+      "index": 6,
+      "label": "primary-button",
+      "grid": [
+        1,
+        1
+      ],
+      "source_box": [
+        323,
+        242,
+        646,
+        484
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/primary-button/prop.png"
+    },
+    {
+      "index": 7,
+      "label": "secondary-button",
+      "grid": [
+        1,
+        2
+      ],
+      "source_box": [
+        646,
+        242,
+        969,
+        484
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/secondary-button/prop.png"
+    },
+    {
+      "index": 8,
+      "label": "active-room-frame",
+      "grid": [
+        1,
+        3
+      ],
+      "source_box": [
+        969,
+        242,
+        1292,
+        484
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/active-room-frame/prop.png"
+    },
+    {
+      "index": 9,
+      "label": "success-badge",
+      "grid": [
+        1,
+        4
+      ],
+      "source_box": [
+        1292,
+        242,
+        1615,
+        484
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        23,
+        299,
+        207
+      ],
+      "padded_crop_bbox": [
+        0,
+        13,
+        299,
+        217
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        204
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/success-badge/prop.png"
+    },
+    {
+      "index": 10,
+      "label": "warning-badge",
+      "grid": [
+        2,
+        0
+      ],
+      "source_box": [
+        0,
+        484,
+        323,
+        726
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/warning-badge/prop.png"
+    },
+    {
+      "index": 11,
+      "label": "error-badge",
+      "grid": [
+        2,
+        1
+      ],
+      "source_box": [
+        323,
+        484,
+        646,
+        726
+      ],
+      "component_mode": "all",
+      "component_count": 2,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/error-badge/prop.png"
+    },
+    {
+      "index": 12,
+      "label": "neutral-pill",
+      "grid": [
+        2,
+        2
+      ],
+      "source_box": [
+        646,
+        484,
+        969,
+        726
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/neutral-pill/prop.png"
+    },
+    {
+      "index": 13,
+      "label": "progress-empty",
+      "grid": [
+        2,
+        3
+      ],
+      "source_box": [
+        969,
+        484,
+        1292,
+        726
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        6,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/progress-empty/prop.png"
+    },
+    {
+      "index": 14,
+      "label": "progress-filled",
+      "grid": [
+        2,
+        4
+      ],
+      "source_box": [
+        1292,
+        484,
+        1615,
+        726
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        6,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/progress-filled/prop.png"
+    },
+    {
+      "index": 15,
+      "label": "notification-bubble",
+      "grid": [
+        3,
+        0
+      ],
+      "source_box": [
+        0,
+        726,
+        323,
+        968
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/notification-bubble/prop.png"
+    },
+    {
+      "index": 16,
+      "label": "work-note-paper",
+      "grid": [
+        3,
+        1
+      ],
+      "source_box": [
+        323,
+        726,
+        646,
+        968
+      ],
+      "component_mode": "all",
+      "component_count": 4,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/work-note-paper/prop.png"
+    },
+    {
+      "index": 17,
+      "label": "assistant-chat-bubble",
+      "grid": [
+        3,
+        2
+      ],
+      "source_box": [
+        646,
+        726,
+        969,
+        968
+      ],
+      "component_mode": "all",
+      "component_count": 3,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/assistant-chat-bubble/prop.png"
+    },
+    {
+      "index": 18,
+      "label": "user-chat-bubble",
+      "grid": [
+        3,
+        3
+      ],
+      "source_box": [
+        969,
+        726,
+        1292,
+        968
+      ],
+      "component_mode": "all",
+      "component_count": 4,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        0,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        218
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/user-chat-bubble/prop.png"
+    },
+    {
+      "index": 19,
+      "label": "icon-button-set",
+      "grid": [
+        3,
+        4
+      ],
+      "source_box": [
+        1292,
+        726,
+        1615,
+        968
+      ],
+      "component_mode": "all",
+      "component_count": 4,
+      "selected_component_area": null,
+      "selected_component_bbox": null,
+      "crop_bbox": [
+        0,
+        40,
+        299,
+        218
+      ],
+      "padded_crop_bbox": [
+        0,
+        30,
+        299,
+        218
+      ],
+      "edge_touch": true,
+      "output_size": [
+        299,
+        188
+      ],
+      "status": "accepted",
+      "image": "public/assets/vistral-workshop/generated/sliced-clean/ui-elements/icon-button-set/prop.png"
+    }
+  ],
+  "rejected": [],
+  "edge_touch_props": [
+    "hud-panel",
+    "sidebar-card",
+    "vertical-rail-panel",
+    "bottom-nav-button",
+    "icon-button",
+    "primary-button",
+    "secondary-button",
+    "active-room-frame",
+    "success-badge",
+    "warning-badge",
+    "error-badge",
+    "neutral-pill",
+    "progress-empty",
+    "progress-filled",
+    "notification-bubble",
+    "work-note-paper",
+    "assistant-chat-bubble",
+    "user-chat-bubble",
+    "icon-button-set"
+  ]
+}

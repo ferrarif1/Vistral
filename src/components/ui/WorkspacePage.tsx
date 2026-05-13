@@ -1,4 +1,7 @@
-import type { HTMLAttributes, ReactNode } from 'react';
+import { useMemo, type HTMLAttributes, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
+import { PixelRoomContextBar } from './PixelRoomContext';
+import { createPixelRoomStyle, resolvePixelRoomContext } from './pixelRoomContextModel';
 import { Card } from './Surface';
 
 interface WorkspacePageProps extends HTMLAttributes<HTMLDivElement> {
@@ -55,9 +58,25 @@ interface WorkspaceWorkbenchProps extends HTMLAttributes<HTMLElement> {
 const joinClasses = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(' ');
 
-export function WorkspacePage({ className, children, ...props }: WorkspacePageProps) {
+export function WorkspacePage({ className, children, style: pageStyle, ...props }: WorkspacePageProps) {
+  const location = useLocation();
+  const pixelScene = useMemo(() => resolvePixelRoomContext(location.pathname), [location.pathname]);
+  const style = createPixelRoomStyle(pixelScene, pageStyle);
+
   return (
-    <div className={joinClasses('workspace-overview-page', 'stack', className)} {...props}>
+    <div
+      className={joinClasses('workspace-overview-page', 'workspace-pixel-skin', 'stack', className)}
+      data-pixel-scene={pixelScene.scene}
+      style={style}
+      {...props}
+    >
+      <PixelRoomContextBar
+        context={pixelScene}
+        className="workspace-pixel-route-strip"
+        copyClassName="workspace-pixel-route-strip__copy"
+        avatarClassName="workspace-pixel-route-strip__dot"
+        actionsClassName="workspace-pixel-route-strip__actions"
+      />
       {children}
     </div>
   );

@@ -49,7 +49,7 @@ const formatTimestamp = (value: string): string => {
 
 const getInboxLane = (task: VisionModelingTaskRecord): VisionTaskInboxLane => {
   const action = task.agent_next_action?.action ?? null;
-  if (action === 'requires_input' || task.missing_requirements.length > 0) {
+  if (action === 'requires_input' || action === 'fix_runtime' || task.missing_requirements.length > 0) {
     return 'blocked';
   }
   if (action === 'wait_training' || task.status === 'training_started') {
@@ -153,7 +153,12 @@ export default function VisionModelingTasksPage() {
       setNotice('');
       setError('');
       try {
-        const result = await api.autoAdvanceVisionTask(task.id, { max_rounds: 3 });
+        const result = await api.autoAdvanceVisionTask(task.id, {
+          max_rounds: 3,
+          deliver_model: true,
+          wait_timeout_ms: 15000,
+          wait_poll_ms: 250
+        });
         setTasks((previous) =>
           previous.map((item) => (item.id === task.id ? result.task : item))
         );
@@ -279,7 +284,7 @@ export default function VisionModelingTasksPage() {
                 }}
                 disabled={advancingTaskId === task.id}
               >
-                {advancingTaskId === task.id ? t('Advancing...') : t('Continue as agent')}
+                {advancingTaskId === task.id ? t('Agent delivering...') : t('Deliver model with agent')}
               </Button>
             ) : (
               <ButtonLink
@@ -341,7 +346,7 @@ export default function VisionModelingTasksPage() {
                       onClick={() => void handleAutoAdvance(task)}
                       disabled={advancingTaskId === task.id}
                     >
-                      {advancingTaskId === task.id ? t('Advancing...') : t('Continue as agent')}
+                      {advancingTaskId === task.id ? t('Agent delivering...') : t('Deliver model with agent')}
                     </Button>
                   ) : null}
                 </div>
@@ -478,7 +483,7 @@ export default function VisionModelingTasksPage() {
         primaryAction={
           isActionable
             ? {
-                label: advancingTaskId === featuredTask.id ? t('Agent continuing...') : t('Continue as agent'),
+                label: advancingTaskId === featuredTask.id ? t('Agent delivering...') : t('Deliver model with agent'),
                 onClick: () => void handleAutoAdvance(featuredTask),
                 disabled: advancingTaskId === featuredTask.id,
                 busy: advancingTaskId === featuredTask.id
