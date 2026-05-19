@@ -90,7 +90,6 @@ Vistral must provide one closed-loop platform where engineers can:
 ### FR-005 Consistent State Feedback
 - all pages must use unified empty/loading/error/success patterns
 
-<<<<<<< HEAD
 ### FR-005A Agent Mode Interaction
 - high-intent workflows should expose one agent-mode control surface instead of scattered status cards.
 - the agent-mode surface must show:
@@ -168,11 +167,12 @@ Vistral must provide one closed-loop platform where engineers can:
 - missing room assets should be generated or added into `public/assets/vistral-workshop/`, with source intent documented. Pages must retain CSS/SVG fallback visuals if a raster asset is absent.
 - all AI-native hard requirements remain unchanged: visible/deletable/status-aware attachments, top steppers for multi-step flows, collapsed expert controls, consistent empty/error/loading/success states, and explicit confirmation for high-risk mutations.
 
-=======
->>>>>>> parent of 10605c8 (动画式交互)
 ### FR-006 Dataset Management
 - create/manage datasets
 - upload image/video/archive files
+- dataset ingestion should support folder-selected local bundles and `.zip` bundle import from the dataset detail workflow
+- bundle import should recognize image files plus paired annotation payloads, then reuse the existing dataset attachment + annotation import contracts instead of creating a second hidden dataset state
+- after bundle import, the workflow should optionally auto-run split + dataset-version snapshot preparation so the operator can continue directly into training launch
 - sample list/detail
 - label class management
 - train/val/test split
@@ -387,6 +387,7 @@ Framework integrations must follow unified trainer interface:
   - one active-learning pool summary that explains which low-confidence / likely-error samples should be mined next and how they are clustered
 - the product must expose both `/vision/tasks` and `/vision/tasks/:taskId` so engineers can reopen or continue the workflow outside the original chat turn
 - `/vision/tasks` should feel like an operator inbox rather than a plain run table:
+  - the first visible control should be an agent-mode panel for the highest-priority task, so the operator can understand the goal, evidence, and next step before scanning the table
   - blocked tasks
   - tasks currently training
   - tasks ready for the next agent-guided operator action

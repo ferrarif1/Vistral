@@ -1358,10 +1358,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
     readAppChatDockCollapsedFromStorage()
   );
   const isCompactViewport = useCompactViewport(960);
-  const isNarrowWorkbenchViewport = useCompactViewport(1520);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isImmersiveWorkspace = location.pathname === '/workspace/chat';
+  const isPixelLabRoute = location.pathname === '/workspace/pixel-lab';
   const isAnnotationFocusRoute = /^\/datasets\/[^/]+\/annotate$/.test(location.pathname);
+  const isAuthRoute = location.pathname.startsWith('/auth/');
 
   const refreshUser = useCallback(() => {
     api.me().then(setCurrentUser).catch(() => setCurrentUser(null));
@@ -1588,7 +1589,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [scopedExecutionTarget, t]);
   const sessionMenuItems = useMemo(
     () => [
-      { to: scopedNavTo('/workspace/chat'), label: t('Conversation Workspace') },
       { to: scopedNavTo('/settings/account'), label: t('Settings') },
       { label: t('Logout'), onSelect: logout, tone: 'danger' as const }
     ],
@@ -1602,7 +1602,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
       currentPathname: location.pathname
     });
   }, [currentTaskPath, location.pathname]);
-<<<<<<< HEAD
   const currentPixelRoom = useMemo(
     () => resolvePixelRoomContext(location.pathname),
     [location.pathname]
@@ -1677,8 +1676,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </div>
     </header>
   );
-=======
->>>>>>> parent of 10605c8 (动画式交互)
 
   const navigationGroups = useMemo<AppNavGroup[]>(
     () => [
@@ -1687,16 +1684,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
         label: t('Workspaces'),
         items: [
           {
-            to: scopedNavTo('/workspace/chat'),
-            label: t('Conversation Workspace'),
-            shortLabel: 'AI',
-            matchPrefixes: ['/workspace/chat']
-          },
-          {
             to: scopedNavTo('/workspace/console'),
             label: t('Professional Console'),
             shortLabel: 'PC',
             matchPrefixes: ['/workspace/console']
+          },
+          {
+            to: scopedNavTo('/workspace/pixel-lab'),
+            label: t('Pixel Lab'),
+            shortLabel: 'PX',
+            matchPrefixes: ['/workspace/pixel-lab']
           }
         ]
       },
@@ -1751,6 +1748,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
             label: t('Training Jobs'),
             shortLabel: 'T',
             matchPrefixes: ['/training/jobs']
+          },
+          {
+            to: scopedNavTo('/training-workshop'),
+            label: t('Training Workshop'),
+            shortLabel: 'TW',
+            matchPrefixes: ['/training-workshop']
           },
           {
             to: scopedNavTo('/vision/tasks'),
@@ -1809,16 +1812,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const railItems = useMemo<AppNavItem[]>(
     () => [
       {
-        to: scopedNavTo('/workspace/chat'),
-        label: t('Conversation Workspace'),
-        shortLabel: 'AI',
-        matchPrefixes: ['/workspace/chat']
-      },
-      {
         to: scopedNavTo('/workspace/console'),
         label: t('Professional Console'),
         shortLabel: 'PC',
         matchPrefixes: ['/workspace/console']
+      },
+      {
+        to: scopedNavTo('/workspace/pixel-lab'),
+        label: t('Pixel Lab'),
+        shortLabel: 'PX',
+        matchPrefixes: ['/workspace/pixel-lab']
       },
       {
         to: scopedNavTo('/models/explore'),
@@ -1843,6 +1846,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
         label: t('Training Jobs'),
         shortLabel: 'T',
         matchPrefixes: ['/training/jobs']
+      },
+      {
+        to: scopedNavTo('/training-workshop'),
+        label: t('Training Workshop'),
+        shortLabel: 'TW',
+        matchPrefixes: ['/training-workshop']
       },
       {
         to: scopedNavTo('/admin/verification-reports'),
@@ -1966,21 +1975,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   const isDesktopSidebarCollapsed = sidebarCollapsed && !isCompactViewport;
-<<<<<<< HEAD
   const showWorkbenchChatDock = Boolean(currentUser) && !isCompactViewport && !isAnnotationFocusRoute;
   const shellClassName = [
     'app-shell',
     'app-shell--pixel-game',
-=======
-  const showWorkbenchChatDock =
-    !isCompactViewport &&
-    !isNarrowWorkbenchViewport &&
-    !isImmersiveWorkspace &&
-    !location.pathname.startsWith('/auth/');
-  const shellClassName = [
-    'app-shell',
-    'no-topbar',
->>>>>>> parent of 10605c8 (动画式交互)
     isDesktopSidebarCollapsed ? 'sidebar-collapsed' : '',
     isCompactViewport ? 'sidebar-compact' : '',
     mobileSidebarOpen ? 'mobile-sidebar-open' : ''
@@ -1996,7 +1994,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
       : t('Collapse sidebar');
   const sidebarToggleToken = isCompactViewport ? (mobileSidebarOpen ? 'X' : '=') : isDesktopSidebarCollapsed ? '>' : '<';
 
-<<<<<<< HEAD
   const isAgentStudioRoute = location.pathname === '/workspace/console';
 
   if (isAgentStudioRoute) {
@@ -2015,14 +2012,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
         {isImmersiveWorkspace || isPixelLabRoute ? gameBottomNav : null}
       </div>
     );
-=======
-  if (isImmersiveWorkspace) {
-    return <main className="chat-route-main">{children}</main>;
->>>>>>> parent of 10605c8 (动画式交互)
   }
 
   return (
     <div className={shellClassName}>
+      {platformTopbar}
       {isCompactViewport && !mobileSidebarOpen ? (
         <button
           type="button"
@@ -2100,7 +2094,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       }>
         <div className="sidebar-content">
           <div className="sidebar-brand-row">
-            <Link to={scopedNavTo('/workspace/chat')} className="sidebar-brand-link" onClick={closeMobileSidebar}>
+            <Link to={scopedNavTo('/workspace/console')} className="sidebar-brand-link" onClick={closeMobileSidebar}>
               <span className="sidebar-brand-mark" aria-hidden="true">
                 V
               </span>

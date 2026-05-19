@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent as ReactChangeEvent } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
   AnnotationReviewReasonCode,
@@ -28,11 +28,8 @@ import {
   SectionCard
 } from '../components/ui/ConsolePage';
 import { Input, Select, Textarea } from '../components/ui/Field';
-<<<<<<< HEAD
 import ProgressStepper from '../components/ui/ProgressStepper';
 import { Panel } from '../components/ui/Surface';
-=======
->>>>>>> parent of 10605c8 (动画式交互)
 import { WorkspacePage, WorkspaceWorkbench } from '../components/ui/WorkspacePage';
 import {
   filterItemsByAnnotationQueue,
@@ -42,6 +39,13 @@ import {
   summarizeAnnotationQueues,
   type AnnotationQueueFilter
 } from '../features/annotationQueue';
+import {
+  buildBundleImportArtifact,
+  buildDatasetBundleFromFolderFiles,
+  buildDatasetBundleFromZipFile,
+  type DatasetBundleCandidate,
+  type DatasetBundleImportFormat
+} from '../features/datasetBundleImport';
 import { matchesMetadataFilter } from '../features/metadataFilter';
 import useBackgroundPolling from '../hooks/useBackgroundPolling';
 import { useI18n } from '../i18n/I18nProvider';
@@ -306,7 +310,6 @@ export default function DatasetDetailPage() {
   const [importFormat, setImportFormat] = useState<'yolo' | 'coco' | 'labelme' | 'ocr'>('yolo');
   const [exportFormat, setExportFormat] = useState<'yolo' | 'coco' | 'labelme' | 'ocr'>('yolo');
   const [importAttachmentId, setImportAttachmentId] = useState('');
-<<<<<<< HEAD
   const [bundleCandidate, setBundleCandidate] = useState<DatasetBundleCandidate | null>(null);
   const [bundleFormat, setBundleFormat] = useState<DatasetBundleImportFormat>('yolo');
   const [bundleAutoPrepareTraining, setBundleAutoPrepareTraining] = useState(true);
@@ -321,8 +324,6 @@ export default function DatasetDetailPage() {
   const [serverFolderBusy, setServerFolderBusy] = useState(false);
   const [serverFolderError, setServerFolderError] = useState('');
   const [serverFolderActiveStep, setServerFolderActiveStep] = useState(0);
-=======
->>>>>>> parent of 10605c8 (动画式交互)
   const [referenceFilename, setReferenceFilename] = useState('');
   const [referenceSplit, setReferenceSplit] = useState<'train' | 'val' | 'test' | 'unassigned'>('unassigned');
   const [referenceStatus, setReferenceStatus] = useState<'uploading' | 'processing' | 'ready' | 'error'>('ready');
@@ -357,11 +358,28 @@ export default function DatasetDetailPage() {
     'Background sync is unavailable right now. Deletion is already applied locally. Click Refresh to retry.'
   );
   const uploadSectionRef = useRef<HTMLDivElement | null>(null);
+  const bundleZipInputRef = useRef<HTMLInputElement | null>(null);
+  const bundleFolderInputRef = useRef<HTMLInputElement | null>(null);
   const sampleSectionRef = useRef<HTMLDivElement | null>(null);
   const versionSectionRef = useRef<HTMLDivElement | null>(null);
   const focusAppliedRef = useRef('');
   const preferredVersionId = (searchParams.get('version') ?? '').trim();
   const preferredFocus = (searchParams.get('focus') ?? '').trim();
+  const focusUploadSection = useCallback(() => {
+    uploadSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusSamplesSection = useCallback(() => {
+    sampleSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusVersionsSection = useCallback(() => {
+    versionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  const focusWorkflowPanel = useCallback(() => {
+    document.getElementById('dataset-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
   const preferredTaskTypeRaw = (searchParams.get('task_type') ?? '').trim().toLowerCase();
   const preferredTaskType =
     preferredTaskTypeRaw === 'ocr' ||
@@ -677,13 +695,23 @@ export default function DatasetDetailPage() {
     },
     [annotationSummary.approved, annotationSummary.in_review, annotationSummary.needs_work, annotationSummary.rejected, annotations, items, t]
   );
-  const launchContextForDatasetFlow: LaunchContext = {
-    taskType: preferredTaskType ?? dataset?.task_type ?? null,
-    framework: resolvePreferredFrameworkForTask(preferredTaskType ?? dataset?.task_type ?? null, preferredFramework),
-    executionTarget: preferredExecutionTarget || null,
-    workerId: preferredWorkerId || null,
-    returnTo: outboundReturnTo
-  };
+  const launchContextForDatasetFlow: LaunchContext = useMemo(
+    () => ({
+      taskType: preferredTaskType ?? dataset?.task_type ?? null,
+      framework: resolvePreferredFrameworkForTask(preferredTaskType ?? dataset?.task_type ?? null, preferredFramework),
+      executionTarget: preferredExecutionTarget || null,
+      workerId: preferredWorkerId || null,
+      returnTo: outboundReturnTo
+    }),
+    [
+      dataset?.task_type,
+      outboundReturnTo,
+      preferredExecutionTarget,
+      preferredFramework,
+      preferredTaskType,
+      preferredWorkerId
+    ]
+  );
   const datasetsPath = buildDatasetsPath(launchContextForDatasetFlow);
   const clearVersionContextPath = useMemo(() => {
     const nextParams = new URLSearchParams(searchParams);
@@ -747,6 +775,46 @@ export default function DatasetDetailPage() {
     sampleStatusFilter,
     selectedVersionId,
     selectedSampleItemIds
+  ]);
+
+  useEffect(() => {
+    if (!preferredFocus || !dataset?.id) {
+      return;
+    }
+
+    const focusKey = `${preferredFocus}:${dataset.id}:${selectedVersionId}`;
+    if (focusAppliedRef.current === focusKey) {
+      return;
+    }
+
+    const focusMap: Record<string, () => void> = {
+      upload: focusUploadSection,
+      files: focusUploadSection,
+      samples: focusSamplesSection,
+      sample: focusSamplesSection,
+      versions: focusVersionsSection,
+      version: focusVersionsSection,
+      workflow: focusWorkflowPanel,
+      advanced: focusWorkflowPanel
+    };
+
+    const action = focusMap[preferredFocus];
+    if (!action) {
+      return;
+    }
+
+    focusAppliedRef.current = focusKey;
+    window.setTimeout(() => {
+      action();
+    }, 120);
+  }, [
+    dataset?.id,
+    focusSamplesSection,
+    focusUploadSection,
+    focusVersionsSection,
+    focusWorkflowPanel,
+    preferredFocus,
+    selectedVersionId
   ]);
   const applySavedSampleView = useCallback(
     (viewId: string) => {
@@ -852,6 +920,17 @@ export default function DatasetDetailPage() {
   }, [attachments, importAttachmentId]);
 
   useEffect(() => {
+    if (!bundleCandidate) {
+      return;
+    }
+
+    const preferred = bundleCandidate.supportedFormats[0];
+    if (preferred && preferred !== bundleFormat) {
+      setBundleFormat(preferred);
+    }
+  }, [bundleCandidate, bundleFormat]);
+
+  useEffect(() => {
     if (items.length === 0) {
       if (selectedItemId) {
         setSelectedItemId('');
@@ -923,7 +1002,6 @@ export default function DatasetDetailPage() {
     await loadDetail('manual');
   };
 
-<<<<<<< HEAD
   const waitForDatasetAttachmentReady = useCallback(
     async (attachmentId: string): Promise<FileAttachment> => {
       if (!datasetId) {
@@ -1212,8 +1290,6 @@ export default function DatasetDetailPage() {
     t
   ]);
 
-=======
->>>>>>> parent of 10605c8 (动画式交互)
   const deleteAttachment = async (attachmentId: string) => {
     await api.removeAttachment(attachmentId);
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentId));
@@ -1837,58 +1913,9 @@ export default function DatasetDetailPage() {
     );
   }
 
-  const focusUploadSection = () => {
-    uploadSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const focusSamplesSection = () => {
-    sampleSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const focusVersionsSection = () => {
-    versionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const focusWorkflowPanel = () => {
-    document.getElementById('dataset-workflow')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  useEffect(() => {
-    if (!preferredFocus) {
-      return;
-    }
-
-    const focusKey = `${preferredFocus}:${dataset.id}:${selectedVersionId}`;
-    if (focusAppliedRef.current === focusKey) {
-      return;
-    }
-
-    const focusMap: Record<string, () => void> = {
-      upload: focusUploadSection,
-      files: focusUploadSection,
-      samples: focusSamplesSection,
-      sample: focusSamplesSection,
-      versions: focusVersionsSection,
-      version: focusVersionsSection,
-      workflow: focusWorkflowPanel,
-      advanced: focusWorkflowPanel
-    };
-
-    const action = focusMap[preferredFocus];
-    if (!action) {
-      return;
-    }
-
-    focusAppliedRef.current = focusKey;
-    window.setTimeout(() => {
-      action();
-    }, 120);
-  }, [dataset.id, preferredFocus, selectedVersionId]);
-
   const preferredTrainingVersion = selectedVersion ?? versions[0] ?? null;
   const preferredLaunchReadyVersion =
     selectedVersionLaunchReady && selectedVersion ? selectedVersion : latestLaunchReadyVersion;
-<<<<<<< HEAD
   const bundleStepperSteps = [
     t('Inspect bundle'),
     t('Upload images'),
@@ -1908,8 +1935,6 @@ export default function DatasetDetailPage() {
     ? `/training/jobs/${serverFolderResult.training_job.id}`
     : '';
   const serverFolderInferencePath = serverFolderResult?.next_links.inference_validation ?? '';
-=======
->>>>>>> parent of 10605c8 (动画式交互)
   const fallbackAnnotationWorkspacePath = buildAnnotationWorkspacePath(dataset.id, 'all', undefined, {
     versionId: selectedVersionId || undefined,
     launchContext: launchContextForDatasetFlow
@@ -2237,7 +2262,6 @@ export default function DatasetDetailPage() {
               </SectionCard>
             </div>
 
-<<<<<<< HEAD
             <div ref={uploadSectionRef} className="stack">
               <SectionCard
                 title={t('Bundle Import')}
@@ -2520,9 +2544,6 @@ export default function DatasetDetailPage() {
                 </div>
               </SectionCard>
 
-=======
-            <div ref={uploadSectionRef}>
->>>>>>> parent of 10605c8 (动画式交互)
               <AttachmentUploader
                 title={t('Files')}
                 items={attachments}
@@ -2532,7 +2553,7 @@ export default function DatasetDetailPage() {
                 onDelete={deleteAttachment}
                 emptyDescription={t('Upload files. They stay visible here.')}
                 uploadButtonLabel={t('Upload Dataset File')}
-                disabled={busy}
+                disabled={busy || bundleImporting}
                 headerActions={
                   <Button
                     type="button"
@@ -2541,7 +2562,7 @@ export default function DatasetDetailPage() {
                     onClick={() => {
                       void refreshAttachmentSection();
                     }}
-                    disabled={busy || sectionRefreshing === 'attachments'}
+                    disabled={busy || bundleImporting || sectionRefreshing === 'attachments'}
                   >
                     {sectionRefreshing === 'attachments' ? t('Refreshing...') : t('Refresh')}
                   </Button>

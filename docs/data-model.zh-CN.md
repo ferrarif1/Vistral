@@ -318,17 +318,11 @@
 - readiness 必须能区分数据问题、标注问题、runtime 问题、worker 问题与 artifact 证据问题。
 
 ### EvaluationSuite / PromotionGate / RunComparison
-<<<<<<< HEAD
 - `EvaluationSuite.direction` 必须显式记录指标方向：`higher_is_better` 或 `lower_is_better`
 - OCR 默认主指标：`cer`（`lower_is_better`），缺失时可用 `accuracy`
 - detection 默认主指标：`map`（`higher_is_better`）
 - segmentation 默认主指标：`miou`（`higher_is_better`），不可用时使用框架可提供的 mask/polygon mAP
 - OBB 默认主指标：旋转框 mAP（`map_obb`，`higher_is_better`），辅助指标包含 precision、recall、angle error 与 angle-bucket regression slice
-=======
-- OCR 默认主指标：`cer`（越低越好），缺失时可用 `accuracy`
-- detection 默认主指标：`map`
-- segmentation 默认主指标：`miou`，不可用时使用框架可提供的 mask/polygon mAP
->>>>>>> parent of 10605c8 (动画式交互)
 - `PromotionGate.status`：`pass | needs_review | fail | pending`
 - `PromotionGate.status=pass` 表示指标阈值与注册产物证据都可接受；若只是指标过线但产物为 template/fallback/non-real，必须保持 `needs_review`
 - `recommended_action`：`register_model | train_again | collect_data | clean_annotations | fix_runtime | observe | stop`
